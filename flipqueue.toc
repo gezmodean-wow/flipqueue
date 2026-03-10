@@ -6,6 +6,8 @@
 ## SavedVariables: FlipQueueDB
 ## OptionalDeps: Auctionator, TradeSkillMaster
 ## IconTexture: Interface\Icons\INV_Misc_Coin_02
+## X-Category: Auction & Economy
+## X-Website: https://github.com/gezmodean-wow/flipqueue
 
 Core.lua
 Scanner.lua

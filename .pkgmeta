@@ -4,7 +4,10 @@ enable-nolib-creation: no
 
 ignore:
   - README.md
+  - CHANGELOG.md
   - .gitignore
   - .claude
   - .vscode
   - .git
+  - CLAUDE.md
+  - "*.md"
