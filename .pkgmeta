@@ -1,0 +1,10 @@
+package-as: FlipQueue
+
+enable-nolib-creation: no
+
+ignore:
+  - README.md
+  - .gitignore
+  - .claude
+  - .vscode
+  - .git

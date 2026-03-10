@@ -1,0 +1,21 @@
+## Interface: 120001
+## Title: FlipQueue
+## Notes: FlippingPal workflow assistant - character routing, inventory tracking, and post management for cross-realm arbitrage
+## Author: Gezmodean
+## Version: 0.2.0
+## SavedVariables: FlipQueueDB
+## OptionalDeps: Auctionator, TradeSkillMaster
+## IconTexture: Interface\Icons\INV_Misc_Coin_02
+
+Core.lua
+Scanner.lua
+Import.lua
+Queue.lua
+Tracker.lua
+UI\Rows.lua
+UI\ImportFrame.lua
+UI\Sections.lua
+UI\LogPage.lua
+UI\UntrackedSection.lua
+UI\MainFrame.lua
+UI\SlashCommands.lua
