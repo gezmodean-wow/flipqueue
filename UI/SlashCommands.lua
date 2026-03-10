@@ -74,6 +74,12 @@ SlashCmdList["FLIPQUEUE"] = function(msg)
             ns:PrintError("Item not found in Do Not Track list: " .. itemName)
         end
 
+    elseif msg == "mini" then
+        UI:ToggleMini()
+
+    elseif msg == "settings" or msg == "config" or msg == "options" then
+        UI:ShowSettings()
+
     elseif msg == "sort" then
         if ns.db then
             ns.db.settings.sortMode = ns.db.settings.sortMode == "realm" and "name" or "realm"
@@ -94,6 +100,8 @@ SlashCmdList["FLIPQUEUE"] = function(msg)
         print("  /fq clear log - Clear posted items log")
         print("  /fq autopull - Toggle auto-pull from bank")
         print("  /fq dnt - Show Do Not Track list")
+        print("  /fq mini - Toggle mini overlay")
+        print("  /fq settings - Open settings panel")
         print("  /fq dnt add <name> - Add item to Do Not Track")
         print("  /fq dnt remove <name> - Remove from Do Not Track")
         print("")

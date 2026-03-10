@@ -158,6 +158,15 @@ mainFrame.dntBtn:SetScript("OnEnter", function(self)
 end)
 mainFrame.dntBtn:SetScript("OnLeave", function() GameTooltip:Hide() end)
 
+mainFrame.settingsBtn = CreateFrame("Button", nil, mainFrame, "GameMenuButtonTemplate")
+mainFrame.settingsBtn:SetSize(70, 22)
+mainFrame.settingsBtn:SetPoint("LEFT", mainFrame.dntBtn, "RIGHT", 3, 0)
+mainFrame.settingsBtn:SetText("Settings")
+mainFrame.settingsBtn:SetNormalFontObject("GameFontNormalSmall")
+mainFrame.settingsBtn:SetScript("OnClick", function()
+    UI:ShowSettings()
+end)
+
 -- ==========================================
 -- SCROLL AREA
 -- ==========================================

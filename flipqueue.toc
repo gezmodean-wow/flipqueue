@@ -17,5 +17,7 @@ UI\ImportFrame.lua
 UI\Sections.lua
 UI\LogPage.lua
 UI\UntrackedSection.lua
+UI\MiniView.lua
+UI\SettingsFrame.lua
 UI\MainFrame.lua
 UI\SlashCommands.lua
