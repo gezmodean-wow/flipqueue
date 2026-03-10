@@ -67,7 +67,13 @@ local function ScanContainers(bagIndices, captureBindInfo)
                 if itemID then
                     local key = ns:MakeItemKey(itemID, bonusIDs, modifiers)
                     if not items[key] then
-                        local itemName = C_Item.GetItemInfo(info.hyperlink)
+                        local itemName
+                        -- Battle pets: C_Item.GetItemInfo returns nil, extract name from link
+                        if info.hyperlink:find("|Hbattlepet:") then
+                            itemName = info.hyperlink:match("|h%[(.-)%]|h")
+                        else
+                            itemName = C_Item.GetItemInfo(info.hyperlink)
+                        end
                         items[key] = {
                             itemID    = itemID,
                             name      = itemName or "Unknown",
@@ -77,9 +83,15 @@ local function ScanContainers(bagIndices, captureBindInfo)
                             icon      = info.iconFileID,
                         }
                         if captureBindInfo then
-                            local bindType, isBound = GetBindInfo(info.hyperlink, info, bagIndex, slot)
-                            items[key].bindType = bindType
-                            items[key].isBound = isBound
+                            -- Battle pets (caged) are always tradeable
+                            if info.hyperlink:find("|Hbattlepet:") then
+                                items[key].bindType = 0
+                                items[key].isBound = false
+                            else
+                                local bindType, isBound = GetBindInfo(info.hyperlink, info, bagIndex, slot)
+                                items[key].bindType = bindType
+                                items[key].isBound = isBound
+                            end
                         end
                     end
                     items[key].quantity = items[key].quantity + (info.stackCount or 1)

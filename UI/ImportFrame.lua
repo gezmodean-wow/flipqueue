@@ -23,7 +23,7 @@ importFrame.instructions = importFrame:CreateFontString(nil, "OVERLAY", "GameFon
 importFrame.instructions:SetPoint("TOPLEFT", importFrame, "TOPLEFT", 15, -35)
 importFrame.instructions:SetPoint("TOPRIGHT", importFrame, "TOPRIGHT", -15, -35)
 importFrame.instructions:SetJustifyH("LEFT")
-importFrame.instructions:SetText("Paste FlippingPal data (website, CSV, tab-delimited, or item names):")
+importFrame.instructions:SetText("Click below and Ctrl+V to paste FlippingPal data:")
 
 local importScroll = CreateFrame("ScrollFrame", "FlipQueueImportScroll", importFrame, "UIPanelScrollFrameTemplate")
 importScroll:SetPoint("TOPLEFT", importFrame, "TOPLEFT", 15, -55)
@@ -36,6 +36,23 @@ importEditBox:SetAutoFocus(false)
 importEditBox:SetMaxLetters(0)
 importEditBox:SetFontObject("ChatFontNormal")
 importEditBox:SetScript("OnEscapePressed", function() importFrame:Hide() end)
+
+-- Auto-detect paste: if text goes from empty to multi-line in one frame, offer quick import
+local lastTextLen = 0
+importEditBox:SetScript("OnTextChanged", function(self, userInput)
+    if not userInput then return end
+    local text = self:GetText()
+    local newLen = #text
+    -- Large paste detected (went from <10 chars to >50 chars in one change)
+    if lastTextLen < 10 and newLen > 50 and text:find("\n") then
+        local items = ns.Import:Parse(text)
+        if #items > 0 then
+            importFrame.importBtn:SetText("Import (" .. #items .. " items)")
+        end
+    end
+    lastTextLen = newLen
+end)
+
 importScroll:SetScrollChild(importEditBox)
 
 -- Import button

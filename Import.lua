@@ -1,6 +1,6 @@
 -- Import.lua
 -- Parse pasted data from FlippingPal website results
--- Supports: FP website copy-paste, semicolon CSV (FP extractor), tab-delimited (Excel), plain item names
+-- Supports: FP website copy-paste, FP comma CSV, semicolon CSV (FP extractor), tab-delimited (Excel), plain item names
 local addonName, ns = ...
 
 local Import = {}
@@ -18,8 +18,9 @@ local KNOWN_QUALITIES = {
 local KNOWN_CATEGORIES = {
     Recipe = true, Pet = true, Armor = true, Profession = true,
     Weapon = true, Consumable = true, Container = true, Gem = true,
-    Miscellaneous = true, Mount = true, Toy = true, Glyph = true,
-    Reagent = true, Enhancement = true, Quest = true, Tradeskill = true,
+    Miscellaneous = true, Mount = true, Toy = true, Toys = true,
+    Glyph = true, Reagent = true, Enhancement = true, Quest = true,
+    Tradeskill = true, Companions = true,
 }
 
 --------------------------
@@ -350,6 +351,155 @@ function Import:ParseTabFormat(text)
 end
 
 --------------------------
+-- RFC 4180 CSV Field Parser (handles quoted fields with commas)
+--------------------------
+
+local function ParseCSVLine(line)
+    local fields = {}
+    local pos = 1
+    local len = #line
+
+    while pos <= len do
+        if line:sub(pos, pos) == '"' then
+            -- Quoted field: find matching close quote
+            local fieldParts = {}
+            pos = pos + 1 -- skip opening quote
+            while pos <= len do
+                local nextQuote = line:find('"', pos, true)
+                if not nextQuote then
+                    -- No closing quote found, take rest of line
+                    table.insert(fieldParts, line:sub(pos))
+                    pos = len + 1
+                    break
+                end
+                if nextQuote < len and line:sub(nextQuote + 1, nextQuote + 1) == '"' then
+                    -- Escaped quote (""), include one quote and continue
+                    table.insert(fieldParts, line:sub(pos, nextQuote))
+                    pos = nextQuote + 2
+                else
+                    -- End of quoted field
+                    table.insert(fieldParts, line:sub(pos, nextQuote - 1))
+                    pos = nextQuote + 1
+                    -- Skip comma after closing quote
+                    if pos <= len and line:sub(pos, pos) == ',' then
+                        pos = pos + 1
+                    end
+                    break
+                end
+            end
+            table.insert(fields, table.concat(fieldParts))
+        else
+            -- Unquoted field: find next comma
+            local nextComma = line:find(',', pos, true)
+            if nextComma then
+                table.insert(fields, line:sub(pos, nextComma - 1))
+                pos = nextComma + 1
+            else
+                table.insert(fields, line:sub(pos))
+                pos = len + 1
+            end
+        end
+    end
+
+    -- Handle trailing comma (empty last field)
+    if len > 0 and line:sub(len, len) == ',' then
+        table.insert(fields, "")
+    end
+
+    return fields
+end
+
+--------------------------
+-- FlippingPal Comma CSV (from FP team export)
+--------------------------
+-- Headers: Item Name,Category,ilvl,Sell Rate,Expansion,Quality,Extra Stats,
+--          Sale Avg,Sale Avg vs Buy %,Sale Avg vs Buy,Sell vs Buy %,Sell vs Buy,
+--          Sell Price,Sell Realm,Buy Price,Buy Realm
+
+function Import:ParseFPCommaCSV(text)
+    local items = {}
+    local lines = {}
+    for line in (text .. "\n"):gmatch("(.-)\n") do
+        local trimmed = strtrim(line)
+        if trimmed ~= "" then
+            table.insert(lines, trimmed)
+        end
+    end
+
+    if #lines < 2 then return items end
+
+    -- Parse header to build column map
+    local headerFields = ParseCSVLine(lines[1])
+    local colMap = {}
+    for i, col in ipairs(headerFields) do
+        col = strtrim(col):lower()
+        if col == "item name" then
+            colMap.name = i
+        elseif col == "category" then
+            colMap.category = i
+        elseif col == "ilvl" then
+            colMap.ilvl = i
+        elseif col == "sell rate" then
+            colMap.sellRate = i
+        elseif col == "expansion" then
+            colMap.expansion = i
+        elseif col == "quality" then
+            colMap.quality = i
+        elseif col == "extra stats" then
+            colMap.extraStats = i
+        elseif col == "sale avg" then
+            colMap.saleAvg = i
+        elseif col == "sell price" then
+            colMap.sellPrice = i
+        elseif col == "sell realm" then
+            colMap.sellRealm = i
+        elseif col == "buy price" then
+            colMap.buyPrice = i
+        elseif col == "buy realm" then
+            colMap.buyRealm = i
+        end
+    end
+
+    if not colMap.name then return items end
+
+    for i = 2, #lines do
+        local fields = ParseCSVLine(lines[i])
+        if #fields >= 2 then
+            local name      = colMap.name and strtrim(fields[colMap.name] or "") or ""
+            local category  = colMap.category and strtrim(fields[colMap.category] or "") or ""
+            local ilvl      = colMap.ilvl and tonumber(strtrim(fields[colMap.ilvl] or "")) or 0
+            local sellRate  = colMap.sellRate and tonumber(strtrim(fields[colMap.sellRate] or "")) or 0
+            local expansion = colMap.expansion and strtrim(fields[colMap.expansion] or "") or ""
+            local quality   = colMap.quality and strtrim(fields[colMap.quality] or "") or ""
+            local sellPrice = colMap.sellPrice and strtrim(fields[colMap.sellPrice] or "") or ""
+            local sellRealm = colMap.sellRealm and strtrim(fields[colMap.sellRealm] or "") or ""
+            local saleAvg   = colMap.saleAvg and strtrim(fields[colMap.saleAvg] or "") or ""
+
+            if name ~= "" then
+                table.insert(items, {
+                    itemKey       = name,
+                    itemID        = "",
+                    name          = name,
+                    quality       = quality,
+                    ilvl          = ilvl or 0,
+                    bonusIDs      = "",
+                    modifiers     = "",
+                    quantity      = 1,
+                    sellRate      = sellRate,
+                    category      = category,
+                    expansion     = expansion,
+                    targetRealm   = sellRealm,
+                    expectedPrice = sellPrice ~= "" and sellPrice or saleAvg,
+                    noCompetition = false,
+                })
+            end
+        end
+    end
+
+    return items
+end
+
+--------------------------
 -- Auto-Detect Format and Parse
 --------------------------
 
@@ -371,6 +521,11 @@ function Import:Parse(text)
 
     local firstLine = text:match("^([^\n]+)")
 
+    -- FlippingPal comma CSV: header starts with "Item Name,"
+    if firstLine and firstLine:find("^Item Name,") then
+        return self:ParseFPCommaCSV(text)
+    end
+
     -- Semicolon-delimited → FlippingPal CSV format (from extractor addon)
     if firstLine and firstLine:find(";") then
         return self:ParseFPFormat(text)
@@ -379,6 +534,13 @@ function Import:Parse(text)
     -- Tab-delimited → clean Excel / table export
     if firstLine and firstLine:find("\t") then
         return self:ParseTabFormat(text)
+    end
+
+    -- Generic comma CSV with header containing known column names
+    if firstLine and firstLine:find(",") and
+       (firstLine:lower():find("sell rate") or firstLine:lower():find("sell realm")
+        or firstLine:lower():find("sell price")) then
+        return self:ParseFPCommaCSV(text)
     end
 
     -- Fallback: each line is an item name
