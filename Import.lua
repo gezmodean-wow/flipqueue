@@ -435,6 +435,8 @@ function Import:ParseFPCommaCSV(text)
         col = strtrim(col):lower()
         if col == "item name" then
             colMap.name = i
+        elseif col == "item id" or col == "itemid" or col == "item_id" then
+            colMap.itemID = i
         elseif col == "category" then
             colMap.category = i
         elseif col == "ilvl" then
@@ -466,6 +468,7 @@ function Import:ParseFPCommaCSV(text)
         local fields = ParseCSVLine(lines[i])
         if #fields >= 2 then
             local name      = colMap.name and strtrim(fields[colMap.name] or "") or ""
+            local itemID    = colMap.itemID and strtrim(fields[colMap.itemID] or "") or ""
             local category  = colMap.category and strtrim(fields[colMap.category] or "") or ""
             local ilvl      = colMap.ilvl and tonumber(strtrim(fields[colMap.ilvl] or "")) or 0
             local sellRate  = colMap.sellRate and tonumber(strtrim(fields[colMap.sellRate] or "")) or 0
@@ -476,9 +479,12 @@ function Import:ParseFPCommaCSV(text)
             local saleAvg   = colMap.saleAvg and strtrim(fields[colMap.saleAvg] or "") or ""
 
             if name ~= "" then
+                -- Use itemID for key if available, fall back to name
+                local key = itemID ~= "" and ns:MakeItemKey(itemID, "", "") or name
+
                 table.insert(items, {
-                    itemKey       = name,
-                    itemID        = "",
+                    itemKey       = key,
+                    itemID        = itemID,
                     name          = name,
                     quality       = quality,
                     ilvl          = ilvl or 0,
