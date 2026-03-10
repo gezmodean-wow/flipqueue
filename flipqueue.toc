@@ -18,5 +18,6 @@ UI\ImportFrame.lua
 UI\UntrackedSection.lua
 UI\MiniView.lua
 UI\SettingsFrame.lua
+UI\MinimapButton.lua
 UI\MainFrame.lua
 UI\SlashCommands.lua

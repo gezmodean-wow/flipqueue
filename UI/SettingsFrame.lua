@@ -1,17 +1,24 @@
 -- UI/SettingsFrame.lua
--- Settings panel for FlipQueue
+-- Settings page rendered inside the main window content area
 local addonName, ns = ...
 
 local UI = ns.UI
 
-local settingsFrame
+local settingsPanel
+local settingsWidgets = {}
 
-local function CreateCheckbox(parent, yOffset, label, settingKey, tooltip)
-    local cb = CreateFrame("CheckButton", nil, parent, "UICheckButtonTemplate")
-    cb:SetSize(24, 24)
-    cb:SetPoint("TOPLEFT", parent, "TOPLEFT", 10, yOffset)
+-- Create a styled checkbox that matches the dark theme
+local function CreateSettingsCheckbox(parent, yOffset, label, settingKey, tooltip)
+    local row = CreateFrame("Frame", nil, parent)
+    row:SetHeight(26)
+    row:SetPoint("TOPLEFT", parent, "TOPLEFT", 8, yOffset)
+    row:SetPoint("RIGHT", parent, "RIGHT", -8, 0)
+
+    local cb = CreateFrame("CheckButton", nil, row, "UICheckButtonTemplate")
+    cb:SetSize(22, 22)
+    cb:SetPoint("LEFT", row, "LEFT", 0, 0)
     cb.text:SetText(label)
-    cb.text:SetFontObject("GameFontNormal")
+    cb.text:SetFontObject("GameFontNormalSmall")
     cb:SetScript("OnClick", function(self)
         if ns.db then
             ns.db.settings[settingKey] = self:GetChecked()
@@ -30,151 +37,246 @@ local function CreateCheckbox(parent, yOffset, label, settingKey, tooltip)
     return cb
 end
 
-function UI:ShowSettings()
-    if not settingsFrame then
-        settingsFrame = CreateFrame("Frame", "FlipQueueSettingsFrame", UIParent, "BasicFrameTemplateWithInset")
-        settingsFrame:SetSize(380, 380)
-        settingsFrame:SetPoint("CENTER")
-        settingsFrame:SetMovable(true)
-        settingsFrame:EnableMouse(true)
-        settingsFrame:RegisterForDrag("LeftButton")
-        settingsFrame:SetScript("OnDragStart", settingsFrame.StartMoving)
-        settingsFrame:SetScript("OnDragStop", settingsFrame.StopMovingOrSizing)
-        settingsFrame:SetFrameStrata("DIALOG")
+local function CreateSectionLabel(parent, yOffset, text)
+    local label = parent:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+    label:SetPoint("TOPLEFT", parent, "TOPLEFT", 8, yOffset)
+    label:SetTextColor(0.9, 0.8, 0.3)
+    label:SetText(text)
+    return label
+end
 
-        settingsFrame.title = settingsFrame:CreateFontString(nil, "OVERLAY")
-        settingsFrame.title:SetFontObject("GameFontHighlight")
-        settingsFrame.title:SetPoint("LEFT", settingsFrame.TitleBg, "LEFT", 5, 0)
-        settingsFrame.title:SetText("FlipQueue - Settings")
+local function CreateSettingsButton(parent, yOffset, label, width, onClick)
+    local btn = CreateFrame("Button", nil, parent, "BackdropTemplate")
+    btn:SetSize(width, 22)
+    btn:SetPoint("TOPLEFT", parent, "TOPLEFT", 10, yOffset)
+    btn:SetBackdrop({
+        bgFile = "Interface\\Tooltips\\UI-Tooltip-Background",
+        edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
+        edgeSize = 10,
+        insets = {left = 2, right = 2, top = 2, bottom = 2},
+    })
+    btn:SetBackdropColor(0.15, 0.15, 0.2, 1)
+    btn:SetBackdropBorderColor(0.3, 0.3, 0.4, 0.8)
 
-        -- Section: Scanning
-        local scanHeader = settingsFrame:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
-        scanHeader:SetPoint("TOPLEFT", settingsFrame, "TOPLEFT", 15, -35)
-        scanHeader:SetText("Scanning")
+    btn.text = btn:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    btn.text:SetPoint("CENTER")
+    btn.text:SetText(label)
 
-        settingsFrame.autoScanCB = CreateCheckbox(settingsFrame, -55,
-            "Auto-scan bags on login",
-            "autoScan",
-            "Automatically scan your character's bags when you log in.")
+    btn:SetScript("OnClick", onClick)
+    btn:SetScript("OnEnter", function(self)
+        self:SetBackdropColor(0.2, 0.2, 0.3, 1)
+    end)
+    btn:SetScript("OnLeave", function(self)
+        self:SetBackdropColor(0.15, 0.15, 0.2, 1)
+    end)
+    return btn
+end
 
-        settingsFrame.autoPullCB = CreateCheckbox(settingsFrame, -80,
-            "Auto-pull queued items from bank",
-            "autoPullBank",
-            "When you open the bank, automatically move queued items to your bags.")
+function UI:CreateSettingsPanel(parent)
+    if settingsPanel then return settingsPanel end
 
-        -- Section: Notifications
-        local notifHeader = settingsFrame:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
-        notifHeader:SetPoint("TOPLEFT", settingsFrame, "TOPLEFT", 15, -115)
-        notifHeader:SetText("Notifications")
+    -- Scrollable settings container
+    local scroll = CreateFrame("ScrollFrame", nil, parent, "UIPanelScrollFrameTemplate")
+    scroll:SetPoint("TOPLEFT", parent, "TOPLEFT", 0, 0)
+    scroll:SetPoint("BOTTOMRIGHT", parent, "BOTTOMRIGHT", -16, 0)
 
-        settingsFrame.loginMsgCB = CreateCheckbox(settingsFrame, -135,
-            "Show login message",
-            "showLoginMessage",
-            "Show a chat message on login if there are items to post on this character.")
+    local content = CreateFrame("Frame", nil, scroll)
+    content:SetWidth(scroll:GetWidth())
+    content:SetHeight(500)
+    scroll:SetScrollChild(content)
 
-        -- Section: Mini View
-        local miniHeader = settingsFrame:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
-        miniHeader:SetPoint("TOPLEFT", settingsFrame, "TOPLEFT", 15, -170)
-        miniHeader:SetText("Mini View")
+    scroll:SetScript("OnSizeChanged", function(sf, w)
+        content:SetWidth(w)
+    end)
 
-        settingsFrame.showMiniCB = CreateCheckbox(settingsFrame, -190,
-            "Show mini overlay",
-            "showMini",
-            "Show a compact overlay with current-character tasks. Persists across sessions.")
+    local y = -10
 
-        settingsFrame.showMiniCB:SetScript("OnClick", function(self)
-            if ns.db then
-                ns.db.settings.showMini = self:GetChecked()
-                if self:GetChecked() then
-                    UI:ShowMini()
-                else
-                    UI:HideMini()
-                end
+    -- Section: Scanning
+    CreateSectionLabel(content, y, "Scanning")
+    y = y - 22
+
+    settingsWidgets.autoScan = CreateSettingsCheckbox(content, y,
+        "Auto-scan bags on login", "autoScan",
+        "Automatically scan your character's bags when you log in.")
+    y = y - 26
+
+    settingsWidgets.autoPull = CreateSettingsCheckbox(content, y,
+        "Auto-pull queued items from bank", "autoPullBank",
+        "When you open the bank, automatically move queued items to your bags.")
+    y = y - 36
+
+    -- Section: Notifications
+    CreateSectionLabel(content, y, "Notifications")
+    y = y - 22
+
+    settingsWidgets.loginMsg = CreateSettingsCheckbox(content, y,
+        "Show login message", "showLoginMessage",
+        "Show a chat message on login if there are items to post on this character.")
+    y = y - 36
+
+    -- Section: Mini View
+    CreateSectionLabel(content, y, "Mini View")
+    y = y - 22
+
+    settingsWidgets.showMini = CreateSettingsCheckbox(content, y,
+        "Show mini overlay", "showMini",
+        "Show a compact overlay with current-character tasks. Persists across sessions.")
+    settingsWidgets.showMini:SetScript("OnClick", function(self)
+        if ns.db then
+            ns.db.settings.showMini = self:GetChecked()
+            if self:GetChecked() then
+                UI:ShowMini()
+            else
+                UI:HideMini()
             end
-        end)
+        end
+    end)
+    y = y - 28
 
-        -- Section: Display
-        local displayHeader = settingsFrame:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
-        displayHeader:SetPoint("TOPLEFT", settingsFrame, "TOPLEFT", 15, -225)
-        displayHeader:SetText("Display")
+    settingsWidgets.showMinimap = CreateSettingsCheckbox(content, y,
+        "Show minimap icon", "showMinimap",
+        "Show the FlipQueue icon on the minimap border.")
+    settingsWidgets.showMinimap:SetScript("OnClick", function(self)
+        if ns.db then
+            ns.db.settings.showMinimap = self:GetChecked()
+            if self:GetChecked() then
+                UI:ShowMinimapButton()
+            else
+                UI:HideMinimapButton()
+            end
+        end
+    end)
+    y = y - 28
 
-        -- Sort mode dropdown (simple toggle button)
-        local sortLabel = settingsFrame:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-        sortLabel:SetPoint("TOPLEFT", settingsFrame, "TOPLEFT", 15, -250)
-        sortLabel:SetText("Default sort mode:")
+    settingsWidgets.resetMiniPos = CreateSettingsButton(content, y, "Reset Mini Position", 160, function()
+        if ns.db then
+            ns.db.settings.miniPos = nil
+            if UI.miniFrame and UI.miniFrame:IsShown() then
+                UI.miniFrame:ClearAllPoints()
+                UI.miniFrame:SetPoint("TOPRIGHT", UIParent, "TOPRIGHT", -200, -200)
+            end
+            ns:Print("Mini view position reset.")
+        end
+    end)
+    y = y - 38
 
-        settingsFrame.sortBtn = CreateFrame("Button", nil, settingsFrame, "GameMenuButtonTemplate")
-        settingsFrame.sortBtn:SetSize(100, 22)
-        settingsFrame.sortBtn:SetPoint("LEFT", sortLabel, "RIGHT", 8, 0)
-        settingsFrame.sortBtn:SetNormalFontObject("GameFontNormalSmall")
-        settingsFrame.sortBtn:SetScript("OnClick", function()
-            if ns.db then
-                ns.db.settings.sortMode = ns.db.settings.sortMode == "realm" and "name" or "realm"
-                UI:RefreshSettings()
+    -- Section: Data Management
+    CreateSectionLabel(content, y, "Data Management")
+    y = y - 24
+
+    settingsWidgets.clearInv = CreateSettingsButton(content, y, "Clear All Inventory Data", 190, function()
+        StaticPopupDialogs["FLIPQUEUE_CLEAR_INVENTORY"] = {
+            text = "Clear all saved inventory data? You will need to rescan on each character.",
+            button1 = "Yes",
+            button2 = "No",
+            OnAccept = function()
+                if ns.db then
+                    wipe(ns.db.inventory)
+                    wipe(ns.db.warbank)
+                    ns:Print("All inventory data cleared.")
+                    UI:Refresh()
+                end
+            end,
+            timeout = 0,
+            whileDead = true,
+            hideOnEscape = true,
+        }
+        StaticPopup_Show("FLIPQUEUE_CLEAR_INVENTORY")
+    end)
+    y = y - 28
+
+    settingsWidgets.clearQueue = CreateSettingsButton(content, y, "Clear Entire Queue", 190, function()
+        StaticPopupDialogs["FLIPQUEUE_CLEAR_ALL_SETTINGS"] = {
+            text = "Clear ALL items from the FlipQueue?",
+            button1 = "Yes",
+            button2 = "No",
+            OnAccept = function()
+                ns.Queue:Clear()
+                ns:Print("Queue cleared.")
                 UI:Refresh()
-            end
-        end)
+            end,
+            timeout = 0,
+            whileDead = true,
+            hideOnEscape = true,
+        }
+        StaticPopup_Show("FLIPQUEUE_CLEAR_ALL_SETTINGS")
+    end)
+    y = y - 28
 
-        -- Reset mini position button
-        local resetPosBtn = CreateFrame("Button", nil, settingsFrame, "GameMenuButtonTemplate")
-        resetPosBtn:SetSize(160, 24)
-        resetPosBtn:SetPoint("TOPLEFT", settingsFrame, "TOPLEFT", 15, -285)
-        resetPosBtn:SetText("Reset Mini Position")
-        resetPosBtn:SetNormalFontObject("GameFontNormalSmall")
-        resetPosBtn:SetScript("OnClick", function()
-            if ns.db then
-                ns.db.settings.miniPos = nil
-                if UI.miniFrame:IsShown() then
-                    UI.miniFrame:ClearAllPoints()
-                    UI.miniFrame:SetPoint("TOPRIGHT", UIParent, "TOPRIGHT", -200, -200)
-                end
-                ns:Print("Mini view position reset.")
-            end
-        end)
+    settingsWidgets.clearLog = CreateSettingsButton(content, y, "Clear Posted Items Log", 190, function()
+        StaticPopupDialogs["FLIPQUEUE_CLEAR_LOG_SETTINGS"] = {
+            text = "Clear ALL items from the posted log?",
+            button1 = "Yes",
+            button2 = "No",
+            OnAccept = function()
+                ns.Queue:ClearLog()
+                ns:Print("Log cleared.")
+                UI:Refresh()
+            end,
+            timeout = 0,
+            whileDead = true,
+            hideOnEscape = true,
+        }
+        StaticPopup_Show("FLIPQUEUE_CLEAR_LOG_SETTINGS")
+    end)
+    y = y - 28
 
-        -- Clear inventory data button
-        local clearInvBtn = CreateFrame("Button", nil, settingsFrame, "GameMenuButtonTemplate")
-        clearInvBtn:SetSize(160, 24)
-        clearInvBtn:SetPoint("TOPLEFT", settingsFrame, "TOPLEFT", 15, -315)
-        clearInvBtn:SetText("Clear All Inventory Data")
-        clearInvBtn:SetNormalFontObject("GameFontNormalSmall")
-        clearInvBtn:SetScript("OnClick", function()
-            StaticPopupDialogs["FLIPQUEUE_CLEAR_INVENTORY"] = {
-                text = "Clear all saved inventory data? You will need to rescan on each character.",
-                button1 = "Yes",
-                button2 = "No",
-                OnAccept = function()
-                    if ns.db then
-                        wipe(ns.db.inventory)
-                        wipe(ns.db.warbank)
-                        ns:Print("All inventory data cleared.")
-                        UI:Refresh()
-                    end
-                end,
-                timeout = 0,
-                whileDead = true,
-                hideOnEscape = true,
-            }
-            StaticPopup_Show("FLIPQUEUE_CLEAR_INVENTORY")
-        end)
+    settingsWidgets.clearDNT = CreateSettingsButton(content, y, "Clear Do Not Track List", 190, function()
+        if ns.db then
+            wipe(ns.db.doNotTrack)
+            ns:Print("Do Not Track list cleared.")
+            UI:Refresh()
+        end
+    end)
+    y = y - 40
 
-        -- Version info
-        local versionText = settingsFrame:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
-        versionText:SetPoint("BOTTOMRIGHT", settingsFrame, "BOTTOMRIGHT", -10, 10)
-        versionText:SetText("FlipQueue v" .. ns.VERSION)
+    -- Version
+    local ver = content:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+    ver:SetPoint("TOPLEFT", content, "TOPLEFT", 8, y)
+    ver:SetText("FlipQueue v" .. ns.VERSION)
+
+    content:SetHeight(math.abs(y) + 20)
+
+    settingsPanel = scroll
+    return settingsPanel
+end
+
+function UI:ShowSettingsPage()
+    if not settingsPanel then
+        self:CreateSettingsPanel(self.tableContainer)
     end
-
-    settingsFrame:Show()
+    settingsPanel:Show()
     self:RefreshSettings()
 end
 
-function UI:RefreshSettings()
-    if not settingsFrame or not settingsFrame:IsShown() then return end
-    if not ns.db then return end
+function UI:HideSettingsPage()
+    if settingsPanel then
+        settingsPanel:Hide()
+    end
+end
 
-    settingsFrame.autoScanCB:SetChecked(ns.db.settings.autoScan)
-    settingsFrame.autoPullCB:SetChecked(ns.db.settings.autoPullBank)
-    settingsFrame.loginMsgCB:SetChecked(ns.db.settings.showLoginMessage)
-    settingsFrame.showMiniCB:SetChecked(ns.db.settings.showMini)
-    settingsFrame.sortBtn:SetText(ns.db.settings.sortMode == "realm" and "By Realm" or "By Name")
+function UI:RefreshSettings()
+    if not ns.db then return end
+    if settingsWidgets.autoScan then
+        settingsWidgets.autoScan:SetChecked(ns.db.settings.autoScan)
+    end
+    if settingsWidgets.autoPull then
+        settingsWidgets.autoPull:SetChecked(ns.db.settings.autoPullBank)
+    end
+    if settingsWidgets.loginMsg then
+        settingsWidgets.loginMsg:SetChecked(ns.db.settings.showLoginMessage)
+    end
+    if settingsWidgets.showMini then
+        settingsWidgets.showMini:SetChecked(ns.db.settings.showMini)
+    end
+    if settingsWidgets.showMinimap then
+        settingsWidgets.showMinimap:SetChecked(ns.db.settings.showMinimap ~= false)
+    end
+end
+
+-- Legacy ShowSettings opens the main window to settings page
+function UI:ShowSettings()
+    self.currentPage = "settings"
+    self.mainFrame:Show()
+    self:Refresh()
 end
