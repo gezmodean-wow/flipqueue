@@ -527,8 +527,8 @@ function Import:Parse(text)
 
     local firstLine = text:match("^([^\n]+)")
 
-    -- FlippingPal comma CSV: header starts with "Item Name,"
-    if firstLine and firstLine:find("^Item Name,") then
+    -- FlippingPal comma CSV: header starts with "Item Name," or "Item ID,"
+    if firstLine and (firstLine:find("^Item Name,") or firstLine:find("^Item ID,")) then
         return self:ParseFPCommaCSV(text)
     end
 

@@ -41,6 +41,16 @@ SlashCmdList["FLIPQUEUE"] = function(msg)
         UI.mainFrame:Show()
         UI:Refresh()
 
+    elseif msg == "queue" then
+        UI.currentPage = "queue"
+        UI.mainFrame:Show()
+        UI:Refresh()
+
+    elseif msg == "inv" or msg == "inventory" then
+        UI.currentPage = "inventory"
+        UI.mainFrame:Show()
+        UI:Refresh()
+
     elseif msg == "autopull" then
         if ns.db then
             ns.db.settings.autoPullBank = not ns.db.settings.autoPullBank

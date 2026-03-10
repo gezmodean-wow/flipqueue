@@ -3,7 +3,7 @@
 local addonName, ns = ...
 
 ns.ADDON_NAME = "FlipQueue"
-ns.VERSION = "0.2.0"
+ns.VERSION = "0.3.0"
 
 -- Bag index constants (TWW 12.0+)
 ns.INVENTORY_BAGS = {0, 1, 2, 3, 4}
