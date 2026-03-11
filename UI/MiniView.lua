@@ -168,7 +168,7 @@ function UI:RefreshMini()
     -- Hide all rows
     for _, row in ipairs(miniRows) do
         row:Hide()
-        row:SetScript("OnMouseUp", nil)
+        row:SetScript("OnMouseDown", nil)
         row.tooltipItemID = nil
         row.tooltipItemName = nil
         row.tooltipExtra = nil
@@ -226,12 +226,17 @@ function UI:RefreshMini()
 
             row.text:SetText(ns.COLORS.WHITE .. task.queueItem.name .. ns.COLORS.RESET .. priceStr .. locStr)
 
-            -- Right-click to mark posted
+            -- Right-click to mark posted, Shift+Right to skip
             local capturedTask = task
-            row:SetScript("OnMouseUp", function(self, button)
+            row:SetScript("OnMouseDown", function(self, button)
                 if button == "RightButton" then
-                    ns.Queue:MarkPosted(capturedTask.queueIndex)
-                    ns:Print("Posted: " .. capturedTask.queueItem.name .. " -> moved to log")
+                    if IsShiftKeyDown() then
+                        ns.Queue:Skip(capturedTask.queueIndex)
+                        ns:Print(ns.COLORS.ORANGE .. "Skipped:|r " .. capturedTask.queueItem.name .. " (will reappear in 24h)")
+                    else
+                        ns.Queue:MarkPosted(capturedTask.queueIndex)
+                        ns:Print("Posted: " .. capturedTask.queueItem.name .. " -> moved to log")
+                    end
                     UI:RefreshMini()
                     UI:Refresh()
                 end
@@ -254,7 +259,7 @@ function UI:RefreshMini()
         sepRow.tooltipItemID = nil
         sepRow.tooltipItemName = nil
         sepRow.tooltipExtra = nil
-        sepRow:SetScript("OnMouseUp", nil)
+        sepRow:SetScript("OnMouseDown", nil)
         sepRow:Show()
 
         for idx = 1, math.min(#nextData, MAX_MINI_STEPS) do
@@ -266,7 +271,7 @@ function UI:RefreshMini()
             row.tooltipItemID = nil
             row.tooltipItemName = step._tooltipText
             row.tooltipExtra = step._tooltipExtra
-            row:SetScript("OnMouseUp", nil)
+            row:SetScript("OnMouseDown", nil)
 
             local valueStr = ""
             if step.value and step.value ~= "" then
@@ -287,7 +292,7 @@ function UI:RefreshMini()
             moreRow.tooltipItemID = nil
             moreRow.tooltipItemName = nil
             moreRow.tooltipExtra = nil
-            moreRow:SetScript("OnMouseUp", nil)
+            moreRow:SetScript("OnMouseDown", nil)
             moreRow:Show()
         end
     elseif #tasks == 0 and ns.Queue:GetPendingCount() == 0 then
@@ -300,7 +305,7 @@ function UI:RefreshMini()
         row.tooltipItemID = nil
         row.tooltipItemName = nil
         row.tooltipExtra = nil
-        row:SetScript("OnMouseUp", nil)
+        row:SetScript("OnMouseDown", nil)
         row:Show()
     end
 

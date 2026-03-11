@@ -296,6 +296,7 @@ function Tracker:AutoPullFromBank()
         end
     end
 
+    local pulledNames = {}
     for _, bagIndex in ipairs(allBankTabs) do
         local numSlots = C_Container.GetContainerNumSlots(bagIndex)
         for slot = 1, numSlots do
@@ -309,6 +310,7 @@ function Tracker:AutoPullFromBank()
                             C_Container.UseContainerItem(bagIndex, slot)
                             needed[queueItem] = count - (info.stackCount or 1)
                             pulled = pulled + 1
+                            table.insert(pulledNames, queueItem.name or "?")
                             break  -- This slot is consumed, move to next slot
                         end
                     end
@@ -318,7 +320,7 @@ function Tracker:AutoPullFromBank()
     end
 
     if pulled > 0 then
-        ns:Print("Auto-pulled " .. pulled .. " stack(s) from bank/warbank to bags.")
+        ns:Print("Auto-pulled " .. pulled .. " item(s) from bank: " .. table.concat(pulledNames, ", "))
         C_Timer.After(1, function()
             ns.Scanner:ScanCurrentCharacter()
             if ns.UI and ns.UI.Refresh then ns.UI:Refresh() end
@@ -348,9 +350,9 @@ function Tracker:AutoWithdrawGold()
 
     if totalExpectedGold <= 0 then return end
 
-    -- Estimate AH listing fees as 5% of total expected value (conservative)
-    local estimatedFees = math.ceil(totalExpectedGold * 0.05)
-    estimatedFees = math.max(estimatedFees, 100) -- minimum 100g
+    -- AH deposits are based on vendor price (tiny relative to AH price).
+    -- Cap at 100g — more than enough for listing fees on any character.
+    local estimatedFees = math.min(math.ceil(totalExpectedGold * 0.01), 100)
 
     local playerGold = math.floor(GetMoney() / 10000)
     if playerGold >= estimatedFees then return end -- already have enough
@@ -543,6 +545,10 @@ frame:SetScript("OnEvent", function(self, event)
 
     elseif event == "BANKFRAME_OPENED" then
         C_Timer.After(1, function()
+            -- Rescan warbank so task counts stay in sync
+            if ns.Scanner and ns.Scanner.ScanWarbank then
+                ns.Scanner:ScanWarbank()
+            end
             Tracker:AutoPullFromBank()
             Tracker:AutoWithdrawGold()
         end)

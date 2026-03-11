@@ -206,7 +206,7 @@ function ScrollTableMixin:Render()
     for _, row in ipairs(self.rows) do
         row:Hide()
         row._onEnter = nil
-        row:SetScript("OnMouseUp", nil)
+        row:SetScript("OnMouseDown", nil)
     end
 
     for i, rowData in ipairs(self.data) do
@@ -279,7 +279,7 @@ function ScrollTableMixin:Render()
         if self.onRowClick then
             local capturedData = rowData
             local capturedIndex = i
-            row:SetScript("OnMouseUp", function(_, button)
+            row:SetScript("OnMouseDown", function(_, button)
                 self.onRowClick(capturedData, button, capturedIndex)
             end)
         end

@@ -143,6 +143,36 @@ function Queue:MarkPosted(index)
     end
 end
 
+-- Skip a queue item (price too low, etc.) — hides from Post Now for 24h
+function Queue:Skip(index)
+    if ns.db and ns.db.queue[index] then
+        ns.db.queue[index].status = "skipped"
+        ns.db.queue[index].skippedAt = time()
+    end
+end
+
+-- Unskip a queue item — returns to pending
+function Queue:Unskip(index)
+    if ns.db and ns.db.queue[index] and ns.db.queue[index].status == "skipped" then
+        ns.db.queue[index].status = "pending"
+        ns.db.queue[index].skippedAt = nil
+    end
+end
+
+-- Auto-unskip items that have been skipped for more than 24h
+function Queue:UnskipExpired()
+    if not ns.db then return end
+    local now = time()
+    for _, item in ipairs(ns.db.queue) do
+        if item.status == "skipped" and item.skippedAt then
+            if now - item.skippedAt > 86400 then
+                item.status = "pending"
+                item.skippedAt = nil
+            end
+        end
+    end
+end
+
 function Queue:ClearLog()
     if ns.db then
         wipe(ns.db.log)

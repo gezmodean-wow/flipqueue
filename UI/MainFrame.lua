@@ -1083,7 +1083,8 @@ local function BuildQueueData()
             price   = item.expectedPrice or "",
             realm   = item.targetRealm or "",
             foundOn = foundStr,
-            status  = item.status == "posted" and "POSTED" or "pending",
+            status  = item.status == "skipped" and (ns.COLORS.ORANGE .. "Skipped" .. "|r") or
+                      item.status == "posted" and "POSTED" or "pending",
             _icon   = icon,
             _tooltipItemID = resolvedID,
             _tooltipText   = item.name ~= "" and item.name or tostring(item.itemID),
@@ -1589,15 +1590,20 @@ function UI:Refresh()
             self._postSummaryFrame:Hide()
             ShowTable(self.postNowTable)
 
-            self.postNowTable:SetData(data)
             self.postNowTable:SetRowClickHandler(function(rowData, button)
                 if button == "RightButton" and rowData._queueIndex then
-                    ns.Queue:MarkPosted(rowData._queueIndex)
-                    ns:Print("Posted: " .. rowData.name .. " -> moved to log")
+                    if IsShiftKeyDown() then
+                        ns.Queue:Skip(rowData._queueIndex)
+                        ns:Print(ns.COLORS.ORANGE .. "Skipped:|r " .. rowData.name .. " (will reappear in 24h)")
+                    else
+                        ns.Queue:MarkPosted(rowData._queueIndex)
+                        ns:Print("Posted: " .. rowData.name .. " -> moved to log")
+                    end
                     self:Refresh()
                     self:RefreshMini()
                 end
             end)
+            self.postNowTable:SetData(data)
 
             if #nextData > 0 then
                 local postNowHeight = math.max(60, (#data + 1) * 20 + 22)
@@ -1638,7 +1644,7 @@ function UI:Refresh()
                 self.postNowTable.scrollFrame:SetPoint("BOTTOMRIGHT", tableContainer, "BOTTOMRIGHT", -22, 0)
             end
 
-            mainFrame.statusText:SetText(postCount .. " items to post  |  " .. #nextData .. " next steps  |  Right-click to mark posted")
+            mainFrame.statusText:SetText(postCount .. " items to post  |  " .. #nextData .. " next steps  |  Right-click: posted  |  Shift+Right: skip")
         end
 
     elseif self.currentPage == "queue" then
@@ -1647,18 +1653,37 @@ function UI:Refresh()
         ShowTable(self.queueTable)
 
         local data = BuildQueueData()
-        self.queueTable:SetData(data)
         self.queueTable:SetRowClickHandler(function(rowData, button)
             if button == "RightButton" and rowData._queueItem then
-                if rowData._queueItem.status == "pending" then
-                    ns.Queue:MarkPosted(rowData._queueIndex)
-                    ns:Print("Posted: " .. rowData.name .. " -> moved to log")
+                if rowData._queueItem.status == "skipped" then
+                    ns.Queue:Unskip(rowData._queueIndex)
+                    ns:Print(ns.COLORS.GREEN .. "Unskipped:|r " .. rowData.name)
+                    self:Refresh()
+                    self:RefreshMini()
+                elseif rowData._queueItem.status == "pending" then
+                    if IsShiftKeyDown() then
+                        ns.Queue:Skip(rowData._queueIndex)
+                        ns:Print(ns.COLORS.ORANGE .. "Skipped:|r " .. rowData.name)
+                    else
+                        ns.Queue:MarkPosted(rowData._queueIndex)
+                        ns:Print("Posted: " .. rowData.name .. " -> moved to log")
+                    end
                     self:Refresh()
                     self:RefreshMini()
                 end
             end
         end)
-        mainFrame.statusText:SetText(#ns.db.queue .. " items in queue  |  Right-click to mark as posted")
+        self.queueTable:SetData(data)
+        local skippedCount = 0
+        for _, item in ipairs(ns.db.queue) do
+            if item.status == "skipped" then skippedCount = skippedCount + 1 end
+        end
+        local queueStatus = #ns.db.queue .. " items in queue"
+        if skippedCount > 0 then
+            queueStatus = queueStatus .. "  |  " .. skippedCount .. " skipped"
+        end
+        queueStatus = queueStatus .. "  |  Right-click: posted  |  Shift+Right: skip"
+        mainFrame.statusText:SetText(queueStatus)
 
     elseif self.currentPage == "log" then
         mainFrame.pageTitle:SetText(ns.COLORS.GREEN .. "Posted Items Log" .. "|r")
@@ -1666,7 +1691,6 @@ function UI:Refresh()
         ShowTable(self.logTable)
 
         local data = BuildLogData()
-        self.logTable:SetData(data)
         self.logTable:SetRowClickHandler(function(rowData, button)
             if button == "RightButton" and IsShiftKeyDown() and rowData._logIndex then
                 table.remove(ns.db.log, rowData._logIndex)
@@ -1674,6 +1698,7 @@ function UI:Refresh()
                 self:Refresh()
             end
         end)
+        self.logTable:SetData(data)
         mainFrame.statusText:SetText(logCount .. " logged items  |  Shift+Right-click to remove")
 
     elseif self.currentPage == "inventory" then
@@ -1682,7 +1707,6 @@ function UI:Refresh()
         ShowTable(self.inventoryTable)
 
         local data = BuildInventoryData()
-        self.inventoryTable:SetData(data)
         self.inventoryTable:SetRowClickHandler(function(rowData, button)
             if button == "RightButton" then
                 if IsShiftKeyDown() then
@@ -1704,6 +1728,7 @@ function UI:Refresh()
                 self:Refresh()
             end
         end)
+        self.inventoryTable:SetData(data)
         mainFrame.statusText:SetText(#data .. " untracked items  |  Right-click: DNT  |  Shift+Right: Add to queue")
 
     elseif self.currentPage == "characters" then
@@ -1714,7 +1739,6 @@ function UI:Refresh()
 
         -- Show known characters table
         ShowTable(self.charsTable)
-        self.charsTable:SetData(charData)
         self.charsTable:SetRowClickHandler(function(rowData, button)
             if button == "RightButton" and rowData._charKey then
                 if ns.db.hiddenCharacters[rowData._charKey] then
@@ -1727,6 +1751,7 @@ function UI:Refresh()
                 self:Refresh()
             end
         end)
+        self.charsTable:SetData(charData)
 
         -- Show "need characters" table below if there are entries
         if #needData > 0 then

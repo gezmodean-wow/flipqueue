@@ -233,6 +233,11 @@ frame:SetScript("OnEvent", function(self, event)
         ns:InitDB()
         UpdateCharacterMeta()
 
+        -- Auto-unskip items that have been skipped for more than 24h
+        if ns.Queue and ns.Queue.UnskipExpired then
+            ns.Queue:UnskipExpired()
+        end
+
         if ns.db.settings.autoScan then
             C_Timer.After(2, function()
                 Scanner:ScanCurrentCharacter()
