@@ -151,15 +151,30 @@ end
 -- Inventory Matching
 --------------------------
 
-function Queue:FindItemLocations(itemKey)
+function Queue:FindItemLocations(itemKey, itemName)
     if not ns.db then return {} end
 
     local locations = {}
+    -- Try to resolve numeric ID for cross-format matching
+    local resolvedID
+    local numID = tonumber(itemKey and itemKey:match("^(%d+);"))
+    if numID and numID > 0 then
+        resolvedID = numID
+    elseif itemName and itemName ~= "" then
+        -- Look up by name to get numeric ID
+        resolvedID = ns:ResolveItemID({itemID = "", name = itemName})
+    end
 
     for charKey, charData in pairs(ns.db.inventory) do
         if charData.items then
             for key, itemData in pairs(charData.items) do
-                if key == itemKey then
+                local matched = (key == itemKey)
+                -- Also try numeric ID match
+                if not matched and resolvedID then
+                    local invNumID = tonumber(key:match("^(%d+);"))
+                    if invNumID and invNumID == resolvedID then matched = true end
+                end
+                if matched then
                     table.insert(locations, {
                         charKey   = charKey,
                         class     = charData.class,
@@ -174,7 +189,12 @@ function Queue:FindItemLocations(itemKey)
 
     if ns.db.warbank and ns.db.warbank.items then
         for key, itemData in pairs(ns.db.warbank.items) do
-            if key == itemKey then
+            local matched = (key == itemKey)
+            if not matched and resolvedID then
+                local invNumID = tonumber(key:match("^(%d+);"))
+                if invNumID and invNumID == resolvedID then matched = true end
+            end
+            if matched then
                 table.insert(locations, {
                     charKey   = "Warbank",
                     quantity  = itemData.quantity,
@@ -232,6 +252,35 @@ end
 -- Character Task Matching
 --------------------------
 
+-- Match a queue item against an inventory item by key, ID, or name
+local function InventoryMatchesQueue(invKey, invData, queueItem, resolvedID)
+    -- Exact key match
+    if invKey == queueItem.itemKey then return true, false end
+
+    -- Numeric ID match: extract ID from inventory key, compare with queue item's resolved ID
+    if resolvedID then
+        local invNumID = tonumber(invKey:match("^(%d+);"))
+        if invNumID and invNumID == resolvedID then return true, false end
+    end
+
+    -- Exact name match
+    if invData.name and queueItem.name ~= "" then
+        if invData.name:lower() == queueItem.name:lower() then
+            return true, true
+        end
+        -- Fuzzy name match (substring, min 8 chars)
+        if #queueItem.name >= 8 then
+            local iName = invData.name:lower()
+            local qName = queueItem.name:lower()
+            if iName:find(qName, 1, true) or qName:find(iName, 1, true) then
+                return true, true
+            end
+        end
+    end
+
+    return false, false
+end
+
 function Queue:GetCharacterTasks(charKey)
     if not ns.db then return {} end
 
@@ -241,10 +290,12 @@ function Queue:GetCharacterTasks(charKey)
     for i, queueItem in ipairs(ns.db.queue) do
         if queueItem.status == "pending" then
             local found = false
+            local resolvedID = ns:ResolveItemID(queueItem)
 
             if charData and charData.items then
                 for itemKey, itemData in pairs(charData.items) do
-                    if itemKey == queueItem.itemKey then
+                    local matched, fuzzy = InventoryMatchesQueue(itemKey, itemData, queueItem, resolvedID)
+                    if matched then
                         table.insert(tasks, {
                             queueIndex = i,
                             queueItem  = queueItem,
@@ -253,25 +304,7 @@ function Queue:GetCharacterTasks(charKey)
                             quantity   = itemData.quantity,
                             locations  = itemData.locations,
                             icon       = itemData.icon,
-                        })
-                        found = true
-                        break
-                    end
-                end
-            end
-
-            if not found and charData and charData.items and queueItem.name ~= "" then
-                for itemKey, itemData in pairs(charData.items) do
-                    if itemData.name and itemData.name:lower() == queueItem.name:lower() then
-                        table.insert(tasks, {
-                            queueIndex = i,
-                            queueItem  = queueItem,
-                            source     = "character",
-                            charKey    = charKey,
-                            quantity   = itemData.quantity,
-                            locations  = itemData.locations,
-                            icon       = itemData.icon,
-                            fuzzyMatch = true,
+                            fuzzyMatch = fuzzy,
                         })
                         found = true
                         break
@@ -281,9 +314,8 @@ function Queue:GetCharacterTasks(charKey)
 
             if not found and ns.db.warbank and ns.db.warbank.items then
                 for itemKey, itemData in pairs(ns.db.warbank.items) do
-                    if itemKey == queueItem.itemKey or
-                       (itemData.name and queueItem.name ~= "" and
-                        itemData.name:lower() == queueItem.name:lower()) then
+                    local matched, fuzzy = InventoryMatchesQueue(itemKey, itemData, queueItem, resolvedID)
+                    if matched then
                         table.insert(tasks, {
                             queueIndex = i,
                             queueItem  = queueItem,
@@ -291,6 +323,7 @@ function Queue:GetCharacterTasks(charKey)
                             quantity   = itemData.quantity,
                             locations  = {warbank = itemData.quantity},
                             icon       = itemData.icon,
+                            fuzzyMatch = fuzzy,
                         })
                         break
                     end

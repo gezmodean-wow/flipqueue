@@ -17,11 +17,26 @@ local prePostSnapshot = {}
 -- Item Matching
 --------------------------
 
--- Check if a scanned item matches a queue item by key or name
+-- Check if a scanned item matches a queue item by key, ID, or name
 local function MatchesQueueItem(scannedKey, scannedLink, queueItem)
     -- Exact key match
     if scannedKey == queueItem.itemKey then
         return true
+    end
+
+    -- Numeric ID match: compare scanned item's ID with resolved queue ID
+    local scannedID = scannedKey and scannedKey:match("^(%d+);")
+    local scannedNumID = tonumber(scannedID)
+    if scannedNumID and scannedNumID > 0 then
+        local queueNumID = tonumber(queueItem.itemID)
+        if queueNumID and queueNumID > 0 and scannedNumID == queueNumID then
+            return true
+        end
+        -- Try resolved ID from inventory
+        local resolvedID = ns:ResolveItemID(queueItem)
+        if resolvedID and scannedNumID == resolvedID then
+            return true
+        end
     end
 
     -- Name-based fallback: extract name from link and compare
@@ -32,8 +47,17 @@ local function MatchesQueueItem(scannedKey, scannedLink, queueItem)
         else
             scannedName = C_Item.GetItemInfo(scannedLink)
         end
-        if scannedName and scannedName:lower() == queueItem.name:lower() then
-            return true
+        if scannedName then
+            local sName = scannedName:lower()
+            local qName = queueItem.name:lower()
+            -- Exact match
+            if sName == qName then return true end
+            -- Fuzzy: substring match (min 8 chars to avoid false positives)
+            if #queueItem.name >= 8 then
+                if sName:find(qName, 1, true) or qName:find(sName, 1, true) then
+                    return true
+                end
+            end
         end
     end
 
@@ -175,6 +199,14 @@ function Tracker:CheckOwnedAuctions()
     end
     ownedAuctionCheckRetries = 0
 
+    -- Pre-resolve queue item numeric IDs from scanned inventory data
+    local resolvedIDs = {}
+    for i, queueItem in ipairs(ns.db.queue) do
+        if queueItem.status == "pending" then
+            resolvedIDs[i] = ns:ResolveItemID(queueItem)
+        end
+    end
+
     -- Track which owned auctions have been consumed so each only satisfies one queue item
     local consumed = {}
 
@@ -188,14 +220,35 @@ function Tracker:CheckOwnedAuctions()
                     local auctionName = auctionNames[aIdx]
 
                     local matches = false
-                    -- Match by item ID
+                    -- 1) Match by queue item's direct numeric ID
                     local queueNumID = tonumber(queueItem.itemID)
-                    if queueNumID and auction.itemKey and auction.itemKey.itemID == queueNumID then
+                    if queueNumID and queueNumID > 0 and auction.itemKey
+                        and auction.itemKey.itemID == queueNumID then
                         matches = true
-                    -- Match by name
-                    elseif auctionName and queueItem.name ~= "" and
-                           auctionName:lower() == queueItem.name:lower() then
+                    end
+
+                    -- 2) Match by resolved numeric ID from inventory data
+                    if not matches and resolvedIDs[i] and auction.itemKey
+                        and auction.itemKey.itemID == resolvedIDs[i] then
                         matches = true
+                    end
+
+                    -- 3) Exact name match
+                    if not matches and auctionName and queueItem.name ~= "" then
+                        if auctionName:lower() == queueItem.name:lower() then
+                            matches = true
+                        end
+                    end
+
+                    -- 4) Fuzzy name match: substring in either direction
+                    --    Handles recipe prefix differences, shortened names, etc.
+                    if not matches and auctionName and queueItem.name ~= ""
+                        and #queueItem.name >= 8 then
+                        local qName = queueItem.name:lower()
+                        local aName = auctionName:lower()
+                        if aName:find(qName, 1, true) or qName:find(aName, 1, true) then
+                            matches = true
+                        end
                     end
 
                     if matches then

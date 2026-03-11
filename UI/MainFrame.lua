@@ -975,7 +975,7 @@ local function BuildQueueData()
 
     for i, item in ipairs(ns.db.queue) do
         -- Build "Found On" string showing where this item exists
-        local locs = ns.Queue:FindItemLocations(item.itemKey)
+        local locs = ns.Queue:FindItemLocations(item.itemKey, item.name)
         local foundParts = {}
         local fuzzy = false
 
@@ -1237,8 +1237,16 @@ local function BuildCharactersData()
     for charKey, inv in pairs(ns.db.inventory) do
         local name = charKey:match("^(.-)%-") or charKey
         local realm = charKey:match("%-(.+)$") or ""
-        local tasks = ns.Queue:GetCharacterTasks(charKey)
+        local allTasks = ns.Queue:GetCharacterTasks(charKey)
         local isHidden = ns.db.hiddenCharacters[charKey]
+
+        -- Filter tasks by character's realm (warbank items match all chars otherwise)
+        local tasks = {}
+        for _, task in ipairs(allTasks) do
+            if ns:RealmMatches(task.queueItem.targetRealm, realm) then
+                table.insert(tasks, task)
+            end
+        end
 
         local classColor = CLASS_COLORS[inv.class] or "888888"
         local coloredName = "|cff" .. classColor .. name .. "|r"
@@ -1521,13 +1529,17 @@ function UI:Refresh()
         self.inventoryTable:SetRowClickHandler(function(rowData, button)
             if button == "RightButton" then
                 if IsShiftKeyDown() then
-                    ns.Queue:Add({{
+                    local added = ns.Queue:Add({{
                         itemKey  = rowData._itemKey,
-                        itemID   = rowData._itemID,
-                        name     = rowData._itemName,
-                        quantity = rowData._quantity,
+                        itemID   = rowData._itemID or "",
+                        name     = rowData._itemName or "Unknown",
+                        quantity = rowData._quantity or 1,
                     }})
-                    ns:Print("Added to queue: " .. rowData.name)
+                    if added > 0 then
+                        ns:Print(ns.COLORS.GREEN .. "Added to queue:|r " .. (rowData._itemName or rowData.name))
+                    else
+                        ns:Print(ns.COLORS.GRAY .. "Already in queue:|r " .. (rowData._itemName or rowData.name))
+                    end
                 else
                     ns.Queue:AddDoNotTrack(rowData._itemID, rowData._itemName)
                     ns:Print("Do not track: " .. rowData.name)

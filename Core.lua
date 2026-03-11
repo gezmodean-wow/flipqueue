@@ -125,6 +125,41 @@ function ns:RealmsOverlap(realm1, realm2)
 end
 
 --------------------------
+-- Item ID Resolution
+--------------------------
+
+-- Resolve a queue item's numeric ID from scanned inventory data
+function ns:ResolveItemID(queueItem)
+    local numID = tonumber(queueItem.itemID)
+    if numID and numID > 0 then return numID end
+
+    if not ns.db or not queueItem.name or queueItem.name == "" then return nil end
+    local searchName = queueItem.name:lower()
+
+    for _, charData in pairs(ns.db.inventory) do
+        if charData.items then
+            for key, itemData in pairs(charData.items) do
+                if itemData.name and itemData.name:lower() == searchName then
+                    local invID = tonumber(itemData.itemID)
+                    if invID and invID > 0 then return invID end
+                end
+            end
+        end
+    end
+
+    if ns.db.warbank and ns.db.warbank.items then
+        for key, itemData in pairs(ns.db.warbank.items) do
+            if itemData.name and itemData.name:lower() == searchName then
+                local invID = tonumber(itemData.itemID)
+                if invID and invID > 0 then return invID end
+            end
+        end
+    end
+
+    return nil
+end
+
+--------------------------
 -- Saved Variables Init
 --------------------------
 
