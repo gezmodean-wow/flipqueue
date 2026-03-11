@@ -3,11 +3,9 @@ package-as: FlipQueue
 enable-nolib-creation: no
 
 ignore:
-  - README.md
-  - CHANGELOG.md
+  - "*.md"
   - .gitignore
   - .claude
   - .vscode
   - .git
-  - CLAUDE.md
-  - "*.md"
+  - TODO.md
