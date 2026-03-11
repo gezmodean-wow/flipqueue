@@ -287,6 +287,10 @@ function Queue:GetCharacterTasks(charKey)
     local tasks = {}
     local charData = ns.db.inventory[charKey]
 
+    -- Track remaining quantity per inventory key so one physical item
+    -- can only satisfy as many queue items as its actual quantity
+    local remainingQty = {}
+
     for i, queueItem in ipairs(ns.db.queue) do
         if queueItem.status == "pending" then
             local found = false
@@ -294,38 +298,51 @@ function Queue:GetCharacterTasks(charKey)
 
             if charData and charData.items then
                 for itemKey, itemData in pairs(charData.items) do
-                    local matched, fuzzy = InventoryMatchesQueue(itemKey, itemData, queueItem, resolvedID)
-                    if matched then
-                        table.insert(tasks, {
-                            queueIndex = i,
-                            queueItem  = queueItem,
-                            source     = "character",
-                            charKey    = charKey,
-                            quantity   = itemData.quantity,
-                            locations  = itemData.locations,
-                            icon       = itemData.icon,
-                            fuzzyMatch = fuzzy,
-                        })
-                        found = true
-                        break
+                    if remainingQty[itemKey] == nil then
+                        remainingQty[itemKey] = itemData.quantity or 1
+                    end
+                    if remainingQty[itemKey] > 0 then
+                        local matched, fuzzy = InventoryMatchesQueue(itemKey, itemData, queueItem, resolvedID)
+                        if matched then
+                            remainingQty[itemKey] = remainingQty[itemKey] - (queueItem.quantity or 1)
+                            table.insert(tasks, {
+                                queueIndex = i,
+                                queueItem  = queueItem,
+                                source     = "character",
+                                charKey    = charKey,
+                                quantity   = itemData.quantity,
+                                locations  = itemData.locations,
+                                icon       = itemData.icon,
+                                fuzzyMatch = fuzzy,
+                            })
+                            found = true
+                            break
+                        end
                     end
                 end
             end
 
             if not found and ns.db.warbank and ns.db.warbank.items then
                 for itemKey, itemData in pairs(ns.db.warbank.items) do
-                    local matched, fuzzy = InventoryMatchesQueue(itemKey, itemData, queueItem, resolvedID)
-                    if matched then
-                        table.insert(tasks, {
-                            queueIndex = i,
-                            queueItem  = queueItem,
-                            source     = "warbank",
-                            quantity   = itemData.quantity,
-                            locations  = {warbank = itemData.quantity},
-                            icon       = itemData.icon,
-                            fuzzyMatch = fuzzy,
-                        })
-                        break
+                    local wbKey = "wb:" .. itemKey
+                    if remainingQty[wbKey] == nil then
+                        remainingQty[wbKey] = itemData.quantity or 1
+                    end
+                    if remainingQty[wbKey] > 0 then
+                        local matched, fuzzy = InventoryMatchesQueue(itemKey, itemData, queueItem, resolvedID)
+                        if matched then
+                            remainingQty[wbKey] = remainingQty[wbKey] - (queueItem.quantity or 1)
+                            table.insert(tasks, {
+                                queueIndex = i,
+                                queueItem  = queueItem,
+                                source     = "warbank",
+                                quantity   = itemData.quantity,
+                                locations  = {warbank = itemData.quantity},
+                                icon       = itemData.icon,
+                                fuzzyMatch = fuzzy,
+                            })
+                            break
+                        end
                     end
                 end
             end

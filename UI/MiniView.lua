@@ -189,7 +189,6 @@ function UI:RefreshMini()
     local rowIndex = 0
 
     if #tasks == 0 then
-        -- Show pending count across all realms
         local pending = ns.Queue:GetPendingCount()
         if pending > 0 then
             titleText:SetText(ns.COLORS.YELLOW .. "FQ" .. ns.COLORS.RESET ..
@@ -240,6 +239,69 @@ function UI:RefreshMini()
 
             row:Show()
         end
+    end
+
+    -- Next Steps section (from BuildNextStepsData in MainFrame)
+    local nextData = UI.BuildNextStepsData and UI.BuildNextStepsData() or {}
+    local MAX_MINI_STEPS = 3
+
+    if #nextData > 0 then
+        -- Separator row
+        rowIndex = rowIndex + 1
+        local sepRow = GetOrCreateMiniRow(rowIndex)
+        sepRow.icon:SetTexture(nil)
+        sepRow.text:SetText(ns.COLORS.GRAY .. "--- Next Steps ---" .. ns.COLORS.RESET)
+        sepRow.tooltipItemID = nil
+        sepRow.tooltipItemName = nil
+        sepRow.tooltipExtra = nil
+        sepRow:SetScript("OnMouseUp", nil)
+        sepRow:Show()
+
+        for idx = 1, math.min(#nextData, MAX_MINI_STEPS) do
+            local step = nextData[idx]
+            rowIndex = rowIndex + 1
+            local row = GetOrCreateMiniRow(rowIndex)
+
+            row.icon:SetTexture(nil)
+            row.tooltipItemID = nil
+            row.tooltipItemName = step._tooltipText
+            row.tooltipExtra = step._tooltipExtra
+            row:SetScript("OnMouseUp", nil)
+
+            local valueStr = ""
+            if step.value and step.value ~= "" then
+                valueStr = ns.COLORS.GREEN .. " " .. step.value .. ns.COLORS.RESET
+            end
+
+            row.text:SetText(step.action .. " " .. step.target ..
+                ns.COLORS.GRAY .. " (" .. step.itemCount .. ")" .. ns.COLORS.RESET .. valueStr)
+            row:Show()
+        end
+
+        if #nextData > MAX_MINI_STEPS then
+            rowIndex = rowIndex + 1
+            local moreRow = GetOrCreateMiniRow(rowIndex)
+            moreRow.icon:SetTexture(nil)
+            moreRow.text:SetText(ns.COLORS.GRAY .. "+" .. (#nextData - MAX_MINI_STEPS) ..
+                " more... (open /fq)" .. ns.COLORS.RESET)
+            moreRow.tooltipItemID = nil
+            moreRow.tooltipItemName = nil
+            moreRow.tooltipExtra = nil
+            moreRow:SetScript("OnMouseUp", nil)
+            moreRow:Show()
+        end
+    elseif #tasks == 0 and ns.Queue:GetPendingCount() == 0 then
+        -- Queue completely empty — fun message
+        rowIndex = rowIndex + 1
+        local row = GetOrCreateMiniRow(rowIndex)
+        row.icon:SetTexture(nil)
+        row.text:SetText(ns.COLORS.GREEN .. "All done!" .. ns.COLORS.RESET ..
+            ns.COLORS.GRAY .. " Time to go shopping!" .. ns.COLORS.RESET)
+        row.tooltipItemID = nil
+        row.tooltipItemName = nil
+        row.tooltipExtra = nil
+        row:SetScript("OnMouseUp", nil)
+        row:Show()
     end
 
     -- Resize frame to fit content

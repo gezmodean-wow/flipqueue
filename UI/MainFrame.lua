@@ -593,6 +593,7 @@ local function HideAllTables()
     exportPage:Hide()
     if UI._nextStepsLabel then UI._nextStepsLabel:Hide() end
     if UI._needCharsLabel then UI._needCharsLabel:Hide() end
+    if UI._postSummaryFrame then UI._postSummaryFrame:Hide() end
 end
 
 local function ShowTable(tbl)
@@ -845,6 +846,9 @@ local function BuildNextStepsData()
 
     return data
 end
+
+-- Expose for MiniView
+UI.BuildNextStepsData = BuildNextStepsData
 
 -- ==========================================
 -- ITEM QUALITY COLORS
@@ -1428,61 +1432,151 @@ function UI:Refresh()
         mainFrame.pageTitle:SetText(ns.COLORS.GREEN .. "Post Now" .. "|r" ..
             ns.COLORS.GRAY .. " - " .. charKey .. "|r")
         LayoutActionBtns(mainFrame.actionBtns.pullBank)
-        ShowTable(self.postNowTable)
 
         local data = BuildPostNowData()
-        self.postNowTable:SetData(data)
-        self.postNowTable:SetRowClickHandler(function(rowData, button)
-            if button == "RightButton" and rowData._queueIndex then
-                ns.Queue:MarkPosted(rowData._queueIndex)
-                ns:Print("Posted: " .. rowData.name .. " -> moved to log")
-                self:Refresh()
-                self:RefreshMini()
-            end
-        end)
-
-        -- Next Steps section below Post Now table
         local nextData = BuildNextStepsData()
-        if #nextData > 0 then
-            local postNowHeight = math.max(60, (#data + 1) * 20 + 22)
-            if postNowHeight > 250 then postNowHeight = 250 end
 
-            -- Section label
-            if not self._nextStepsLabel then
-                self._nextStepsLabel = tableContainer:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-            end
-            self._nextStepsLabel:ClearAllPoints()
-            self._nextStepsLabel:SetPoint("TOPLEFT", tableContainer, "TOPLEFT", 4, -postNowHeight + 2)
-            self._nextStepsLabel:SetTextColor(0.6, 0.8, 1.0)
-            self._nextStepsLabel:SetText("Next Steps (" .. #nextData .. ")")
-            self._nextStepsLabel:Show()
+        -- Create summary banner (reused across refreshes)
+        if not self._postSummaryFrame then
+            local sf = CreateFrame("Frame", nil, tableContainer)
+            sf:SetPoint("TOPLEFT", tableContainer, "TOPLEFT", 0, 0)
+            sf:SetPoint("TOPRIGHT", tableContainer, "TOPRIGHT", 0, 0)
+            sf:SetHeight(60)
+            self._postSummaryFrame = sf
 
-            -- Position next steps table below
-            self.nextStepsTable.headerFrame:ClearAllPoints()
-            self.nextStepsTable.headerFrame:SetPoint("TOPLEFT", tableContainer, "TOPLEFT", 0, -postNowHeight - 10)
-            self.nextStepsTable.headerFrame:SetPoint("TOPRIGHT", tableContainer, "TOPRIGHT", 0, -postNowHeight - 10)
+            sf.title = sf:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
+            sf.title:SetPoint("TOP", sf, "TOP", 0, -10)
 
-            self.nextStepsTable.scrollFrame:ClearAllPoints()
-            self.nextStepsTable.scrollFrame:SetPoint("TOPLEFT", self.nextStepsTable.headerFrame, "BOTTOMLEFT", 0, 0)
-            self.nextStepsTable.scrollFrame:SetPoint("BOTTOMRIGHT", tableContainer, "BOTTOMRIGHT", -22, 0)
+            sf.sub = sf:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+            sf.sub:SetPoint("TOP", sf.title, "BOTTOM", 0, -6)
+            sf.sub:SetWidth(sf:GetWidth() - 40)
+            sf.sub:SetJustifyH("CENTER")
 
-            ShowTable(self.nextStepsTable)
-            self.nextStepsTable:SetData(nextData)
-
-            -- Resize postNow scroll to fit above
-            self.postNowTable.scrollFrame:ClearAllPoints()
-            self.postNowTable.scrollFrame:SetPoint("TOPLEFT", self.postNowTable.headerFrame, "BOTTOMLEFT", 0, 0)
-            self.postNowTable.scrollFrame:SetPoint("RIGHT", tableContainer, "RIGHT", -22, 0)
-            self.postNowTable.scrollFrame:SetHeight(postNowHeight - 22)
-        else
-            if self._nextStepsLabel then self._nextStepsLabel:Hide() end
-            -- Reset postNow scroll to fill the full container
-            self.postNowTable.scrollFrame:ClearAllPoints()
-            self.postNowTable.scrollFrame:SetPoint("TOPLEFT", self.postNowTable.headerFrame, "BOTTOMLEFT", 0, 0)
-            self.postNowTable.scrollFrame:SetPoint("BOTTOMRIGHT", tableContainer, "BOTTOMRIGHT", -22, 0)
+            sf:SetScript("OnSizeChanged", function(self, w)
+                sf.sub:SetWidth(w - 40)
+            end)
         end
 
-        mainFrame.statusText:SetText(postCount .. " items to post  |  " .. #nextData .. " next steps  |  Right-click to mark posted")
+        if #data == 0 then
+            -- Nothing to post on this character — show summary banner + next steps table
+            self._postSummaryFrame:Show()
+
+            if #nextData == 0 and ns.Queue:GetPendingCount() == 0 then
+                -- Everything is done! Full-height fun message
+                self._postSummaryFrame:ClearAllPoints()
+                self._postSummaryFrame:SetAllPoints(tableContainer)
+
+                local doneMessages = {
+                    {title = "All done!", sub = "Time to go shopping on FlippingPal!"},
+                    {title = "Queue empty!", sub = "Hit the AH browser or import more flips."},
+                    {title = "Everything posted!", sub = "Now sit back and wait for the gold to roll in."},
+                    {title = "Nothing to do!", sub = "Browse FlippingPal.com for your next deals."},
+                }
+                local msg = doneMessages[math.random(#doneMessages)]
+                self._postSummaryFrame.title:ClearAllPoints()
+                self._postSummaryFrame.title:SetPoint("CENTER", self._postSummaryFrame, "CENTER", 0, 10)
+                self._postSummaryFrame.title:SetText(ns.COLORS.GREEN .. msg.title .. "|r")
+                self._postSummaryFrame.sub:SetText(ns.COLORS.GRAY .. msg.sub .. "|r")
+                mainFrame.statusText:SetText("Queue empty  |  Import items from FlippingPal to get started")
+            else
+                -- This character is done, show banner + full next steps table below
+                local bannerHeight = 50
+                self._postSummaryFrame:ClearAllPoints()
+                self._postSummaryFrame:SetPoint("TOPLEFT", tableContainer, "TOPLEFT", 0, 0)
+                self._postSummaryFrame:SetPoint("TOPRIGHT", tableContainer, "TOPRIGHT", 0, 0)
+                self._postSummaryFrame:SetHeight(bannerHeight)
+
+                self._postSummaryFrame.title:ClearAllPoints()
+                self._postSummaryFrame.title:SetPoint("TOP", self._postSummaryFrame, "TOP", 0, -10)
+
+                local remaining = ns.Queue:GetPendingCount()
+                self._postSummaryFrame.title:SetText(ns.COLORS.GREEN .. "Done on this character!" .. "|r")
+                self._postSummaryFrame.sub:SetText(
+                    ns.COLORS.GRAY .. remaining .. " items remaining across " ..
+                    #nextData .. " step" .. (#nextData ~= 1 and "s" or "") .. "|r")
+
+                -- Next Steps label
+                if not self._nextStepsLabel then
+                    self._nextStepsLabel = tableContainer:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+                end
+                self._nextStepsLabel:ClearAllPoints()
+                self._nextStepsLabel:SetPoint("TOPLEFT", tableContainer, "TOPLEFT", 4, -bannerHeight + 2)
+                self._nextStepsLabel:SetTextColor(0.6, 0.8, 1.0)
+                self._nextStepsLabel:SetText("Next Steps (" .. #nextData .. ")")
+                self._nextStepsLabel:Show()
+
+                -- Position next steps table below banner
+                self.nextStepsTable.headerFrame:ClearAllPoints()
+                self.nextStepsTable.headerFrame:SetPoint("TOPLEFT", tableContainer, "TOPLEFT", 0, -bannerHeight - 10)
+                self.nextStepsTable.headerFrame:SetPoint("TOPRIGHT", tableContainer, "TOPRIGHT", 0, -bannerHeight - 10)
+
+                self.nextStepsTable.scrollFrame:ClearAllPoints()
+                self.nextStepsTable.scrollFrame:SetPoint("TOPLEFT", self.nextStepsTable.headerFrame, "BOTTOMLEFT", 0, 0)
+                self.nextStepsTable.scrollFrame:SetPoint("BOTTOMRIGHT", tableContainer, "BOTTOMRIGHT", -22, 0)
+
+                ShowTable(self.nextStepsTable)
+                self.nextStepsTable:SetData(nextData)
+
+                mainFrame.statusText:SetText("Done here  |  " .. #nextData ..
+                    " next step" .. (#nextData ~= 1 and "s" or "") ..
+                    "  |  " .. remaining .. " items remaining")
+            end
+        else
+            -- Has items to post — show normal tables
+            self._postSummaryFrame:Hide()
+            ShowTable(self.postNowTable)
+
+            self.postNowTable:SetData(data)
+            self.postNowTable:SetRowClickHandler(function(rowData, button)
+                if button == "RightButton" and rowData._queueIndex then
+                    ns.Queue:MarkPosted(rowData._queueIndex)
+                    ns:Print("Posted: " .. rowData.name .. " -> moved to log")
+                    self:Refresh()
+                    self:RefreshMini()
+                end
+            end)
+
+            if #nextData > 0 then
+                local postNowHeight = math.max(60, (#data + 1) * 20 + 22)
+                if postNowHeight > 250 then postNowHeight = 250 end
+
+                -- Section label
+                if not self._nextStepsLabel then
+                    self._nextStepsLabel = tableContainer:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+                end
+                self._nextStepsLabel:ClearAllPoints()
+                self._nextStepsLabel:SetPoint("TOPLEFT", tableContainer, "TOPLEFT", 4, -postNowHeight + 2)
+                self._nextStepsLabel:SetTextColor(0.6, 0.8, 1.0)
+                self._nextStepsLabel:SetText("Next Steps (" .. #nextData .. ")")
+                self._nextStepsLabel:Show()
+
+                -- Position next steps table below
+                self.nextStepsTable.headerFrame:ClearAllPoints()
+                self.nextStepsTable.headerFrame:SetPoint("TOPLEFT", tableContainer, "TOPLEFT", 0, -postNowHeight - 10)
+                self.nextStepsTable.headerFrame:SetPoint("TOPRIGHT", tableContainer, "TOPRIGHT", 0, -postNowHeight - 10)
+
+                self.nextStepsTable.scrollFrame:ClearAllPoints()
+                self.nextStepsTable.scrollFrame:SetPoint("TOPLEFT", self.nextStepsTable.headerFrame, "BOTTOMLEFT", 0, 0)
+                self.nextStepsTable.scrollFrame:SetPoint("BOTTOMRIGHT", tableContainer, "BOTTOMRIGHT", -22, 0)
+
+                ShowTable(self.nextStepsTable)
+                self.nextStepsTable:SetData(nextData)
+
+                -- Resize postNow scroll to fit above
+                self.postNowTable.scrollFrame:ClearAllPoints()
+                self.postNowTable.scrollFrame:SetPoint("TOPLEFT", self.postNowTable.headerFrame, "BOTTOMLEFT", 0, 0)
+                self.postNowTable.scrollFrame:SetPoint("RIGHT", tableContainer, "RIGHT", -22, 0)
+                self.postNowTable.scrollFrame:SetHeight(postNowHeight - 22)
+            else
+                if self._nextStepsLabel then self._nextStepsLabel:Hide() end
+                -- Reset postNow scroll to fill the full container
+                self.postNowTable.scrollFrame:ClearAllPoints()
+                self.postNowTable.scrollFrame:SetPoint("TOPLEFT", self.postNowTable.headerFrame, "BOTTOMLEFT", 0, 0)
+                self.postNowTable.scrollFrame:SetPoint("BOTTOMRIGHT", tableContainer, "BOTTOMRIGHT", -22, 0)
+            end
+
+            mainFrame.statusText:SetText(postCount .. " items to post  |  " .. #nextData .. " next steps  |  Right-click to mark posted")
+        end
 
     elseif self.currentPage == "queue" then
         mainFrame.pageTitle:SetText(ns.COLORS.YELLOW .. "Full Queue" .. "|r")
