@@ -111,7 +111,7 @@ end
 --------------------------
 
 -- Move a queue item to the completed log
-function Queue:MoveToLog(queueIndex, postedPrice)
+function Queue:MoveToLog(queueIndex, postedPrice, expirySeconds)
     if not ns.db then return end
     local item = ns.db.queue[queueIndex]
     if not item then return end
@@ -127,6 +127,8 @@ function Queue:MoveToLog(queueIndex, postedPrice)
         postedPrice   = postedPrice or item.expectedPrice,
         postedAt      = time(),
         charKey       = ns:GetCharKey(),
+        expiresAt     = expirySeconds and (time() + expirySeconds) or nil,
+        auctionStatus = "active",
         soldAt        = nil,
         soldPrice     = nil,
     })

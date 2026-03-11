@@ -235,6 +235,92 @@ function UI:CreateSettingsPanel(parent)
     end)
     y = y - 40
 
+    -- Section: Multi-Account
+    CreateSectionLabel(content, y, "Multi-Account (External Realm Coverage)")
+    y = y - 20
+
+    local extDesc = content:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+    extDesc:SetPoint("TOPLEFT", content, "TOPLEFT", 10, y)
+    extDesc:SetPoint("RIGHT", content, "RIGHT", -10, 0)
+    extDesc:SetJustifyH("LEFT")
+    extDesc:SetText("Add realms from other WoW accounts that share AH access. These realms will be excluded from 'Create char' suggestions.")
+    y = y - 28
+
+    -- Label input
+    local lblLabel = content:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    lblLabel:SetPoint("TOPLEFT", content, "TOPLEFT", 10, y)
+    lblLabel:SetText("Account label:")
+    y = y - 18
+
+    local lblBox = CreateFrame("EditBox", nil, content, "InputBoxTemplate")
+    lblBox:SetSize(170, 20)
+    lblBox:SetPoint("TOPLEFT", content, "TOPLEFT", 14, y)
+    lblBox:SetAutoFocus(false)
+    lblBox:SetMaxLetters(30)
+    lblBox:SetText("")
+    y = y - 26
+
+    -- Realms input
+    local rlmLabel = content:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    rlmLabel:SetPoint("TOPLEFT", content, "TOPLEFT", 10, y)
+    rlmLabel:SetText("Realms (comma-separated):")
+    y = y - 18
+
+    local rlmBox = CreateFrame("EditBox", nil, content, "InputBoxTemplate")
+    rlmBox:SetSize(280, 20)
+    rlmBox:SetPoint("TOPLEFT", content, "TOPLEFT", 14, y)
+    rlmBox:SetAutoFocus(false)
+    rlmBox:SetMaxLetters(200)
+    rlmBox:SetText("")
+    y = y - 26
+
+    -- Add button
+    local addAcctBtn = CreateSettingsButton(content, y, "Add External Account", 160, function()
+        if not ns.db then return end
+        local label = lblBox:GetText():match("^%s*(.-)%s*$")
+        local realmsStr = rlmBox:GetText():match("^%s*(.-)%s*$")
+        if label == "" or realmsStr == "" then
+            ns:Print(ns.COLORS.RED .. "Both label and realms are required.|r")
+            return
+        end
+        local realms = {}
+        for r in realmsStr:gmatch("([^,]+)") do
+            local trimmed = r:match("^%s*(.-)%s*$")
+            if trimmed ~= "" then
+                table.insert(realms, trimmed)
+            end
+        end
+        if #realms == 0 then
+            ns:Print(ns.COLORS.RED .. "No valid realm names found.|r")
+            return
+        end
+        table.insert(ns.db.externalAccounts, {label = label, realms = realms})
+        ns:Print(ns.COLORS.GREEN .. "Added external account:|r " .. label .. " (" .. #realms .. " realms)")
+        lblBox:SetText("")
+        rlmBox:SetText("")
+        UI:RefreshSettings()
+        UI:Refresh()
+    end)
+    y = y - 30
+
+    -- List existing external accounts
+    settingsWidgets.extAccountList = content:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    settingsWidgets.extAccountList:SetPoint("TOPLEFT", content, "TOPLEFT", 10, y)
+    settingsWidgets.extAccountList:SetPoint("RIGHT", content, "RIGHT", -10, 0)
+    settingsWidgets.extAccountList:SetJustifyH("LEFT")
+    settingsWidgets.extAccountList:SetWordWrap(true)
+    y = y - 20
+
+    settingsWidgets.removeExtBtn = CreateSettingsButton(content, y, "Remove Last Account", 160, function()
+        if ns.db and #ns.db.externalAccounts > 0 then
+            local removed = table.remove(ns.db.externalAccounts)
+            ns:Print("Removed external account: " .. removed.label)
+            UI:RefreshSettings()
+            UI:Refresh()
+        end
+    end)
+    y = y - 40
+
     -- Version
     local ver = content:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
     ver:SetPoint("TOPLEFT", content, "TOPLEFT", 8, y)
@@ -279,6 +365,17 @@ function UI:RefreshSettings()
     end
     if settingsWidgets.showMinimap then
         settingsWidgets.showMinimap:SetChecked(ns.db.settings.showMinimap ~= false)
+    end
+    if settingsWidgets.extAccountList then
+        if ns.db.externalAccounts and #ns.db.externalAccounts > 0 then
+            local lines = {}
+            for i, acct in ipairs(ns.db.externalAccounts) do
+                table.insert(lines, i .. ". " .. acct.label .. ": " .. table.concat(acct.realms, ", "))
+            end
+            settingsWidgets.extAccountList:SetText(table.concat(lines, "\n"))
+        else
+            settingsWidgets.extAccountList:SetText("|cff888888No external accounts configured.|r")
+        end
     end
 end
 

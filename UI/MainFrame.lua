@@ -446,13 +446,13 @@ UI.inventoryTable:SetSort("name", true)
 
 -- Characters table
 UI.charsTable = UI:CreateScrollTable(tableContainer, {
-    {key = "name",      label = "Character",   width = 130, sortable = true},
-    {key = "realm",     label = "Realm",        width = 150, sortable = true},
-    {key = "class",     label = "Class",        width = 70,  sortable = true},
-    {key = "tasks",     label = "Tasks",        width = 45,  align = "CENTER", sortable = true},
-    {key = "status",    label = "Status",       width = 80,  sortable = true},
-    {key = "lastScan",  label = "Last Scan",    width = 90,  sortable = true},
-    {key = "items",     label = "Items",        width = 45,  align = "CENTER", sortable = true},
+    {key = "name",      label = "Character",   width = 110, sortable = true},
+    {key = "realm",     label = "Realm",        width = 130, sortable = true},
+    {key = "gold",      label = "Gold",         width = 70,  align = "RIGHT", sortable = true},
+    {key = "tasks",     label = "Tasks",        width = 40,  align = "CENTER", sortable = true},
+    {key = "auctions",  label = "Auctions",     width = 65,  align = "CENTER", sortable = true},
+    {key = "lastLogin", label = "Last Login",   width = 75,  sortable = true},
+    {key = "status",    label = "Status",       width = 65,  sortable = true},
 })
 UI.charsTable:SetSort("name", true)
 
@@ -722,6 +722,18 @@ local function BuildNextStepsData()
                     coveredRealms[realm] = {}
                 end
                 table.insert(coveredRealms[realm], charKey)
+            end
+        end
+    end
+
+    -- Include external accounts as realm coverage
+    if ns.db.externalAccounts then
+        for _, acct in ipairs(ns.db.externalAccounts) do
+            for _, realm in ipairs(acct.realms) do
+                if not coveredRealms[realm] then
+                    coveredRealms[realm] = {}
+                end
+                table.insert(coveredRealms[realm], acct.label .. " (external)")
             end
         end
     end
@@ -1265,6 +1277,10 @@ local function BuildCharactersData()
         end
     end
 
+    -- Get auction expiry data grouped by character
+    local expiringByChar = ns.Tracker and ns.Tracker.GetExpiringByCharacter
+        and ns.Tracker:GetExpiringByCharacter() or {}
+
     -- Build character list
     for charKey, inv in pairs(ns.db.inventory) do
         local name = charKey:match("^(.-)%-") or charKey
@@ -1286,55 +1302,75 @@ local function BuildCharactersData()
             coloredName = "|cff666666" .. name .. "|r"
         end
 
-        local itemCount = 0
-        if inv.items then
-            for _ in pairs(inv.items) do itemCount = itemCount + 1 end
-        end
+        -- Character metadata (gold, lastLogin)
+        local charMeta = ns.db.characters and ns.db.characters[charKey] or {}
+        local goldCopper = charMeta.gold or 0
+        local goldStr = ns:FormatGold(goldCopper)
+        local lastLoginTime = charMeta.lastLogin or 0
+        local lastLoginStr = ns:FormatRelativeTime(lastLoginTime)
 
-        local scanStr = ""
-        if inv.lastScan then
-            scanStr = date("%m/%d %H:%M", inv.lastScan)
+        -- Auction expiry info
+        local expiryInfo = expiringByChar[charKey]
+        local auctionStr = ""
+        if expiryInfo then
+            local soonestStr = ns:FormatRelativeTime(time() + expiryInfo.soonest)
+            -- Remove " ago" since this is time remaining
+            soonestStr = soonestStr:gsub(" ago$", "")
+            auctionStr = ns.COLORS.ORANGE .. expiryInfo.count .. "|r"
+            if expiryInfo.soonest < 7200 then -- < 2h = red
+                auctionStr = ns.COLORS.RED .. expiryInfo.count .. "!|r"
+            end
         end
 
         -- Build status string
         local statusParts = {}
         if isHidden then
             table.insert(statusParts, "|cff666666Hidden|r")
-        end
-        if duplicateRealms[realm] then
-            table.insert(statusParts, "|cffff8800Dupe (" .. duplicateRealms[realm] .. ")|r")
+        elseif duplicateRealms[realm] then
+            table.insert(statusParts, "|cffff8800Dupe|r")
+        else
+            table.insert(statusParts, "|cff00ff00Active|r")
         end
         local statusStr = table.concat(statusParts, " ")
-        if statusStr == "" then
-            statusStr = "|cff00ff00Active|r"
-        end
 
-        -- Row color: hidden = dark gray, duplicate = amber tint
+        -- Row color
         local rowColor = nil
         if isHidden then
             rowColor = {0.3, 0.3, 0.3, 0.1}
+        elseif expiryInfo and expiryInfo.soonest < 7200 then
+            rowColor = {1.0, 0.3, 0.3, 0.1} -- red tint for urgent auctions
         elseif duplicateRealms[realm] then
             rowColor = {0.8, 0.5, 0.1, 0.1}
         end
 
+        local itemCount = 0
+        if inv.items then
+            for _ in pairs(inv.items) do itemCount = itemCount + 1 end
+        end
+
         table.insert(charData, {
-            name     = coloredName,
-            realm    = realm,
-            class    = inv.class or "?",
-            tasks    = isHidden and "-" or tostring(#tasks),
-            status   = statusStr,
-            lastScan = scanStr,
-            items    = itemCount,
+            name      = coloredName,
+            realm     = realm,
+            gold      = goldStr,
+            tasks     = isHidden and "-" or tostring(#tasks),
+            auctions  = auctionStr,
+            lastLogin = lastLoginStr,
+            status    = statusStr,
             _sortName = name:lower(),
+            _sortGold = goldCopper,
+            _sortLastLogin = lastLoginTime,
+            _sortAuctions = expiryInfo and expiryInfo.count or 0,
             _charKey = charKey,
             _isHidden = isHidden,
             _rowColor = rowColor,
             _tooltipText = charKey,
             _tooltipExtra = string.format(
-                "%d scanned items\n%d queue tasks\nLast scan: %s\nStatus: %s%s\n\nRight-click to %s this character",
-                itemCount, #tasks, scanStr ~= "" and scanStr or "never",
+                "Gold: %s\n%d queue tasks%s\nLast login: %s\nStatus: %s%s\n\nRight-click to %s",
+                goldStr, #tasks,
+                expiryInfo and ("\n" .. expiryInfo.count .. " active auction(s)") or "",
+                lastLoginStr,
                 isHidden and "Hidden" or "Active",
-                duplicateRealms[realm] and ("\nDuplicate realm: " .. duplicateRealms[realm] .. " characters on " .. realm) or "",
+                duplicateRealms[realm] and ("\nDuplicate realm: " .. duplicateRealms[realm] .. " chars on " .. realm) or "",
                 isHidden and "re-enable" or "hide"),
         })
     end
@@ -1354,8 +1390,20 @@ local function BuildCharactersData()
         end
     end
 
-    -- Merge connected realms when building "need character" list
-    local realmNeedsList = {}
+    -- Include external accounts as realm coverage
+    if ns.db.externalAccounts then
+        for _, acct in ipairs(ns.db.externalAccounts) do
+            for _, realm in ipairs(acct.realms) do
+                if not coveredRealms[realm] then
+                    coveredRealms[realm] = {}
+                end
+                table.insert(coveredRealms[realm], acct.label .. " (external)")
+            end
+        end
+    end
+
+    -- Group uncovered queue items by exact targetRealm string (no RealmsOverlap)
+    local realmNeedsMap = {} -- realmKey -> {realmStr, count, prices}
     for _, item in ipairs(ns.db.queue) do
         if item.status == "pending" and item.targetRealm and item.targetRealm ~= "" then
             local hasCoverage = false
@@ -1367,37 +1415,24 @@ local function BuildCharactersData()
             end
 
             if not hasCoverage then
-                local found = false
-                for _, entry in ipairs(realmNeedsList) do
-                    if ns:RealmsOverlap(entry.realmStr, item.targetRealm) then
-                        entry.count = entry.count + 1
-                        if item.expectedPrice and item.expectedPrice ~= "" then
-                            table.insert(entry.prices, item.expectedPrice)
-                        end
-                        if #item.targetRealm > #entry.realmStr then
-                            entry.realmStr = item.targetRealm
-                        end
-                        found = true
-                        break
-                    end
-                end
-                if not found then
-                    local prices = {}
-                    if item.expectedPrice and item.expectedPrice ~= "" then
-                        table.insert(prices, item.expectedPrice)
-                    end
-                    table.insert(realmNeedsList, {
+                local realmKey = item.targetRealm:lower()
+                if not realmNeedsMap[realmKey] then
+                    realmNeedsMap[realmKey] = {
                         realmStr = item.targetRealm,
-                        count = 1,
-                        prices = prices,
-                    })
+                        count = 0,
+                        prices = {},
+                    }
+                end
+                realmNeedsMap[realmKey].count = realmNeedsMap[realmKey].count + 1
+                if item.expectedPrice and item.expectedPrice ~= "" then
+                    table.insert(realmNeedsMap[realmKey].prices, item.expectedPrice)
                 end
             end
         end
     end
 
     local needData = {}
-    for _, info in ipairs(realmNeedsList) do
+    for _, info in pairs(realmNeedsMap) do
         local totalGold = 0
         for _, price in ipairs(info.prices) do
             totalGold = totalGold + ParseGoldValue(price)
@@ -1731,16 +1766,21 @@ function UI:Refresh()
 
         local charCount = 0
         local hiddenCount = 0
+        local totalGold = 0
         for ck in pairs(ns.db.inventory) do
             charCount = charCount + 1
             if ns.db.hiddenCharacters[ck] then hiddenCount = hiddenCount + 1 end
+            local meta = ns.db.characters and ns.db.characters[ck]
+            if meta and meta.gold then totalGold = totalGold + meta.gold end
         end
         local statusParts = {charCount .. " characters"}
+        if totalGold > 0 then
+            table.insert(statusParts, ns:FormatGold(totalGold) .. " total")
+        end
         if hiddenCount > 0 then
             table.insert(statusParts, hiddenCount .. " hidden")
         end
         table.insert(statusParts, #needData .. " realms need chars")
-        table.insert(statusParts, "Right-click to toggle tracking")
         mainFrame.statusText:SetText(table.concat(statusParts, "  |  "))
 
     elseif self.currentPage == "import" then

@@ -3,7 +3,9 @@
 local addonName, ns = ...
 
 ns.ADDON_NAME = "FlipQueue"
-ns.VERSION = "0.3.0"
+-- @project-version@ is replaced by CurseForge packager on release
+local tocVersion = C_AddOns and C_AddOns.GetAddOnMetadata(addonName, "Version") or "dev"
+ns.VERSION = tocVersion:find("@") and "dev" or tocVersion
 
 -- Bag index constants (TWW 12.0+)
 ns.INVENTORY_BAGS = {0, 1, 2, 3, 4}
@@ -180,9 +182,37 @@ function ns:InitDB()
         showLoginMessage = true,
         autoWithdrawGold = false,
     }
+    db.characters = db.characters or {}
+    db.externalAccounts = db.externalAccounts or {}
     db.settings.collapsed = db.settings.collapsed or {}
     db.settings.sortMode  = db.settings.sortMode or "realm"
+    db.settings.expiryAlertHours = db.settings.expiryAlertHours or 6
     ns.db = db
+end
+
+--------------------------
+-- Gold Formatting
+--------------------------
+
+function ns:FormatGold(copper)
+    if not copper or copper <= 0 then return "0g" end
+    local gold = math.floor(copper / 10000)
+    if gold >= 1000000 then
+        return string.format("%.1fm", gold / 1000000)
+    elseif gold >= 1000 then
+        return string.format("%.1fk", gold / 1000)
+    end
+    return tostring(gold) .. "g"
+end
+
+function ns:FormatRelativeTime(timestamp)
+    if not timestamp or timestamp <= 0 then return "never" end
+    local diff = time() - timestamp
+    if diff < 0 then return "now" end
+    if diff < 60 then return "just now" end
+    if diff < 3600 then return math.floor(diff / 60) .. "m ago" end
+    if diff < 86400 then return math.floor(diff / 3600) .. "h ago" end
+    return math.floor(diff / 86400) .. "d ago"
 end
 
 --------------------------

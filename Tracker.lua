@@ -255,7 +255,8 @@ function Tracker:CheckOwnedAuctions()
                         consumed[aIdx] = true
                         found = found + 1
                         ns:Print(ns.COLORS.YELLOW .. "Already listed:|r " .. queueItem.name .. " — moving to log")
-                        ns.Queue:MoveToLog(i)
+                        local expirySec = auction.timeLeftSeconds
+                        ns.Queue:MoveToLog(i, nil, expirySec)
                         break
                     end
                 end
@@ -389,6 +390,121 @@ function Tracker:AutoWithdrawGold()
 end
 
 --------------------------
+-- Auction Expiry Tracking
+--------------------------
+
+-- Update log entries with expiry data from owned auctions
+function Tracker:UpdateLogExpiry()
+    if not ns.db or not C_AuctionHouse then return end
+
+    local owned = C_AuctionHouse.GetOwnedAuctions()
+    if not owned or #owned == 0 then return end
+
+    local now = time()
+
+    -- Pre-cache auction names
+    local auctionNames = {}
+    for aIdx, auction in ipairs(owned) do
+        if auction.itemKey then
+            local name
+            local speciesID = auction.itemKey.battlePetSpeciesID
+            if speciesID and speciesID > 0 and C_PetJournal then
+                name = C_PetJournal.GetPetInfoBySpeciesID(speciesID)
+            end
+            if not name and auction.itemKey.itemID then
+                name = C_Item.GetItemInfo(auction.itemKey.itemID)
+            end
+            auctionNames[aIdx] = name
+        end
+    end
+
+    local currentCharKey = ns:GetCharKey()
+    local updated = 0
+
+    for _, logEntry in ipairs(ns.db.log) do
+        if logEntry.auctionStatus == "active" and logEntry.charKey == currentCharKey then
+            -- Check if expired based on stored expiresAt
+            if logEntry.expiresAt and logEntry.expiresAt <= now then
+                logEntry.auctionStatus = "expired"
+            else
+                -- Try to match against owned auctions to update/confirm expiry
+                for aIdx, auction in ipairs(owned) do
+                    local auctionName = auctionNames[aIdx]
+                    local matches = false
+
+                    local logNumID = tonumber(logEntry.itemID)
+                    if logNumID and logNumID > 0 and auction.itemKey
+                        and auction.itemKey.itemID == logNumID then
+                        matches = true
+                    end
+
+                    if not matches and auctionName and logEntry.name ~= "" then
+                        if auctionName:lower() == logEntry.name:lower() then
+                            matches = true
+                        end
+                    end
+
+                    if matches and auction.timeLeftSeconds then
+                        logEntry.expiresAt = now + auction.timeLeftSeconds
+                        updated = updated + 1
+                        break
+                    end
+                end
+            end
+        end
+    end
+end
+
+-- Return log entries with auctions expiring soon (for login alerts)
+function Tracker:CheckExpiringAuctions()
+    if not ns.db then return {} end
+
+    local now = time()
+    local alertHours = ns.db.settings.expiryAlertHours or 6
+    local threshold = alertHours * 3600
+    local expiring = {}
+
+    for _, entry in ipairs(ns.db.log) do
+        if entry.auctionStatus == "active" and entry.expiresAt then
+            if entry.expiresAt <= now then
+                entry.auctionStatus = "expired"
+            elseif entry.expiresAt - now < threshold then
+                table.insert(expiring, entry)
+            end
+        end
+    end
+
+    return expiring
+end
+
+-- Get characters that have expiring auctions (for Characters page)
+function Tracker:GetExpiringByCharacter()
+    if not ns.db then return {} end
+
+    local now = time()
+    local byChar = {} -- charKey -> {count, soonest}
+
+    for _, entry in ipairs(ns.db.log) do
+        if entry.auctionStatus == "active" and entry.expiresAt and entry.charKey then
+            if entry.expiresAt <= now then
+                entry.auctionStatus = "expired"
+            else
+                local remaining = entry.expiresAt - now
+                if not byChar[entry.charKey] then
+                    byChar[entry.charKey] = {count = 0, soonest = remaining}
+                end
+                byChar[entry.charKey].count = byChar[entry.charKey].count + 1
+                if remaining < byChar[entry.charKey].soonest then
+                    byChar[entry.charKey].soonest = remaining
+                end
+            end
+        end
+    end
+
+    return byChar
+end
+
+--------------------------
 -- Event Handling
 --------------------------
 
@@ -434,6 +550,7 @@ frame:SetScript("OnEvent", function(self, event)
     elseif event == "OWNED_AUCTIONS_UPDATED" then
         if isAHOpen then
             Tracker:CheckOwnedAuctions()
+            Tracker:UpdateLogExpiry()
         end
     end
 end)

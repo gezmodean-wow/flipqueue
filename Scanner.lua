@@ -204,13 +204,35 @@ end
 -- Event Handling
 --------------------------
 
+--------------------------
+-- Character Metadata
+--------------------------
+
+local function UpdateCharacterMeta()
+    if not ns.db then return end
+    local charKey = ns:GetCharKey()
+    ns.db.characters[charKey] = ns.db.characters[charKey] or {}
+    local meta = ns.db.characters[charKey]
+    meta.gold = GetMoney()
+    meta.lastLogin = time()
+    meta.class = select(2, UnitClass("player"))
+    meta.level = UnitLevel("player")
+end
+
+--------------------------
+-- Event Handling
+--------------------------
+
 local frame = CreateFrame("Frame")
 frame:RegisterEvent("PLAYER_LOGIN")
 frame:RegisterEvent("BANKFRAME_OPENED")
+frame:RegisterEvent("PLAYER_MONEY")
 
 frame:SetScript("OnEvent", function(self, event)
     if event == "PLAYER_LOGIN" then
         ns:InitDB()
+        UpdateCharacterMeta()
+
         if ns.db.settings.autoScan then
             C_Timer.After(2, function()
                 Scanner:ScanCurrentCharacter()
@@ -228,6 +250,21 @@ frame:SetScript("OnEvent", function(self, event)
                         ns:Print(ns.COLORS.GREEN .. realmCount .. " items|r to post on this character! Type /fq to see details.")
                     end
                 end
+
+                -- Expiring auction alerts
+                if ns.Tracker and ns.Tracker.CheckExpiringAuctions then
+                    local expiring = ns.Tracker:CheckExpiringAuctions()
+                    if #expiring > 0 then
+                        local byChar = {}
+                        for _, entry in ipairs(expiring) do
+                            local ck = entry.charKey or "Unknown"
+                            byChar[ck] = (byChar[ck] or 0) + 1
+                        end
+                        for ck, count in pairs(byChar) do
+                            ns:Print(ns.COLORS.ORANGE .. count .. " auction(s) expiring soon on " .. ck .. "!|r")
+                        end
+                    end
+                end
             end)
         end
 
@@ -237,5 +274,13 @@ frame:SetScript("OnEvent", function(self, event)
             Scanner:ScanBank()
             Scanner:ScanWarbank()
         end)
+
+    elseif event == "PLAYER_MONEY" then
+        if ns.db then
+            local charKey = ns:GetCharKey()
+            if ns.db.characters[charKey] then
+                ns.db.characters[charKey].gold = GetMoney()
+            end
+        end
     end
 end)
