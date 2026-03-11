@@ -789,8 +789,18 @@ local function BuildNextStepsData()
         })
     end
 
-    -- 2) Realms needing new characters (only unconsumed pending items)
-    local realmNeeds = {} -- {realmStr, count, totalGold}
+    -- 2) Realms needing new characters
+    -- Only count items that actually exist in the warbank (the only cross-realm storage)
+    local realmNeeds = {} -- realmKey -> {realmStr, count, totalGold}
+
+    -- Build warbank remaining quantity tracker (same approach as GetCharacterTasks)
+    local wbRemaining = {}
+    if ns.db.warbank and ns.db.warbank.items then
+        for wbKey, wbData in pairs(ns.db.warbank.items) do
+            wbRemaining[wbKey] = wbData.quantity or 1
+        end
+    end
+
     for i, item in ipairs(ns.db.queue) do
         if item.status == "pending" and not consumed[i]
             and item.targetRealm and item.targetRealm ~= "" then
@@ -803,31 +813,49 @@ local function BuildNextStepsData()
             end
 
             if not hasCoverage then
-                -- Find existing entry for this connected realm cluster
-                local found = false
-                for _, entry in ipairs(realmNeeds) do
-                    if ns:RealmsOverlap(entry.realmStr, item.targetRealm) then
-                        entry.count = entry.count + 1
-                        entry.totalGold = entry.totalGold + ParseGoldValue(item.expectedPrice)
-                        if #item.targetRealm > #entry.realmStr then
-                            entry.realmStr = item.targetRealm
+                -- Check if this item actually exists in warbank
+                local inWarbank = false
+                if ns.db.warbank and ns.db.warbank.items then
+                    local resolvedID = ns:ResolveItemID(item)
+                    for wbKey, wbData in pairs(ns.db.warbank.items) do
+                        if (wbRemaining[wbKey] or 0) > 0 then
+                            local matched = (wbKey == item.itemKey)
+                            if not matched and resolvedID then
+                                local wbNumID = tonumber(wbKey:match("^(%d+);"))
+                                if wbNumID and wbNumID == resolvedID then matched = true end
+                            end
+                            if not matched and wbData.name and item.name ~= "" then
+                                if wbData.name:lower() == item.name:lower() then
+                                    matched = true
+                                end
+                            end
+                            if matched then
+                                wbRemaining[wbKey] = wbRemaining[wbKey] - (item.quantity or 1)
+                                inWarbank = true
+                                break
+                            end
                         end
-                        found = true
-                        break
                     end
                 end
-                if not found then
-                    table.insert(realmNeeds, {
-                        realmStr = item.targetRealm,
-                        count = 1,
-                        totalGold = ParseGoldValue(item.expectedPrice),
-                    })
+
+                if inWarbank then
+                    -- Group by exact targetRealm string to avoid cross-cluster merging
+                    local realmKey = item.targetRealm:lower()
+                    if not realmNeeds[realmKey] then
+                        realmNeeds[realmKey] = {
+                            realmStr = item.targetRealm,
+                            count = 0,
+                            totalGold = 0,
+                        }
+                    end
+                    realmNeeds[realmKey].count = realmNeeds[realmKey].count + 1
+                    realmNeeds[realmKey].totalGold = realmNeeds[realmKey].totalGold + ParseGoldValue(item.expectedPrice)
                 end
             end
         end
     end
 
-    for _, info in ipairs(realmNeeds) do
+    for _, info in pairs(realmNeeds) do
         table.insert(data, {
             action    = "|cffff6666" .. "Create char" .. "|r",
             target    = info.realmStr,
