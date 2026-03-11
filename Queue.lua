@@ -9,19 +9,38 @@ ns.Queue = Queue
 -- Queue Operations
 --------------------------
 
+-- Use shared ns:RealmsOverlap from Core.lua
+local function RealmsOverlap(realm1, realm2)
+    return ns:RealmsOverlap(realm1, realm2)
+end
+
 function Queue:Add(items)
     if not ns.db then return 0 end
 
     local added = 0
+    local duped = 0
     for _, item in ipairs(items) do
         local isDuplicate = false
+        -- Match by key or name (handles FP website vs CSV key differences)
+        local itemName = (item.name or ""):lower()
         for _, existing in ipairs(ns.db.queue) do
-            if existing.itemKey == item.itemKey
-                and existing.status == "pending"
-                and (existing.targetRealm or "") == (item.targetRealm or "") then
-                existing.quantity = existing.quantity + (item.quantity or 1)
-                isDuplicate = true
-                break
+            if existing.status == "pending" then
+                local keyMatch = existing.itemKey == item.itemKey
+                local nameMatch = itemName ~= "" and existing.name
+                    and existing.name:lower() == itemName
+                if (keyMatch or nameMatch) and RealmsOverlap(existing.targetRealm, item.targetRealm) then
+                    -- Keep the longer/more descriptive realm string
+                    if #(item.targetRealm or "") > #(existing.targetRealm or "") then
+                        existing.targetRealm = item.targetRealm
+                    end
+                    -- Keep higher price if available
+                    if item.expectedPrice and (not existing.expectedPrice or existing.expectedPrice == "") then
+                        existing.expectedPrice = item.expectedPrice
+                    end
+                    isDuplicate = true
+                    duped = duped + 1
+                    break
+                end
             end
         end
 
@@ -47,6 +66,10 @@ function Queue:Add(items)
             })
             added = added + 1
         end
+    end
+
+    if duped > 0 then
+        ns:Print(ns.COLORS.GRAY .. "Deduped " .. duped .. " connected-realm duplicates.|r")
     end
 
     return added

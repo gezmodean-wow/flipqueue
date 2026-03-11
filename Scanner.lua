@@ -215,9 +215,17 @@ frame:SetScript("OnEvent", function(self, event)
             C_Timer.After(2, function()
                 Scanner:ScanCurrentCharacter()
                 if ns.db.settings.showLoginMessage and ns.Queue then
-                    local tasks = ns.Queue:GetCharacterTasks(ns:GetCharKey())
-                    if tasks and #tasks > 0 then
-                        ns:Print(ns.COLORS.GREEN .. #tasks .. " items|r to post on this character! Type /fq to see details.")
+                    local charKey = ns:GetCharKey()
+                    local myRealm = charKey:match("%-(.+)$") or ""
+                    local allTasks = ns.Queue:GetCharacterTasks(charKey)
+                    local realmCount = 0
+                    for _, task in ipairs(allTasks) do
+                        if ns:RealmMatches(task.queueItem.targetRealm, myRealm) then
+                            realmCount = realmCount + 1
+                        end
+                    end
+                    if realmCount > 0 then
+                        ns:Print(ns.COLORS.GREEN .. realmCount .. " items|r to post on this character! Type /fq to see details.")
                     end
                 end
             end)
@@ -225,6 +233,7 @@ frame:SetScript("OnEvent", function(self, event)
 
     elseif event == "BANKFRAME_OPENED" then
         C_Timer.After(0.5, function()
+            Scanner:ScanCurrentCharacter()
             Scanner:ScanBank()
             Scanner:ScanWarbank()
         end)

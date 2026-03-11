@@ -98,8 +98,9 @@ scanBtn:SetPoint("RIGHT", mainBtn, "LEFT", -ICON_SPACING, 0)
 
 -- Import button
 local importBtn = CreateIconButton(header, "Interface\\Buttons\\UI-GuildButton-MOTD-Up", "Import", function()
-    UI.importFrame:Show()
-    UI.importEditBox:SetFocus(true)
+    UI.currentPage = "import"
+    UI.mainFrame:Show()
+    UI:Refresh()
 end)
 importBtn:SetPoint("RIGHT", scanBtn, "LEFT", -ICON_SPACING, 0)
 

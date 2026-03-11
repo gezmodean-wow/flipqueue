@@ -108,6 +108,22 @@ function ns:RealmMatches(targetRealm, realmName)
     return targetRealm:lower():find(realmName:lower(), 1, true) ~= nil
 end
 
+-- Check if two realm strings refer to the same connected AH
+-- e.g., "Kalecgos, Lightninghoof, Maelstrom" overlaps with "Lightninghoof"
+function ns:RealmsOverlap(realm1, realm2)
+    local r1 = realm1 or ""
+    local r2 = realm2 or ""
+    if r1 == "" and r2 == "" then return true end
+    if r1 == "" or r2 == "" then return false end
+    for name in r1:gmatch("([^,]+)") do
+        name = strtrim(name)
+        if name ~= "" and r2:lower():find(name:lower(), 1, true) then
+            return true
+        end
+    end
+    return false
+end
+
 --------------------------
 -- Saved Variables Init
 --------------------------
@@ -122,10 +138,12 @@ function ns:InitDB()
     db.queue      = db.queue or {}
     db.log        = db.log or {}
     db.doNotTrack = db.doNotTrack or {}
+    db.hiddenCharacters = db.hiddenCharacters or {}
     db.settings   = db.settings or {
         autoScan         = true,
         autoPullBank     = false,
         showLoginMessage = true,
+        autoWithdrawGold = false,
     }
     db.settings.collapsed = db.settings.collapsed or {}
     db.settings.sortMode  = db.settings.sortMode or "realm"

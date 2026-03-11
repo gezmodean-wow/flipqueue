@@ -1,17 +1,36 @@
 -- UI/MinimapButton.lua
 -- Minimap icon button: left-click opens main window, right-click opens settings
+-- Parents to Minimap's parent to avoid clipping by square minimap addons
 local addonName, ns = ...
 
 local UI = ns.UI
 
-local ICON_SIZE = 32
+local ICON_SIZE = 31
 local ICON_TEXTURE = "Interface\\Icons\\INV_Misc_Coin_02"
 
+--------------------------
+-- Square minimap detection
+--------------------------
+
+local function IsSquareMinimap()
+    if type(GetMinimapShape) == "function" then
+        local shape = GetMinimapShape()
+        if shape and shape ~= "ROUND" then
+            return true
+        end
+    end
+    return false
+end
+
+--------------------------
 -- Create the minimap button
-local btn = CreateFrame("Button", "FlipQueueMinimapButton", Minimap)
+-- Parent to Minimap's parent to avoid clip masking
+--------------------------
+
+local btn = CreateFrame("Button", "FlipQueueMinimapButton", Minimap:GetParent() or Minimap)
 btn:SetSize(ICON_SIZE, ICON_SIZE)
 btn:SetFrameStrata("MEDIUM")
-btn:SetFrameLevel(8)
+btn:SetFrameLevel(9)
 btn:SetClampedToScreen(true)
 btn:SetMovable(true)
 btn:RegisterForClicks("LeftButtonUp", "RightButtonUp")
@@ -20,20 +39,20 @@ btn:SetHighlightTexture("Interface\\Minimap\\UI-Minimap-ZoomButton-Highlight")
 
 -- Icon texture
 local icon = btn:CreateTexture(nil, "ARTWORK")
-icon:SetSize(20, 20)
-icon:SetPoint("CENTER", 0, 0)
+icon:SetSize(18, 18)
+icon:SetPoint("TOPLEFT", btn, "TOPLEFT", 7, -5)
 icon:SetTexture(ICON_TEXTURE)
 
--- Border overlay (looks like other minimap buttons)
+-- Border overlay — anchored at TOPLEFT like Blizzard's tracking button
 local border = btn:CreateTexture(nil, "OVERLAY")
-border:SetSize(54, 54)
-border:SetPoint("CENTER", 0, 0)
+border:SetSize(52, 52)
+border:SetPoint("TOPLEFT", btn, "TOPLEFT", 0, 0)
 border:SetTexture("Interface\\Minimap\\MiniMap-TrackingBorder")
 
--- Background
+-- Background circle behind icon
 local bg = btn:CreateTexture(nil, "BACKGROUND")
-bg:SetSize(24, 24)
-bg:SetPoint("CENTER", 0, 0)
+bg:SetSize(18, 18)
+bg:SetPoint("TOPLEFT", btn, "TOPLEFT", 7, -5)
 bg:SetColorTexture(0, 0, 0, 0.6)
 
 --------------------------
@@ -41,31 +60,39 @@ bg:SetColorTexture(0, 0, 0, 0.6)
 --------------------------
 
 local function UpdatePosition(angle)
-    local radius = 80
-    local x = math.cos(angle) * radius
-    local y = math.sin(angle) * radius
+    local halfWidth = Minimap:GetWidth() / 2
+    local dist = halfWidth
+
+    local x = math.cos(angle) * dist
+    local y = math.sin(angle) * dist
+
+    -- For square minimaps, project onto the square perimeter
+    if IsSquareMinimap() then
+        local absX, absY = math.abs(x), math.abs(y)
+        local furthest = math.max(absX, absY)
+        if furthest > 0 then
+            local scale = dist / furthest
+            x = x * scale
+            y = y * scale
+        end
+    end
+
     btn:ClearAllPoints()
     btn:SetPoint("CENTER", Minimap, "CENTER", x, y)
 end
 
-local function GetAngleFromPosition()
-    local cx, cy = Minimap:GetCenter()
-    local bx, by = btn:GetCenter()
-    if not cx or not bx then return 3.5 end -- default angle
-    return math.atan2(by - cy, bx - cx)
+local function GetAngleFromCursor()
+    local mx, my = Minimap:GetCenter()
+    local cx, cy = GetCursorPosition()
+    local scale = UIParent:GetEffectiveScale()
+    cx, cy = cx / scale, cy / scale
+    return math.atan2(cy - my, cx - mx)
 end
 
 -- Dragging
-local isDragging = false
-
 btn:SetScript("OnDragStart", function(self)
-    isDragging = true
-    self:SetScript("OnUpdate", function(self)
-        local mx, my = Minimap:GetCenter()
-        local cx, cy = GetCursorPosition()
-        local scale = UIParent:GetEffectiveScale()
-        cx, cy = cx / scale, cy / scale
-        local angle = math.atan2(cy - my, cx - mx)
+    self:SetScript("OnUpdate", function()
+        local angle = GetAngleFromCursor()
         UpdatePosition(angle)
         if ns.db then
             ns.db.settings.minimapAngle = angle
@@ -74,7 +101,6 @@ btn:SetScript("OnDragStart", function(self)
 end)
 
 btn:SetScript("OnDragStop", function(self)
-    isDragging = false
     self:SetScript("OnUpdate", nil)
 end)
 
@@ -126,9 +152,8 @@ initFrame:RegisterEvent("PLAYER_LOGIN")
 initFrame:SetScript("OnEvent", function()
     C_Timer.After(1, function()
         ns:InitDB()
-        -- Default settings
         if ns.db.settings.minimapAngle == nil then
-            ns.db.settings.minimapAngle = 3.5 -- ~200 degrees, top-right area
+            ns.db.settings.minimapAngle = 3.5
         end
         if ns.db.settings.showMinimap == nil then
             ns.db.settings.showMinimap = true
@@ -142,6 +167,13 @@ initFrame:SetScript("OnEvent", function()
             btn:Hide()
         end
     end)
+end)
+
+-- Reposition when minimap resizes
+Minimap:HookScript("OnSizeChanged", function()
+    if ns.db and ns.db.settings.minimapAngle then
+        UpdatePosition(ns.db.settings.minimapAngle)
+    end
 end)
 
 -- API for hiding/showing

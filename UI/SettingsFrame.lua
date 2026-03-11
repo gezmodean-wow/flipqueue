@@ -78,7 +78,7 @@ function UI:CreateSettingsPanel(parent)
     -- Scrollable settings container
     local scroll = CreateFrame("ScrollFrame", nil, parent, "UIPanelScrollFrameTemplate")
     scroll:SetPoint("TOPLEFT", parent, "TOPLEFT", 0, 0)
-    scroll:SetPoint("BOTTOMRIGHT", parent, "BOTTOMRIGHT", -16, 0)
+    scroll:SetPoint("BOTTOMRIGHT", parent, "BOTTOMRIGHT", -22, 0)
 
     local content = CreateFrame("Frame", nil, scroll)
     content:SetWidth(scroll:GetWidth())
@@ -103,6 +103,11 @@ function UI:CreateSettingsPanel(parent)
     settingsWidgets.autoPull = CreateSettingsCheckbox(content, y,
         "Auto-pull queued items from bank", "autoPullBank",
         "When you open the bank, automatically move queued items to your bags.")
+    y = y - 26
+
+    settingsWidgets.autoGold = CreateSettingsCheckbox(content, y,
+        "Auto-withdraw gold for AH fees", "autoWithdrawGold",
+        "When you open the bank, withdraw enough gold from warband bank to cover estimated AH listing fees (5% of expected item value).")
     y = y - 36
 
     -- Section: Notifications
@@ -262,6 +267,9 @@ function UI:RefreshSettings()
     end
     if settingsWidgets.autoPull then
         settingsWidgets.autoPull:SetChecked(ns.db.settings.autoPullBank)
+    end
+    if settingsWidgets.autoGold then
+        settingsWidgets.autoGold:SetChecked(ns.db.settings.autoWithdrawGold)
     end
     if settingsWidgets.loginMsg then
         settingsWidgets.loginMsg:SetChecked(ns.db.settings.showLoginMessage)

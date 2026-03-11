@@ -24,6 +24,33 @@ mainFrame:SetScript("OnDragStart", mainFrame.StartMoving)
 mainFrame:SetScript("OnDragStop", mainFrame.StopMovingOrSizing)
 mainFrame:SetFrameStrata("HIGH")
 mainFrame:SetClampedToScreen(true)
+mainFrame:SetResizable(true)
+if mainFrame.SetResizeBounds then
+    mainFrame:SetResizeBounds(600, 400, 1200, 900)
+else
+    mainFrame:SetMinResize(600, 400)
+    mainFrame:SetMaxResize(1200, 900)
+end
+
+-- Resize grip (bottom-right corner)
+local resizeGrip = CreateFrame("Button", nil, mainFrame)
+resizeGrip:SetSize(16, 16)
+resizeGrip:SetPoint("BOTTOMRIGHT", mainFrame, "BOTTOMRIGHT", -4, 4)
+resizeGrip:SetNormalTexture("Interface\\ChatFrame\\UI-ChatIM-SizeGrabber-Up")
+resizeGrip:SetHighlightTexture("Interface\\ChatFrame\\UI-ChatIM-SizeGrabber-Highlight")
+resizeGrip:SetPushedTexture("Interface\\ChatFrame\\UI-ChatIM-SizeGrabber-Down")
+resizeGrip:SetScript("OnMouseDown", function()
+    mainFrame:StartSizing("BOTTOMRIGHT")
+end)
+resizeGrip:SetScript("OnMouseUp", function()
+    mainFrame:StopMovingOrSizing()
+    -- Save size
+    if ns.db then
+        ns.db.settings.frameWidth = mainFrame:GetWidth()
+        ns.db.settings.frameHeight = mainFrame:GetHeight()
+    end
+end)
+
 mainFrame:SetBackdrop({
     bgFile = "Interface\\Tooltips\\UI-Tooltip-Background",
     edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
@@ -96,7 +123,8 @@ local NAV_ITEMS = {
     {key = "inventory",  label = "Inventory",    icon = "Interface\\Icons\\INV_Misc_Bag_07"},
     {key = "characters", label = "Characters",   icon = "Interface\\Icons\\Achievement_GuildPerk_EverybodysFriend"},
     {key = "sep"},
-    {key = "import",     label = "Import",       icon = "Interface\\Icons\\Ability_Creature_Cursed_04", action = true},
+    {key = "import",     label = "Import",       icon = "Interface\\Icons\\Ability_Creature_Cursed_04"},
+    {key = "export",     label = "Export",       icon = "Interface\\Icons\\INV_Scroll_11"},
     {key = "rescan",     label = "Rescan",       icon = "Interface\\Icons\\Spell_Shadow_MindSteal", action = true},
     {key = "sep2"},
     {key = "settings",   label = "Settings",     icon = "Interface\\Icons\\INV_Gizmo_02"},
@@ -155,6 +183,8 @@ for _, nav in ipairs(NAV_ITEMS) do
                 if navKey == "import" then
                     UI.importFrame:Show()
                     UI.importEditBox:SetFocus(true)
+                elseif navKey == "export" then
+                    ns.Export:ShowExportFrame("bags")
                 elseif navKey == "rescan" then
                     ns.Scanner:ScanCurrentCharacter()
                     UI:Refresh()
@@ -285,6 +315,69 @@ mainFrame.actionBtns.dnt = CreateActionBtn("DNT List", "Manage Do Not Track list
     UI:ShowDoNotTrackFrame()
 end)
 
+mainFrame.actionBtns.importDo = CreateActionBtn("Import", "Import pasted data to queue", function()
+    local text = UI._importEdit:GetText()
+    if text and text ~= "" then
+        local items = ns.Import:Parse(text)
+        if #items > 0 then
+            local added = ns.Queue:Add(items)
+            ns:Print("Imported " .. added .. " new items (" .. #items .. " parsed, duplicates merged).")
+            UI._importEdit:SetText("")
+            UI._importStatus:SetText(ns.COLORS.GREEN .. added .. " items imported!|r")
+            UI:Refresh()
+            UI:RefreshMini()
+        else
+            UI._importStatus:SetText(ns.COLORS.RED .. "No items found in pasted data.|r")
+        end
+    end
+end)
+
+mainFrame.actionBtns.importClear = CreateActionBtn("Clear", "Clear the import text", function()
+    UI._importEdit:SetText("")
+    UI._importStatus:SetText("")
+    UI._importEdit:SetFocus(true)
+end)
+
+mainFrame.actionBtns.exportBags = CreateActionBtn("Bags", "Export bag inventory", function()
+    local csv, count = ns.Export:ExportBags()
+    UI._exportEdit:SetText(csv)
+    UI._exportStatus:SetText(ns.COLORS.GREEN .. count .. " items|r from bags")
+    UI._exportEdit:HighlightText()
+    UI._exportEdit:SetFocus(true)
+end)
+
+mainFrame.actionBtns.exportBank = CreateActionBtn("Bank", "Export bank (bank must be open)", function()
+    local csv, count = ns.Export:ExportBank()
+    UI._exportEdit:SetText(csv)
+    UI._exportStatus:SetText(ns.COLORS.GREEN .. count .. " items|r from bank")
+    UI._exportEdit:HighlightText()
+    UI._exportEdit:SetFocus(true)
+end)
+
+mainFrame.actionBtns.exportWarbank = CreateActionBtn("Warbank", "Export warbank (bank must be open)", function()
+    local csv, count = ns.Export:ExportWarbank()
+    UI._exportEdit:SetText(csv)
+    UI._exportStatus:SetText(ns.COLORS.GREEN .. count .. " items|r from warbank")
+    UI._exportEdit:HighlightText()
+    UI._exportEdit:SetFocus(true)
+end)
+
+mainFrame.actionBtns.exportAll = CreateActionBtn("All", "Export all containers (live scan)", function()
+    local csv, count = ns.Export:ExportAll()
+    UI._exportEdit:SetText(csv)
+    UI._exportStatus:SetText(ns.COLORS.GREEN .. count .. " items|r from all containers (live)")
+    UI._exportEdit:HighlightText()
+    UI._exportEdit:SetFocus(true)
+end)
+
+mainFrame.actionBtns.exportSaved = CreateActionBtn("Saved All", "Export all from saved scans (no bank needed)", function()
+    local csv, count = ns.Export:ExportSaved("all")
+    UI._exportEdit:SetText(csv)
+    UI._exportStatus:SetText(ns.COLORS.GREEN .. count .. " items|r from saved data (bags+bank+warbank)")
+    UI._exportEdit:HighlightText()
+    UI._exportEdit:SetFocus(true)
+end)
+
 -- Status bar at bottom of content
 local statusBar = CreateFrame("Frame", nil, contentArea)
 statusBar:SetHeight(18)
@@ -353,12 +446,13 @@ UI.inventoryTable:SetSort("name", true)
 
 -- Characters table
 UI.charsTable = UI:CreateScrollTable(tableContainer, {
-    {key = "name",      label = "Character",   width = 140, sortable = true},
-    {key = "realm",     label = "Realm",        width = 160, sortable = true},
-    {key = "class",     label = "Class",        width = 80,  sortable = true},
-    {key = "tasks",     label = "Tasks",        width = 50,  align = "CENTER", sortable = true},
-    {key = "lastScan",  label = "Last Scan",    width = 100, sortable = true},
-    {key = "items",     label = "Items",        width = 50,  align = "CENTER", sortable = true},
+    {key = "name",      label = "Character",   width = 130, sortable = true},
+    {key = "realm",     label = "Realm",        width = 150, sortable = true},
+    {key = "class",     label = "Class",        width = 70,  sortable = true},
+    {key = "tasks",     label = "Tasks",        width = 45,  align = "CENTER", sortable = true},
+    {key = "status",    label = "Status",       width = 80,  sortable = true},
+    {key = "lastScan",  label = "Last Scan",    width = 90,  sortable = true},
+    {key = "items",     label = "Items",        width = 45,  align = "CENTER", sortable = true},
 })
 UI.charsTable:SetSort("name", true)
 
@@ -371,9 +465,107 @@ UI.needCharsTable = UI:CreateScrollTable(tableContainer, {
 })
 UI.needCharsTable:SetSort("itemCount", false)
 
+-- Next Steps table (shown on Post Now page)
+UI.nextStepsTable = UI:CreateScrollTable(tableContainer, {
+    {key = "action",    label = "Action",     width = 90,  sortable = true},
+    {key = "target",    label = "Target",     width = 200, sortable = true},
+    {key = "itemCount", label = "Items",      width = 50,  align = "CENTER", sortable = true},
+    {key = "value",     label = "Est. Value", width = 90,  sortable = true},
+    {key = "detail",    label = "Detail",     width = 130, sortable = false},
+})
+UI.nextStepsTable:SetSort("_sortValue", false)
+
 -- Keep references for backward compatibility
 UI.content = tableContainer
 UI.contentRows = {}
+
+-- ==========================================
+-- IMPORT / EXPORT PAGES (in-frame)
+-- ==========================================
+
+-- Import page
+local importPage = CreateFrame("Frame", nil, tableContainer)
+importPage:SetAllPoints()
+importPage:Hide()
+
+local importInstr = importPage:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+importInstr:SetPoint("TOPLEFT", importPage, "TOPLEFT", 8, -8)
+importInstr:SetText("Paste FlippingPal data below, then click Import:")
+importInstr:SetTextColor(0.7, 0.7, 0.7)
+
+local importScroll = CreateFrame("ScrollFrame", "FlipQueueImportScrollInline", importPage, "UIPanelScrollFrameTemplate")
+importScroll:SetPoint("TOPLEFT", importPage, "TOPLEFT", 4, -28)
+importScroll:SetPoint("BOTTOMRIGHT", importPage, "BOTTOMRIGHT", -24, 34)
+
+local importEdit = CreateFrame("EditBox", "FlipQueueImportEditInline", importScroll)
+importEdit:SetMultiLine(true)
+importEdit:SetAutoFocus(false)
+importEdit:SetMaxLetters(0)
+importEdit:SetFontObject("ChatFontNormal")
+importEdit:SetWidth(importScroll:GetWidth() or 500)
+importScroll:SetScrollChild(importEdit)
+importScroll:SetScript("OnSizeChanged", function(sf, w)
+    importEdit:SetWidth(w)
+end)
+
+local importStatus = importPage:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+importStatus:SetPoint("LEFT", importPage, "BOTTOMLEFT", 8, 17)
+importStatus:SetTextColor(0.5, 0.5, 0.5)
+importStatus:SetText("")
+
+-- Auto-detect paste
+local importLastLen = 0
+importEdit:SetScript("OnTextChanged", function(self, userInput)
+    if not userInput then return end
+    local text = self:GetText()
+    local newLen = #text
+    if importLastLen < 10 and newLen > 50 and text:find("\n") then
+        local items = ns.Import:Parse(text)
+        if #items > 0 then
+            importStatus:SetText(ns.COLORS.GREEN .. #items .. " items detected|r — click Import")
+        end
+    end
+    importLastLen = newLen
+end)
+importEdit:SetScript("OnEscapePressed", function() importEdit:ClearFocus() end)
+
+UI._importPage = importPage
+UI._importEdit = importEdit
+UI._importStatus = importStatus
+
+-- Export page
+local exportPage = CreateFrame("Frame", nil, tableContainer)
+exportPage:SetAllPoints()
+exportPage:Hide()
+
+local exportInstr = exportPage:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+exportInstr:SetPoint("TOPLEFT", exportPage, "TOPLEFT", 8, -8)
+exportInstr:SetText("Select source, then Ctrl+A / Ctrl+C to copy:")
+exportInstr:SetTextColor(0.7, 0.7, 0.7)
+
+local exportScroll = CreateFrame("ScrollFrame", "FlipQueueExportScrollInline", exportPage, "UIPanelScrollFrameTemplate")
+exportScroll:SetPoint("TOPLEFT", exportPage, "TOPLEFT", 4, -28)
+exportScroll:SetPoint("BOTTOMRIGHT", exportPage, "BOTTOMRIGHT", -24, 34)
+
+local exportEdit = CreateFrame("EditBox", "FlipQueueExportEditInline", exportScroll)
+exportEdit:SetMultiLine(true)
+exportEdit:SetAutoFocus(false)
+exportEdit:SetFontObject("ChatFontNormal")
+exportEdit:SetWidth(exportScroll:GetWidth() or 500)
+exportScroll:SetScrollChild(exportEdit)
+exportScroll:SetScript("OnSizeChanged", function(sf, w)
+    exportEdit:SetWidth(w)
+end)
+exportEdit:SetScript("OnEscapePressed", function() exportEdit:ClearFocus() end)
+
+local exportStatus = exportPage:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+exportStatus:SetPoint("LEFT", exportPage, "BOTTOMLEFT", 8, 17)
+exportStatus:SetTextColor(0.5, 0.5, 0.5)
+exportStatus:SetText("")
+
+UI._exportPage = exportPage
+UI._exportEdit = exportEdit
+UI._exportStatus = exportStatus
 
 -- ==========================================
 -- HIDE/SHOW HELPERS
@@ -389,6 +581,7 @@ RegisterTable(UI.logTable)
 RegisterTable(UI.inventoryTable)
 RegisterTable(UI.charsTable)
 RegisterTable(UI.needCharsTable)
+RegisterTable(UI.nextStepsTable)
 
 local function HideAllTables()
     for _, tbl in ipairs(allTables) do
@@ -396,6 +589,10 @@ local function HideAllTables()
         tbl.scrollFrame:Hide()
     end
     UI:HideSettingsPage()
+    importPage:Hide()
+    exportPage:Hide()
+    if UI._nextStepsLabel then UI._nextStepsLabel:Hide() end
+    if UI._needCharsLabel then UI._needCharsLabel:Hide() end
 end
 
 local function ShowTable(tbl)
@@ -424,6 +621,11 @@ local function LayoutActionBtns(...)
     end
 end
 
+-- Forward declarations (defined later in file)
+local QualityColorName
+local LookupItemInfo
+local CLASS_COLORS
+
 -- ==========================================
 -- POST NOW PAGE
 -- ==========================================
@@ -438,6 +640,21 @@ local function BuildPostNowData()
 
     for _, task in ipairs(tasks) do
         if ns:RealmMatches(task.queueItem.targetRealm, myRealm) then
+            local qi = task.queueItem
+            local displayName = qi.name ~= "" and qi.name or tostring(qi.itemID)
+
+            -- Safely lookup icon/quality (pcall protects against missing API)
+            local lookupIcon, quality, resolvedID
+            local ok, err = pcall(function()
+                lookupIcon, quality, resolvedID = LookupItemInfo(qi.itemID, qi.itemKey, qi.name)
+            end)
+
+            if quality then
+                displayName = QualityColorName(displayName, quality)
+            elseif qi.quality and qi.quality ~= "" then
+                displayName = QualityColorName(displayName, qi.quality)
+            end
+
             local locParts = {}
             if task.locations then
                 for loc, qty in pairs(task.locations) do
@@ -446,24 +663,306 @@ local function BuildPostNowData()
             end
 
             table.insert(data, {
-                name     = task.queueItem.name,
+                name     = displayName,
                 qty      = task.quantity,
-                price    = task.queueItem.expectedPrice or "",
-                realm    = task.queueItem.targetRealm or "",
+                price    = qi.expectedPrice or "",
+                realm    = qi.targetRealm or "",
                 location = table.concat(locParts, ", "),
-                _icon    = task.icon,
-                _tooltipItemID = task.queueItem.itemID,
-                _tooltipText   = task.queueItem.name,
-                _tooltipExtra  = (task.queueItem.targetRealm or "") ~= "" and
-                    ("Sell on: " .. task.queueItem.targetRealm .. "  @  " .. (task.queueItem.expectedPrice or "?")) or nil,
+                _icon    = task.icon or lookupIcon,
+                _tooltipItemID = resolvedID,
+                _tooltipText   = qi.name ~= "" and qi.name or tostring(qi.itemID),
+                _tooltipExtra  = (qi.targetRealm or "") ~= "" and
+                    ("Sell on: " .. qi.targetRealm .. "  @  " .. (qi.expectedPrice or "?")) or nil,
                 _queueIndex = task.queueIndex,
-                _queueItem  = task.queueItem,
+                _queueItem  = qi,
                 _fuzzy = task.fuzzyMatch,
             })
         end
     end
 
     return data
+end
+
+-- ==========================================
+-- NEXT STEPS (shown on Post Now page)
+-- ==========================================
+
+local function ParseGoldValue(priceStr)
+    if not priceStr or priceStr == "" then return 0 end
+    local goldNum = priceStr:gsub(",", ""):match("(%d+)g")
+    return goldNum and tonumber(goldNum) or 0
+end
+
+local function FormatGoldValue(totalGold)
+    if totalGold <= 0 then return "" end
+    if totalGold >= 1000 then
+        return string.format("%.1fk gold", totalGold / 1000)
+    end
+    return tostring(totalGold) .. " gold"
+end
+
+local function BuildNextStepsData()
+    if not ns.db then return {} end
+
+    local data = {}
+    local myCharKey = ns:GetCharKey()
+    local myRealm = myCharKey:match("%-(.+)$") or ""
+
+    -- Track consumed queue indices so each item is counted exactly once
+    local consumed = {}
+
+    -- Gather all covered realms from inventory (excluding hidden characters)
+    local coveredRealms = {}
+    for charKey, _ in pairs(ns.db.inventory) do
+        if not ns.db.hiddenCharacters[charKey] then
+            local realm = charKey:match("%-(.+)$") or ""
+            if realm ~= "" then
+                if not coveredRealms[realm] then
+                    coveredRealms[realm] = {}
+                end
+                table.insert(coveredRealms[realm], charKey)
+            end
+        end
+    end
+
+    -- 0) Consume current character's items (already shown in Post Now)
+    local myTasks = ns.Queue:GetCharacterTasks(myCharKey)
+    for _, task in ipairs(myTasks) do
+        if ns:RealmMatches(task.queueItem.targetRealm, myRealm) then
+            consumed[task.queueIndex] = true
+        end
+    end
+
+    -- 1) Other characters with pending tasks (not current char, not hidden)
+    -- Process characters with personal inventory matches first, then warbank-only
+    local otherChars = {}
+    for charKey, _ in pairs(ns.db.inventory) do
+        if charKey ~= myCharKey and not ns.db.hiddenCharacters[charKey] then
+            table.insert(otherChars, charKey)
+        end
+    end
+
+    local charTasks = {} -- charKey -> {count, totalGold}
+    for _, charKey in ipairs(otherChars) do
+        local charRealm = charKey:match("%-(.+)$") or ""
+        local tasks = ns.Queue:GetCharacterTasks(charKey)
+        local realmCount = 0
+        local totalGold = 0
+
+        for _, task in ipairs(tasks) do
+            if not consumed[task.queueIndex] then
+                local targetRealm = task.queueItem.targetRealm or ""
+                if targetRealm ~= "" and ns:RealmMatches(targetRealm, charRealm) then
+                    consumed[task.queueIndex] = true
+                    realmCount = realmCount + 1
+                    totalGold = totalGold + ParseGoldValue(task.queueItem.expectedPrice)
+                end
+            end
+        end
+
+        if realmCount > 0 then
+            charTasks[charKey] = {
+                count = realmCount,
+                totalGold = totalGold,
+            }
+        end
+    end
+
+    for charKey, info in pairs(charTasks) do
+        local name = charKey:match("^(.-)%-") or charKey
+        local realm = charKey:match("%-(.+)$") or ""
+        local charInv = ns.db.inventory[charKey]
+        local classColor = charInv and CLASS_COLORS[charInv.class] or "888888"
+        local coloredName = "|cff" .. classColor .. name .. "|r"
+
+        table.insert(data, {
+            action    = ns.COLORS.YELLOW .. "Log in" .. "|r",
+            target    = coloredName .. "  (" .. realm .. ")",
+            itemCount = info.count,
+            value     = FormatGoldValue(info.totalGold),
+            detail    = info.count .. " items to post",
+            _sortValue = info.totalGold,
+            _tooltipText = charKey,
+            _tooltipExtra = string.format("Log in to %s to post %d items\nEstimated value: %s",
+                charKey, info.count, FormatGoldValue(info.totalGold)),
+        })
+    end
+
+    -- 2) Realms needing new characters (only unconsumed pending items)
+    local realmNeeds = {} -- {realmStr, count, totalGold}
+    for i, item in ipairs(ns.db.queue) do
+        if item.status == "pending" and not consumed[i]
+            and item.targetRealm and item.targetRealm ~= "" then
+            local hasCoverage = false
+            for realm, _ in pairs(coveredRealms) do
+                if ns:RealmMatches(item.targetRealm, realm) then
+                    hasCoverage = true
+                    break
+                end
+            end
+
+            if not hasCoverage then
+                -- Find existing entry for this connected realm cluster
+                local found = false
+                for _, entry in ipairs(realmNeeds) do
+                    if ns:RealmsOverlap(entry.realmStr, item.targetRealm) then
+                        entry.count = entry.count + 1
+                        entry.totalGold = entry.totalGold + ParseGoldValue(item.expectedPrice)
+                        if #item.targetRealm > #entry.realmStr then
+                            entry.realmStr = item.targetRealm
+                        end
+                        found = true
+                        break
+                    end
+                end
+                if not found then
+                    table.insert(realmNeeds, {
+                        realmStr = item.targetRealm,
+                        count = 1,
+                        totalGold = ParseGoldValue(item.expectedPrice),
+                    })
+                end
+            end
+        end
+    end
+
+    for _, info in ipairs(realmNeeds) do
+        table.insert(data, {
+            action    = "|cffff6666" .. "Create char" .. "|r",
+            target    = info.realmStr,
+            itemCount = info.count,
+            value     = FormatGoldValue(info.totalGold),
+            detail    = "New character needed",
+            _sortValue = info.totalGold,
+            _tooltipText = info.realmStr,
+            _tooltipExtra = string.format("Create a character on %s\n%d items worth ~%s waiting",
+                info.realmStr, info.count, FormatGoldValue(info.totalGold)),
+        })
+    end
+
+    -- Sort by value descending
+    table.sort(data, function(a, b) return (a._sortValue or 0) > (b._sortValue or 0) end)
+
+    return data
+end
+
+-- ==========================================
+-- ITEM QUALITY COLORS
+-- ==========================================
+
+local QUALITY_COLORS = {
+    Poor      = "9d9d9d",
+    Common    = "ffffff",
+    Uncommon  = "1eff00",
+    Rare      = "0070dd",
+    Epic      = "a335ee",
+    Legendary = "ff8000",
+    Artifact  = "e6cc80",
+    Heirloom  = "00ccff",
+}
+
+-- WoW Enum.ItemQuality numeric -> color
+local QUALITY_NUM_COLORS = {
+    [0] = "9d9d9d", -- Poor
+    [1] = "ffffff", -- Common
+    [2] = "1eff00", -- Uncommon
+    [3] = "0070dd", -- Rare
+    [4] = "a335ee", -- Epic
+    [5] = "ff8000", -- Legendary
+    [6] = "e6cc80", -- Artifact
+    [7] = "00ccff", -- Heirloom
+}
+
+-- Colorize a name by quality (string name like "Rare" or numeric 3)
+QualityColorName = function(name, quality)
+    local color
+    if type(quality) == "number" then
+        color = QUALITY_NUM_COLORS[quality]
+    elseif type(quality) == "string" and quality ~= "" then
+        color = QUALITY_COLORS[quality]
+    end
+    if color then
+        return "|cff" .. color .. name .. "|r"
+    end
+    return name
+end
+
+-- Look up icon, quality, and resolved numeric ID for an item
+-- Returns: icon, quality, resolvedNumericID
+LookupItemInfo = function(itemID, itemKey, itemName)
+    local icon, quality, resolvedID
+
+    -- Try WoW API with numeric ID
+    local numID = tonumber(itemID)
+    if numID and numID > 0 then
+        resolvedID = numID
+        local ok1, _, _, _, _, iconTexture = pcall(C_Item.GetItemInfoInstant, numID)
+        if ok1 and iconTexture then icon = iconTexture end
+        local ok2, _, _, itemQuality = pcall(C_Item.GetItemInfo, numID)
+        if ok2 and itemQuality then quality = itemQuality end
+    end
+
+    -- If no numeric ID, try resolving by item name via WoW API
+    if not resolvedID and itemName and itemName ~= "" then
+        -- C_Item.GetItemIDForItemInfo may not exist in all WoW versions
+        local ok, nameID = pcall(function()
+            if C_Item.GetItemIDForItemInfo then
+                return C_Item.GetItemIDForItemInfo(itemName)
+            end
+            return nil
+        end)
+        if ok and nameID and nameID > 0 then
+            resolvedID = nameID
+            if not icon then
+                local _, _, _, _, iconTexture = C_Item.GetItemInfoInstant(nameID)
+                if iconTexture then icon = iconTexture end
+            end
+            if not quality then
+                local _, _, itemQuality = C_Item.GetItemInfo(nameID)
+                if itemQuality then quality = itemQuality end
+            end
+        end
+    end
+
+    -- Fall back to scanned inventory data for icon
+    if not icon and ns.db then
+        local searchKey = itemKey or ""
+        local searchName = itemName and itemName:lower() or ""
+
+        -- Search character inventories
+        for _, charData in pairs(ns.db.inventory) do
+            if charData.items then
+                for key, data in pairs(charData.items) do
+                    if key == searchKey or (data.name and data.name:lower() == searchName) then
+                        if data.icon then icon = data.icon end
+                        -- Try to resolve ID from inventory itemID
+                        if not resolvedID then
+                            local invNumID = tonumber(data.itemID)
+                            if invNumID and invNumID > 0 then resolvedID = invNumID end
+                        end
+                        break
+                    end
+                end
+                if icon then break end
+            end
+        end
+
+        -- Search warbank
+        if not icon and ns.db.warbank and ns.db.warbank.items then
+            for key, data in pairs(ns.db.warbank.items) do
+                if key == searchKey or (data.name and data.name:lower() == searchName) then
+                    if data.icon then icon = data.icon end
+                    if not resolvedID then
+                        local wbNumID = tonumber(data.itemID)
+                        if wbNumID and wbNumID > 0 then resolvedID = wbNumID end
+                    end
+                    break
+                end
+            end
+        end
+    end
+
+    return icon, quality, resolvedID
 end
 
 -- ==========================================
@@ -523,15 +1022,27 @@ local function BuildQueueData()
             foundStr = ns.COLORS.RED .. "Not found" .. "|r"
         end
 
+        -- Look up icon, quality, and resolved numeric ID
+        local icon, quality, resolvedID = LookupItemInfo(item.itemID, item.itemKey, item.name)
+        local displayName = item.name ~= "" and item.name or tostring(item.itemID)
+
+        -- Apply quality color (prefer API quality, fall back to imported string)
+        if quality then
+            displayName = QualityColorName(displayName, quality)
+        elseif item.quality and item.quality ~= "" then
+            displayName = QualityColorName(displayName, item.quality)
+        end
+
         table.insert(data, {
-            name    = item.name ~= "" and item.name or item.itemID,
+            name    = displayName,
             qty     = item.quantity,
             price   = item.expectedPrice or "",
             realm   = item.targetRealm or "",
             foundOn = foundStr,
             status  = item.status == "posted" and "POSTED" or "pending",
-            _tooltipItemID = item.itemID,
-            _tooltipText   = item.name ~= "" and item.name or item.itemID,
+            _icon   = icon,
+            _tooltipItemID = resolvedID,
+            _tooltipText   = item.name ~= "" and item.name or tostring(item.itemID),
             _tooltipExtra  = (item.targetRealm or "") ~= "" and
                 ("Sell on: " .. item.targetRealm .. "  @  " .. (item.expectedPrice or "?")) or nil,
             _queueIndex = i,
@@ -556,15 +1067,24 @@ local function BuildLogData()
             dateStr = date("%m/%d %H:%M", entry.postedAt)
         end
 
+        local icon, quality, resolvedID = LookupItemInfo(entry.itemID, entry.itemKey, entry.name)
+        local displayName = entry.name or "?"
+        if quality then
+            displayName = QualityColorName(displayName, quality)
+        elseif entry.quality and entry.quality ~= "" then
+            displayName = QualityColorName(displayName, entry.quality)
+        end
+
         table.insert(data, {
-            name      = entry.name or "?",
+            name      = displayName,
             posted    = entry.postedPrice or "?",
             guide     = entry.expectedPrice or "?",
             realm     = entry.targetRealm or "",
             character = entry.charKey or "",
             date      = dateStr,
+            _icon     = icon,
             _sortDate = entry.postedAt or 0,
-            _tooltipItemID = entry.itemID,
+            _tooltipItemID = resolvedID,
             _tooltipText   = entry.name,
             _tooltipExtra  = string.format("Posted: %s\nPosted for: %s\nFP suggested: %s",
                 dateStr, entry.postedPrice or "?", entry.expectedPrice or "?"),
@@ -620,13 +1140,19 @@ local function BuildInventoryData()
                         table.insert(locParts, loc .. ": " .. qty)
                     end
                 end
+                local _, invQuality, invResolvedID = LookupItemInfo(itemData.itemID, key, itemData.name)
+                local invDisplayName = itemData.name or "Unknown"
+                if invQuality then
+                    invDisplayName = QualityColorName(invDisplayName, invQuality)
+                end
+
                 table.insert(data, {
-                    name     = itemData.name or "Unknown",
+                    name     = invDisplayName,
                     qty      = itemData.quantity,
                     source   = charKey,
                     location = table.concat(locParts, ", "),
                     _icon    = itemData.icon,
-                    _tooltipItemID = itemData.itemID,
+                    _tooltipItemID = invResolvedID,
                     _itemKey  = key,
                     _itemID   = itemData.itemID,
                     _itemName = itemData.name,
@@ -644,13 +1170,19 @@ local function BuildInventoryData()
                 and not ns.Queue:IsDoNotTrack(itemData.itemID)
                 and not BOUND_TYPES[itemData.bindType or 0]
                 and not itemData.isBound then
+                local _, wbQuality, wbResolvedID = LookupItemInfo(itemData.itemID, key, itemData.name)
+                local wbDisplayName = itemData.name or "Unknown"
+                if wbQuality then
+                    wbDisplayName = QualityColorName(wbDisplayName, wbQuality)
+                end
+
                 table.insert(data, {
-                    name     = itemData.name or "Unknown",
+                    name     = wbDisplayName,
                     qty      = itemData.quantity,
                     source   = "Warbank",
                     location = "warbank",
                     _icon    = itemData.icon,
-                    _tooltipItemID = itemData.itemID,
+                    _tooltipItemID = wbResolvedID,
                     _itemKey  = key,
                     _itemID   = itemData.itemID,
                     _itemName = itemData.name,
@@ -668,7 +1200,7 @@ end
 -- ==========================================
 
 -- WoW class colors for display
-local CLASS_COLORS = {
+CLASS_COLORS = {
     WARRIOR     = "c79c6e", PALADIN     = "f58cba", HUNTER      = "abd473",
     ROGUE       = "fff569", PRIEST      = "ffffff", DEATHKNIGHT = "c41f3b",
     SHAMAN      = "0070de", MAGE        = "69ccf0", WARLOCK     = "9482c9",
@@ -681,14 +1213,38 @@ local function BuildCharactersData()
 
     local charData = {}
 
-    -- Build character list from scanned inventory
+    -- First pass: count characters per realm for duplicate detection
+    local realmCharCount = {} -- realm -> count of active (non-hidden) characters
+    local realmAllChars = {} -- realm -> list of all charKeys
+    for charKey, _ in pairs(ns.db.inventory) do
+        local realm = charKey:match("%-(.+)$") or ""
+        if realm ~= "" then
+            realmAllChars[realm] = realmAllChars[realm] or {}
+            table.insert(realmAllChars[realm], charKey)
+            realmCharCount[realm] = (realmCharCount[realm] or 0) + 1
+        end
+    end
+
+    -- Identify duplicate realms (2+ characters on same realm)
+    local duplicateRealms = {}
+    for realm, count in pairs(realmCharCount) do
+        if count > 1 then
+            duplicateRealms[realm] = count
+        end
+    end
+
+    -- Build character list
     for charKey, inv in pairs(ns.db.inventory) do
         local name = charKey:match("^(.-)%-") or charKey
         local realm = charKey:match("%-(.+)$") or ""
         local tasks = ns.Queue:GetCharacterTasks(charKey)
+        local isHidden = ns.db.hiddenCharacters[charKey]
 
         local classColor = CLASS_COLORS[inv.class] or "888888"
         local coloredName = "|cff" .. classColor .. name .. "|r"
+        if isHidden then
+            coloredName = "|cff666666" .. name .. "|r"
+        end
 
         local itemCount = 0
         if inv.items then
@@ -700,36 +1256,68 @@ local function BuildCharactersData()
             scanStr = date("%m/%d %H:%M", inv.lastScan)
         end
 
+        -- Build status string
+        local statusParts = {}
+        if isHidden then
+            table.insert(statusParts, "|cff666666Hidden|r")
+        end
+        if duplicateRealms[realm] then
+            table.insert(statusParts, "|cffff8800Dupe (" .. duplicateRealms[realm] .. ")|r")
+        end
+        local statusStr = table.concat(statusParts, " ")
+        if statusStr == "" then
+            statusStr = "|cff00ff00Active|r"
+        end
+
+        -- Row color: hidden = dark gray, duplicate = amber tint
+        local rowColor = nil
+        if isHidden then
+            rowColor = {0.3, 0.3, 0.3, 0.1}
+        elseif duplicateRealms[realm] then
+            rowColor = {0.8, 0.5, 0.1, 0.1}
+        end
+
         table.insert(charData, {
             name     = coloredName,
             realm    = realm,
             class    = inv.class or "?",
-            tasks    = #tasks,
+            tasks    = isHidden and "-" or tostring(#tasks),
+            status   = statusStr,
             lastScan = scanStr,
             items    = itemCount,
             _sortName = name:lower(),
+            _charKey = charKey,
+            _isHidden = isHidden,
+            _rowColor = rowColor,
             _tooltipText = charKey,
-            _tooltipExtra = string.format("%d scanned items\n%d queue tasks\nLast scan: %s",
-                itemCount, #tasks, scanStr ~= "" and scanStr or "never"),
+            _tooltipExtra = string.format(
+                "%d scanned items\n%d queue tasks\nLast scan: %s\nStatus: %s%s\n\nRight-click to %s this character",
+                itemCount, #tasks, scanStr ~= "" and scanStr or "never",
+                isHidden and "Hidden" or "Active",
+                duplicateRealms[realm] and ("\nDuplicate realm: " .. duplicateRealms[realm] .. " characters on " .. realm) or "",
+                isHidden and "re-enable" or "hide"),
         })
     end
 
     -- Build "realms needing characters" from queue
-    local coveredRealms = {} -- realm -> list of charKeys
+    -- Only count non-hidden characters as providing realm coverage
+    local coveredRealms = {}
     for charKey, _ in pairs(ns.db.inventory) do
-        local realm = charKey:match("%-(.+)$") or ""
-        if realm ~= "" then
-            if not coveredRealms[realm] then
-                coveredRealms[realm] = {}
+        if not ns.db.hiddenCharacters[charKey] then
+            local realm = charKey:match("%-(.+)$") or ""
+            if realm ~= "" then
+                if not coveredRealms[realm] then
+                    coveredRealms[realm] = {}
+                end
+                table.insert(coveredRealms[realm], charKey)
             end
-            table.insert(coveredRealms[realm], charKey)
         end
     end
 
-    local realmNeeds = {} -- targetRealm -> {count, value}
+    -- Merge connected realms when building "need character" list
+    local realmNeedsList = {}
     for _, item in ipairs(ns.db.queue) do
         if item.status == "pending" and item.targetRealm and item.targetRealm ~= "" then
-            -- Check if any scanned character covers this realm
             local hasCoverage = false
             for realm, _ in pairs(coveredRealms) do
                 if ns:RealmMatches(item.targetRealm, realm) then
@@ -739,39 +1327,46 @@ local function BuildCharactersData()
             end
 
             if not hasCoverage then
-                if not realmNeeds[item.targetRealm] then
-                    realmNeeds[item.targetRealm] = {count = 0, prices = {}}
+                local found = false
+                for _, entry in ipairs(realmNeedsList) do
+                    if ns:RealmsOverlap(entry.realmStr, item.targetRealm) then
+                        entry.count = entry.count + 1
+                        if item.expectedPrice and item.expectedPrice ~= "" then
+                            table.insert(entry.prices, item.expectedPrice)
+                        end
+                        if #item.targetRealm > #entry.realmStr then
+                            entry.realmStr = item.targetRealm
+                        end
+                        found = true
+                        break
+                    end
                 end
-                realmNeeds[item.targetRealm].count = realmNeeds[item.targetRealm].count + 1
-                if item.expectedPrice and item.expectedPrice ~= "" then
-                    table.insert(realmNeeds[item.targetRealm].prices, item.expectedPrice)
+                if not found then
+                    local prices = {}
+                    if item.expectedPrice and item.expectedPrice ~= "" then
+                        table.insert(prices, item.expectedPrice)
+                    end
+                    table.insert(realmNeedsList, {
+                        realmStr = item.targetRealm,
+                        count = 1,
+                        prices = prices,
+                    })
                 end
             end
         end
     end
 
     local needData = {}
-    for realmStr, info in pairs(realmNeeds) do
-        -- Sum up gold values (rough parse: extract numbers before 'g')
+    for _, info in ipairs(realmNeedsList) do
         local totalGold = 0
         for _, price in ipairs(info.prices) do
-            local goldNum = price:gsub(",", ""):match("(%d+)g")
-            if goldNum then
-                totalGold = totalGold + tonumber(goldNum)
-            end
-        end
-
-        local valueStr = ""
-        if totalGold > 0 then
-            valueStr = string.format("%s%sg", totalGold >= 1000 and string.format("%d,%03d", math.floor(totalGold / 1000), totalGold % 1000) or tostring(totalGold), "")
-            -- Simplified: just show the number
-            valueStr = string.format("%s gold", totalGold >= 1000 and (string.format("%.1fk", totalGold / 1000)) or tostring(totalGold))
+            totalGold = totalGold + ParseGoldValue(price)
         end
 
         table.insert(needData, {
-            realm      = realmStr,
+            realm      = info.realmStr,
             itemCount  = info.count,
-            totalValue = valueStr,
+            totalValue = FormatGoldValue(totalGold),
             note       = "Create character (flex slot)",
         })
     end
@@ -837,7 +1432,49 @@ function UI:Refresh()
                 self:RefreshMini()
             end
         end)
-        mainFrame.statusText:SetText(postCount .. " items to post  |  Right-click to mark as posted")
+
+        -- Next Steps section below Post Now table
+        local nextData = BuildNextStepsData()
+        if #nextData > 0 then
+            local postNowHeight = math.max(60, (#data + 1) * 20 + 22)
+            if postNowHeight > 250 then postNowHeight = 250 end
+
+            -- Section label
+            if not self._nextStepsLabel then
+                self._nextStepsLabel = tableContainer:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+            end
+            self._nextStepsLabel:ClearAllPoints()
+            self._nextStepsLabel:SetPoint("TOPLEFT", tableContainer, "TOPLEFT", 4, -postNowHeight + 2)
+            self._nextStepsLabel:SetTextColor(0.6, 0.8, 1.0)
+            self._nextStepsLabel:SetText("Next Steps (" .. #nextData .. ")")
+            self._nextStepsLabel:Show()
+
+            -- Position next steps table below
+            self.nextStepsTable.headerFrame:ClearAllPoints()
+            self.nextStepsTable.headerFrame:SetPoint("TOPLEFT", tableContainer, "TOPLEFT", 0, -postNowHeight - 10)
+            self.nextStepsTable.headerFrame:SetPoint("TOPRIGHT", tableContainer, "TOPRIGHT", 0, -postNowHeight - 10)
+
+            self.nextStepsTable.scrollFrame:ClearAllPoints()
+            self.nextStepsTable.scrollFrame:SetPoint("TOPLEFT", self.nextStepsTable.headerFrame, "BOTTOMLEFT", 0, 0)
+            self.nextStepsTable.scrollFrame:SetPoint("BOTTOMRIGHT", tableContainer, "BOTTOMRIGHT", -22, 0)
+
+            ShowTable(self.nextStepsTable)
+            self.nextStepsTable:SetData(nextData)
+
+            -- Resize postNow scroll to fit above
+            self.postNowTable.scrollFrame:ClearAllPoints()
+            self.postNowTable.scrollFrame:SetPoint("TOPLEFT", self.postNowTable.headerFrame, "BOTTOMLEFT", 0, 0)
+            self.postNowTable.scrollFrame:SetPoint("RIGHT", tableContainer, "RIGHT", -22, 0)
+            self.postNowTable.scrollFrame:SetHeight(postNowHeight - 22)
+        else
+            if self._nextStepsLabel then self._nextStepsLabel:Hide() end
+            -- Reset postNow scroll to fill the full container
+            self.postNowTable.scrollFrame:ClearAllPoints()
+            self.postNowTable.scrollFrame:SetPoint("TOPLEFT", self.postNowTable.headerFrame, "BOTTOMLEFT", 0, 0)
+            self.postNowTable.scrollFrame:SetPoint("BOTTOMRIGHT", tableContainer, "BOTTOMRIGHT", -22, 0)
+        end
+
+        mainFrame.statusText:SetText(postCount .. " items to post  |  " .. #nextData .. " next steps  |  Right-click to mark posted")
 
     elseif self.currentPage == "queue" then
         mainFrame.pageTitle:SetText(ns.COLORS.YELLOW .. "Full Queue" .. "|r")
@@ -909,6 +1546,18 @@ function UI:Refresh()
         -- Show known characters table
         ShowTable(self.charsTable)
         self.charsTable:SetData(charData)
+        self.charsTable:SetRowClickHandler(function(rowData, button)
+            if button == "RightButton" and rowData._charKey then
+                if ns.db.hiddenCharacters[rowData._charKey] then
+                    ns.db.hiddenCharacters[rowData._charKey] = nil
+                    ns:Print("Re-enabled character: " .. rowData._charKey)
+                else
+                    ns.db.hiddenCharacters[rowData._charKey] = true
+                    ns:Print("Hidden character: " .. rowData._charKey .. " (will be skipped for task routing)")
+                end
+                self:Refresh()
+            end
+        end)
 
         -- Show "need characters" table below if there are entries
         if #needData > 0 then
@@ -922,7 +1571,7 @@ function UI:Refresh()
 
             self.needCharsTable.scrollFrame:ClearAllPoints()
             self.needCharsTable.scrollFrame:SetPoint("TOPLEFT", self.needCharsTable.headerFrame, "BOTTOMLEFT", 0, 0)
-            self.needCharsTable.scrollFrame:SetPoint("BOTTOMRIGHT", tableContainer, "BOTTOMRIGHT", -16, 0)
+            self.needCharsTable.scrollFrame:SetPoint("BOTTOMRIGHT", tableContainer, "BOTTOMRIGHT", -22, 0)
 
             -- Add section label
             if not self._needCharsLabel then
@@ -940,15 +1589,39 @@ function UI:Refresh()
             -- Resize chars scroll to fit above
             self.charsTable.scrollFrame:ClearAllPoints()
             self.charsTable.scrollFrame:SetPoint("TOPLEFT", self.charsTable.headerFrame, "BOTTOMLEFT", 0, 0)
-            self.charsTable.scrollFrame:SetPoint("RIGHT", tableContainer, "RIGHT", -16, 0)
+            self.charsTable.scrollFrame:SetPoint("RIGHT", tableContainer, "RIGHT", -22, 0)
             self.charsTable.scrollFrame:SetHeight(charsHeight - 22)
         else
             if self._needCharsLabel then self._needCharsLabel:Hide() end
         end
 
         local charCount = 0
-        for _ in pairs(ns.db.inventory) do charCount = charCount + 1 end
-        mainFrame.statusText:SetText(charCount .. " scanned characters  |  " .. #needData .. " realms need characters")
+        local hiddenCount = 0
+        for ck in pairs(ns.db.inventory) do
+            charCount = charCount + 1
+            if ns.db.hiddenCharacters[ck] then hiddenCount = hiddenCount + 1 end
+        end
+        local statusParts = {charCount .. " characters"}
+        if hiddenCount > 0 then
+            table.insert(statusParts, hiddenCount .. " hidden")
+        end
+        table.insert(statusParts, #needData .. " realms need chars")
+        table.insert(statusParts, "Right-click to toggle tracking")
+        mainFrame.statusText:SetText(table.concat(statusParts, "  |  "))
+
+    elseif self.currentPage == "import" then
+        mainFrame.pageTitle:SetText(ns.COLORS.YELLOW .. "Import" .. "|r")
+        LayoutActionBtns(mainFrame.actionBtns.importClear, mainFrame.actionBtns.importDo)
+        importPage:Show()
+        UI._importEdit:SetFocus(true)
+        mainFrame.statusText:SetText("Paste FlippingPal website, CSV, or tab-delimited data")
+
+    elseif self.currentPage == "export" then
+        mainFrame.pageTitle:SetText(ns.COLORS.YELLOW .. "Export" .. "|r")
+        LayoutActionBtns(mainFrame.actionBtns.exportSaved, mainFrame.actionBtns.exportAll,
+            mainFrame.actionBtns.exportWarbank, mainFrame.actionBtns.exportBank, mainFrame.actionBtns.exportBags)
+        exportPage:Show()
+        mainFrame.statusText:SetText("FlippingPalInventoryExport compatible CSV format")
 
     elseif self.currentPage == "settings" then
         mainFrame.pageTitle:SetText("Settings")
@@ -995,5 +1668,9 @@ mainFrame:Hide()
 UI.mainFrame = mainFrame
 
 mainFrame:SetScript("OnShow", function()
+    -- Restore saved size
+    if ns.db and ns.db.settings.frameWidth and ns.db.settings.frameHeight then
+        mainFrame:SetSize(ns.db.settings.frameWidth, ns.db.settings.frameHeight)
+    end
     UI:Refresh()
 end)

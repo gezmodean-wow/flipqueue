@@ -92,7 +92,7 @@ end
 function ScrollTableMixin:CreateScrollArea(parent)
     self.scrollFrame = CreateFrame("ScrollFrame", nil, parent, "UIPanelScrollFrameTemplate")
     self.scrollFrame:SetPoint("TOPLEFT", self.headerFrame, "BOTTOMLEFT", 0, 0)
-    self.scrollFrame:SetPoint("BOTTOMRIGHT", parent, "BOTTOMRIGHT", -16, 0)
+    self.scrollFrame:SetPoint("BOTTOMRIGHT", parent, "BOTTOMRIGHT", -22, 0)
 
     self.content = CreateFrame("Frame", nil, self.scrollFrame)
     self.content:SetWidth(self.scrollFrame:GetWidth())
@@ -219,6 +219,32 @@ function ScrollTableMixin:Render()
                 value = col.format(value, rowData)
             end
             row.cells[j]:SetText(value or "")
+        end
+
+        -- Custom row color tint (or reset to default alternating)
+        if rowData._rowColor then
+            local c = rowData._rowColor
+            local baseAlpha = c[4] or 0.15
+            row.bg:SetColorTexture(c[1], c[2], c[3], baseAlpha)
+            row:SetScript("OnEnter", function(self)
+                self.bg:SetColorTexture(c[1], c[2], c[3], baseAlpha + 0.08)
+                if row._onEnter then row._onEnter(row) end
+            end)
+            row:SetScript("OnLeave", function(self)
+                self.bg:SetColorTexture(c[1], c[2], c[3], baseAlpha)
+                GameTooltip:Hide()
+            end)
+        else
+            local defaultAlpha = i % 2 == 0 and 0.03 or 0
+            row.bg:SetColorTexture(1, 1, 1, defaultAlpha)
+            row:SetScript("OnEnter", function(self)
+                self.bg:SetColorTexture(1, 1, 1, 0.08)
+                if row._onEnter then row._onEnter(row) end
+            end)
+            row:SetScript("OnLeave", function(self)
+                self.bg:SetColorTexture(1, 1, 1, defaultAlpha)
+                GameTooltip:Hide()
+            end)
         end
 
         -- Icon

@@ -11,8 +11,9 @@ SlashCmdList["FLIPQUEUE"] = function(msg)
     msg = (msg or ""):lower():trim()
 
     if msg == "import" then
-        UI.importFrame:Show()
-        UI.importEditBox:SetFocus(true)
+        UI.currentPage = "import"
+        UI.mainFrame:Show()
+        UI:Refresh()
 
     elseif msg == "scan" then
         ns.Scanner:ScanCurrentCharacter()
@@ -57,6 +58,12 @@ SlashCmdList["FLIPQUEUE"] = function(msg)
             ns:Print("Auto-pull from bank: " .. (ns.db.settings.autoPullBank and "ON" or "OFF"))
         end
 
+    elseif msg == "gold" then
+        if ns.db then
+            ns.db.settings.autoWithdrawGold = not ns.db.settings.autoWithdrawGold
+            ns:Print("Auto-withdraw gold for AH fees: " .. (ns.db.settings.autoWithdrawGold and "ON" or "OFF"))
+        end
+
     elseif msg == "dnt" or msg == "donottrack" then
         UI:ShowDoNotTrackFrame()
 
@@ -87,6 +94,12 @@ SlashCmdList["FLIPQUEUE"] = function(msg)
     elseif msg == "mini" then
         UI:ToggleMini()
 
+    elseif msg == "export" or msg == "export bags" or msg == "export bank"
+        or msg == "export warbank" or msg == "export wb" or msg == "export all" then
+        UI.currentPage = "export"
+        UI.mainFrame:Show()
+        UI:Refresh()
+
     elseif msg == "settings" or msg == "config" or msg == "options" then
         UI:ShowSettings()
 
@@ -104,11 +117,14 @@ SlashCmdList["FLIPQUEUE"] = function(msg)
         print("  /fq log - Show posted items log")
         print("  /fq scan - Rescan current character's bags")
         print("  /fq bank - Scan bank + warbank (must be at bank)")
+        print("  /fq export - Export bags as FP-compatible CSV")
+        print("  /fq export [bank|warbank|all] - Export other containers")
         print("  /fq sort - Toggle sort mode (realm/name)")
         print("  /fq clear - Clear entire queue")
         print("  /fq clear posted - Clear posted items only")
         print("  /fq clear log - Clear posted items log")
         print("  /fq autopull - Toggle auto-pull from bank")
+        print("  /fq gold - Toggle auto-withdraw gold for AH fees")
         print("  /fq dnt - Show Do Not Track list")
         print("  /fq mini - Toggle mini overlay")
         print("  /fq settings - Open settings panel")

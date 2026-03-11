@@ -12,6 +12,7 @@
 Core.lua
 Scanner.lua
 Import.lua
+Export.lua
 Queue.lua
 Tracker.lua
 UI\Rows.lua
