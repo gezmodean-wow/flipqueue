@@ -8,4 +8,5 @@ ignore:
   - .claude
   - .vscode
   - .git
+  - .github
   - TODO.md
