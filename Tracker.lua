@@ -45,7 +45,8 @@ local function MatchesQueueItem(scannedKey, scannedLink, queueItem)
         if scannedLink:find("|Hbattlepet:") then
             scannedName = scannedLink:match("|h%[(.-)%]|h")
         else
-            scannedName = C_Item.GetItemInfo(scannedLink)
+            local okN, n = pcall(C_Item.GetItemInfo, scannedLink)
+            scannedName = okN and n or nil
         end
         if scannedName then
             local sName = scannedName:lower()
@@ -177,7 +178,8 @@ function Tracker:CheckOwnedAuctions()
             end
             -- Regular items
             if not name and auction.itemKey.itemID then
-                name = C_Item.GetItemInfo(auction.itemKey.itemID)
+                local okI, n = pcall(C_Item.GetItemInfo, auction.itemKey.itemID)
+                name = okI and n or nil
                 if not name then
                     hasMissing = true
                     C_Item.RequestLoadItemDataByID(auction.itemKey.itemID)
@@ -274,8 +276,10 @@ end
 -- Bank Auto-Pull
 --------------------------
 
-local PULL_BATCH_SIZE = 10     -- items per batch (warbank errors at ~30)
-local PULL_BATCH_DELAY = 0.4   -- seconds between batches
+-- Batch size of 5 matches Baganator's proven warbank transfer limit
+-- to avoid slot locking / internal bag errors
+local PULL_BATCH_SIZE = 5
+local PULL_TIMEOUT = 5  -- seconds to wait for locks before giving up on a batch
 
 function Tracker:AutoPullFromBank()
     if not ns.db or not ns.db.settings.autoPullBank then return end
@@ -301,18 +305,20 @@ function Tracker:AutoPullFromBank()
     -- Build a list of moves to make (bag, slot, name)
     local moves = {}
     for _, bagIndex in ipairs(allBankTabs) do
-        local numSlots = C_Container.GetContainerNumSlots(bagIndex)
-        for slot = 1, numSlots do
-            local info = C_Container.GetContainerItemInfo(bagIndex, slot)
-            if info and info.hyperlink then
-                local itemID, bonusIDs, modifiers = ns:ParseItemLink(info.hyperlink)
-                if itemID then
-                    local key = ns:MakeItemKey(itemID, bonusIDs, modifiers)
-                    for queueItem, count in pairs(needed) do
-                        if count > 0 and MatchesQueueItem(key, info.hyperlink, queueItem) then
-                            table.insert(moves, {bag = bagIndex, slot = slot, name = queueItem.name or "?"})
-                            needed[queueItem] = count - (info.stackCount or 1)
-                            break
+        local ok, numSlots = pcall(C_Container.GetContainerNumSlots, bagIndex)
+        if ok and numSlots then
+            for slot = 1, numSlots do
+                local ok2, info = pcall(C_Container.GetContainerItemInfo, bagIndex, slot)
+                if ok2 and info and info.hyperlink then
+                    local itemID, bonusIDs, modifiers = ns:ParseItemLink(info.hyperlink)
+                    if itemID then
+                        local key = ns:MakeItemKey(itemID, bonusIDs, modifiers)
+                        for queueItem, count in pairs(needed) do
+                            if count > 0 and MatchesQueueItem(key, info.hyperlink, queueItem) then
+                                table.insert(moves, {bag = bagIndex, slot = slot, name = queueItem.name or "?"})
+                                needed[queueItem] = count - (info.stackCount or 1)
+                                break
+                            end
                         end
                     end
                 end
@@ -322,35 +328,124 @@ function Tracker:AutoPullFromBank()
 
     if #moves == 0 then return end
 
-    -- Execute moves in batches to avoid warbank internal bag error
+    -- Event-driven batch execution
+    -- Pattern from Baganator: move a small batch, wait for ITEM_LOCK_CHANGED
+    -- to signal the server has processed the moves, then continue
     local totalMoves = #moves
-    local batchStart = 1
+    local moveIndex = 1
     local pulledNames = {}
+    local pullErrors = 0
+    local aborted = false
 
-    local function ExecuteBatch()
-        local batchEnd = math.min(batchStart + PULL_BATCH_SIZE - 1, totalMoves)
-        for i = batchStart, batchEnd do
-            local move = moves[i]
-            C_Container.UseContainerItem(move.bag, move.slot)
-            table.insert(pulledNames, move.name)
+    local listener = CreateFrame("Frame")
+
+    local function Cleanup()
+        listener:UnregisterAllEvents()
+        listener:SetScript("OnEvent", nil)
+    end
+
+    local function FinishPull()
+        Cleanup()
+        local successCount = #pulledNames
+        if successCount > 0 then
+            if successCount == totalMoves then
+                ns:Print("Auto-pulled " .. successCount .. " item(s) from bank: " .. table.concat(pulledNames, ", "))
+            else
+                ns:Print("Auto-pulled " .. successCount .. " of " .. totalMoves .. " item(s) from bank: " .. table.concat(pulledNames, ", "))
+            end
+        end
+        if pullErrors > 0 then
+            ns:Print(ns.COLORS.YELLOW .. pullErrors .. " item(s) failed to move. Try opening your bank again.|r")
+        end
+        C_Timer.After(1, function()
+            if ns.Scanner then ns.Scanner:ScanCurrentCharacter() end
+            if ns.UI and ns.UI.Refresh then ns.UI:Refresh() end
+        end)
+    end
+
+    local function ExecuteNextBatch()
+        if aborted or moveIndex > totalMoves then
+            FinishPull()
+            return
         end
 
-        batchStart = batchEnd + 1
-        if batchStart <= totalMoves then
-            -- More batches to go
-            C_Timer.After(PULL_BATCH_DELAY, ExecuteBatch)
-        else
-            -- All done
-            ns:Print("Auto-pulled " .. totalMoves .. " item(s) from bank: " .. table.concat(pulledNames, ", "))
-            C_Timer.After(1, function()
-                ns.Scanner:ScanCurrentCharacter()
-                if ns.UI and ns.UI.Refresh then ns.UI:Refresh() end
+        local batchEnd = math.min(moveIndex + PULL_BATCH_SIZE - 1, totalMoves)
+        local batchMoved = 0
+
+        for i = moveIndex, batchEnd do
+            local move = moves[i]
+            -- Check if slot is locked before attempting
+            local okLock, isLocked = pcall(C_Container.GetContainerItemInfo, move.bag, move.slot)
+            if okLock and isLocked and isLocked.isLocked then
+                -- Slot is locked from a previous operation — skip, will retry
+                pullErrors = pullErrors + 1
+            else
+                local ok, err = pcall(C_Container.UseContainerItem, move.bag, move.slot)
+                if ok then
+                    table.insert(pulledNames, move.name)
+                    batchMoved = batchMoved + 1
+                else
+                    pullErrors = pullErrors + 1
+                end
+            end
+        end
+
+        moveIndex = batchEnd + 1
+
+        if moveIndex > totalMoves then
+            -- All batches issued — wait briefly for any trailing events
+            C_Timer.After(0.3, FinishPull)
+        elseif batchMoved > 0 then
+            -- Wait for items to unlock before continuing
+            -- ITEM_LOCK_CHANGED fires when server finishes processing
+            local waitingForUnlock = true
+            listener:RegisterEvent("ITEM_LOCK_CHANGED")
+            listener:RegisterEvent("UI_ERROR_MESSAGE")
+            listener:SetScript("OnEvent", function(_, event, errorType, message)
+                if event == "UI_ERROR_MESSAGE" then
+                    if message == ERR_INTERNAL_BAG_ERROR
+                        or (message and message:find("Internal Bag Error")) then
+                        aborted = true
+                        pullErrors = pullErrors + 1
+                        listener:UnregisterEvent("ITEM_LOCK_CHANGED")
+                        listener:UnregisterEvent("UI_ERROR_MESSAGE")
+                        FinishPull()
+                        return
+                    elseif message == ERR_INV_FULL
+                        or (message and message:find("Inventory is full")) then
+                        aborted = true
+                        listener:UnregisterEvent("ITEM_LOCK_CHANGED")
+                        listener:UnregisterEvent("UI_ERROR_MESSAGE")
+                        FinishPull()
+                        return
+                    end
+                elseif event == "ITEM_LOCK_CHANGED" and waitingForUnlock then
+                    waitingForUnlock = false
+                    listener:UnregisterEvent("ITEM_LOCK_CHANGED")
+                    listener:UnregisterEvent("UI_ERROR_MESSAGE")
+                    -- Items unlocked — server processed the batch, continue
+                    C_Timer.After(0.1, ExecuteNextBatch)
+                end
             end)
+
+            -- Safety timeout in case ITEM_LOCK_CHANGED never fires
+            C_Timer.After(PULL_TIMEOUT, function()
+                if waitingForUnlock then
+                    waitingForUnlock = false
+                    listener:UnregisterEvent("ITEM_LOCK_CHANGED")
+                    listener:UnregisterEvent("UI_ERROR_MESSAGE")
+                    -- Continue anyway — items may have moved without firing the event
+                    ExecuteNextBatch()
+                end
+            end)
+        else
+            -- Nothing moved in this batch (all locked) — short delay then retry next batch
+            C_Timer.After(0.5, ExecuteNextBatch)
         end
     end
 
     ns:Print(ns.COLORS.YELLOW .. "Pulling " .. totalMoves .. " item(s) from bank..." .. "|r")
-    ExecuteBatch()
+    ExecuteNextBatch()
 end
 
 --------------------------
@@ -441,7 +536,8 @@ function Tracker:UpdateLogExpiry()
                 name = C_PetJournal.GetPetInfoBySpeciesID(speciesID)
             end
             if not name and auction.itemKey.itemID then
-                name = C_Item.GetItemInfo(auction.itemKey.itemID)
+                local okI, n = pcall(C_Item.GetItemInfo, auction.itemKey.itemID)
+                name = okI and n or nil
             end
             auctionNames[aIdx] = name
         end
@@ -602,9 +698,9 @@ function Tracker:ScanMailForSales()
     local hasMissing = false
 
     for mailIndex = 1, numItems do
-        local _, _, _, _, money = GetInboxHeaderInfo(mailIndex)
+        local okH, _, _, _, _, money = pcall(GetInboxHeaderInfo, mailIndex)
         -- Only check mail with gold attached (potential AH sale)
-        if money and money > 0 then
+        if okH and money and money > 0 then
             local ok, invoiceType, itemName, _, _, buyout = pcall(GetInboxInvoiceInfo, mailIndex)
             if ok and invoiceType == "seller" and itemName then
                 local nameKey = itemName:lower()

@@ -82,8 +82,9 @@ local function GetItemExportData(itemLink, stackCount, containerItemInfo, bagInd
     end
 
     -- Get extended item info (may return nil if not cached)
-    local itemName, _, itemQuality, _, _, _, _, itemStackCount, _, _, _, _, _, bindType =
-        C_Item.GetItemInfo(itemLink)
+    local okInfo, itemName, _, itemQuality, _, _, _, _, itemStackCount, _, _, _, _, _, bindType =
+        pcall(C_Item.GetItemInfo, itemLink)
+    if not okInfo then itemName = nil end
 
     -- Extract name from link as fallback
     if not itemName then
@@ -110,7 +111,11 @@ local function GetItemExportData(itemLink, stackCount, containerItemInfo, bagInd
     local qualityName = QUALITY_NAMES[quality] or "Unknown"
 
     -- ilvl
-    local effectiveILvl = C_Item.GetDetailedItemLevelInfo and C_Item.GetDetailedItemLevelInfo(itemLink) or 0
+    local okIlvl, ilvlResult = false, 0
+    if C_Item.GetDetailedItemLevelInfo then
+        okIlvl, ilvlResult = pcall(C_Item.GetDetailedItemLevelInfo, itemLink)
+    end
+    local effectiveILvl = (okIlvl and ilvlResult) or 0
     local ilvl = effectiveILvl or 0
 
     local _, bonusIDs, modifiers = ns:ParseItemLink(itemLink)

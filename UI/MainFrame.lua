@@ -1183,12 +1183,12 @@ LookupItemInfo = function(itemID, itemKey, itemName)
         if ok and nameID and nameID > 0 then
             resolvedID = nameID
             if not icon then
-                local _, _, _, _, iconTexture = C_Item.GetItemInfoInstant(nameID)
-                if iconTexture then icon = iconTexture end
+                local ok3, _, _, _, _, iconTexture = pcall(C_Item.GetItemInfoInstant, nameID)
+                if ok3 and iconTexture then icon = iconTexture end
             end
             if not quality then
-                local _, _, itemQuality = C_Item.GetItemInfo(nameID)
-                if itemQuality then quality = itemQuality end
+                local ok4, _, _, itemQuality = pcall(C_Item.GetItemInfo, nameID)
+                if ok4 and itemQuality then quality = itemQuality end
             end
         end
     end

@@ -39,8 +39,8 @@ end
 -- bindType: 0=none, 1=BoP, 2=BoE, 3=BoU, 4=Quest, 7=BtA, 8=BtW, 9=WuE
 local function GetBindInfo(itemLink, containerItemInfo, bagIndex, slot)
     local isBound = containerItemInfo.isBound or false
-    local _, _, _, _, _, _, _, _, _, _, _, _, _, bindType = C_Item.GetItemInfo(itemLink)
-    bindType = bindType or 0
+    local ok, _, _, _, _, _, _, _, _, _, _, _, _, _, bt = pcall(C_Item.GetItemInfo, itemLink)
+    local bindType = (ok and bt) or 0
 
     -- Check for warbound-until-equipped via tooltip
     if bindType == 2 and not isBound and bagIndex and slot then
@@ -72,7 +72,8 @@ local function ScanContainers(bagIndices, captureBindInfo)
                         if info.hyperlink:find("|Hbattlepet:") then
                             itemName = info.hyperlink:match("|h%[(.-)%]|h")
                         else
-                            itemName = C_Item.GetItemInfo(info.hyperlink)
+                            local okName, n = pcall(C_Item.GetItemInfo, info.hyperlink)
+                            itemName = okName and n or nil
                         end
                         items[key] = {
                             itemID    = itemID,
