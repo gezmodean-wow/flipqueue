@@ -45,8 +45,13 @@ header:SetHeight(20)
 header:SetPoint("TOPLEFT", mini, "TOPLEFT", 4, -4)
 header:SetPoint("TOPRIGHT", mini, "TOPRIGHT", -4, -4)
 
+local titleIcon = header:CreateTexture(nil, "ARTWORK")
+titleIcon:SetSize(16, 16)
+titleIcon:SetPoint("LEFT", header, "LEFT", 2, 0)
+titleIcon:SetTexture("Interface\\AddOns\\flipqueue\\Art\\flipqueue-icon")
+
 local titleText = header:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-titleText:SetPoint("LEFT", header, "LEFT", 2, 0)
+titleText:SetPoint("LEFT", titleIcon, "RIGHT", 3, 0)
 titleText:SetText(ns.COLORS.YELLOW .. "FQ" .. ns.COLORS.RESET)
 
 -- Icon buttons (right side of header)
@@ -344,6 +349,31 @@ function UI:ToggleMini()
 end
 
 UI.miniFrame = mini
+
+--------------------------
+-- Hide in combat (optional)
+--------------------------
+
+local combatFrame = CreateFrame("Frame")
+combatFrame:RegisterEvent("PLAYER_REGEN_DISABLED") -- entering combat
+combatFrame:RegisterEvent("PLAYER_REGEN_ENABLED")  -- leaving combat
+local hiddenForCombat = false
+
+combatFrame:SetScript("OnEvent", function(_, event)
+    if not ns.db or not ns.db.settings.hideMiniInCombat then return end
+    if event == "PLAYER_REGEN_DISABLED" then
+        if mini:IsShown() then
+            hiddenForCombat = true
+            mini:Hide()
+        end
+    elseif event == "PLAYER_REGEN_ENABLED" then
+        if hiddenForCombat then
+            hiddenForCombat = false
+            mini:Show()
+            UI:RefreshMini()
+        end
+    end
+end)
 
 --------------------------
 -- Auto-show on login if enabled

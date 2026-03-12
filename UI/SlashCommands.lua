@@ -70,8 +70,11 @@ SlashCmdList["FLIPQUEUE"] = function(msg)
     elseif msg:match("^dnt add ") or msg:match("^donottrack add ") then
         local itemName = msg:match("^d[on]*t[rack]* add (.+)$")
         if itemName and itemName ~= "" then
-            ns.Queue:AddDoNotTrack(itemName, itemName)
-            ns:Print("Added to Do Not Track: " .. itemName)
+            -- Resolve itemID from inventory so IsDoNotTrack(itemID) works
+            local resolvedID = ns:ResolveItemID({itemID = "", name = itemName})
+            local dntKey = resolvedID and tostring(resolvedID) or itemName
+            ns.Queue:AddDoNotTrack(dntKey, itemName)
+            ns:Print("Added to Do Not Track: " .. itemName .. (resolvedID and (" (ID: " .. resolvedID .. ")") or " (name only, item not in inventory)"))
             UI:Refresh()
         end
 

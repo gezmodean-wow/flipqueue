@@ -118,15 +118,35 @@ function ScrollTableMixin:UpdateHeaderArrows()
     end
 end
 
+-- Parse gold strings like "1,377g", "22.8k gold", "1.3m" to numeric gold value
+local function ParseSortGold(val)
+    if type(val) ~= "string" then return nil end
+    -- Strip WoW color codes for comparison
+    local clean = val:gsub("|c%x%x%x%x%x%x%x%x", ""):gsub("|r", "")
+    -- "1.3k gold" or "1.3k"
+    local k = clean:match("^([%d,.]+)k")
+    if k then return tonumber(k:gsub(",", "")) * 1000 end
+    -- "1.3m"
+    local m = clean:match("^([%d,.]+)m")
+    if m then return tonumber(m:gsub(",", "")) * 1000000 end
+    -- "1,377g" or "500g"
+    local g = clean:match("([%d,]+)g")
+    if g then return tonumber(g:gsub(",", "")) end
+    return nil
+end
+
 function ScrollTableMixin:RefreshSort()
     if not self.sortKey then return end
 
     local key = self.sortKey
     local asc = self.sortAsc
+    -- Check for a dedicated sort key (e.g., _sortStatus for status column)
+    local sortOverride = "_sort" .. key:sub(1,1):upper() .. key:sub(2)
 
     table.sort(self.data, function(a, b)
-        local va = a[key]
-        local vb = b[key]
+        -- Use sort override key if present
+        local va = a[sortOverride] or a[key]
+        local vb = b[sortOverride] or b[key]
         if va == nil then va = "" end
         if vb == nil then vb = "" end
 
@@ -134,6 +154,12 @@ function ScrollTableMixin:RefreshSort()
         local na, nb = tonumber(va), tonumber(vb)
         if na and nb then
             return asc and na < nb or (not asc and na > nb)
+        end
+
+        -- Try gold string comparison (handles "1,377g", "22.8k", etc.)
+        local ga, gb = ParseSortGold(va), ParseSortGold(vb)
+        if ga and gb then
+            return asc and ga < gb or (not asc and ga > gb)
         end
 
         -- String comparison

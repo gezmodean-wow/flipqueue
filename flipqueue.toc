@@ -5,7 +5,7 @@
 ## Version: @project-version@
 ## SavedVariables: FlipQueueDB
 ## OptionalDeps: Auctionator, TradeSkillMaster
-## IconTexture: Interface\Icons\INV_Misc_Coin_02
+## IconTexture: Interface\AddOns\flipqueue\Art\flipqueue-icon
 ## X-Category: Auction & Economy
 ## X-Website: https://github.com/gezmodean-wow/flipqueue
 ## X-Curse-Project-ID: 1483814
@@ -17,7 +17,6 @@ Import.lua
 Export.lua
 Queue.lua
 Tracker.lua
-UI\Rows.lua
 UI\ScrollTable.lua
 UI\ImportFrame.lua
 UI\UntrackedSection.lua

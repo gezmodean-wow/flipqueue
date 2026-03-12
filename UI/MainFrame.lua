@@ -315,25 +315,59 @@ mainFrame.actionBtns.dnt = CreateActionBtn("DNT List", "Manage Do Not Track list
     UI:ShowDoNotTrackFrame()
 end)
 
-mainFrame.actionBtns.importDo = CreateActionBtn("Import", "Import pasted data to queue", function()
+mainFrame.actionBtns.importPreview = CreateActionBtn("Preview", "Parse and preview import results", function()
     local text = UI._importEdit:GetText()
     if text and text ~= "" then
         local items = ns.Import:Parse(text)
         if #items > 0 then
-            local added = ns.Queue:Add(items)
-            ns:Print("Imported " .. added .. " new items (" .. #items .. " parsed, duplicates merged).")
-            UI._importEdit:SetText("")
-            UI._importStatus:SetText(ns.COLORS.GREEN .. added .. " items imported!|r")
-            UI:Refresh()
-            UI:RefreshMini()
+            UI._importPreviewClear()
+            -- Re-parse to get fresh preview
+            local previewItems = ns.Import:Parse(text)
+            -- Store preview data via a direct approach
+            UI._importSetPreview(previewItems, ns.Queue:PreviewAdd(previewItems))
+            UI:RefreshImportPreview()
         else
             UI._importStatus:SetText(ns.COLORS.RED .. "No items found in pasted data.|r")
         end
     end
 end)
 
-mainFrame.actionBtns.importClear = CreateActionBtn("Clear", "Clear the import text", function()
+mainFrame.actionBtns.importDo = CreateActionBtn("Import", "Import previewed items to queue", function()
+    local previewData = UI._importPreviewData()
+    if previewData and #previewData > 0 then
+        local added = ns.Queue:Add(previewData)
+        ns:Print("Imported " .. added .. " new items (" .. #previewData .. " parsed, duplicates merged).")
+        UI._importEdit:SetText("")
+        UI._importPreviewClear()
+        UI.importPreviewTable:SetData({})
+        UI._importStatus:SetText(ns.COLORS.GREEN .. added .. " items imported!|r")
+        UI:Refresh()
+        UI:RefreshMini()
+    else
+        -- No preview data — try direct parse
+        local text = UI._importEdit:GetText()
+        if text and text ~= "" then
+            local items = ns.Import:Parse(text)
+            if #items > 0 then
+                local added = ns.Queue:Add(items)
+                ns:Print("Imported " .. added .. " new items (" .. #items .. " parsed, duplicates merged).")
+                UI._importEdit:SetText("")
+                UI._importPreviewClear()
+                UI.importPreviewTable:SetData({})
+                UI._importStatus:SetText(ns.COLORS.GREEN .. added .. " items imported!|r")
+                UI:Refresh()
+                UI:RefreshMini()
+            else
+                UI._importStatus:SetText(ns.COLORS.RED .. "No items found in pasted data.|r")
+            end
+        end
+    end
+end)
+
+mainFrame.actionBtns.importClear = CreateActionBtn("Clear", "Clear import text and preview", function()
     UI._importEdit:SetText("")
+    UI._importPreviewClear()
+    UI.importPreviewTable:SetData({})
     UI._importStatus:SetText("")
     UI._importEdit:SetFocus(true)
 end)
@@ -425,12 +459,13 @@ UI.queueTable:SetSort("realm", true)
 
 -- Log columns
 UI.logTable = UI:CreateScrollTable(tableContainer, {
-    {key = "name",      label = "Item",      width = 170, sortable = true},
-    {key = "posted",    label = "Posted",    width = 80,  sortable = true},
-    {key = "guide",     label = "FP Guide",  width = 80,  sortable = true},
-    {key = "realm",     label = "Realm",     width = 130, sortable = true},
-    {key = "character", label = "Character", width = 100, sortable = true},
-    {key = "date",      label = "Date",      width = 80,  sortable = true,
+    {key = "name",      label = "Item",      width = 150, sortable = true},
+    {key = "status",    label = "Status",    width = 52,  align = "CENTER", sortable = true},
+    {key = "posted",    label = "Posted",    width = 72,  sortable = true},
+    {key = "guide",     label = "FP Guide",  width = 72,  sortable = true},
+    {key = "realm",     label = "Realm",     width = 110, sortable = true},
+    {key = "character", label = "Character", width = 90,  sortable = true},
+    {key = "date",      label = "Date",      width = 75,  sortable = true,
         format = function(v) return v or "" end},
 })
 UI.logTable:SetSort("date", false)
@@ -489,13 +524,27 @@ importPage:SetAllPoints()
 importPage:Hide()
 
 local importInstr = importPage:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-importInstr:SetPoint("TOPLEFT", importPage, "TOPLEFT", 8, -8)
-importInstr:SetText("Paste FlippingPal data below, then click Import:")
+importInstr:SetPoint("TOPLEFT", importPage, "TOPLEFT", 8, -4)
+importInstr:SetText("Paste FlippingPal data below, then click Preview:")
 importInstr:SetTextColor(0.7, 0.7, 0.7)
 
-local importScroll = CreateFrame("ScrollFrame", "FlipQueueImportScrollInline", importPage, "UIPanelScrollFrameTemplate")
-importScroll:SetPoint("TOPLEFT", importPage, "TOPLEFT", 4, -28)
-importScroll:SetPoint("BOTTOMRIGHT", importPage, "BOTTOMRIGHT", -24, 34)
+-- Edit box area (top 100px)
+local importEditBg = CreateFrame("Frame", nil, importPage, "BackdropTemplate")
+importEditBg:SetPoint("TOPLEFT", importPage, "TOPLEFT", 4, -20)
+importEditBg:SetPoint("TOPRIGHT", importPage, "TOPRIGHT", -4, -20)
+importEditBg:SetHeight(80)
+importEditBg:SetBackdrop({
+    bgFile = "Interface\\Tooltips\\UI-Tooltip-Background",
+    edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
+    edgeSize = 10,
+    insets = {left = 2, right = 2, top = 2, bottom = 2},
+})
+importEditBg:SetBackdropColor(0.05, 0.05, 0.08, 1)
+importEditBg:SetBackdropBorderColor(0.25, 0.25, 0.35, 0.8)
+
+local importScroll = CreateFrame("ScrollFrame", "FlipQueueImportScrollInline", importEditBg, "UIPanelScrollFrameTemplate")
+importScroll:SetPoint("TOPLEFT", importEditBg, "TOPLEFT", 6, -4)
+importScroll:SetPoint("BOTTOMRIGHT", importEditBg, "BOTTOMRIGHT", -22, 4)
 
 local importEdit = CreateFrame("EditBox", "FlipQueueImportEditInline", importScroll)
 importEdit:SetMultiLine(true)
@@ -508,12 +557,47 @@ importScroll:SetScript("OnSizeChanged", function(sf, w)
     importEdit:SetWidth(w)
 end)
 
+-- Preview table (below editbox, fills remaining space)
+UI.importPreviewTable = UI:CreateScrollTable(importPage, {
+    {key = "status",   label = "Status",  width = 52,  align = "CENTER", sortable = true},
+    {key = "name",     label = "Item",    width = 160, sortable = true},
+    {key = "realm",    label = "Realm",   width = 110, sortable = true},
+    {key = "price",    label = "Price",   width = 70,  sortable = true},
+    {key = "qty",      label = "Qty",     width = 30,  align = "CENTER", sortable = true},
+    {key = "reason",   label = "Reason",  width = 128, sortable = true},
+})
+UI.importPreviewTable:SetSort("status", true)
+
+-- Position the preview table below the editbox
+UI.importPreviewTable.headerFrame:SetParent(importPage)
+UI.importPreviewTable.headerFrame:ClearAllPoints()
+UI.importPreviewTable.headerFrame:SetPoint("TOPLEFT", importEditBg, "BOTTOMLEFT", 0, -4)
+UI.importPreviewTable.headerFrame:SetPoint("TOPRIGHT", importEditBg, "BOTTOMRIGHT", 0, -4)
+
+UI.importPreviewTable.scrollFrame:SetParent(importPage)
+UI.importPreviewTable.scrollFrame:ClearAllPoints()
+UI.importPreviewTable.scrollFrame:SetPoint("TOPLEFT", UI.importPreviewTable.headerFrame, "BOTTOMLEFT", 0, 0)
+UI.importPreviewTable.scrollFrame:SetPoint("BOTTOMRIGHT", importPage, "BOTTOMRIGHT", -22, 20)
+
 local importStatus = importPage:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-importStatus:SetPoint("LEFT", importPage, "BOTTOMLEFT", 8, 17)
+importStatus:SetPoint("LEFT", importPage, "BOTTOMLEFT", 8, 10)
 importStatus:SetTextColor(0.5, 0.5, 0.5)
 importStatus:SetText("")
 
--- Auto-detect paste
+-- Skip-preview checkbox
+local importSkipCheck = CreateFrame("CheckButton", "FlipQueueImportSkipCheck", importPage, "UICheckButtonTemplate")
+importSkipCheck:SetSize(22, 22)
+importSkipCheck:SetPoint("RIGHT", importPage, "BOTTOMRIGHT", -8, 10)
+local importSkipLabel = importPage:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+importSkipLabel:SetPoint("RIGHT", importSkipCheck, "LEFT", -2, 0)
+importSkipLabel:SetText("Auto-import")
+importSkipLabel:SetTextColor(0.5, 0.5, 0.5)
+
+-- Stored preview data for import confirmation
+local importPreviewData = nil -- raw items from Parse
+local importPreviewResults = nil -- annotated items from PreviewAdd
+
+-- Auto-detect paste and build preview
 local importLastLen = 0
 importEdit:SetScript("OnTextChanged", function(self, userInput)
     if not userInput then return end
@@ -522,16 +606,129 @@ importEdit:SetScript("OnTextChanged", function(self, userInput)
     if importLastLen < 10 and newLen > 50 and text:find("\n") then
         local items = ns.Import:Parse(text)
         if #items > 0 then
-            importStatus:SetText(ns.COLORS.GREEN .. #items .. " items detected|r — click Import")
+            if importSkipCheck:GetChecked() then
+                -- Auto-import mode: skip preview, add directly
+                local added = ns.Queue:Add(items)
+                ns:Print("Imported " .. added .. " new items (" .. #items .. " parsed, duplicates merged).")
+                importEdit:SetText("")
+                importPreviewData = nil
+                importPreviewResults = nil
+                UI.importPreviewTable:SetData({})
+                importStatus:SetText(ns.COLORS.GREEN .. added .. " items imported!|r")
+                importLastLen = 0
+                UI:Refresh()
+                UI:RefreshMini()
+            else
+                -- Preview mode: show preview table
+                importPreviewData = items
+                importPreviewResults = ns.Queue:PreviewAdd(items)
+                UI:RefreshImportPreview()
+            end
+        else
+            importStatus:SetText(ns.COLORS.RED .. "No items found in pasted data.|r")
         end
     end
     importLastLen = newLen
 end)
 importEdit:SetScript("OnEscapePressed", function() importEdit:ClearFocus() end)
 
+-- Quality color map (inline since QUALITY_COLORS isn't in scope yet)
+local IMPORT_QUALITY_COLORS = {
+    Poor = "9d9d9d", Common = "ffffff", Uncommon = "1eff00",
+    Rare = "0070dd", Epic = "a335ee", Legendary = "ff8000",
+    Artifact = "e6cc80", Heirloom = "00ccff",
+}
+
+-- Build preview table display data
+function UI:RefreshImportPreview()
+    if not importPreviewResults then
+        UI.importPreviewTable:SetData({})
+        return
+    end
+
+    local data = {}
+    local newCount, dupCount, updateCount = 0, 0, 0
+
+    for _, result in ipairs(importPreviewResults) do
+        local item = result.item
+        local st = result._importStatus
+
+        local dupeReason = result._dupeReason
+        local statusStr, statusSort
+        if st == "new" then
+            statusStr = ns.COLORS.GREEN .. "New" .. "|r"
+            statusSort = "1new"
+            newCount = newCount + 1
+        elseif st == "update" then
+            statusStr = ns.COLORS.YELLOW .. "Update" .. "|r"
+            statusSort = "2update"
+            updateCount = updateCount + 1
+        elseif st == "duplicate" then
+            statusStr = ns.COLORS.GRAY .. "Dupe" .. "|r"
+            statusSort = "3dupe"
+            dupCount = dupCount + 1
+        else
+            statusStr = st or "?"
+            statusSort = "4" .. (st or "")
+        end
+
+        local displayName = item.name or "?"
+        local qColor = item.quality and IMPORT_QUALITY_COLORS[item.quality]
+        if qColor then
+            displayName = "|cff" .. qColor .. displayName .. "|r"
+        end
+
+        local reasonStr = ""
+        if dupeReason then
+            if st == "duplicate" then
+                reasonStr = ns.COLORS.GRAY .. dupeReason .. "|r"
+            elseif st == "update" then
+                reasonStr = ns.COLORS.YELLOW .. dupeReason .. "|r"
+            end
+        end
+
+        table.insert(data, {
+            status   = statusStr,
+            name     = displayName,
+            realm    = item.targetRealm or "",
+            price    = item.expectedPrice or "",
+            qty      = item.quantity or 1,
+            reason   = reasonStr,
+            _sortStatus = statusSort,
+            _tooltipText = item.name,
+            _tooltipExtra = (item.targetRealm and item.targetRealm ~= "" and ("Sell on: " .. item.targetRealm) or "")
+                .. (item.expectedPrice and item.expectedPrice ~= "" and ("\nPrice: " .. item.expectedPrice) or "")
+                .. (st == "duplicate" and "\n" .. ns.COLORS.GRAY .. "Already in queue (" .. (dupeReason or "exact match") .. ") — will be skipped|r" or "")
+                .. (st == "update" and "\n" .. ns.COLORS.YELLOW .. "Will update existing entry (" .. (dupeReason or "match") .. ")|r" or ""),
+        })
+    end
+
+    UI.importPreviewTable:SetData(data)
+
+    -- Show the preview table
+    UI.importPreviewTable.headerFrame:Show()
+    UI.importPreviewTable.scrollFrame:Show()
+
+    local parts = {}
+    if newCount > 0 then table.insert(parts, ns.COLORS.GREEN .. newCount .. " new|r") end
+    if updateCount > 0 then table.insert(parts, ns.COLORS.YELLOW .. updateCount .. " updates|r") end
+    if dupCount > 0 then table.insert(parts, ns.COLORS.GRAY .. dupCount .. " dupes|r") end
+    importStatus:SetText(table.concat(parts, "  ") .. "  — click Import to confirm")
+end
+
 UI._importPage = importPage
 UI._importEdit = importEdit
 UI._importStatus = importStatus
+UI._importPreviewData = function() return importPreviewData end
+UI._importPreviewClear = function()
+    importPreviewData = nil
+    importPreviewResults = nil
+    importLastLen = 0
+end
+UI._importSetPreview = function(items, results)
+    importPreviewData = items
+    importPreviewResults = results
+end
 
 -- Export page
 local exportPage = CreateFrame("Frame", nil, tableContainer)
@@ -582,6 +779,7 @@ RegisterTable(UI.inventoryTable)
 RegisterTable(UI.charsTable)
 RegisterTable(UI.needCharsTable)
 RegisterTable(UI.nextStepsTable)
+RegisterTable(UI.importPreviewTable)
 
 local function HideAllTables()
     for _, tbl in ipairs(allTables) do
@@ -1147,9 +1345,44 @@ local function BuildLogData()
             displayName = QualityColorName(displayName, entry.quality)
         end
 
+        -- Status display
+        local aStatus = entry.auctionStatus or "active"
+        local statusStr
+        if aStatus == "sold" then
+            statusStr = ns.COLORS.GREEN .. "Sold" .. "|r"
+        elseif aStatus == "expired" then
+            statusStr = ns.COLORS.RED .. "Expired" .. "|r"
+        elseif aStatus == "collected" then
+            statusStr = ns.COLORS.GRAY .. "Done" .. "|r"
+        else
+            statusStr = ns.COLORS.YELLOW .. "Active" .. "|r"
+        end
+
+        -- Price display: show sold price if sold, posted price otherwise
+        local priceStr
+        if aStatus == "sold" and entry.soldPrice and entry.soldPrice > 0 then
+            priceStr = ns.COLORS.GREEN .. ns:FormatGold(entry.soldPrice) .. "|r"
+        else
+            priceStr = entry.postedPrice or "?"
+        end
+
+        -- Tooltip with sale info
+        local tooltipExtra = string.format("Posted: %s\nListed for: %s\nFP suggested: %s",
+            dateStr, entry.postedPrice or "?", entry.expectedPrice or "?")
+        if aStatus == "sold" then
+            tooltipExtra = tooltipExtra .. "\n" .. ns.COLORS.GREEN .. "Sold for: " ..
+                (entry.soldPrice and entry.soldPrice > 0 and ns:FormatGold(entry.soldPrice) or "unknown") .. "|r"
+            if entry.soldAt then
+                tooltipExtra = tooltipExtra .. "\nSold: " .. date("%m/%d %H:%M", entry.soldAt)
+            end
+        elseif aStatus == "expired" then
+            tooltipExtra = tooltipExtra .. "\n" .. ns.COLORS.RED .. "Auction expired|r"
+        end
+
         table.insert(data, {
             name      = displayName,
-            posted    = entry.postedPrice or "?",
+            status    = statusStr,
+            posted    = priceStr,
             guide     = entry.expectedPrice or "?",
             realm     = entry.targetRealm or "",
             character = entry.charKey or "",
@@ -1158,8 +1391,7 @@ local function BuildLogData()
             _sortDate = entry.postedAt or 0,
             _tooltipItemID = resolvedID,
             _tooltipText   = entry.name,
-            _tooltipExtra  = string.format("Posted: %s\nPosted for: %s\nFP suggested: %s",
-                dateStr, entry.postedPrice or "?", entry.expectedPrice or "?"),
+            _tooltipExtra  = tooltipExtra,
             _logIndex = i,
         })
     end
@@ -1438,7 +1670,17 @@ local function BuildCharactersData()
     end
 
     -- Group uncovered queue items by exact targetRealm string (no RealmsOverlap)
+    -- Only count items that actually exist in warbank (matches NextSteps logic)
     local realmNeedsMap = {} -- realmKey -> {realmStr, count, prices}
+
+    -- Build warbank remaining quantity tracker
+    local wbRemaining = {}
+    if ns.db.warbank and ns.db.warbank.items then
+        for wbKey, wbData in pairs(ns.db.warbank.items) do
+            wbRemaining[wbKey] = wbData.quantity or 1
+        end
+    end
+
     for _, item in ipairs(ns.db.queue) do
         if item.status == "pending" and item.targetRealm and item.targetRealm ~= "" then
             local hasCoverage = false
@@ -1450,17 +1692,44 @@ local function BuildCharactersData()
             end
 
             if not hasCoverage then
-                local realmKey = item.targetRealm:lower()
-                if not realmNeedsMap[realmKey] then
-                    realmNeedsMap[realmKey] = {
-                        realmStr = item.targetRealm,
-                        count = 0,
-                        prices = {},
-                    }
+                -- Check if this item actually exists in warbank
+                local inWarbank = false
+                if ns.db.warbank and ns.db.warbank.items then
+                    local resolvedID = ns:ResolveItemID(item)
+                    for wbKey, wbData in pairs(ns.db.warbank.items) do
+                        if (wbRemaining[wbKey] or 0) > 0 then
+                            local matched = (wbKey == item.itemKey)
+                            if not matched and resolvedID then
+                                local wbNumID = tonumber(wbKey:match("^(%d+);"))
+                                if wbNumID and wbNumID == resolvedID then matched = true end
+                            end
+                            if not matched and wbData.name and item.name ~= "" then
+                                if wbData.name:lower() == item.name:lower() then
+                                    matched = true
+                                end
+                            end
+                            if matched then
+                                wbRemaining[wbKey] = wbRemaining[wbKey] - (item.quantity or 1)
+                                inWarbank = true
+                                break
+                            end
+                        end
+                    end
                 end
-                realmNeedsMap[realmKey].count = realmNeedsMap[realmKey].count + 1
-                if item.expectedPrice and item.expectedPrice ~= "" then
-                    table.insert(realmNeedsMap[realmKey].prices, item.expectedPrice)
+
+                if inWarbank then
+                    local realmKey = item.targetRealm:lower()
+                    if not realmNeedsMap[realmKey] then
+                        realmNeedsMap[realmKey] = {
+                            realmStr = item.targetRealm,
+                            count = 0,
+                            prices = {},
+                        }
+                    end
+                    realmNeedsMap[realmKey].count = realmNeedsMap[realmKey].count + 1
+                    if item.expectedPrice and item.expectedPrice ~= "" then
+                        table.insert(realmNeedsMap[realmKey].prices, item.expectedPrice)
+                    end
                 end
             end
         end
@@ -1733,7 +2002,21 @@ function UI:Refresh()
             end
         end)
         self.logTable:SetData(data)
-        mainFrame.statusText:SetText(logCount .. " logged items  |  Shift+Right-click to remove")
+        local soldCount, activeCount, expiredCount = 0, 0, 0
+        for _, entry in ipairs(ns.db.log) do
+            if entry.auctionStatus == "sold" then soldCount = soldCount + 1
+            elseif entry.auctionStatus == "expired" then expiredCount = expiredCount + 1
+            elseif entry.auctionStatus == "active" then activeCount = activeCount + 1
+            end
+        end
+        local logStatus = logCount .. " logged"
+        local parts = {}
+        if soldCount > 0 then table.insert(parts, ns.COLORS.GREEN .. soldCount .. " sold|r") end
+        if activeCount > 0 then table.insert(parts, ns.COLORS.YELLOW .. activeCount .. " active|r") end
+        if expiredCount > 0 then table.insert(parts, ns.COLORS.RED .. expiredCount .. " expired|r") end
+        if #parts > 0 then logStatus = logStatus .. " (" .. table.concat(parts, ", ") .. ")" end
+        logStatus = logStatus .. "  |  Shift+Right-click to remove"
+        mainFrame.statusText:SetText(logStatus)
 
     elseif self.currentPage == "inventory" then
         mainFrame.pageTitle:SetText("Untracked Inventory")
@@ -1844,8 +2127,13 @@ function UI:Refresh()
 
     elseif self.currentPage == "import" then
         mainFrame.pageTitle:SetText(ns.COLORS.YELLOW .. "Import" .. "|r")
-        LayoutActionBtns(mainFrame.actionBtns.importClear, mainFrame.actionBtns.importDo)
+        LayoutActionBtns(mainFrame.actionBtns.importClear, mainFrame.actionBtns.importDo, mainFrame.actionBtns.importPreview)
         importPage:Show()
+        -- Show preview table if we have data
+        if UI._importPreviewData() then
+            UI.importPreviewTable.headerFrame:Show()
+            UI.importPreviewTable.scrollFrame:Show()
+        end
         UI._importEdit:SetFocus(true)
         mainFrame.statusText:SetText("Paste FlippingPal website, CSV, or tab-delimited data")
 

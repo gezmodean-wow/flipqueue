@@ -3,22 +3,22 @@
 ## High Priority
 
 ### Sold Item Tracking
-- [ ] Monitor AH mail results to detect if posted items actually sold
-- [ ] Update log entries with `soldAt` timestamp and `soldPrice` when sale confirmed
-- [ ] Show sold/expired/active status in Log page
-- [ ] Profit calculation: sold price minus buy price from FP data
-- Fields already exist in log entries (`soldAt`, `soldPrice`) but nothing populates them
+- [x] Monitor AH mail results to detect if posted items actually sold
+- [x] Update log entries with `soldAt` timestamp and `soldPrice` when sale confirmed
+- [x] Show sold/expired/active status in Log page
+- [x] Detect sold items from owned auctions (missing from AH list = sold)
+- [x] Mark expired as "collected" when user opens AH (clears "Check AH" next step)
+- [x] Login alert for expired auctions on current character
+- [ ] Profit calculation: sold price minus buy price from FP data (needs buy price tracking)
 
 ### Dead Code Cleanup
-- [ ] Remove `UI/Sections.lua` from .toc (superseded by MainFrame page renderers)
-- [ ] Remove `UI/LogPage.lua` from .toc (superseded by MainFrame BuildLogData)
-- [ ] Remove `UI/Rows.lua` from .toc (superseded by ScrollTable) - check MiniView dependency first
-- [ ] Remove backward-compat stubs `HideAllRows()` / `GetOrCreateRow()` once confirmed unused
-- [ ] Remove `UI/UntrackedSection.lua` render functions (only keep DNT frame)
+- [x] Remove `UI/Sections.lua` (deleted)
+- [x] Remove `UI/LogPage.lua` (already gone)
+- [x] Remove `UI/Rows.lua` from .toc (deleted, superseded by ScrollTable)
+- [x] Remove `UI/UntrackedSection.lua` render functions (only kept DNT frame)
 
 ### Fix DNT Key Inconsistency
-- [ ] `/fq dnt add <name>` stores name as key instead of itemID - should lookup itemID from inventory
-- [ ] Normalize all DNT entries to use itemID as key consistently
+- [x] `/fq dnt add <name>` now resolves itemID from inventory before storing
 
 ## Medium Priority
 
@@ -87,7 +87,7 @@
 - [ ] Notification when logging onto a character with pending tasks
 
 ### CurseForge Distribution
-- [ ] Create CurseForge project (get project ID)
-- [ ] Add `X-Curse-Project-ID` to .toc
-- [ ] Set up GitHub Actions for automatic packaging on tag push
-- [ ] First alpha release
+- [x] Create CurseForge project (project ID in .toc)
+- [x] Add `X-Curse-Project-ID` to .toc
+- [x] Set up GitHub Actions for automatic packaging on tag push
+- [x] First alpha release

@@ -111,6 +111,9 @@ local function ParseRealmLine(realmLine)
         or realmLine:match("^(.-)%s+[%d,]+g")          -- before 1+ spaces then gold
         or realmLine:match("^(.-)\t[%d,]+g")            -- before tab then gold
         or realmLine                                      -- fallback: whole line
+    realm = strtrim(realm)
+    -- Strip FP website ", ..." suffix (means "and connected realms" — not a real name)
+    realm = realm:gsub(",%s*%.%.%.$", "")
     return strtrim(realm)
 end
 

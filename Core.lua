@@ -119,7 +119,8 @@ function ns:RealmsOverlap(realm1, realm2)
     if r1 == "" or r2 == "" then return false end
     for name in r1:gmatch("([^,]+)") do
         name = strtrim(name)
-        if name ~= "" and r2:lower():find(name:lower(), 1, true) then
+        -- Skip short fragments (e.g., "..." from FP website formatting)
+        if #name >= 3 and not name:find("^%.+$") and r2:lower():find(name:lower(), 1, true) then
             return true
         end
     end
@@ -187,6 +188,7 @@ function ns:InitDB()
     db.settings.collapsed = db.settings.collapsed or {}
     db.settings.sortMode  = db.settings.sortMode or "realm"
     db.settings.expiryAlertHours = db.settings.expiryAlertHours or 6
+    if db.settings.hideMiniInCombat == nil then db.settings.hideMiniInCombat = true end
     ns.db = db
 end
 

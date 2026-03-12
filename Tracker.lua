@@ -350,9 +350,11 @@ function Tracker:AutoWithdrawGold()
 
     if totalExpectedGold <= 0 then return end
 
-    -- AH deposits are based on vendor price (tiny relative to AH price).
-    -- Cap at 100g — more than enough for listing fees on any character.
-    local estimatedFees = math.min(math.ceil(totalExpectedGold * 0.01), 100)
+    -- AH deposits are 15%/30%/60% of vendor sell price based on 12h/24h/48h duration.
+    -- Vendor price is typically ~1-5% of AH market value.
+    -- Conservatively estimate: vendor ~5% of AH price, at 60% deposit (48h worst case).
+    -- So deposit ≈ 3% of expected AH value. Cap at 200g to be safe.
+    local estimatedFees = math.min(math.ceil(totalExpectedGold * 0.03), 200)
 
     local playerGold = math.floor(GetMoney() / 10000)
     if playerGold >= estimatedFees then return end -- already have enough
@@ -542,6 +544,86 @@ function Tracker:GetAuctionSummaryByCharacter()
 end
 
 --------------------------
+-- Mail Scanning for Sales
+--------------------------
+
+local isMailOpen = false
+local mailScanRetries = 0
+
+function Tracker:ScanMailForSales()
+    if not ns.db or not isMailOpen then return end
+
+    local numItems = GetInboxNumItems()
+    if numItems == 0 then return end
+
+    local currentCharKey = ns:GetCharKey()
+
+    -- Collect active log entries for this character, grouped by name
+    local activeByName = {} -- name:lower() -> list of log indices (oldest first)
+    for i, entry in ipairs(ns.db.log) do
+        if entry.auctionStatus == "active" and entry.charKey == currentCharKey then
+            local key = (entry.name or ""):lower()
+            if key ~= "" then
+                if not activeByName[key] then activeByName[key] = {} end
+                table.insert(activeByName[key], i)
+            end
+        end
+    end
+
+    if not next(activeByName) then return end
+
+    local consumed = {} -- log index -> true
+    local updated = 0
+    local hasMissing = false
+
+    for mailIndex = 1, numItems do
+        local _, _, _, _, money = GetInboxHeaderInfo(mailIndex)
+        -- Only check mail with gold attached (potential AH sale)
+        if money and money > 0 then
+            local ok, invoiceType, itemName, _, _, buyout = pcall(GetInboxInvoiceInfo, mailIndex)
+            if ok and invoiceType == "seller" and itemName then
+                local nameKey = itemName:lower()
+                local candidates = activeByName[nameKey]
+                if candidates then
+                    for _, logIndex in ipairs(candidates) do
+                        if not consumed[logIndex] then
+                            consumed[logIndex] = true
+                            local entry = ns.db.log[logIndex]
+                            entry.auctionStatus = "sold"
+                            entry.soldAt = time()
+                            entry.soldPrice = buyout or money or 0
+                            updated = updated + 1
+                            break
+                        end
+                    end
+                end
+            elseif ok and invoiceType == nil and money > 0 then
+                -- Has gold but no invoice data yet — might not be loaded
+                hasMissing = true
+            end
+        end
+    end
+
+    -- Retry if invoice data wasn't loaded yet (up to 3 times)
+    if hasMissing and updated == 0 and mailScanRetries < 3 then
+        mailScanRetries = mailScanRetries + 1
+        C_Timer.After(1, function()
+            if isMailOpen then
+                Tracker:ScanMailForSales()
+            end
+        end)
+        return
+    end
+    mailScanRetries = 0
+
+    if updated > 0 then
+        ns:Print(ns.COLORS.GREEN .. updated .. " auction sale(s) detected!|r")
+        if ns.UI and ns.UI.Refresh then ns.UI:Refresh() end
+        if ns.UI and ns.UI.RefreshMini then ns.UI:RefreshMini() end
+    end
+end
+
+--------------------------
 -- Event Handling
 --------------------------
 
@@ -551,11 +633,23 @@ frame:RegisterEvent("AUCTION_HOUSE_CLOSED")
 frame:RegisterEvent("BAG_UPDATE_DELAYED")
 frame:RegisterEvent("BANKFRAME_OPENED")
 frame:RegisterEvent("OWNED_AUCTIONS_UPDATED")
+frame:RegisterEvent("MAIL_SHOW")
+frame:RegisterEvent("MAIL_CLOSED")
 
 frame:SetScript("OnEvent", function(self, event)
     if event == "AUCTION_HOUSE_SHOW" then
         isAHOpen = true
         SnapshotBags()
+
+        -- Mark expired auctions as collected (user is at the AH)
+        if ns.db then
+            local charKey = ns:GetCharKey()
+            for _, entry in ipairs(ns.db.log) do
+                if entry.auctionStatus == "expired" and entry.charKey == charKey then
+                    entry.auctionStatus = "collected"
+                end
+            end
+        end
 
         if ns.Queue then
             local tasks = ns.Queue:GetCharacterTasks(ns:GetCharKey())
@@ -592,6 +686,21 @@ frame:SetScript("OnEvent", function(self, event)
         if isAHOpen then
             Tracker:CheckOwnedAuctions()
             Tracker:UpdateLogExpiry()
+            -- Sold detection only via mail scanning (ScanMailForSales)
+            -- Owned auction disappearance can't distinguish sold vs cancelled
         end
+
+    elseif event == "MAIL_SHOW" then
+        isMailOpen = true
+        mailScanRetries = 0
+        -- Delay to allow mail data to load
+        C_Timer.After(1, function()
+            if isMailOpen then
+                Tracker:ScanMailForSales()
+            end
+        end)
+
+    elseif event == "MAIL_CLOSED" then
+        isMailOpen = false
     end
 end)

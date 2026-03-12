@@ -14,6 +14,77 @@ local function RealmsOverlap(realm1, realm2)
     return ns:RealmsOverlap(realm1, realm2)
 end
 
+-- Preview what Add would do without modifying the queue
+-- Returns items annotated with _importStatus: "new", "duplicate", "update"
+function Queue:PreviewAdd(items)
+    if not ns.db then return {} end
+
+    local results = {}
+    -- Track items within this batch that have already been claimed as "new"
+    -- so subsequent same-name items in the batch are flagged correctly
+    local batchAdded = {} -- name:lower() .. "|" .. realm:lower() -> true
+
+    for _, item in ipairs(items) do
+        local status = "new"
+        local matchedRealm = nil
+        local dupeReason = nil
+        local itemName = (item.name or ""):lower()
+
+        for _, existing in ipairs(ns.db.queue) do
+            if existing.status == "pending" then
+                local keyMatch = existing.itemKey == item.itemKey
+                local nameMatch = itemName ~= "" and existing.name
+                    and existing.name:lower() == itemName
+                if (keyMatch or nameMatch) and RealmsOverlap(existing.targetRealm, item.targetRealm) then
+                    matchedRealm = existing.targetRealm
+                    -- Check if the import would update any fields
+                    local wouldUpdate = false
+                    if item.expectedPrice and item.expectedPrice ~= "" then
+                        if (not existing.expectedPrice or existing.expectedPrice == "") then
+                            wouldUpdate = true
+                        elseif existing.expectedPrice ~= item.expectedPrice then
+                            wouldUpdate = true
+                        end
+                    end
+                    if #(item.targetRealm or "") > #(existing.targetRealm or "") then
+                        wouldUpdate = true
+                    end
+                    status = wouldUpdate and "update" or "duplicate"
+                    -- Determine the reason for the match
+                    local importRealm = (item.targetRealm or ""):lower()
+                    local existingRealm = (existing.targetRealm or ""):lower()
+                    if importRealm == existingRealm then
+                        dupeReason = "same realm"
+                    else
+                        dupeReason = "connected realm: " .. (existing.targetRealm or "?")
+                    end
+                    break
+                end
+            end
+        end
+
+        -- Check against items already in this batch
+        if status == "new" then
+            local batchKey = itemName .. "|" .. (item.targetRealm or ""):lower()
+            if batchAdded[batchKey] then
+                status = "duplicate"
+                dupeReason = "duplicate in paste"
+            else
+                batchAdded[batchKey] = true
+            end
+        end
+
+        table.insert(results, {
+            item = item,
+            _importStatus = status,
+            _matchedRealm = matchedRealm,
+            _dupeReason = dupeReason,
+        })
+    end
+
+    return results
+end
+
 function Queue:Add(items)
     if not ns.db then return 0 end
 
@@ -33,8 +104,8 @@ function Queue:Add(items)
                     if #(item.targetRealm or "") > #(existing.targetRealm or "") then
                         existing.targetRealm = item.targetRealm
                     end
-                    -- Keep higher price if available
-                    if item.expectedPrice and (not existing.expectedPrice or existing.expectedPrice == "") then
+                    -- Update price if import has one
+                    if item.expectedPrice and item.expectedPrice ~= "" then
                         existing.expectedPrice = item.expectedPrice
                     end
                     isDuplicate = true

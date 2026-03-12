@@ -256,7 +256,19 @@ frame:SetScript("OnEvent", function(self, event)
                     end
                 end
 
-                -- Expiring auction alerts
+                -- Expired auctions on this character (need collecting)
+                local currentCharKey = ns:GetCharKey()
+                local expiredCount = 0
+                for _, entry in ipairs(ns.db.log) do
+                    if entry.auctionStatus == "expired" and entry.charKey == currentCharKey then
+                        expiredCount = expiredCount + 1
+                    end
+                end
+                if expiredCount > 0 then
+                    ns:Print(ns.COLORS.ORANGE .. expiredCount .. " expired auction(s) to collect — check the AH!|r")
+                end
+
+                -- Expiring auction alerts (across all characters)
                 if ns.Tracker and ns.Tracker.CheckExpiringAuctions then
                     local expiring = ns.Tracker:CheckExpiringAuctions()
                     if #expiring > 0 then

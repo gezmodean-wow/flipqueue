@@ -6,7 +6,7 @@ local addonName, ns = ...
 local UI = ns.UI
 
 local ICON_SIZE = 31
-local ICON_TEXTURE = "Interface\\Icons\\INV_Misc_Coin_02"
+local ICON_TEXTURE = "Interface\\AddOns\\flipqueue\\Art\\flipqueue-icon"
 
 --------------------------
 -- Square minimap detection

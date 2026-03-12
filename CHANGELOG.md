@@ -1,5 +1,26 @@
 # Changelog
 
+## v0.4.1
+- Custom addon icon and banner artwork
+- Credits section in Settings page
+- Settings redesigned: inline descriptions below each setting, section dividers, improved spacing
+- Import preview shows dupe reason (same realm, connected realm, duplicate in paste)
+- Import preview detects price changes as "update" instead of "duplicate"
+- Queue:Add now applies updated prices on re-import
+- Sold item tracking via AH mail scanning (invoice-based, no false positives from cancels)
+- Log table Status column: Active, Sold, Expired, Done with color coding
+- "Check AH" next step clears when AH is opened on that character
+- Login message shows expired auction alerts
+- Next Steps gold values match "realms needing a character" counts (warbank-backed only)
+- Realm "..." suffix from FP website no longer causes false dedup
+- Gold values sort numerically (1.3k, 22.8k, 1.3m handled correctly)
+- Hide mini view in combat (toggle in Settings, on by default)
+- Mini view shows FQ icon in header
+- Minimap button uses custom FQ icon
+- AH fee estimate updated: 60% of vendor price (48h post), cap raised to 200g
+- Dead code cleanup: removed Rows.lua, Sections.lua, LogPage.lua, trimmed UntrackedSection.lua
+- DNT key fix: /fq dnt add now resolves item IDs from inventory
+
 ## v0.4.0
 - Skip/unskip queue items: Shift+Right-click to skip items where AH price is too low (auto-unskips after 24h)
 - Character tracking: gold, last login, class/level per character
