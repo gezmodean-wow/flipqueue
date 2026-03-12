@@ -102,29 +102,79 @@ end
 -- Realm Matching
 --------------------------
 
+-- UTF-8 accent normalization for realm name comparison
+-- Maps accented characters (multi-byte UTF-8) to their ASCII equivalents
+-- Covers Latin diacritics used in EU WoW realm names (French, German, Spanish, etc.)
+local ACCENT_MAP = {
+    -- French: à â æ ç é è ê ë î ï ô œ ù û ü ÿ
+    ["\195\160"] = "a", ["\195\161"] = "a", ["\195\162"] = "a", ["\195\163"] = "a",
+    ["\195\164"] = "a", ["\195\165"] = "a", -- à á â ã ä å
+    ["\195\166"] = "ae",                     -- æ
+    ["\195\167"] = "c",                      -- ç
+    ["\195\168"] = "e", ["\195\169"] = "e", ["\195\170"] = "e", ["\195\171"] = "e", -- è é ê ë
+    ["\195\172"] = "i", ["\195\173"] = "i", ["\195\174"] = "i", ["\195\175"] = "i", -- ì í î ï
+    ["\195\176"] = "d",                      -- ð
+    ["\195\177"] = "n",                      -- ñ
+    ["\195\178"] = "o", ["\195\179"] = "o", ["\195\180"] = "o", ["\195\181"] = "o",
+    ["\195\182"] = "o",                      -- ò ó ô õ ö
+    ["\195\184"] = "o",                      -- ø
+    ["\195\185"] = "u", ["\195\186"] = "u", ["\195\187"] = "u", ["\195\188"] = "u", -- ù ú û ü
+    ["\195\189"] = "y", ["\195\190"] = "th", ["\195\191"] = "y", -- ý þ ÿ
+    -- Uppercase variants (lowered)
+    ["\195\128"] = "a", ["\195\129"] = "a", ["\195\130"] = "a", ["\195\131"] = "a",
+    ["\195\132"] = "a", ["\195\133"] = "a", -- À Á Â Ã Ä Å
+    ["\195\134"] = "ae",                     -- Æ
+    ["\195\135"] = "c",                      -- Ç
+    ["\195\136"] = "e", ["\195\137"] = "e", ["\195\138"] = "e", ["\195\139"] = "e", -- È É Ê Ë
+    ["\195\140"] = "i", ["\195\141"] = "i", ["\195\142"] = "i", ["\195\143"] = "i", -- Ì Í Î Ï
+    ["\195\144"] = "d",                      -- Ð
+    ["\195\145"] = "n",                      -- Ñ
+    ["\195\146"] = "o", ["\195\147"] = "o", ["\195\148"] = "o", ["\195\149"] = "o",
+    ["\195\150"] = "o",                      -- Ò Ó Ô Õ Ö
+    ["\195\152"] = "o",                      -- Ø
+    ["\195\153"] = "u", ["\195\154"] = "u", ["\195\155"] = "u", ["\195\156"] = "u", -- Ù Ú Û Ü
+    ["\195\157"] = "y", ["\195\158"] = "th", ["\195\159"] = "ss", -- Ý Þ ß
+}
+
+-- Normalize a string for accent-insensitive comparison
+-- Strips diacritics and lowercases
+function ns:NormalizeAccents(str)
+    if not str then return "" end
+    return str:gsub("[\195][\128-\191]", ACCENT_MAP):lower()
+end
+
 -- Check if a target realm string matches a given realm name
 -- Supports linked realm clusters like "Aegwynn, Lightninghoof, Maelstrom"
+-- Accent-insensitive: "Confrérie du Thorium" matches "Confrerie du Thorium"
 function ns:RealmMatches(targetRealm, realmName)
     if not targetRealm or targetRealm == "" then return true end
     if not realmName or realmName == "" then return false end
-    return targetRealm:lower():find(realmName:lower(), 1, true) ~= nil
+    return ns:NormalizeAccents(targetRealm):find(ns:NormalizeAccents(realmName), 1, true) ~= nil
 end
 
 -- Check if two realm strings refer to the same connected AH
 -- e.g., "Kalecgos, Lightninghoof, Maelstrom" overlaps with "Lightninghoof"
+-- Accent-insensitive for EU realm names
 function ns:RealmsOverlap(realm1, realm2)
     local r1 = realm1 or ""
     local r2 = realm2 or ""
     if r1 == "" and r2 == "" then return true end
     if r1 == "" or r2 == "" then return false end
+    local r2norm = ns:NormalizeAccents(r2)
     for name in r1:gmatch("([^,]+)") do
         name = strtrim(name)
         -- Skip short fragments (e.g., "..." from FP website formatting)
-        if #name >= 3 and not name:find("^%.+$") and r2:lower():find(name:lower(), 1, true) then
+        if #name >= 3 and not name:find("^%.+$") and r2norm:find(ns:NormalizeAccents(name), 1, true) then
             return true
         end
     end
     return false
+end
+
+-- Normalize a realm string for use as a grouping/map key
+-- Strips accents and lowercases so "Confrérie du Thorium" and "Confrerie du Thorium" group together
+function ns:NormalizeRealmKey(realm)
+    return ns:NormalizeAccents(realm or "")
 end
 
 --------------------------

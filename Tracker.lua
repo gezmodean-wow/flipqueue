@@ -274,10 +274,12 @@ end
 -- Bank Auto-Pull
 --------------------------
 
+local PULL_BATCH_SIZE = 10     -- items per batch (warbank errors at ~30)
+local PULL_BATCH_DELAY = 0.4   -- seconds between batches
+
 function Tracker:AutoPullFromBank()
     if not ns.db or not ns.db.settings.autoPullBank then return end
 
-    local pulled = 0
     local allBankTabs = {}
     for _, b in ipairs(ns.BANK_TABS) do table.insert(allBankTabs, b) end
     for _, b in ipairs(ns.WARBANK_TABS) do table.insert(allBankTabs, b) end
@@ -296,7 +298,8 @@ function Tracker:AutoPullFromBank()
         end
     end
 
-    local pulledNames = {}
+    -- Build a list of moves to make (bag, slot, name)
+    local moves = {}
     for _, bagIndex in ipairs(allBankTabs) do
         local numSlots = C_Container.GetContainerNumSlots(bagIndex)
         for slot = 1, numSlots do
@@ -307,11 +310,9 @@ function Tracker:AutoPullFromBank()
                     local key = ns:MakeItemKey(itemID, bonusIDs, modifiers)
                     for queueItem, count in pairs(needed) do
                         if count > 0 and MatchesQueueItem(key, info.hyperlink, queueItem) then
-                            C_Container.UseContainerItem(bagIndex, slot)
+                            table.insert(moves, {bag = bagIndex, slot = slot, name = queueItem.name or "?"})
                             needed[queueItem] = count - (info.stackCount or 1)
-                            pulled = pulled + 1
-                            table.insert(pulledNames, queueItem.name or "?")
-                            break  -- This slot is consumed, move to next slot
+                            break
                         end
                     end
                 end
@@ -319,13 +320,37 @@ function Tracker:AutoPullFromBank()
         end
     end
 
-    if pulled > 0 then
-        ns:Print("Auto-pulled " .. pulled .. " item(s) from bank: " .. table.concat(pulledNames, ", "))
-        C_Timer.After(1, function()
-            ns.Scanner:ScanCurrentCharacter()
-            if ns.UI and ns.UI.Refresh then ns.UI:Refresh() end
-        end)
+    if #moves == 0 then return end
+
+    -- Execute moves in batches to avoid warbank internal bag error
+    local totalMoves = #moves
+    local batchStart = 1
+    local pulledNames = {}
+
+    local function ExecuteBatch()
+        local batchEnd = math.min(batchStart + PULL_BATCH_SIZE - 1, totalMoves)
+        for i = batchStart, batchEnd do
+            local move = moves[i]
+            C_Container.UseContainerItem(move.bag, move.slot)
+            table.insert(pulledNames, move.name)
+        end
+
+        batchStart = batchEnd + 1
+        if batchStart <= totalMoves then
+            -- More batches to go
+            C_Timer.After(PULL_BATCH_DELAY, ExecuteBatch)
+        else
+            -- All done
+            ns:Print("Auto-pulled " .. totalMoves .. " item(s) from bank: " .. table.concat(pulledNames, ", "))
+            C_Timer.After(1, function()
+                ns.Scanner:ScanCurrentCharacter()
+                if ns.UI and ns.UI.Refresh then ns.UI:Refresh() end
+            end)
+        end
     end
+
+    ns:Print(ns.COLORS.YELLOW .. "Pulling " .. totalMoves .. " item(s) from bank..." .. "|r")
+    ExecuteBatch()
 end
 
 --------------------------

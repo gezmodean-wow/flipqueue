@@ -51,8 +51,8 @@ function Queue:PreviewAdd(items)
                     end
                     status = wouldUpdate and "update" or "duplicate"
                     -- Determine the reason for the match
-                    local importRealm = (item.targetRealm or ""):lower()
-                    local existingRealm = (existing.targetRealm or ""):lower()
+                    local importRealm = ns:NormalizeRealmKey(item.targetRealm)
+                    local existingRealm = ns:NormalizeRealmKey(existing.targetRealm)
                     if importRealm == existingRealm then
                         dupeReason = "same realm"
                     else
@@ -65,7 +65,7 @@ function Queue:PreviewAdd(items)
 
         -- Check against items already in this batch
         if status == "new" then
-            local batchKey = itemName .. "|" .. (item.targetRealm or ""):lower()
+            local batchKey = itemName .. "|" .. ns:NormalizeRealmKey(item.targetRealm)
             if batchAdded[batchKey] then
                 status = "duplicate"
                 dupeReason = "duplicate in paste"

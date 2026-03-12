@@ -1050,7 +1050,7 @@ local function BuildNextStepsData()
 
                 if inWarbank then
                     -- Group by exact targetRealm string to avoid cross-cluster merging
-                    local realmKey = item.targetRealm:lower()
+                    local realmKey = ns:NormalizeRealmKey(item.targetRealm)
                     if not realmNeeds[realmKey] then
                         realmNeeds[realmKey] = {
                             realmStr = item.targetRealm,
@@ -1718,7 +1718,7 @@ local function BuildCharactersData()
                 end
 
                 if inWarbank then
-                    local realmKey = item.targetRealm:lower()
+                    local realmKey = ns:NormalizeRealmKey(item.targetRealm)
                     if not realmNeedsMap[realmKey] then
                         realmNeedsMap[realmKey] = {
                             realmStr = item.targetRealm,
