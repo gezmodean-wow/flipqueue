@@ -1,4 +1,4 @@
-package-as: FlipQueue
+package-as: flipqueue
 
 enable-nolib-creation: no
 
