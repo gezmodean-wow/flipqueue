@@ -506,6 +506,41 @@ function Tracker:GetExpiringByCharacter()
     return byChar
 end
 
+-- Get full auction summary by character: active + done counts
+function Tracker:GetAuctionSummaryByCharacter()
+    if not ns.db then return {} end
+
+    local now = time()
+    local byChar = {} -- charKey -> {active, done, soonest}
+
+    for _, entry in ipairs(ns.db.log) do
+        if entry.charKey then
+            -- Auto-expire active auctions past their time
+            if entry.auctionStatus == "active" and entry.expiresAt and entry.expiresAt <= now then
+                entry.auctionStatus = "expired"
+            end
+
+            if not byChar[entry.charKey] then
+                byChar[entry.charKey] = {active = 0, done = 0, soonest = nil}
+            end
+
+            if entry.auctionStatus == "active" then
+                byChar[entry.charKey].active = byChar[entry.charKey].active + 1
+                if entry.expiresAt then
+                    local remaining = entry.expiresAt - now
+                    if not byChar[entry.charKey].soonest or remaining < byChar[entry.charKey].soonest then
+                        byChar[entry.charKey].soonest = remaining
+                    end
+                end
+            elseif entry.auctionStatus == "expired" then
+                byChar[entry.charKey].done = byChar[entry.charKey].done + 1
+            end
+        end
+    end
+
+    return byChar
+end
+
 --------------------------
 -- Event Handling
 --------------------------

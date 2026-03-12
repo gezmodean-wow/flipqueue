@@ -450,7 +450,7 @@ UI.charsTable = UI:CreateScrollTable(tableContainer, {
     {key = "realm",     label = "Realm",        width = 130, sortable = true},
     {key = "gold",      label = "Gold",         width = 70,  align = "RIGHT", sortable = true},
     {key = "tasks",     label = "Tasks",        width = 40,  align = "CENTER", sortable = true},
-    {key = "auctions",  label = "Auctions",     width = 65,  align = "CENTER", sortable = true},
+    {key = "auctions",  label = "Auctions",     width = 110, align = "CENTER", sortable = true},
     {key = "lastLogin", label = "Last Login",   width = 75,  sortable = true},
     {key = "status",    label = "Status",       width = 65,  sortable = true},
 })
@@ -881,6 +881,33 @@ local function BuildNextStepsData()
         })
     end
 
+    -- 3) Characters with done (expired) auctions to check
+    local auctionsByChar = ns.Tracker and ns.Tracker.GetAuctionSummaryByCharacter
+        and ns.Tracker:GetAuctionSummaryByCharacter() or {}
+
+    for charKey, info in pairs(auctionsByChar) do
+        if info.done > 0 then
+            local name = charKey:match("^(.-)%-") or charKey
+            local realm = charKey:match("%-(.+)$") or ""
+            local charInv = ns.db.inventory[charKey]
+            local classColor = charInv and CLASS_COLORS[charInv.class] or "888888"
+            local coloredName = "|cff" .. classColor .. name .. "|r"
+
+            table.insert(data, {
+                action    = ns.COLORS.GREEN .. "Check AH" .. "|r",
+                target    = coloredName .. "  (" .. realm .. ")",
+                itemCount = info.done,
+                value     = "",
+                detail    = info.done .. " auction(s) done",
+                _sortValue = 999999 + info.done, -- sort above "create char" items
+                _tooltipText = charKey,
+                _tooltipExtra = string.format("Log in to %s to collect %d expired auction(s)%s",
+                    charKey, info.done,
+                    info.active > 0 and ("\n" .. info.active .. " still active") or ""),
+            })
+        end
+    end
+
     -- Sort by value descending
     table.sort(data, function(a, b) return (a._sortValue or 0) > (b._sortValue or 0) end)
 
@@ -1278,9 +1305,9 @@ local function BuildCharactersData()
         end
     end
 
-    -- Get auction expiry data grouped by character
-    local expiringByChar = ns.Tracker and ns.Tracker.GetExpiringByCharacter
-        and ns.Tracker:GetExpiringByCharacter() or {}
+    -- Get auction summary (active + done) grouped by character
+    local auctionsByChar = ns.Tracker and ns.Tracker.GetAuctionSummaryByCharacter
+        and ns.Tracker:GetAuctionSummaryByCharacter() or {}
 
     -- Build character list
     for charKey, inv in pairs(ns.db.inventory) do
@@ -1310,17 +1337,22 @@ local function BuildCharactersData()
         local lastLoginTime = charMeta.lastLogin or 0
         local lastLoginStr = ns:FormatRelativeTime(lastLoginTime)
 
-        -- Auction expiry info
-        local expiryInfo = expiringByChar[charKey]
+        -- Auction summary: active + done
+        local auctionInfo = auctionsByChar[charKey]
         local auctionStr = ""
-        if expiryInfo then
-            local soonestStr = ns:FormatRelativeTime(time() + expiryInfo.soonest)
-            -- Remove " ago" since this is time remaining
-            soonestStr = soonestStr:gsub(" ago$", "")
-            auctionStr = ns.COLORS.ORANGE .. expiryInfo.count .. "|r"
-            if expiryInfo.soonest < 7200 then -- < 2h = red
-                auctionStr = ns.COLORS.RED .. expiryInfo.count .. "!|r"
+        if auctionInfo then
+            local parts = {}
+            if auctionInfo.active > 0 then
+                if auctionInfo.soonest and auctionInfo.soonest < 7200 then
+                    table.insert(parts, ns.COLORS.RED .. auctionInfo.active .. " live|r")
+                else
+                    table.insert(parts, ns.COLORS.ORANGE .. auctionInfo.active .. " live|r")
+                end
             end
+            if auctionInfo.done > 0 then
+                table.insert(parts, ns.COLORS.GREEN .. auctionInfo.done .. " done|r")
+            end
+            auctionStr = table.concat(parts, " / ")
         end
 
         -- Build status string
@@ -1338,7 +1370,9 @@ local function BuildCharactersData()
         local rowColor = nil
         if isHidden then
             rowColor = {0.3, 0.3, 0.3, 0.1}
-        elseif expiryInfo and expiryInfo.soonest < 7200 then
+        elseif auctionInfo and auctionInfo.done > 0 then
+            rowColor = {0.3, 1.0, 0.3, 0.1} -- green tint for done auctions
+        elseif auctionInfo and auctionInfo.soonest and auctionInfo.soonest < 7200 then
             rowColor = {1.0, 0.3, 0.3, 0.1} -- red tint for urgent auctions
         elseif duplicateRealms[realm] then
             rowColor = {0.8, 0.5, 0.1, 0.1}
@@ -1354,13 +1388,13 @@ local function BuildCharactersData()
             realm     = realm,
             gold      = goldStr,
             tasks     = isHidden and "-" or tostring(#tasks),
-            auctions  = auctionStr,
+            auctions  = auctionStr ~= "" and auctionStr or "",
             lastLogin = lastLoginStr,
             status    = statusStr,
             _sortName = name:lower(),
             _sortGold = goldCopper,
             _sortLastLogin = lastLoginTime,
-            _sortAuctions = expiryInfo and expiryInfo.count or 0,
+            _sortAuctions = auctionInfo and (auctionInfo.done * 1000 + auctionInfo.active) or 0,
             _charKey = charKey,
             _isHidden = isHidden,
             _rowColor = rowColor,
@@ -1368,7 +1402,7 @@ local function BuildCharactersData()
             _tooltipExtra = string.format(
                 "Gold: %s\n%d queue tasks%s\nLast login: %s\nStatus: %s%s\n\nRight-click to %s",
                 goldStr, #tasks,
-                expiryInfo and ("\n" .. expiryInfo.count .. " active auction(s)") or "",
+                auctionInfo and ("\n" .. auctionInfo.active .. " active, " .. auctionInfo.done .. " done auction(s)") or "",
                 lastLoginStr,
                 isHidden and "Hidden" or "Active",
                 duplicateRealms[realm] and ("\nDuplicate realm: " .. duplicateRealms[realm] .. " chars on " .. realm) or "",
