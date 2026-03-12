@@ -16,11 +16,28 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Determine release type
+        id: release_type
+        run: |
+          TAG="${GITHUB_REF#refs/tags/}"
+          if [[ "${TAG,,}" == *"alpha"* ]]; then
+            echo "prerelease=true" >> "$GITHUB_OUTPUT"
+            echo "channel=alpha" >> "$GITHUB_OUTPUT"
+          elif [[ "${TAG,,}" == *"beta"* ]]; then
+            echo "prerelease=true" >> "$GITHUB_OUTPUT"
+            echo "channel=beta" >> "$GITHUB_OUTPUT"
+          else
+            echo "prerelease=false" >> "$GITHUB_OUTPUT"
+            echo "channel=release" >> "$GITHUB_OUTPUT"
+          fi
+          echo "Release channel: $(cat "$GITHUB_OUTPUT" | grep channel | cut -d= -f2)"
+
       - name: Create GitHub Release
         uses: ncipollo/release-action@v1
         with:
           generateReleaseNotes: true
           skipIfReleaseExists: true
+          prerelease: ${{ steps.release_type.outputs.prerelease }}
 
       - name: Package and Publish
         uses: BigWigsMods/packager@v2
