@@ -8,6 +8,8 @@
 ## IconTexture: Interface\Icons\INV_Misc_Coin_02
 ## X-Category: Auction & Economy
 ## X-Website: https://github.com/gezmodean-wow/flipqueue
+## X-Curse-Project-ID: 1483814
+## X-Wago-ID: b6XeZ0Kp
 
 Core.lua
 Scanner.lua
