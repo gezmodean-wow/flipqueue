@@ -239,7 +239,51 @@ function ns:InitDB()
     db.settings.sortMode  = db.settings.sortMode or "realm"
     db.settings.expiryAlertHours = db.settings.expiryAlertHours or 6
     if db.settings.hideMiniInCombat == nil then db.settings.hideMiniInCombat = true end
+    -- Bank tab selection: default "all", can customize warbank globally or bank per-character
+    -- pullTabs.mode: "all" (use everything) or "custom"
+    -- pullTabs.warbank: {[1]=true, [2]=true, ...} — which warbank tabs (1-5) to use
+    -- pullTabs.bank: {[charKey] = {[1]=true, ...}} — per-character bank tab overrides
+    if not db.settings.pullTabs then
+        db.settings.pullTabs = { mode = "all" }
+    end
     ns.db = db
+end
+
+--------------------------
+-- Bank Tab Filtering
+--------------------------
+
+-- Returns the list of warbank bag indices (12-16) filtered by settings
+function ns:GetEnabledWarbankTabs()
+    if not ns.db or not ns.db.settings.pullTabs or ns.db.settings.pullTabs.mode == "all" then
+        return ns.WARBANK_TABS
+    end
+    local cfg = ns.db.settings.pullTabs.warbank
+    if not cfg then return ns.WARBANK_TABS end
+    local result = {}
+    for i, bagIndex in ipairs(ns.WARBANK_TABS) do
+        if cfg[i] ~= false then  -- default true if not explicitly disabled
+            table.insert(result, bagIndex)
+        end
+    end
+    return result
+end
+
+-- Returns the list of bank bag indices (6-11) filtered by settings for current character
+function ns:GetEnabledBankTabs()
+    if not ns.db or not ns.db.settings.pullTabs or ns.db.settings.pullTabs.mode == "all" then
+        return ns.BANK_TABS
+    end
+    local charKey = ns:GetCharKey()
+    local charCfg = ns.db.settings.pullTabs.bank and ns.db.settings.pullTabs.bank[charKey]
+    if not charCfg then return ns.BANK_TABS end
+    local result = {}
+    for i, bagIndex in ipairs(ns.BANK_TABS) do
+        if charCfg[i] ~= false then
+            table.insert(result, bagIndex)
+        end
+    end
+    return result
 end
 
 --------------------------

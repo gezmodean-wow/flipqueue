@@ -281,8 +281,8 @@ function Tracker:AutoPullFromBank()
     if not ns.db or not ns.db.settings.autoPullBank then return end
 
     local allBankTabs = {}
-    for _, b in ipairs(ns.BANK_TABS) do table.insert(allBankTabs, b) end
-    for _, b in ipairs(ns.WARBANK_TABS) do table.insert(allBankTabs, b) end
+    for _, b in ipairs(ns:GetEnabledBankTabs()) do table.insert(allBankTabs, b) end
+    for _, b in ipairs(ns:GetEnabledWarbankTabs()) do table.insert(allBankTabs, b) end
 
     -- Only pull items that are targeted for this character's realm
     local currentRealm = GetRealmName()

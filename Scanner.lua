@@ -163,7 +163,7 @@ function Scanner:ScanBank()
         charData = ns.db.inventory[charKey]
     end
 
-    local bankItems = ScanContainers(ns.BANK_TABS, true)
+    local bankItems = ScanContainers(ns:GetEnabledBankTabs(), true)
     MergeItems(charData.items, bankItems, "bank")
     charData.lastScan = time()
 
@@ -175,7 +175,7 @@ end
 function Scanner:ScanWarbank()
     if not ns.db then return end
 
-    local warbankItems = ScanContainers(ns.WARBANK_TABS, true)
+    local warbankItems = ScanContainers(ns:GetEnabledWarbankTabs(), true)
     local items = {}
     for key, data in pairs(warbankItems) do
         items[key] = {
