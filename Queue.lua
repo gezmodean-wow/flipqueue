@@ -182,10 +182,13 @@ end
 --------------------------
 
 -- Move a queue item to the completed log
-function Queue:MoveToLog(queueIndex, postedPrice, expirySeconds)
+function Queue:MoveToLog(queueIndex, postedPrice, expirySeconds, postedQuantity)
     if not ns.db then return end
     local item = ns.db.queue[queueIndex]
     if not item then return end
+
+    local queueQty = item.quantity or 1
+    local moveQty = postedQuantity or queueQty
 
     table.insert(ns.db.log, {
         itemKey       = item.itemKey,
@@ -202,9 +205,15 @@ function Queue:MoveToLog(queueIndex, postedPrice, expirySeconds)
         auctionStatus = "active",
         soldAt        = nil,
         soldPrice     = nil,
+        postedQuantity = moveQty,
     })
 
-    table.remove(ns.db.queue, queueIndex)
+    -- Partial post: reduce queue quantity instead of removing
+    if moveQty < queueQty then
+        item.quantity = queueQty - moveQty
+    else
+        table.remove(ns.db.queue, queueIndex)
+    end
 end
 
 -- Mark posted and move to log (replaces old MarkPosted)

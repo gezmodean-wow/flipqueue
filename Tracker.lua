@@ -104,8 +104,13 @@ local function CheckForPosts()
     -- Each detected bag decrease should only satisfy one queue item
     -- (items with same name across different realms are filtered out by SnapshotBags)
     for _, p in ipairs(posted) do
-        ns:Print(ns.COLORS.GREEN .. "Posted:|r " .. p.item.name .. " (x" .. p.count .. ")")
-        ns.Queue:MoveToLog(p.idx)
+        local queueQty = p.item.quantity or 1
+        if p.count < queueQty then
+            ns:Print(ns.COLORS.GREEN .. "Posted:|r " .. p.item.name .. " (x" .. p.count .. " of " .. queueQty .. ")")
+        else
+            ns:Print(ns.COLORS.GREEN .. "Posted:|r " .. p.item.name .. " (x" .. p.count .. ")")
+        end
+        ns.Queue:MoveToLog(p.idx, nil, nil, p.count)
     end
 
     if #posted > 0 then
@@ -193,9 +198,16 @@ function Tracker:CheckOwnedAuctions()
                     if matches then
                         consumed[aIdx] = true
                         found = found + 1
-                        ns:Print(ns.COLORS.YELLOW .. "Already listed:|r " .. queueItem.name .. " — moving to log")
+                        local auctionQty = auction.quantity or 1
+                        local queueQty = queueItem.quantity or 1
+                        if auctionQty < queueQty then
+                            ns:Print(ns.COLORS.YELLOW .. "Already listed:|r " .. queueItem.name ..
+                                " (x" .. auctionQty .. " of " .. queueQty .. ") — moving to log")
+                        else
+                            ns:Print(ns.COLORS.YELLOW .. "Already listed:|r " .. queueItem.name .. " — moving to log")
+                        end
                         local expirySec = auction.timeLeftSeconds
-                        ns.Queue:MoveToLog(i, nil, expirySec)
+                        ns.Queue:MoveToLog(i, nil, expirySec, auctionQty)
                         break
                     end
                 end
@@ -203,7 +215,81 @@ function Tracker:CheckOwnedAuctions()
         end
     end
 
-    if found > 0 then
+    -- State recovery: discover orphaned auctions not in queue or log
+    local recovered = 0
+
+    -- Count active log entries per item ID for this character
+    local loggedByItemID = {} -- itemID string -> count
+    local charKey = ns:GetCharKey()
+    for _, entry in ipairs(ns.db.log) do
+        if entry.auctionStatus == "active" and entry.charKey == charKey then
+            local entryID = tostring((entry.itemKey or ""):match("^(%d+)")) or ""
+            if entryID ~= "" then
+                loggedByItemID[entryID] = (loggedByItemID[entryID] or 0) + 1
+            end
+        end
+    end
+
+    -- Count consumed auctions (matched to queue) per item ID
+    local consumedByItemID = {}
+    for aIdx, _ in pairs(consumed) do
+        local aID = tostring(owned[aIdx].itemKey.itemID)
+        consumedByItemID[aID] = (consumedByItemID[aID] or 0) + 1
+    end
+
+    -- Track how many auctions per item ID we've already accounted for
+    local accountedFor = {} -- itemID -> count
+    for id, count in pairs(loggedByItemID) do
+        accountedFor[id] = count
+    end
+    for id, count in pairs(consumedByItemID) do
+        accountedFor[id] = (accountedFor[id] or 0) + count
+    end
+
+    local now = time()
+    for aIdx, auction in ipairs(owned) do
+        if not consumed[aIdx] then
+            local auctionID = tostring(auction.itemKey.itemID)
+            local accounted = accountedFor[auctionID] or 0
+
+            if accounted > 0 then
+                -- This auction is accounted for by an existing log entry
+                accountedFor[auctionID] = accounted - 1
+            else
+                -- Orphaned auction: not in queue or log
+                local auctionKey = auctionID .. ";;"
+                local auctionName = auctionNames[aIdx] or ("Item " .. auctionID)
+                local expirySec = auction.timeLeftSeconds
+                local estPostedAt = expirySec and (now - (172800 - expirySec)) or now
+
+                table.insert(ns.db.log, {
+                    itemKey       = auctionKey,
+                    itemID        = auctionID,
+                    name          = auctionName,
+                    quality       = "",
+                    icon          = nil,
+                    targetRealm   = currentRealm,
+                    expectedPrice = "",
+                    postedPrice   = auction.buyoutAmount and ns:FormatGold(auction.buyoutAmount) or "",
+                    postedAt      = estPostedAt,
+                    charKey       = charKey,
+                    expiresAt     = expirySec and (now + expirySec) or nil,
+                    auctionStatus = "active",
+                    soldAt        = nil,
+                    soldPrice     = nil,
+                    postedQuantity = auction.quantity or 1,
+                    isRecovered   = true,
+                })
+                recovered = recovered + 1
+            end
+        end
+    end
+
+    if recovered > 0 then
+        ns:Print(ns.COLORS.YELLOW .. "Recovered " .. recovered .. " untracked auction(s) from AH.|r")
+    end
+
+    if found > 0 or recovered > 0 then
         if ns.UI and ns.UI.Refresh then ns.UI:Refresh() end
         if ns.UI and ns.UI.RefreshMini then ns.UI:RefreshMini() end
     end
@@ -577,11 +663,13 @@ function Tracker:GetAuctionSummaryByCharacter()
             end
 
             if not byChar[entry.charKey] then
-                byChar[entry.charKey] = {active = 0, done = 0, soonest = nil}
+                byChar[entry.charKey] = {active = 0, done = 0, soonest = nil, totalValue = 0}
             end
 
             if entry.auctionStatus == "active" then
                 byChar[entry.charKey].active = byChar[entry.charKey].active + 1
+                byChar[entry.charKey].totalValue = byChar[entry.charKey].totalValue
+                    + (ns:ParseGoldValue(entry.postedPrice or entry.expectedPrice) or 0)
                 if entry.expiresAt then
                     local remaining = entry.expiresAt - now
                     if not byChar[entry.charKey].soonest or remaining < byChar[entry.charKey].soonest then
@@ -612,54 +700,90 @@ function Tracker:ScanMailForSales()
 
     local currentCharKey = ns:GetCharKey()
 
-    -- Collect active log entries for this character, grouped by name
+    -- Collect active and expired log entries for this character, grouped by name
     local activeByName = {} -- name:lower() -> list of log indices (oldest first)
+    local expiredByName = {} -- name:lower() -> list of log indices for expired auctions
     for i, entry in ipairs(ns.db.log) do
-        if entry.auctionStatus == "active" and entry.charKey == currentCharKey then
+        if entry.charKey == currentCharKey then
             local key = (entry.name or ""):lower()
             if key ~= "" then
-                if not activeByName[key] then activeByName[key] = {} end
-                table.insert(activeByName[key], i)
+                if entry.auctionStatus == "active" then
+                    if not activeByName[key] then activeByName[key] = {} end
+                    table.insert(activeByName[key], i)
+                elseif entry.auctionStatus == "expired" then
+                    if not expiredByName[key] then expiredByName[key] = {} end
+                    table.insert(expiredByName[key], i)
+                end
             end
         end
     end
 
-    if not next(activeByName) then return end
+    local hasActive = next(activeByName)
+    local hasExpired = next(expiredByName)
+    if not hasActive and not hasExpired then return end
 
     local consumed = {} -- log index -> true
-    local updated = 0
+    local soldCount = 0
+    local collectedCount = 0
     local hasMissing = false
 
     for mailIndex = 1, numItems do
-        local okH, _, _, _, _, money = pcall(GetInboxHeaderInfo, mailIndex)
-        -- Only check mail with gold attached (potential AH sale)
-        if okH and money and money > 0 then
-            local ok, invoiceType, itemName, _, _, buyout = pcall(GetInboxInvoiceInfo, mailIndex)
-            if ok and invoiceType == "seller" and itemName then
-                local nameKey = itemName:lower()
-                local candidates = activeByName[nameKey]
-                if candidates then
-                    for _, logIndex in ipairs(candidates) do
-                        if not consumed[logIndex] then
-                            consumed[logIndex] = true
-                            local entry = ns.db.log[logIndex]
-                            entry.auctionStatus = "sold"
-                            entry.soldAt = time()
-                            entry.soldPrice = buyout or money or 0
-                            updated = updated + 1
-                            break
+        local okH, _, _, _, _, money, _, _, _, _, _, _, _, hasItem = pcall(GetInboxHeaderInfo, mailIndex)
+        if okH then
+            if money and money > 0 then
+                -- Mail with gold: potential AH sale
+                local ok, invoiceType, itemName, _, _, buyout = pcall(GetInboxInvoiceInfo, mailIndex)
+                if ok and invoiceType == "seller" and itemName then
+                    local nameKey = itemName:lower()
+                    local candidates = activeByName[nameKey]
+                    if candidates then
+                        for _, logIndex in ipairs(candidates) do
+                            if not consumed[logIndex] then
+                                consumed[logIndex] = true
+                                local entry = ns.db.log[logIndex]
+                                entry.auctionStatus = "sold"
+                                entry.soldAt = time()
+                                entry.soldPrice = buyout or money or 0
+                                soldCount = soldCount + 1
+                                break
+                            end
+                        end
+                    end
+                elseif ok and invoiceType == nil and money > 0 then
+                    hasMissing = true
+                end
+            elseif hasItem then
+                -- Mail with item but no gold: expired/cancelled auction returned
+                local okL, itemLink = pcall(GetInboxItemLink, mailIndex, 1)
+                if okL and itemLink then
+                    local itemName = itemLink:match("%[(.-)%]")
+                    if itemName then
+                        local nameKey = itemName:lower()
+                        -- Match against expired log entries first
+                        local candidates = expiredByName[nameKey]
+                        if not candidates then
+                            -- Also check active entries (might not have been marked expired yet)
+                            candidates = activeByName[nameKey]
+                        end
+                        if candidates then
+                            for _, logIndex in ipairs(candidates) do
+                                if not consumed[logIndex] then
+                                    consumed[logIndex] = true
+                                    local entry = ns.db.log[logIndex]
+                                    entry.auctionStatus = "collected"
+                                    collectedCount = collectedCount + 1
+                                    break
+                                end
+                            end
                         end
                     end
                 end
-            elseif ok and invoiceType == nil and money > 0 then
-                -- Has gold but no invoice data yet — might not be loaded
-                hasMissing = true
             end
         end
     end
 
     -- Retry if invoice data wasn't loaded yet (up to 3 times)
-    if hasMissing and updated == 0 and mailScanRetries < 3 then
+    if hasMissing and soldCount == 0 and collectedCount == 0 and mailScanRetries < 3 then
         mailScanRetries = mailScanRetries + 1
         C_Timer.After(1, function()
             if isMailOpen then
@@ -670,8 +794,13 @@ function Tracker:ScanMailForSales()
     end
     mailScanRetries = 0
 
-    if updated > 0 then
-        ns:Print(ns.COLORS.GREEN .. updated .. " auction sale(s) detected!|r")
+    if soldCount > 0 then
+        ns:Print(ns.COLORS.GREEN .. soldCount .. " auction sale(s) detected!|r")
+    end
+    if collectedCount > 0 then
+        ns:Print(ns.COLORS.YELLOW .. collectedCount .. " returned auction(s) collected.|r")
+    end
+    if soldCount > 0 or collectedCount > 0 then
         if ns.UI and ns.UI.Refresh then ns.UI:Refresh() end
         if ns.UI and ns.UI.RefreshMini then ns.UI:RefreshMini() end
     end

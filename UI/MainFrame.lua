@@ -34,11 +34,36 @@ end
 
 -- Resize grip (bottom-right corner)
 local resizeGrip = CreateFrame("Button", nil, mainFrame)
-resizeGrip:SetSize(16, 16)
-resizeGrip:SetPoint("BOTTOMRIGHT", mainFrame, "BOTTOMRIGHT", -4, 4)
-resizeGrip:SetNormalTexture("Interface\\ChatFrame\\UI-ChatIM-SizeGrabber-Up")
-resizeGrip:SetHighlightTexture("Interface\\ChatFrame\\UI-ChatIM-SizeGrabber-Highlight")
-resizeGrip:SetPushedTexture("Interface\\ChatFrame\\UI-ChatIM-SizeGrabber-Down")
+resizeGrip:SetSize(24, 24)
+resizeGrip:SetPoint("BOTTOMRIGHT", mainFrame, "BOTTOMRIGHT", -3, 3)
+resizeGrip:SetHitRectInsets(-8, -4, -8, -4)
+resizeGrip:SetFrameLevel(mainFrame:GetFrameLevel() + 10)
+
+-- Diagonal grip dots: 3x3px squares in a triangle pattern
+local gripDots = {}
+local dotPositions = {
+    {1, 1},
+    {7, 1}, {1, 7},
+    {13, 1}, {7, 7}, {1, 13},
+}
+for _, pos in ipairs(dotPositions) do
+    local dot = resizeGrip:CreateTexture(nil, "ARTWORK", nil, 7)
+    dot:SetColorTexture(1, 1, 1, 0.5)
+    dot:SetSize(3, 3)
+    dot:SetPoint("BOTTOMRIGHT", resizeGrip, "BOTTOMRIGHT", -pos[1], pos[2])
+    table.insert(gripDots, dot)
+end
+
+resizeGrip:SetScript("OnEnter", function()
+    for _, dot in ipairs(gripDots) do
+        dot:SetColorTexture(1, 0.82, 0, 1.0)
+    end
+end)
+resizeGrip:SetScript("OnLeave", function()
+    for _, dot in ipairs(gripDots) do
+        dot:SetColorTexture(1, 1, 1, 0.5)
+    end
+end)
 resizeGrip:SetScript("OnMouseDown", function()
     mainFrame:StartSizing("BOTTOMRIGHT")
 end)
@@ -460,11 +485,12 @@ UI.queueTable:SetSort("realm", true)
 -- Log columns
 UI.logTable = UI:CreateScrollTable(tableContainer, {
     {key = "name",      label = "Item",      width = 150, sortable = true},
+    {key = "qty",       label = "Qty",       width = 30,  align = "CENTER", sortable = true},
     {key = "status",    label = "Status",    width = 52,  align = "CENTER", sortable = true},
     {key = "posted",    label = "Posted",    width = 72,  sortable = true},
     {key = "guide",     label = "FP Guide",  width = 72,  sortable = true},
-    {key = "realm",     label = "Realm",     width = 110, sortable = true},
-    {key = "character", label = "Character", width = 90,  sortable = true},
+    {key = "realm",     label = "Realm",     width = 100, sortable = true},
+    {key = "character", label = "Character", width = 80,  sortable = true},
     {key = "date",      label = "Date",      width = 75,  sortable = true,
         format = function(v) return v or "" end},
 })
@@ -1085,7 +1111,7 @@ local function BuildNextStepsData()
                 action    = ns.COLORS.GREEN .. "Check AH" .. "|r",
                 target    = coloredName .. "  (" .. realm .. ")",
                 itemCount = info.done,
-                value     = "",
+                value     = FormatGoldValue(info.totalValue or 0),
                 detail    = info.done .. " auction(s) done",
                 _sortValue = 999999 + info.done, -- sort above "create char" items
                 _tooltipText = charKey,
@@ -1118,8 +1144,8 @@ local function BuildNextStepsData()
                     action    = ns.COLORS.ORANGE .. "Expiring" .. "|r",
                     target    = coloredName .. "  (" .. realm .. ")",
                     itemCount = info.active,
-                    value     = countdown,
-                    detail    = info.active .. " auction(s), soonest in " .. countdown,
+                    value     = FormatGoldValue(info.totalValue or 0),
+                    detail    = ns.COLORS.ORANGE .. countdown .. "|r",
                     _sortValue = 999998 - info.soonest, -- sooner = higher priority
                     _tooltipText = charKey,
                     _tooltipExtra = string.format("%d active auction(s)\nSoonest expires in %s",
@@ -1389,9 +1415,17 @@ local function BuildLogData()
             priceStr = entry.postedPrice or "?"
         end
 
+        -- Recovered entry indicator
+        if entry.isRecovered then
+            statusStr = statusStr .. " *"
+        end
+
         -- Tooltip with sale info
         local tooltipExtra = string.format("Posted: %s\nListed for: %s\nFP suggested: %s",
             dateStr, entry.postedPrice or "?", entry.expectedPrice or "?")
+        if entry.isRecovered then
+            tooltipExtra = tooltipExtra .. "\n" .. ns.COLORS.YELLOW .. "Recovered from AH (approx. post time)|r"
+        end
         if aStatus == "sold" then
             tooltipExtra = tooltipExtra .. "\n" .. ns.COLORS.GREEN .. "Sold for: " ..
                 (entry.soldPrice and entry.soldPrice > 0 and ns:FormatGold(entry.soldPrice) or "unknown") .. "|r"
@@ -1404,6 +1438,7 @@ local function BuildLogData()
 
         table.insert(data, {
             name      = displayName,
+            qty       = entry.postedQuantity or 1,
             status    = statusStr,
             posted    = priceStr,
             guide     = entry.expectedPrice or "?",
