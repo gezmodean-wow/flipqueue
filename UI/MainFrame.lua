@@ -1096,6 +1096,39 @@ local function BuildNextStepsData()
         end
     end
 
+    -- 4) Characters with auctions expiring soon (not current char, not already in "Check AH")
+    local alertHours = ns.db.settings.expiryAlertHours or 6
+    local alertThreshold = alertHours * 3600
+    for charKey, info in pairs(auctionsByChar) do
+        if charKey ~= myCharKey and info.active > 0 and info.soonest and info.soonest < alertThreshold then
+            -- Skip if already shown as "Check AH" (has done auctions)
+            if not (info.done > 0) then
+                local name = charKey:match("^(.-)%-") or charKey
+                local realm = charKey:match("%-(.+)$") or ""
+                local charInv = ns.db.inventory[charKey]
+                local classColor = charInv and CLASS_COLORS[charInv.class] or "888888"
+                local coloredName = "|cff" .. classColor .. name .. "|r"
+
+                -- Format countdown
+                local h = math.floor(info.soonest / 3600)
+                local m = math.floor((info.soonest % 3600) / 60)
+                local countdown = h > 0 and (h .. "h " .. m .. "m") or (m .. "m")
+
+                table.insert(data, {
+                    action    = ns.COLORS.ORANGE .. "Expiring" .. "|r",
+                    target    = coloredName .. "  (" .. realm .. ")",
+                    itemCount = info.active,
+                    value     = countdown,
+                    detail    = info.active .. " auction(s), soonest in " .. countdown,
+                    _sortValue = 999998 - info.soonest, -- sooner = higher priority
+                    _tooltipText = charKey,
+                    _tooltipExtra = string.format("%d active auction(s)\nSoonest expires in %s",
+                        info.active, countdown),
+                })
+            end
+        end
+    end
+
     -- Sort by value descending
     table.sort(data, function(a, b) return (a._sortValue or 0) > (b._sortValue or 0) end)
 

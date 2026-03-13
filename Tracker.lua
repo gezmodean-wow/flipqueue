@@ -678,6 +678,37 @@ function Tracker:ScanMailForSales()
 end
 
 --------------------------
+-- Auction Expiry Ticker
+--------------------------
+
+-- Periodically checks for newly expired auctions and notifies the player
+function Tracker:StartExpiryTicker()
+    if self._expiryTicker then return end -- already running
+    self._expiryTicker = C_Timer.NewTicker(60, function()
+        if not ns.db then return end
+
+        local now = time()
+        local newlyExpired = {}
+
+        for _, entry in ipairs(ns.db.log) do
+            if entry.auctionStatus == "active" and entry.expiresAt and entry.expiresAt <= now then
+                entry.auctionStatus = "expired"
+                local ck = entry.charKey or "Unknown"
+                newlyExpired[ck] = (newlyExpired[ck] or 0) + 1
+            end
+        end
+
+        if next(newlyExpired) then
+            for ck, count in pairs(newlyExpired) do
+                ns:Print(ns.COLORS.ORANGE .. count .. " auction(s) expired on " .. ck .. "!|r")
+            end
+            if ns.UI and ns.UI.RefreshMini then ns.UI:RefreshMini() end
+            if ns.UI and ns.UI.Refresh then ns.UI:Refresh() end
+        end
+    end)
+end
+
+--------------------------
 -- Event Handling
 --------------------------
 

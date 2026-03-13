@@ -239,6 +239,11 @@ frame:SetScript("OnEvent", function(self, event)
             ns.Queue:UnskipExpired()
         end
 
+        -- Start periodic expiry checker
+        if ns.Tracker and ns.Tracker.StartExpiryTicker then
+            ns.Tracker:StartExpiryTicker()
+        end
+
         if ns.db.settings.autoScan then
             C_Timer.After(2, function()
                 Scanner:ScanCurrentCharacter()
