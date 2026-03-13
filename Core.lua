@@ -213,6 +213,56 @@ function ns:ResolveItemID(queueItem)
 end
 
 --------------------------
+-- Item Matching
+--------------------------
+
+-- Unified item matching: compares an inventory/auction item against a queue/log item
+-- Returns: (matched: bool, fuzzy: bool)
+-- fuzzy=true for any name-based match (exact or substring)
+-- resolvedID: pre-computed resolved ID for queue item (avoids re-resolving)
+-- allowFuzzy: enable substring name matching (default true, pass false to disable)
+function ns:ItemsMatch(itemKey, itemName, queueItem, resolvedID, allowFuzzy)
+    -- Tier 1: Exact key match
+    if itemKey == queueItem.itemKey then
+        return true, false
+    end
+
+    -- Tier 2: Numeric ID match
+    local scannedID = itemKey and itemKey:match("^(%d+);")
+    local scannedNumID = tonumber(scannedID)
+    if scannedNumID and scannedNumID > 0 then
+        local queueNumID = tonumber(queueItem.itemID)
+        if queueNumID and queueNumID > 0 and scannedNumID == queueNumID then
+            return true, false
+        end
+        -- resolvedID: number=use it, false=already checked (skip), nil=resolve now
+        local rid = resolvedID
+        if rid == nil then rid = ns:ResolveItemID(queueItem) end
+        if rid and scannedNumID == rid then
+            return true, false
+        end
+    end
+
+    -- Tier 3 & 4: Name-based matching
+    if itemName and queueItem.name and queueItem.name ~= "" then
+        local sName = itemName:lower()
+        local qName = queueItem.name:lower()
+        -- Tier 3: Exact name match
+        if sName == qName then
+            return true, true
+        end
+        -- Tier 4: Fuzzy substring match (min 8 chars, opt-in)
+        if allowFuzzy ~= false and #queueItem.name >= 8 then
+            if sName:find(qName, 1, true) or qName:find(sName, 1, true) then
+                return true, true
+            end
+        end
+    end
+
+    return false, false
+end
+
+--------------------------
 -- Saved Variables Init
 --------------------------
 
@@ -239,6 +289,7 @@ function ns:InitDB()
     db.settings.sortMode  = db.settings.sortMode or "realm"
     db.settings.expiryAlertHours = db.settings.expiryAlertHours or 6
     if db.settings.hideMiniInCombat == nil then db.settings.hideMiniInCombat = true end
+    db.settings.pullBatchSize = db.settings.pullBatchSize or 5
     -- Bank tab selection: default "all", can customize warbank globally or bank per-character
     -- pullTabs.mode: "all" (use everything) or "custom"
     -- pullTabs.warbank: {[1]=true, [2]=true, ...} — which warbank tabs (1-5) to use
@@ -299,6 +350,20 @@ function ns:FormatGold(copper)
         return string.format("%.1fk", gold / 1000)
     end
     return tostring(gold) .. "g"
+end
+
+-- Parse gold strings like "1,377g", "22.8k", "1.3m" to numeric gold value
+-- Handles WoW color-coded strings and abbreviated formats
+function ns:ParseGoldValue(str)
+    if not str or str == "" then return 0 end
+    local clean = str:gsub("|c%x%x%x%x%x%x%x%x", ""):gsub("|r", "")
+    local m = clean:match("^([%d,.]+)m")
+    if m then return (tonumber((m:gsub(",", ""))) or 0) * 1000000 end
+    local k = clean:match("^([%d,.]+)k")
+    if k then return (tonumber((k:gsub(",", ""))) or 0) * 1000 end
+    local g = clean:match("([%d,]+)g")
+    if g then return tonumber((g:gsub(",", ""))) or 0 end
+    return 0
 end
 
 function ns:FormatRelativeTime(timestamp)

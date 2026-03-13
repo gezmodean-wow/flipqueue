@@ -355,34 +355,7 @@ end
 -- Character Task Matching
 --------------------------
 
--- Match a queue item against an inventory item by key, ID, or name
-local function InventoryMatchesQueue(invKey, invData, queueItem, resolvedID)
-    -- Exact key match
-    if invKey == queueItem.itemKey then return true, false end
-
-    -- Numeric ID match: extract ID from inventory key, compare with queue item's resolved ID
-    if resolvedID then
-        local invNumID = tonumber(invKey:match("^(%d+);"))
-        if invNumID and invNumID == resolvedID then return true, false end
-    end
-
-    -- Exact name match
-    if invData.name and queueItem.name ~= "" then
-        if invData.name:lower() == queueItem.name:lower() then
-            return true, true
-        end
-        -- Fuzzy name match (substring, min 8 chars)
-        if #queueItem.name >= 8 then
-            local iName = invData.name:lower()
-            local qName = queueItem.name:lower()
-            if iName:find(qName, 1, true) or qName:find(iName, 1, true) then
-                return true, true
-            end
-        end
-    end
-
-    return false, false
-end
+-- Item matching now uses ns:ItemsMatch() from Core.lua
 
 function Queue:GetCharacterTasks(charKey)
     if not ns.db then return {} end
@@ -405,7 +378,7 @@ function Queue:GetCharacterTasks(charKey)
                         remainingQty[itemKey] = itemData.quantity or 1
                     end
                     if remainingQty[itemKey] > 0 then
-                        local matched, fuzzy = InventoryMatchesQueue(itemKey, itemData, queueItem, resolvedID)
+                        local matched, fuzzy = ns:ItemsMatch(itemKey, itemData.name, queueItem, resolvedID or false)
                         if matched then
                             remainingQty[itemKey] = remainingQty[itemKey] - (queueItem.quantity or 1)
                             table.insert(tasks, {
@@ -432,7 +405,7 @@ function Queue:GetCharacterTasks(charKey)
                         remainingQty[wbKey] = itemData.quantity or 1
                     end
                     if remainingQty[wbKey] > 0 then
-                        local matched, fuzzy = InventoryMatchesQueue(itemKey, itemData, queueItem, resolvedID)
+                        local matched, fuzzy = ns:ItemsMatch(itemKey, itemData.name, queueItem, resolvedID or false)
                         if matched then
                             remainingQty[wbKey] = remainingQty[wbKey] - (queueItem.quantity or 1)
                             table.insert(tasks, {

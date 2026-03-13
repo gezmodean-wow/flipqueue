@@ -886,10 +886,9 @@ end
 -- NEXT STEPS (shown on Post Now page)
 -- ==========================================
 
+-- Gold parsing now uses ns:ParseGoldValue() from Core.lua
 local function ParseGoldValue(priceStr)
-    if not priceStr or priceStr == "" then return 0 end
-    local goldNum = priceStr:gsub(",", ""):match("(%d+)g")
-    return goldNum and tonumber(goldNum) or 0
+    return ns:ParseGoldValue(priceStr)
 end
 
 local function FormatGoldValue(totalGold)
@@ -1029,16 +1028,7 @@ local function BuildNextStepsData()
                     local resolvedID = ns:ResolveItemID(item)
                     for wbKey, wbData in pairs(ns.db.warbank.items) do
                         if (wbRemaining[wbKey] or 0) > 0 then
-                            local matched = (wbKey == item.itemKey)
-                            if not matched and resolvedID then
-                                local wbNumID = tonumber(wbKey:match("^(%d+);"))
-                                if wbNumID and wbNumID == resolvedID then matched = true end
-                            end
-                            if not matched and wbData.name and item.name ~= "" then
-                                if wbData.name:lower() == item.name:lower() then
-                                    matched = true
-                                end
-                            end
+                            local matched = ns:ItemsMatch(wbKey, wbData.name, item, resolvedID or false, false)
                             if matched then
                                 wbRemaining[wbKey] = wbRemaining[wbKey] - (item.quantity or 1)
                                 inWarbank = true
@@ -1084,7 +1074,7 @@ local function BuildNextStepsData()
         and ns.Tracker:GetAuctionSummaryByCharacter() or {}
 
     for charKey, info in pairs(auctionsByChar) do
-        if info.done > 0 then
+        if info.done > 0 and charKey ~= myCharKey then
             local name = charKey:match("^(.-)%-") or charKey
             local realm = charKey:match("%-(.+)$") or ""
             local charInv = ns.db.inventory[charKey]
@@ -1698,16 +1688,7 @@ local function BuildCharactersData()
                     local resolvedID = ns:ResolveItemID(item)
                     for wbKey, wbData in pairs(ns.db.warbank.items) do
                         if (wbRemaining[wbKey] or 0) > 0 then
-                            local matched = (wbKey == item.itemKey)
-                            if not matched and resolvedID then
-                                local wbNumID = tonumber(wbKey:match("^(%d+);"))
-                                if wbNumID and wbNumID == resolvedID then matched = true end
-                            end
-                            if not matched and wbData.name and item.name ~= "" then
-                                if wbData.name:lower() == item.name:lower() then
-                                    matched = true
-                                end
-                            end
+                            local matched = ns:ItemsMatch(wbKey, wbData.name, item, resolvedID or false, false)
                             if matched then
                                 wbRemaining[wbKey] = wbRemaining[wbKey] - (item.quantity or 1)
                                 inWarbank = true

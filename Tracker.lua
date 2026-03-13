@@ -14,55 +14,17 @@ local isAHOpen = false
 local prePostSnapshot = {}
 
 --------------------------
--- Item Matching
+-- Item Name Extraction
 --------------------------
 
--- Check if a scanned item matches a queue item by key, ID, or name
-local function MatchesQueueItem(scannedKey, scannedLink, queueItem)
-    -- Exact key match
-    if scannedKey == queueItem.itemKey then
-        return true
+-- Extract item name from a hyperlink (handles battle pets and regular items)
+local function GetNameFromLink(link)
+    if not link then return nil end
+    if link:find("|Hbattlepet:") then
+        return link:match("|h%[(.-)%]|h")
     end
-
-    -- Numeric ID match: compare scanned item's ID with resolved queue ID
-    local scannedID = scannedKey and scannedKey:match("^(%d+);")
-    local scannedNumID = tonumber(scannedID)
-    if scannedNumID and scannedNumID > 0 then
-        local queueNumID = tonumber(queueItem.itemID)
-        if queueNumID and queueNumID > 0 and scannedNumID == queueNumID then
-            return true
-        end
-        -- Try resolved ID from inventory
-        local resolvedID = ns:ResolveItemID(queueItem)
-        if resolvedID and scannedNumID == resolvedID then
-            return true
-        end
-    end
-
-    -- Name-based fallback: extract name from link and compare
-    if queueItem.name and queueItem.name ~= "" then
-        local scannedName
-        if scannedLink:find("|Hbattlepet:") then
-            scannedName = scannedLink:match("|h%[(.-)%]|h")
-        else
-            local okN, n = pcall(C_Item.GetItemInfo, scannedLink)
-            scannedName = okN and n or nil
-        end
-        if scannedName then
-            local sName = scannedName:lower()
-            local qName = queueItem.name:lower()
-            -- Exact match
-            if sName == qName then return true end
-            -- Fuzzy: substring match (min 8 chars to avoid false positives)
-            if #queueItem.name >= 8 then
-                if sName:find(qName, 1, true) or qName:find(sName, 1, true) then
-                    return true
-                end
-            end
-        end
-    end
-
-    return false
+    local ok, n = pcall(C_Item.GetItemInfo, link)
+    return ok and n or nil
 end
 
 -- Get the bag quantity for a specific queue item across all inventory bags
@@ -76,7 +38,12 @@ local function CountInBags(queueItem)
                 local itemID, bonusIDs, modifiers = ns:ParseItemLink(info.hyperlink)
                 if itemID then
                     local key = ns:MakeItemKey(itemID, bonusIDs, modifiers)
-                    if MatchesQueueItem(key, info.hyperlink, queueItem) then
+                    -- Try key/ID matching first, only resolve name if needed
+                    local matched = ns:ItemsMatch(key, nil, queueItem)
+                    if not matched then
+                        matched = ns:ItemsMatch(key, GetNameFromLink(info.hyperlink), queueItem)
+                    end
+                    if matched then
                         total = total + (info.stackCount or 1)
                     end
                 end
@@ -220,38 +187,8 @@ function Tracker:CheckOwnedAuctions()
             for aIdx, auction in ipairs(owned) do
                 if not consumed[aIdx] then
                     local auctionName = auctionNames[aIdx]
-
-                    local matches = false
-                    -- 1) Match by queue item's direct numeric ID
-                    local queueNumID = tonumber(queueItem.itemID)
-                    if queueNumID and queueNumID > 0 and auction.itemKey
-                        and auction.itemKey.itemID == queueNumID then
-                        matches = true
-                    end
-
-                    -- 2) Match by resolved numeric ID from inventory data
-                    if not matches and resolvedIDs[i] and auction.itemKey
-                        and auction.itemKey.itemID == resolvedIDs[i] then
-                        matches = true
-                    end
-
-                    -- 3) Exact name match
-                    if not matches and auctionName and queueItem.name ~= "" then
-                        if auctionName:lower() == queueItem.name:lower() then
-                            matches = true
-                        end
-                    end
-
-                    -- 4) Fuzzy name match: substring in either direction
-                    --    Handles recipe prefix differences, shortened names, etc.
-                    if not matches and auctionName and queueItem.name ~= ""
-                        and #queueItem.name >= 8 then
-                        local qName = queueItem.name:lower()
-                        local aName = auctionName:lower()
-                        if aName:find(qName, 1, true) or qName:find(aName, 1, true) then
-                            matches = true
-                        end
-                    end
+                    local auctionKey = tostring(auction.itemKey.itemID) .. ";;"
+                    local matches = ns:ItemsMatch(auctionKey, auctionName, queueItem, resolvedIDs[i] or false)
 
                     if matches then
                         consumed[aIdx] = true
@@ -276,9 +213,6 @@ end
 -- Bank Auto-Pull
 --------------------------
 
--- Batch size of 5 matches Baganator's proven warbank transfer limit
--- to avoid slot locking / internal bag errors
-local PULL_BATCH_SIZE = 5
 local PULL_TIMEOUT = 5  -- seconds to wait for locks before giving up on a batch
 
 function Tracker:AutoPullFromBank()
@@ -313,12 +247,23 @@ function Tracker:AutoPullFromBank()
                     local itemID, bonusIDs, modifiers = ns:ParseItemLink(info.hyperlink)
                     if itemID then
                         local key = ns:MakeItemKey(itemID, bonusIDs, modifiers)
+                        local slotName  -- lazy name cache per slot
                         for queueItem, count in pairs(needed) do
-                            if count > 0 and MatchesQueueItem(key, info.hyperlink, queueItem) then
+                            if count > 0 then
+                            -- Try key/ID matching first, only resolve name if needed
+                            local matched = ns:ItemsMatch(key, nil, queueItem, nil, false)
+                            if not matched then
+                                if slotName == nil then slotName = GetNameFromLink(info.hyperlink) or false end
+                                if slotName then
+                                    matched = ns:ItemsMatch(key, slotName, queueItem, nil, false)
+                                end
+                            end
+                            if matched then
                                 table.insert(moves, {bag = bagIndex, slot = slot, name = queueItem.name or "?"})
                                 needed[queueItem] = count - (info.stackCount or 1)
                                 break
                             end
+                            end -- count > 0
                         end
                     end
                 end
@@ -369,7 +314,8 @@ function Tracker:AutoPullFromBank()
             return
         end
 
-        local batchEnd = math.min(moveIndex + PULL_BATCH_SIZE - 1, totalMoves)
+        local batchSize = ns.db and ns.db.settings.pullBatchSize or 5
+        local batchEnd = math.min(moveIndex + batchSize - 1, totalMoves)
         local batchMoved = 0
 
         for i = moveIndex, batchEnd do
@@ -462,9 +408,7 @@ function Tracker:AutoWithdrawGold()
     local totalExpectedGold = 0
     for _, queueItem in ipairs(ns.db.queue) do
         if queueItem.status == "pending" and ns:RealmMatches(queueItem.targetRealm, currentRealm) then
-            local priceStr = queueItem.expectedPrice or ""
-            local goldNum = priceStr:gsub(",", ""):match("(%d+)g")
-            totalExpectedGold = totalExpectedGold + (tonumber(goldNum) or 0)
+            totalExpectedGold = totalExpectedGold + ns:ParseGoldValue(queueItem.expectedPrice)
         end
     end
 
@@ -555,19 +499,8 @@ function Tracker:UpdateLogExpiry()
                 -- Try to match against owned auctions to update/confirm expiry
                 for aIdx, auction in ipairs(owned) do
                     local auctionName = auctionNames[aIdx]
-                    local matches = false
-
-                    local logNumID = tonumber(logEntry.itemID)
-                    if logNumID and logNumID > 0 and auction.itemKey
-                        and auction.itemKey.itemID == logNumID then
-                        matches = true
-                    end
-
-                    if not matches and auctionName and logEntry.name ~= "" then
-                        if auctionName:lower() == logEntry.name:lower() then
-                            matches = true
-                        end
-                    end
+                    local auctionKey = tostring(auction.itemKey.itemID) .. ";;"
+                    local matches = ns:ItemsMatch(auctionKey, auctionName, logEntry, nil, false)
 
                     if matches and auction.timeLeftSeconds then
                         logEntry.expiresAt = now + auction.timeLeftSeconds

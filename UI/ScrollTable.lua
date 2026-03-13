@@ -118,22 +118,7 @@ function ScrollTableMixin:UpdateHeaderArrows()
     end
 end
 
--- Parse gold strings like "1,377g", "22.8k gold", "1.3m" to numeric gold value
-local function ParseSortGold(val)
-    if type(val) ~= "string" then return nil end
-    -- Strip WoW color codes for comparison
-    local clean = val:gsub("|c%x%x%x%x%x%x%x%x", ""):gsub("|r", "")
-    -- "1.3k gold" or "1.3k"
-    local k = clean:match("^([%d,.]+)k")
-    if k then return tonumber(k:gsub(",", "")) * 1000 end
-    -- "1.3m"
-    local m = clean:match("^([%d,.]+)m")
-    if m then return tonumber(m:gsub(",", "")) * 1000000 end
-    -- "1,377g" or "500g"
-    local g = clean:match("([%d,]+)g")
-    if g then return tonumber(g:gsub(",", "")) end
-    return nil
-end
+-- Gold parsing now uses ns:ParseGoldValue() from Core.lua
 
 function ScrollTableMixin:RefreshSort()
     if not self.sortKey then return end
@@ -157,9 +142,11 @@ function ScrollTableMixin:RefreshSort()
         end
 
         -- Try gold string comparison (handles "1,377g", "22.8k", etc.)
-        local ga, gb = ParseSortGold(va), ParseSortGold(vb)
-        if ga and gb then
-            return asc and ga < gb or (not asc and ga > gb)
+        if type(va) == "string" and type(vb) == "string" then
+            local ga, gb = ns:ParseGoldValue(va), ns:ParseGoldValue(vb)
+            if ga > 0 and gb > 0 then
+                return asc and ga < gb or (not asc and ga > gb)
+            end
         end
 
         -- String comparison

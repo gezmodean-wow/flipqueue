@@ -175,7 +175,53 @@ function UI:CreateSettingsPanel(parent)
         "Auto-withdraw gold for AH fees",
         "When you open the bank, withdraw enough gold from your warband bank to cover estimated AH listing fees. Assumes 60% of vendor price (48h post) with vendor at ~5% of market value.",
         "autoWithdrawGold")
-    y = y - h - SECTION_SPACING
+    y = y - h - ITEM_SPACING
+
+    -- Pull batch size slider
+    do
+        local row = CreateFrame("Frame", nil, content)
+        row:SetPoint("TOPLEFT", content, "TOPLEFT", LEFT_MARGIN, y)
+        row:SetPoint("RIGHT", content, "RIGHT", RIGHT_MARGIN, 0)
+        row:SetHeight(52)
+
+        local title = row:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+        title:SetPoint("TOPLEFT", row, "TOPLEFT", 0, 0)
+        title:SetText("Bank pull batch size")
+
+        local slider = CreateFrame("Slider", "FlipQueueBatchSizeSlider", row, "OptionsSliderTemplate")
+        slider:SetWidth(180)
+        slider:SetHeight(16)
+        slider:SetPoint("TOPLEFT", title, "BOTTOMLEFT", 4, -8)
+        slider:SetMinMaxValues(1, 10)
+        slider:SetValueStep(1)
+        slider:SetObeyStepOnDrag(true)
+        slider.Low:SetText("1")
+        slider.High:SetText("10")
+
+        local valLabel = row:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+        valLabel:SetPoint("LEFT", slider, "RIGHT", 8, 0)
+        valLabel:SetTextColor(1, 1, 1)
+
+        slider:SetScript("OnValueChanged", function(self, value)
+            value = math.floor(value + 0.5)
+            valLabel:SetText(tostring(value))
+            if ns.db then
+                ns.db.settings.pullBatchSize = value
+            end
+        end)
+
+        local descText = row:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+        descText:SetPoint("TOPLEFT", slider, "BOTTOMLEFT", -4, -4)
+        descText:SetPoint("RIGHT", row, "RIGHT", 0, 0)
+        descText:SetJustifyH("LEFT")
+        descText:SetWordWrap(true)
+        descText:SetTextColor(DESC_COLOR[1], DESC_COLOR[2], DESC_COLOR[3])
+        descText:SetText("How many items to move per batch when auto-pulling from bank. Lower values are safer but slower.")
+
+        settingsWidgets.batchSizeSlider = slider
+        settingsWidgets.batchSizeLabel = valLabel
+    end
+    y = y - 52 - SECTION_SPACING
 
     ------------------------------------------------
     -- Section: Bank Tab Selection
@@ -689,6 +735,14 @@ function UI:RefreshSettings()
     end
     if settingsWidgets.showMinimap then
         settingsWidgets.showMinimap:SetChecked(ns.db.settings.showMinimap ~= false)
+    end
+    -- Batch size slider
+    if settingsWidgets.batchSizeSlider then
+        local batchSize = ns.db.settings.pullBatchSize or 5
+        settingsWidgets.batchSizeSlider:SetValue(batchSize)
+        if settingsWidgets.batchSizeLabel then
+            settingsWidgets.batchSizeLabel:SetText(tostring(batchSize))
+        end
     end
     -- Bank tab selection
     local pt = ns.db.settings.pullTabs or {}
