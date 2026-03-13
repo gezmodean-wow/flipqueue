@@ -1087,7 +1087,7 @@ local function BuildNextStepsData()
             target    = info.realmStr,
             itemCount = info.count,
             value     = FormatGoldValue(info.totalGold),
-            detail    = "New character needed",
+            detail    = "",
             _sortValue = info.totalGold,
             _tooltipText = info.realmStr,
             _tooltipExtra = string.format("Create a character on %s\n%d items worth ~%s waiting",

@@ -278,13 +278,16 @@ function UI:RefreshMini()
             row.tooltipExtra = step._tooltipExtra
             row:SetScript("OnMouseDown", nil)
 
-            local valueStr = ""
-            if step.value and step.value ~= "" then
-                valueStr = ns.COLORS.GREEN .. " " .. step.value .. ns.COLORS.RESET
+            -- Mini prefers detail (e.g. countdown timer) over value (gold)
+            local extraStr = ""
+            if step.detail and step.detail ~= "" then
+                extraStr = " " .. step.detail
+            elseif step.value and step.value ~= "" then
+                extraStr = ns.COLORS.GREEN .. " " .. step.value .. ns.COLORS.RESET
             end
 
             row.text:SetText(step.action .. " " .. step.target ..
-                ns.COLORS.GRAY .. " (" .. step.itemCount .. ")" .. ns.COLORS.RESET .. valueStr)
+                ns.COLORS.GRAY .. " (" .. step.itemCount .. ")" .. ns.COLORS.RESET .. extraStr)
             row:Show()
         end
 
