@@ -1,5 +1,25 @@
 # Changelog
 
+## v0.5.0
+- **Partial post detection**: posting fewer than queued quantity keeps remainder in queue (#6)
+- **Mail scan updates**: detects expired/cancelled auction returns, marks as collected (#30)
+- **State recovery**: discovers pre-existing AH auctions not tracked by the addon (#31)
+- **Live auction expiry timer**: 60s ticker auto-marks expired auctions, chat notifications (#36)
+- **Consolidated item matching**: unified 4-tier matching (key → ID → name → fuzzy) across all systems (#20, #33)
+- **Shared gold parsing**: single ParseGoldValue utility replaces 3 duplicated implementations (#21)
+- **Configurable batch size**: settings slider for warbank auto-pull batch size (#29)
+- **Accent-insensitive realm matching**: handles German/EU realm names (#23)
+- **Warbank batching rewrite**: event-driven 5-item batches with error detection (#24)
+- **Configurable bank tab selection**: choose which bank/warbank tabs to scan and pull from (#26)
+- **Error handling hardened**: all C_Item/C_Container calls wrapped in pcall (#28)
+- **Release channels**: alpha/beta/release via tag naming convention
+- Log page Qty column shows posted quantity per auction
+- Recovered log entries marked with * and tooltip indicator
+- Next Steps shows estimated gold value instead of countdown in Est. Value column
+- Mini view shows countdown timer for expiring auctions
+- Visible resize grip with hover highlight
+- Redundant "New character needed" detail text removed
+
 ## v0.4.1
 - Custom addon icon and banner artwork
 - Credits section in Settings page
