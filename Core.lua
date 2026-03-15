@@ -252,9 +252,22 @@ function ns:ItemsMatch(itemKey, itemName, queueItem, resolvedID, allowFuzzy)
             return true, true
         end
         -- Tier 4: Fuzzy substring match (min 8 chars, opt-in)
+        -- Prevent recipe/pattern/design items from fuzzy-matching their base items
         if allowFuzzy ~= false and #queueItem.name >= 8 then
-            if sName:find(qName, 1, true) or qName:find(sName, 1, true) then
+            local sBase = sName:match("^%w+:%s*(.+)$") or sName
+            local qBase = qName:match("^%w+:%s*(.+)$") or qName
+            -- Only match if the base names (after stripping prefix) match,
+            -- or one base is a substring of the other
+            if sBase == qBase then
                 return true, true
+            end
+            if sBase:find(qBase, 1, true) or qBase:find(sBase, 1, true) then
+                -- Reject if one has a prefix and the other doesn't (recipe vs item)
+                local sHasPrefix = sName:find("^%w+:%s") ~= nil
+                local qHasPrefix = qName:find("^%w+:%s") ~= nil
+                if sHasPrefix == qHasPrefix then
+                    return true, true
+                end
             end
         end
     end
@@ -290,6 +303,15 @@ function ns:InitDB()
     db.settings.expiryAlertHours = db.settings.expiryAlertHours or 6
     if db.settings.hideMiniInCombat == nil then db.settings.hideMiniInCombat = true end
     db.settings.pullBatchSize = db.settings.pullBatchSize or 5
+    -- TSM integration defaults
+    if db.settings.tsmEnabled == nil then db.settings.tsmEnabled = false end
+    db.settings.tsmProfile         = db.settings.tsmProfile or ""  -- empty = use active profile
+    db.settings.tsmMinPriceSource  = db.settings.tsmMinPriceSource or "70% DBMarket"
+    db.settings.tsmPriceSource     = db.settings.tsmPriceSource or "DBMinBuyout"
+    if db.settings.tsmShowColumns == nil then db.settings.tsmShowColumns = false end
+    if db.settings.tsmAutoUpdatePrice == nil then db.settings.tsmAutoUpdatePrice = false end
+    db.settings.tsmPriceMaxAge     = db.settings.tsmPriceMaxAge or 3600 -- seconds before TSM can overwrite (1h)
+    db.settings.defaultSellQty     = db.settings.defaultSellQty or 1   -- default posting quantity per item
     -- Bank tab selection: default "all", can customize warbank globally or bank per-character
     -- pullTabs.mode: "all" (use everything) or "custom"
     -- pullTabs.warbank: {[1]=true, [2]=true, ...} — which warbank tabs (1-5) to use

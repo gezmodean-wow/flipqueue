@@ -221,6 +221,52 @@ function UI:CreateSettingsPanel(parent)
         settingsWidgets.batchSizeSlider = slider
         settingsWidgets.batchSizeLabel = valLabel
     end
+    y = y - 52 - ITEM_SPACING
+
+    -- Default sell quantity slider
+    do
+        local row = CreateFrame("Frame", nil, content)
+        row:SetPoint("TOPLEFT", content, "TOPLEFT", LEFT_MARGIN, y)
+        row:SetPoint("RIGHT", content, "RIGHT", RIGHT_MARGIN, 0)
+        row:SetHeight(52)
+
+        local title = row:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+        title:SetPoint("TOPLEFT", row, "TOPLEFT", 0, 0)
+        title:SetText("Default sell quantity")
+
+        local slider = CreateFrame("Slider", "FlipQueueSellQtySlider", row, "OptionsSliderTemplate")
+        slider:SetWidth(180)
+        slider:SetHeight(16)
+        slider:SetPoint("TOPLEFT", title, "BOTTOMLEFT", 4, -8)
+        slider:SetMinMaxValues(1, 20)
+        slider:SetValueStep(1)
+        slider:SetObeyStepOnDrag(true)
+        slider.Low:SetText("1")
+        slider.High:SetText("20")
+
+        local valLabel = row:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+        valLabel:SetPoint("LEFT", slider, "RIGHT", 8, 0)
+        valLabel:SetTextColor(1, 1, 1)
+
+        slider:SetScript("OnValueChanged", function(self, value)
+            value = math.floor(value + 0.5)
+            valLabel:SetText(tostring(value))
+            if ns.db then
+                ns.db.settings.defaultSellQty = value
+            end
+        end)
+
+        local descText = row:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+        descText:SetPoint("TOPLEFT", slider, "BOTTOMLEFT", -4, -4)
+        descText:SetPoint("RIGHT", row, "RIGHT", 0, 0)
+        descText:SetJustifyH("LEFT")
+        descText:SetWordWrap(true)
+        descText:SetTextColor(DESC_COLOR[1], DESC_COLOR[2], DESC_COLOR[3])
+        descText:SetText("How many of each item to post by default. TSM's Auctioning postCap overrides this when higher.")
+
+        settingsWidgets.sellQtySlider = slider
+        settingsWidgets.sellQtyLabel = valLabel
+    end
     y = y - 52 - SECTION_SPACING
 
     ------------------------------------------------
@@ -453,16 +499,13 @@ function UI:CreateSettingsPanel(parent)
 
     settingsWidgets.showMinimap, h = CreateSettingsCheckbox(content, y,
         "Show minimap icon",
-        "Show the FlipQueue icon on the minimap border for quick access.",
+        "Show the FlipQueue icon on the minimap border for quick access. Uses LibDBIcon for compatibility with minimap managers.",
         "showMinimap")
     settingsWidgets.showMinimap:SetScript("OnClick", function(self)
-        if ns.db then
-            ns.db.settings.showMinimap = self:GetChecked()
-            if self:GetChecked() then
-                UI:ShowMinimapButton()
-            else
-                UI:HideMinimapButton()
-            end
+        if self:GetChecked() then
+            UI:ShowMinimapButton()
+        else
+            UI:HideMinimapButton()
         end
     end)
     y = y - h - ITEM_SPACING
@@ -734,7 +777,7 @@ function UI:RefreshSettings()
         settingsWidgets.hideMiniCombat:SetChecked(ns.db.settings.hideMiniInCombat)
     end
     if settingsWidgets.showMinimap then
-        settingsWidgets.showMinimap:SetChecked(ns.db.settings.showMinimap ~= false)
+        settingsWidgets.showMinimap:SetChecked(UI:IsMinimapButtonShown())
     end
     -- Batch size slider
     if settingsWidgets.batchSizeSlider then
@@ -742,6 +785,14 @@ function UI:RefreshSettings()
         settingsWidgets.batchSizeSlider:SetValue(batchSize)
         if settingsWidgets.batchSizeLabel then
             settingsWidgets.batchSizeLabel:SetText(tostring(batchSize))
+        end
+    end
+    -- Default sell quantity slider
+    if settingsWidgets.sellQtySlider then
+        local sellQty = ns.db.settings.defaultSellQty or 1
+        settingsWidgets.sellQtySlider:SetValue(sellQty)
+        if settingsWidgets.sellQtyLabel then
+            settingsWidgets.sellQtyLabel:SetText(tostring(sellQty))
         end
     end
     -- Bank tab selection

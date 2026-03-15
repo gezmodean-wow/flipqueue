@@ -133,6 +133,7 @@ function Queue:Add(items)
                 noCompetition = item.noCompetition,
                 status        = "pending",
                 addedAt       = time(),
+                priceUpdatedAt = time(),
                 postedAt      = nil,
             })
             added = added + 1
@@ -366,7 +367,10 @@ end
 
 -- Item matching now uses ns:ItemsMatch() from Core.lua
 
-function Queue:GetCharacterTasks(charKey)
+-- sharedWarbankQty: optional table shared across calls to coordinate warbank allocation.
+-- When provided, warbank items assigned to one character reduce availability for others.
+-- Pass the same table to all GetCharacterTasks calls in a batch to prevent over-allocation.
+function Queue:GetCharacterTasks(charKey, sharedWarbankQty)
     if not ns.db then return {} end
 
     local tasks = {}
@@ -410,13 +414,15 @@ function Queue:GetCharacterTasks(charKey)
             if not found and ns.db.warbank and ns.db.warbank.items then
                 for itemKey, itemData in pairs(ns.db.warbank.items) do
                     local wbKey = "wb:" .. itemKey
-                    if remainingQty[wbKey] == nil then
-                        remainingQty[wbKey] = itemData.quantity or 1
+                    -- Use shared warbank tracker if provided, else local
+                    local tracker = sharedWarbankQty or remainingQty
+                    if tracker[wbKey] == nil then
+                        tracker[wbKey] = itemData.quantity or 1
                     end
-                    if remainingQty[wbKey] > 0 then
+                    if tracker[wbKey] > 0 then
                         local matched, fuzzy = ns:ItemsMatch(itemKey, itemData.name, queueItem, resolvedID or false)
                         if matched then
-                            remainingQty[wbKey] = remainingQty[wbKey] - (queueItem.quantity or 1)
+                            tracker[wbKey] = tracker[wbKey] - (queueItem.quantity or 1)
                             table.insert(tasks, {
                                 queueIndex = i,
                                 queueItem  = queueItem,

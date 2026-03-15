@@ -316,6 +316,47 @@ function ScrollTableMixin:GetRowHeight()
     return ROW_HEIGHT
 end
 
+function ScrollTableMixin:SetColumns(newColumns)
+    local parent = self.headerFrame:GetParent()
+    local wasVisible = self.headerFrame:IsShown()
+
+    -- Hide and release old header frame entirely
+    self.headerFrame:Hide()
+    self.headerFrame:SetParent(nil)
+    wipe(self.headerButtons)
+
+    -- Hide and release old rows (cell count tied to old column count)
+    for _, row in ipairs(self.rows) do
+        row:Hide()
+        row:SetParent(nil)
+    end
+    wipe(self.rows)
+
+    -- Update columns and rebuild header
+    self.columns = newColumns
+    self.data = {}
+
+    -- Validate sort key still exists in new columns
+    if self.sortKey then
+        local found = false
+        for _, col in ipairs(newColumns) do
+            if col.key == self.sortKey then found = true; break end
+        end
+        if not found then
+            self.sortKey = newColumns[1] and newColumns[1].key or nil
+            self.sortAsc = true
+        end
+    end
+
+    -- Create new header and re-anchor scroll frame to it
+    self:CreateHeader(parent)
+    self.scrollFrame:SetPoint("TOPLEFT", self.headerFrame, "BOTTOMLEFT", 0, 0)
+
+    if not wasVisible then
+        self.headerFrame:Hide()
+    end
+end
+
 --------------------------
 -- Constructor
 --------------------------

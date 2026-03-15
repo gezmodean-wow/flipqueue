@@ -314,8 +314,19 @@ function Tracker:AutoPullFromBank()
     local needed = {}
     for _, queueItem in ipairs(ns.db.queue) do
         if queueItem.status == "pending" and ns:RealmMatches(queueItem.targetRealm, currentRealm) then
+            -- Determine target quantity: TSM postCap > queue quantity > default setting
+            local targetQty = queueItem.quantity or ns.db.settings.defaultSellQty or 1
+            if ns.TSM:IsEnabled() then
+                local op = ns.TSM:GetItemAuctioningOp(queueItem.itemKey)
+                if op and op.postCap then
+                    local tsmQty = tonumber(op.postCap)
+                    if tsmQty and tsmQty > targetQty then
+                        targetQty = tsmQty
+                    end
+                end
+            end
             local inBags = CountInBags(queueItem)
-            local stillNeeded = (queueItem.quantity or 1) - inBags
+            local stillNeeded = targetQty - inBags
             if stillNeeded > 0 then
                 needed[queueItem] = stillNeeded
             end

@@ -152,6 +152,7 @@ local NAV_ITEMS = {
     {key = "export",     label = "Export",       icon = "Interface\\Icons\\INV_Scroll_11"},
     {key = "rescan",     label = "Rescan",       icon = "Interface\\Icons\\Spell_Shadow_MindSteal", action = true},
     {key = "sep2"},
+    {key = "tsm",        label = "TSM",           icon = "Interface\\Icons\\INV_Misc_Coin_17"},
     {key = "settings",   label = "Settings",     icon = "Interface\\Icons\\INV_Gizmo_02"},
 }
 
@@ -461,26 +462,68 @@ UI.tableContainer = tableContainer
 -- SCROLL TABLES (one per page)
 -- ==========================================
 
--- Post Now columns
-UI.postNowTable = UI:CreateScrollTable(tableContainer, {
+-- Post Now columns (base — TSM column added dynamically)
+local POST_NOW_COLS_BASE = {
     {key = "name",     label = "Item",     width = 200, sortable = true},
     {key = "qty",      label = "Qty",      width = 40,  align = "CENTER", sortable = true},
     {key = "price",    label = "Price",    width = 90,  sortable = true},
     {key = "realm",    label = "Realm",    width = 140, sortable = true},
     {key = "location", label = "Location", width = 100, sortable = true},
-})
+}
+local POST_NOW_COLS_TSM = {
+    {key = "name",     label = "Item",     width = 180, sortable = true},
+    {key = "qty",      label = "Qty",      width = 35,  align = "CENTER", sortable = true},
+    {key = "price",    label = "Price",    width = 75,  sortable = true},
+    {key = "ahPrice",  label = "AH Price", width = 80,  sortable = true},
+    {key = "realm",    label = "Realm",    width = 120, sortable = true},
+    {key = "location", label = "Location", width = 80,  sortable = true},
+}
+
+UI.postNowTable = UI:CreateScrollTable(tableContainer, POST_NOW_COLS_BASE)
 UI.postNowTable:SetSort("name", true)
 
--- Full Queue columns - "Found On" shows where item exists in inventory
-UI.queueTable = UI:CreateScrollTable(tableContainer, {
+-- Full Queue columns (base — TSM column added dynamically)
+local QUEUE_COLS_BASE = {
     {key = "name",    label = "Item",     width = 180, sortable = true},
     {key = "qty",     label = "Qty",      width = 40,  align = "CENTER", sortable = true},
     {key = "price",   label = "Price",    width = 80,  sortable = true},
     {key = "realm",   label = "Sell Realm", width = 130, sortable = true},
     {key = "foundOn", label = "Found On", width = 130, sortable = true},
     {key = "status",  label = "Status",   width = 60,  align = "CENTER", sortable = true},
-})
+}
+local QUEUE_COLS_TSM = {
+    {key = "name",    label = "Item",     width = 160, sortable = true},
+    {key = "qty",     label = "Qty",      width = 35,  align = "CENTER", sortable = true},
+    {key = "price",   label = "Price",    width = 70,  sortable = true},
+    {key = "ahPrice", label = "AH Price", width = 70,  sortable = true},
+    {key = "realm",   label = "Sell Realm", width = 110, sortable = true},
+    {key = "foundOn", label = "Found On", width = 110, sortable = true},
+    {key = "status",  label = "Status",   width = 55,  align = "CENTER", sortable = true},
+}
+
+UI.queueTable = UI:CreateScrollTable(tableContainer, QUEUE_COLS_BASE)
 UI.queueTable:SetSort("realm", true)
+
+-- Track current TSM column state to avoid unnecessary rebuilds
+local tsmColumnsActive = false
+
+function UI:UpdateTSMColumns()
+    local shouldShow = ns.db and ns.db.settings.tsmEnabled and ns.db.settings.tsmShowColumns and ns.TSM:IsAvailable()
+    if shouldShow == tsmColumnsActive then return end
+    tsmColumnsActive = shouldShow
+
+    if shouldShow then
+        self.postNowTable:SetColumns(POST_NOW_COLS_TSM)
+        self.postNowTable:SetSort("name", true)
+        self.queueTable:SetColumns(QUEUE_COLS_TSM)
+        self.queueTable:SetSort("realm", true)
+    else
+        self.postNowTable:SetColumns(POST_NOW_COLS_BASE)
+        self.postNowTable:SetSort("name", true)
+        self.queueTable:SetColumns(QUEUE_COLS_BASE)
+        self.queueTable:SetSort("realm", true)
+    end
+end
 
 -- Log columns
 UI.logTable = UI:CreateScrollTable(tableContainer, {
@@ -813,6 +856,7 @@ local function HideAllTables()
         tbl.scrollFrame:Hide()
     end
     UI:HideSettingsPage()
+    if UI.HideTSMPage then UI:HideTSMPage() end
     importPage:Hide()
     exportPage:Hide()
     if UI._nextStepsLabel then UI._nextStepsLabel:Hide() end
@@ -887,7 +931,7 @@ local function BuildPostNowData()
                 end
             end
 
-            table.insert(data, {
+            local row = {
                 name     = displayName,
                 qty      = task.quantity,
                 price    = qi.expectedPrice or "",
@@ -901,7 +945,47 @@ local function BuildPostNowData()
                 _queueIndex = task.queueIndex,
                 _queueItem  = qi,
                 _fuzzy = task.fuzzyMatch,
-            })
+            }
+
+            -- TSM price data
+            if ns.TSM:IsEnabled() then
+                local priceSource = ns.db.settings.tsmPriceSource or "DBMinBuyout"
+                local copper = ns.TSM:GetPrice(qi.itemKey, priceSource)
+                if copper then
+                    row.ahPrice = ns.TSM:FormatCopper(copper)
+                    row._sortAhPrice = copper
+
+                    -- Per-item threshold from TSM Auctioning operation
+                    local belowThreshold, ahMin, threshold, opName = ns.TSM:IsBelowThreshold(qi.itemKey)
+                    if belowThreshold then
+                        row.ahPrice = "|cffff4444" .. row.ahPrice .. "|r"
+                        row._rowColor = {0.8, 0.2, 0.2, 0.10}
+                        local threshStr = ns.TSM:FormatCopper(threshold) or "?"
+                        local opStr = opName and (" [" .. opName .. "]") or ""
+                        row._tooltipExtra = (row._tooltipExtra or "")
+                            .. "\n|cffff4444TSM: AH price below min (" .. threshStr .. ")" .. opStr .. "|r"
+                    else
+                        row.ahPrice = "|cff00ff00" .. row.ahPrice .. "|r"
+                    end
+
+                    -- Auto-update expected price (only if import is old enough)
+                    if ns.db.settings.tsmAutoUpdatePrice then
+                        local maxAge = ns.db.settings.tsmPriceMaxAge or 3600
+                        local priceAge = qi.priceUpdatedAt or qi.addedAt or 0
+                        if maxAge == 0 or (time() - priceAge) > maxAge then
+                            qi.expectedPrice = ns:FormatGold(copper)
+                            qi.priceSource = "TSM"
+                            qi.priceUpdatedAt = time()
+                            row.price = qi.expectedPrice
+                        end
+                    end
+                else
+                    row.ahPrice = "|cff888888" .. "\226\128\148" .. "|r"  -- em dash
+                    row._sortAhPrice = 0
+                end
+            end
+
+            table.insert(data, row)
         end
     end
 
@@ -961,8 +1045,12 @@ local function BuildNextStepsData()
         end
     end
 
+    -- Shared warbank quantity tracker — prevents the same warbank item
+    -- from being assigned to multiple characters simultaneously
+    local sharedWarbankQty = {}
+
     -- 0) Consume current character's items (already shown in Post Now)
-    local myTasks = ns.Queue:GetCharacterTasks(myCharKey)
+    local myTasks = ns.Queue:GetCharacterTasks(myCharKey, sharedWarbankQty)
     for _, task in ipairs(myTasks) do
         if ns:RealmMatches(task.queueItem.targetRealm, myRealm) then
             consumed[task.queueIndex] = true
@@ -981,7 +1069,7 @@ local function BuildNextStepsData()
     local charTasks = {} -- charKey -> {count, totalGold}
     for _, charKey in ipairs(otherChars) do
         local charRealm = charKey:match("%-(.+)$") or ""
-        local tasks = ns.Queue:GetCharacterTasks(charKey)
+        local tasks = ns.Queue:GetCharacterTasks(charKey, sharedWarbankQty)
         local realmCount = 0
         local totalGold = 0
 
@@ -1290,6 +1378,9 @@ end
 local function BuildQueueData()
     if not ns.db then return {} end
     local data = {}
+    local tsmEnabled = ns.TSM:IsEnabled()
+    local myCharKey = tsmEnabled and ns:GetCharKey() or nil
+    local myRealm = myCharKey and (myCharKey:match("%-(.+)$") or "") or ""
 
     for i, item in ipairs(ns.db.queue) do
         -- Build "Found On" string showing where this item exists
@@ -1351,7 +1442,7 @@ local function BuildQueueData()
             displayName = QualityColorName(displayName, item.quality)
         end
 
-        table.insert(data, {
+        local row = {
             name    = displayName,
             qty     = item.quantity,
             price   = item.expectedPrice or "",
@@ -1366,7 +1457,37 @@ local function BuildQueueData()
                 ("Sell on: " .. item.targetRealm .. "  @  " .. (item.expectedPrice or "?")) or nil,
             _queueIndex = i,
             _queueItem  = item,
-        })
+        }
+
+        -- TSM price data (only meaningful for current realm)
+        if tsmEnabled then
+            local isMyRealm = ns:RealmMatches(item.targetRealm or "", myRealm)
+
+            if isMyRealm then
+                local priceSource = ns.db.settings.tsmPriceSource or "DBMinBuyout"
+                local copper = ns.TSM:GetPrice(item.itemKey, priceSource)
+                if copper then
+                    row.ahPrice = ns.TSM:FormatCopper(copper)
+                    row._sortAhPrice = copper
+
+                    local belowThreshold = ns.TSM:IsBelowThreshold(item.itemKey)
+                    if belowThreshold then
+                        row.ahPrice = "|cffff4444" .. row.ahPrice .. "|r"
+                        row._rowColor = {0.8, 0.2, 0.2, 0.10}
+                    else
+                        row.ahPrice = "|cff00ff00" .. row.ahPrice .. "|r"
+                    end
+                else
+                    row.ahPrice = "|cff888888" .. "\226\128\148" .. "|r"
+                    row._sortAhPrice = 0
+                end
+            else
+                row.ahPrice = "|cff666666" .. "\226\128\148" .. "|r"
+                row._sortAhPrice = -1
+            end
+        end
+
+        table.insert(data, row)
     end
 
     return data
@@ -1810,6 +1931,9 @@ function UI:Refresh()
     if not mainFrame:IsShown() then return end
     if not ns.db then return end
 
+    -- Ensure TSM columns match current settings
+    self:UpdateTSMColumns()
+
     UpdateNavHighlights()
     HideAllTables()
 
@@ -2192,6 +2316,14 @@ function UI:Refresh()
             mainFrame.actionBtns.exportWarbank, mainFrame.actionBtns.exportBank, mainFrame.actionBtns.exportBags)
         exportPage:Show()
         mainFrame.statusText:SetText("FlippingPalInventoryExport compatible CSV format")
+
+    elseif self.currentPage == "tsm" then
+        mainFrame.pageTitle:SetText("TSM Integration")
+        HideAllActionBtns()
+        if self.ShowTSMPage then
+            self:ShowTSMPage()
+        end
+        mainFrame.statusText:SetText(ns.TSM:IsAvailable() and "TSM detected" or "TSM not installed")
 
     elseif self.currentPage == "settings" then
         mainFrame.pageTitle:SetText("Settings")
