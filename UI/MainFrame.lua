@@ -4,7 +4,7 @@ local addonName, ns = ...
 
 local UI = ns.UI
 
-UI.currentPage = "postNow"
+UI.currentPage = "todo"
 
 -- ==========================================
 -- MAIN FRAME (dark, clean styling)
@@ -141,26 +141,85 @@ sidebar:SetBackdrop({
 })
 sidebar:SetBackdropColor(0.1, 0.1, 0.15, 1)
 
+-- Sidebar resize handle (4px drag strip on right edge)
+local sidebarHandle = CreateFrame("Button", nil, mainFrame)
+sidebarHandle:SetWidth(4)
+sidebarHandle:SetPoint("TOPLEFT", sidebar, "TOPRIGHT", 0, 0)
+sidebarHandle:SetPoint("BOTTOMLEFT", sidebar, "BOTTOMRIGHT", 0, 0)
+sidebarHandle:SetFrameLevel(sidebar:GetFrameLevel() + 5)
+
+local sidebarHandleTex = sidebarHandle:CreateTexture(nil, "ARTWORK")
+sidebarHandleTex:SetAllPoints()
+sidebarHandleTex:SetColorTexture(0.3, 0.3, 0.4, 0)
+
+sidebarHandle:SetScript("OnEnter", function()
+    sidebarHandleTex:SetColorTexture(0.5, 0.5, 0.6, 0.6)
+end)
+sidebarHandle:SetScript("OnLeave", function()
+    if not sidebarHandle._dragging then
+        sidebarHandleTex:SetColorTexture(0.3, 0.3, 0.4, 0)
+    end
+end)
+sidebarHandle:SetScript("OnMouseDown", function(self, button)
+    if button == "LeftButton" then
+        self._dragging = true
+        self._startX = GetCursorPosition() / UIParent:GetEffectiveScale()
+        self._startW = sidebar:GetWidth()
+        sidebarHandleTex:SetColorTexture(1, 0.82, 0, 0.6)
+        self:SetScript("OnUpdate", function()
+            local curX = GetCursorPosition() / UIParent:GetEffectiveScale()
+            local newW = math.max(80, math.min(200, self._startW + (curX - self._startX)))
+            sidebar:SetWidth(newW)
+        end)
+    end
+end)
+sidebarHandle:SetScript("OnMouseUp", function(self)
+    self._dragging = false
+    sidebarHandleTex:SetColorTexture(0.3, 0.3, 0.4, 0)
+    self:SetScript("OnUpdate", nil)
+    if ns.db then
+        ns.db.settings.sidebarWidth = sidebar:GetWidth()
+    end
+end)
+
 local NAV_ITEMS = {
-    {key = "postNow",    label = "Post Now",    icon = "Interface\\Icons\\INV_Misc_Coin_02"},
-    {key = "queue",      label = "Queue",        icon = "Interface\\Icons\\INV_Scroll_03"},
-    {key = "log",        label = "Log",          icon = "Interface\\Icons\\INV_Misc_Book_09"},
-    {key = "inventory",  label = "Inventory",    icon = "Interface\\Icons\\INV_Misc_Bag_07"},
-    {key = "characters", label = "Characters",   icon = "Interface\\Icons\\Achievement_GuildPerk_EverybodysFriend"},
+    {key = "section", label = "WORK"},
+    {key = "todo",       label = "To-Do",          icon = "Interface\\Icons\\INV_Misc_Coin_02"},
+    {key = "generator",  label = "To-Do Generator", icon = "Interface\\Icons\\INV_Scroll_03"},
+    {key = "section", label = "DATA"},
+    {key = "inventory",  label = "Inventory",      icon = "Interface\\Icons\\INV_Misc_Bag_07"},
+    {key = "characters", label = "Characters",     icon = "Interface\\Icons\\Achievement_GuildPerk_EverybodysFriend"},
+    {key = "section", label = "FLIPPINGPAL"},
+    {key = "import",     label = "Import",         icon = "Interface\\Icons\\Ability_Creature_Cursed_04"},
+    {key = "export",     label = "Export",         icon = "Interface\\Icons\\INV_Scroll_11"},
+    {key = "section", label = "INTEGRATIONS"},
+    {key = "tsm",        label = "TSM",            icon = "Interface\\Icons\\INV_Misc_Coin_17"},
+    {key = "auctionator", label = "Auctionator",   icon = "Interface\\Icons\\INV_Misc_Note_01"},
     {key = "sep"},
-    {key = "import",     label = "Import",       icon = "Interface\\Icons\\Ability_Creature_Cursed_04"},
-    {key = "export",     label = "Export",       icon = "Interface\\Icons\\INV_Scroll_11"},
-    {key = "rescan",     label = "Rescan",       icon = "Interface\\Icons\\Spell_Shadow_MindSteal", action = true},
-    {key = "sep2"},
-    {key = "tsm",        label = "TSM",           icon = "Interface\\Icons\\INV_Misc_Coin_17"},
-    {key = "settings",   label = "Settings",     icon = "Interface\\Icons\\INV_Gizmo_02"},
+    {key = "log",        label = "Log",            icon = "Interface\\Icons\\INV_Misc_Book_09"},
+    {key = "settings",   label = "Settings",       icon = "Interface\\Icons\\INV_Gizmo_02"},
 }
 
 local navButtons = {}
 local navY = -8
 
 for _, nav in ipairs(NAV_ITEMS) do
-    if nav.key:find("^sep") then
+    if nav.key == "section" then
+        -- Section header: small gray uppercase text + thin divider
+        navY = navY - 2
+        local sep = sidebar:CreateTexture(nil, "ARTWORK")
+        sep:SetHeight(1)
+        sep:SetPoint("TOPLEFT", sidebar, "TOPLEFT", 6, navY)
+        sep:SetPoint("TOPRIGHT", sidebar, "TOPRIGHT", -6, navY)
+        sep:SetColorTexture(0.3, 0.3, 0.4, 0.4)
+        navY = navY - 10
+
+        local sectionLabel = sidebar:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+        sectionLabel:SetPoint("TOPLEFT", sidebar, "TOPLEFT", 8, navY)
+        sectionLabel:SetText(nav.label)
+        sectionLabel:SetTextColor(0.45, 0.45, 0.5)
+        navY = navY - 12
+    elseif nav.key:find("^sep") then
         local sep = sidebar:CreateTexture(nil, "ARTWORK")
         sep:SetHeight(1)
         sep:SetPoint("TOPLEFT", sidebar, "TOPLEFT", 6, navY - 4)
@@ -203,22 +262,9 @@ for _, nav in ipairs(NAV_ITEMS) do
         end)
 
         local navKey = nav.key
-        local isAction = nav.action
         btn:SetScript("OnClick", function()
-            if isAction then
-                if navKey == "import" then
-                    UI.importFrame:Show()
-                    UI.importEditBox:SetFocus(true)
-                elseif navKey == "export" then
-                    ns.Export:ShowExportFrame("bags")
-                elseif navKey == "rescan" then
-                    ns.Scanner:ScanCurrentCharacter()
-                    UI:Refresh()
-                end
-            else
-                UI.currentPage = navKey
-                UI:Refresh()
-            end
+            UI.currentPage = navKey
+            UI:Refresh()
         end)
 
         navButtons[nav.key] = btn
@@ -341,6 +387,102 @@ mainFrame.actionBtns.dnt = CreateActionBtn("DNT List", "Manage Do Not Track list
     UI:ShowDoNotTrackFrame()
 end)
 
+mainFrame.actionBtns.rescan = CreateActionBtn("Rescan", "Rescan current character's bags", function()
+    ns.Scanner:ScanCurrentCharacter()
+    UI:Refresh()
+end)
+
+mainFrame.actionBtns.generate = CreateActionBtn("Generate", "Match queue deals against inventory (preview)", function()
+    if ns.TodoList then
+        UI._generatorPreview = ns.TodoList:GenerateTodoList(
+            UI:GetGenAllocationOrder())
+        local count = UI._generatorPreview and UI._generatorPreview.items and #UI._generatorPreview.items or 0
+        local pending, missing = 0, 0
+        for _, item in ipairs(UI._generatorPreview.items) do
+            if item.status == "pending" then pending = pending + 1
+            elseif item.status == "missing" then missing = missing + 1 end
+        end
+        ns:Print(ns.COLORS.GREEN .. "Generated " .. count .. " task(s): " ..
+            pending .. " ready" ..
+            (missing > 0 and (", " .. missing .. " missing") or "") ..
+            " — click Save to commit|r")
+        UI:Refresh()
+    end
+end)
+
+mainFrame.actionBtns.commitSave = CreateActionBtn("Save", "Save generated to-do list", function()
+    if UI._generatorPreview and ns.TodoList then
+        ns.TodoList:CommitList(UI._generatorPreview, "replace")
+        local count = #UI._generatorPreview.items
+        UI._generatorPreview = nil
+        ns:Print(ns.COLORS.GREEN .. "Saved to-do list with " .. count .. " tasks.|r")
+        UI:Refresh()
+        if UI.RefreshMini then UI:RefreshMini() end
+    end
+end)
+
+mainFrame.actionBtns.exportPoolToFP = CreateActionBtn("Export to FP", "Export filtered item pool as FP CSV", function()
+    if ns.TodoList then
+        local pool = ns.TodoList:GetFilteredItemPool(
+            UI._genFilterMode or "all", UI._genFilterValue or "", UI._genExcludedItems or {})
+        if #pool == 0 then
+            ns:Print(ns.COLORS.RED .. "No items in pool to export.|r")
+            return
+        end
+        -- Build CSV: ItemID;Name;Quality;iLvl;BonusIDs;Modifiers;Quantity
+        local lines = {"ItemID;Name;Quality;iLvl;BonusIDs;Modifiers;Quantity"}
+        for _, item in ipairs(pool) do
+            local itemID = item.itemKey and item.itemKey:match("^(%d+)") or item.itemID or ""
+            local bonusIDs = item.itemKey and item.itemKey:match("^%d+;([^;]*)") or ""
+            local modifiers = item.itemKey and item.itemKey:match("^%d+;[^;]*;(.*)$") or ""
+            table.insert(lines, table.concat({
+                itemID,
+                item.name or "Unknown",
+                "", -- quality
+                "0", -- ilvl
+                bonusIDs,
+                modifiers,
+                tostring(item.totalQuantity or 1),
+            }, ";"))
+        end
+        local csv = table.concat(lines, "\n")
+        -- Store pending export data, switch to export page, render will pick it up
+        UI._pendingExportCSV = csv
+        UI._pendingExportCount = #pool
+        UI.currentPage = "export"
+        UI:Refresh()
+    end
+end)
+
+mainFrame.actionBtns.clearTodoList = CreateActionBtn("Clear All Lists", "Clear current and all queued to-do lists", function()
+    StaticPopupDialogs["FLIPQUEUE_CLEAR_TODOLIST"] = {
+        text = "Clear ALL to-do lists (current + queued)?",
+        button1 = "Yes",
+        button2 = "No",
+        OnAccept = function()
+            if ns.TodoList then
+                ns.TodoList:ClearCurrent()
+                if ns.db and ns.db.todoLists then
+                    wipe(ns.db.todoLists.queue)
+                end
+                UI._generatorPreview = nil
+                ns:Print("All to-do lists cleared.")
+                UI:Refresh()
+                if UI.RefreshMini then UI:RefreshMini() end
+            end
+        end,
+        timeout = 0,
+        whileDead = true,
+        hideOnEscape = true,
+    }
+    StaticPopup_Show("FLIPQUEUE_CLEAR_TODOLIST")
+end)
+
+mainFrame.actionBtns.importFromFP = CreateActionBtn("Import from FP", "Switch to Import page to paste FlippingPal data", function()
+    UI.currentPage = "import"
+    UI:Refresh()
+end)
+
 mainFrame.actionBtns.importPreview = CreateActionBtn("Preview", "Parse and preview import results", function()
     local text = UI._importEdit:GetText()
     if text and text ~= "" then
@@ -398,44 +540,73 @@ mainFrame.actionBtns.importClear = CreateActionBtn("Clear", "Clear import text a
     UI._importEdit:SetFocus(true)
 end)
 
-mainFrame.actionBtns.exportBags = CreateActionBtn("Bags", "Export bag inventory", function()
-    local csv, count = ns.Export:ExportBags()
-    UI._exportEdit:SetText(csv)
-    UI._exportStatus:SetText(ns.COLORS.GREEN .. count .. " items|r from bags")
+-- Helper: perform export with current filter and format settings
+local function DoFilteredExport(getItemsFn, source)
+    local csv, count = getItemsFn()
+
+    -- If format is AAA JSON, re-export as AAA
+    if ns.Export:GetFormat() == "aaa" then
+        -- Parse CSV back to item data list for AAA export
+        -- Instead, use ExportSaved which returns aggregated data
+        -- For live scans, we need the raw data — export CSV then re-parse
+        -- Simpler: use ExportSaved for AAA mode
+        local savedCsv, savedCount = ns.Export:ExportSaved("all")
+
+        -- Parse CSV into item data list
+        local itemDataList = {}
+        local first = true
+        for line in savedCsv:gmatch("[^\n]+") do
+            if first then
+                first = false -- skip header
+            else
+                local id, name, quality, ilvl, bonus, mods, qty = line:match("([^;]*);([^;]*);([^;]*);([^;]*);([^;]*);([^;]*);([^;]*)")
+                if id then
+                    table.insert(itemDataList, {
+                        itemID = id, itemName = name, quality = quality,
+                        ilvl = tonumber(ilvl) or 0, bonusIDs = bonus or "",
+                        modifiers = mods or "", quantity = tonumber(qty) or 1,
+                    })
+                end
+            end
+        end
+
+        -- Apply filter
+        itemDataList = ns.Export:ApplyFilter(itemDataList)
+
+        local result, countFn = ns.Export:ExportAAA(itemDataList,
+            ns.Export:GetAAADiscount(), ns.Export:GetAAAPriceSource())
+        local ic, pc = countFn()
+
+        local output = "// Items:\n" .. result.items .. "\n\n// Pets:\n" .. result.pets
+        UI._exportEdit:SetText(output)
+        UI._exportStatus:SetText(ns.COLORS.GREEN .. ic .. " items, " .. pc .. " pets|r — AAA JSON from " .. source)
+    else
+        UI._exportEdit:SetText(csv)
+        UI._exportStatus:SetText(ns.COLORS.GREEN .. count .. " items|r from " .. source)
+    end
+
     UI._exportEdit:HighlightText()
     UI._exportEdit:SetFocus(true)
+end
+
+mainFrame.actionBtns.exportBags = CreateActionBtn("Bags", "Export bag inventory", function()
+    DoFilteredExport(function() return ns.Export:ExportBags() end, "bags")
 end)
 
 mainFrame.actionBtns.exportBank = CreateActionBtn("Bank", "Export bank (bank must be open)", function()
-    local csv, count = ns.Export:ExportBank()
-    UI._exportEdit:SetText(csv)
-    UI._exportStatus:SetText(ns.COLORS.GREEN .. count .. " items|r from bank")
-    UI._exportEdit:HighlightText()
-    UI._exportEdit:SetFocus(true)
+    DoFilteredExport(function() return ns.Export:ExportBank() end, "bank")
 end)
 
 mainFrame.actionBtns.exportWarbank = CreateActionBtn("Warbank", "Export warbank (bank must be open)", function()
-    local csv, count = ns.Export:ExportWarbank()
-    UI._exportEdit:SetText(csv)
-    UI._exportStatus:SetText(ns.COLORS.GREEN .. count .. " items|r from warbank")
-    UI._exportEdit:HighlightText()
-    UI._exportEdit:SetFocus(true)
+    DoFilteredExport(function() return ns.Export:ExportWarbank() end, "warbank")
 end)
 
 mainFrame.actionBtns.exportAll = CreateActionBtn("All", "Export all containers (live scan)", function()
-    local csv, count = ns.Export:ExportAll()
-    UI._exportEdit:SetText(csv)
-    UI._exportStatus:SetText(ns.COLORS.GREEN .. count .. " items|r from all containers (live)")
-    UI._exportEdit:HighlightText()
-    UI._exportEdit:SetFocus(true)
+    DoFilteredExport(function() return ns.Export:ExportAll() end, "all containers")
 end)
 
 mainFrame.actionBtns.exportSaved = CreateActionBtn("Saved All", "Export all from saved scans (no bank needed)", function()
-    local csv, count = ns.Export:ExportSaved("all")
-    UI._exportEdit:SetText(csv)
-    UI._exportStatus:SetText(ns.COLORS.GREEN .. count .. " items|r from saved data (bags+bank+warbank)")
-    UI._exportEdit:HighlightText()
-    UI._exportEdit:SetFocus(true)
+    DoFilteredExport(function() return ns.Export:ExportSaved("all") end, "saved data")
 end)
 
 -- Status bar at bottom of content
@@ -539,12 +710,14 @@ UI.logTable = UI:CreateScrollTable(tableContainer, {
 })
 UI.logTable:SetSort("date", false)
 
--- Inventory (untracked) columns
+-- Inventory columns (full tradeable inventory)
 UI.inventoryTable = UI:CreateScrollTable(tableContainer, {
-    {key = "name",     label = "Item",     width = 220, sortable = true},
-    {key = "qty",      label = "Qty",      width = 50,  align = "CENTER", sortable = true},
-    {key = "source",   label = "Source",   width = 120, sortable = true},
-    {key = "location", label = "Location", width = 150, sortable = true},
+    {key = "name",        label = "Item",         width = 180, sortable = true},
+    {key = "qty",         label = "Qty",          width = 40,  align = "CENTER", sortable = true},
+    {key = "owner",       label = "Owner",        width = 100, sortable = true},
+    {key = "location",    label = "Location",     width = 80,  sortable = true},
+    {key = "status",      label = "Status",       width = 70,  align = "CENTER", sortable = true},
+    {key = "targetRealm", label = "Target Realm", width = 100, sortable = true},
 })
 UI.inventoryTable:SetSort("name", true)
 
@@ -578,6 +751,21 @@ UI.nextStepsTable = UI:CreateScrollTable(tableContainer, {
     {key = "detail",    label = "Detail",     width = 130, sortable = false},
 })
 UI.nextStepsTable:SetSort("_sortValue", false)
+
+-- Generator preview table
+UI.generatorPreviewTable = UI:CreateScrollTable(tableContainer, {
+    {key = "name",      label = "Item",      width = 170, sortable = true},
+    {key = "qty",       label = "Qty",       width = 35,  align = "CENTER", sortable = true},
+    {key = "realm",     label = "Realm",     width = 110, sortable = true},
+    {key = "character", label = "Character", width = 100, sortable = true},
+    {key = "source",    label = "Source",    width = 65,  sortable = true},
+    {key = "price",     label = "Price",     width = 70,  sortable = true},
+    {key = "status",    label = "Status",    width = 60,  align = "CENTER", sortable = true},
+})
+UI.generatorPreviewTable:SetSort("status", true)
+
+-- Generator state
+UI._generatorPreview = nil
 
 -- Keep references for backward compatibility
 UI.content = tableContainer
@@ -804,13 +992,341 @@ local exportPage = CreateFrame("Frame", nil, tableContainer)
 exportPage:SetAllPoints()
 exportPage:Hide()
 
-local exportInstr = exportPage:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-exportInstr:SetPoint("TOPLEFT", exportPage, "TOPLEFT", 8, -8)
-exportInstr:SetText("Select source, then Ctrl+A / Ctrl+C to copy:")
-exportInstr:SetTextColor(0.7, 0.7, 0.7)
+-- Format toggle row
+local exportFormatLabel = exportPage:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+exportFormatLabel:SetPoint("TOPLEFT", exportPage, "TOPLEFT", 8, -6)
+exportFormatLabel:SetText("Format:")
+exportFormatLabel:SetTextColor(0.6, 0.6, 0.6)
 
+local function CreateExportToggle(label, parent)
+    local btn = CreateFrame("Button", nil, parent, "BackdropTemplate")
+    btn:SetHeight(20)
+    btn:SetBackdrop({
+        bgFile = "Interface\\Tooltips\\UI-Tooltip-Background",
+        edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
+        edgeSize = 10,
+        insets = {left = 2, right = 2, top = 2, bottom = 2},
+    })
+    btn:SetBackdropColor(0.15, 0.15, 0.2, 1)
+    btn:SetBackdropBorderColor(0.3, 0.3, 0.4, 0.8)
+    btn.text = btn:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    btn.text:SetPoint("CENTER")
+    btn.text:SetText(label)
+    btn:SetWidth(btn.text:GetStringWidth() + 16)
+    btn:SetScript("OnEnter", function(self) self:SetBackdropColor(0.2, 0.2, 0.3, 1) end)
+    btn:SetScript("OnLeave", function(self)
+        if not self._active then self:SetBackdropColor(0.15, 0.15, 0.2, 1) end
+    end)
+    return btn
+end
+
+local fmtCSVBtn = CreateExportToggle("FP CSV", exportPage)
+fmtCSVBtn:SetPoint("LEFT", exportFormatLabel, "RIGHT", 6, 0)
+
+local fmtAAABtn = CreateExportToggle("AAA JSON", exportPage)
+fmtAAABtn:SetPoint("LEFT", fmtCSVBtn, "RIGHT", 4, 0)
+
+-- Filter toggle row
+local exportFilterLabel = exportPage:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+exportFilterLabel:SetPoint("TOPLEFT", exportPage, "TOPLEFT", 8, -28)
+exportFilterLabel:SetText("Filter:")
+exportFilterLabel:SetTextColor(0.6, 0.6, 0.6)
+
+local filterAllBtn = CreateExportToggle("Everything", exportPage)
+filterAllBtn:SetPoint("LEFT", exportFilterLabel, "RIGHT", 6, 0)
+
+local filterTSMBtn = CreateExportToggle("TSM Group", exportPage)
+filterTSMBtn:SetPoint("LEFT", filterAllBtn, "RIGHT", 4, 0)
+
+local filterAuctBtn = CreateExportToggle("Auctionator List", exportPage)
+filterAuctBtn:SetPoint("LEFT", filterTSMBtn, "RIGHT", 4, 0)
+
+-- Filter value input (hidden text box — kept for backwards compat, used by tree/list selection)
+local filterValueBox = CreateFrame("EditBox", nil, exportPage, "InputBoxTemplate")
+filterValueBox:SetSize(200, 20)
+filterValueBox:SetPoint("TOPLEFT", exportPage, "TOPLEFT", 52, -48)
+filterValueBox:SetAutoFocus(false)
+filterValueBox:SetMaxLetters(200)
+filterValueBox:Hide()
+filterValueBox:SetScript("OnEscapePressed", function(self) self:ClearFocus() end)
+filterValueBox:SetScript("OnEnterPressed", function(self)
+    self:ClearFocus()
+    ns.Export:SetFilter(ns.Export:GetFilterMode(), self:GetText())
+end)
+
+local filterValueLabel = exportPage:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+filterValueLabel:SetPoint("LEFT", filterValueBox, "RIGHT", 6, 0)
+filterValueLabel:SetText("")
+
+-- TSM Group Tree for export filter (shown when TSM Group filter selected)
+local exportTreeFrame = CreateFrame("Frame", nil, exportPage)
+exportTreeFrame:SetPoint("TOPLEFT", exportPage, "TOPLEFT", 4, -48)
+exportTreeFrame:SetPoint("RIGHT", exportPage, "RIGHT", -4, 0)
+exportTreeFrame:SetHeight(100)
+exportTreeFrame:Hide()
+
+local exportGroupTree
+if UI.CreateGroupTree then
+    exportGroupTree = UI:CreateGroupTree(exportTreeFrame, function(path)
+        filterValueBox:SetText(path or "")
+        ns.Export:SetFilter("tsmgroup", path or "")
+        -- Update status text
+        if filterValueLabel then
+            filterValueLabel:SetText(path and path ~= "" and (ns.COLORS.YELLOW .. path:gsub("`", " > ") .. "|r") or "")
+        end
+    end)
+end
+
+-- Auctionator list picker for export filter
+local exportAuctFrame = CreateFrame("Frame", nil, exportPage)
+exportAuctFrame:SetPoint("TOPLEFT", exportPage, "TOPLEFT", 4, -48)
+exportAuctFrame:SetPoint("RIGHT", exportPage, "RIGHT", -4, 0)
+exportAuctFrame:SetHeight(80)
+exportAuctFrame:Hide()
+
+local exportAuctScroll = CreateFrame("ScrollFrame", nil, exportAuctFrame, "UIPanelScrollFrameTemplate")
+exportAuctScroll:SetPoint("TOPLEFT", exportAuctFrame, "TOPLEFT", 0, 0)
+exportAuctScroll:SetPoint("BOTTOMRIGHT", exportAuctFrame, "BOTTOMRIGHT", -16, 0)
+
+local exportAuctContent = CreateFrame("Frame", nil, exportAuctScroll)
+exportAuctContent:SetWidth(1)
+exportAuctContent:SetHeight(1)
+exportAuctScroll:SetScrollChild(exportAuctContent)
+exportAuctScroll:SetScript("OnSizeChanged", function(sf, w)
+    exportAuctContent:SetWidth(w)
+end)
+local exportAuctRows = {}
+
+-- AAA settings row (shown when AAA format selected)
+local aaaRow = CreateFrame("Frame", nil, exportPage)
+aaaRow:SetPoint("TOPLEFT", exportPage, "TOPLEFT", 8, -48)
+aaaRow:SetPoint("RIGHT", exportPage, "RIGHT", -8, 0)
+aaaRow:SetHeight(22)
+aaaRow:Hide()
+
+local aaaDiscountLabel = aaaRow:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+aaaDiscountLabel:SetPoint("LEFT", aaaRow, "LEFT", 0, 0)
+aaaDiscountLabel:SetText("Discount %:")
+aaaDiscountLabel:SetTextColor(0.6, 0.6, 0.6)
+
+local aaaDiscountBox = CreateFrame("EditBox", nil, aaaRow, "InputBoxTemplate")
+aaaDiscountBox:SetSize(40, 20)
+aaaDiscountBox:SetPoint("LEFT", aaaDiscountLabel, "RIGHT", 4, 0)
+aaaDiscountBox:SetAutoFocus(false)
+aaaDiscountBox:SetMaxLetters(3)
+aaaDiscountBox:SetText("90")
+aaaDiscountBox:SetScript("OnEscapePressed", function(self) self:ClearFocus() end)
+aaaDiscountBox:SetScript("OnEnterPressed", function(self)
+    self:ClearFocus()
+    local val = tonumber(self:GetText())
+    if val and val >= 0 and val <= 100 then
+        ns.Export:SetAAASettings(val, nil)
+    end
+end)
+
+local aaaSrcLabel = aaaRow:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+aaaSrcLabel:SetPoint("LEFT", aaaDiscountBox, "RIGHT", 12, 0)
+aaaSrcLabel:SetText("Price source:")
+aaaSrcLabel:SetTextColor(0.6, 0.6, 0.6)
+
+local aaaSrcBox = CreateFrame("EditBox", nil, aaaRow, "InputBoxTemplate")
+aaaSrcBox:SetSize(120, 20)
+aaaSrcBox:SetPoint("LEFT", aaaSrcLabel, "RIGHT", 4, 0)
+aaaSrcBox:SetAutoFocus(false)
+aaaSrcBox:SetMaxLetters(100)
+aaaSrcBox:SetText("DBMarket")
+aaaSrcBox:SetScript("OnEscapePressed", function(self) self:ClearFocus() end)
+aaaSrcBox:SetScript("OnEnterPressed", function(self)
+    self:ClearFocus()
+    ns.Export:SetAAASettings(nil, self:GetText())
+end)
+
+-- Active filter text
+local exportFilterStatus = exportPage:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+exportFilterStatus:SetPoint("TOPLEFT", exportPage, "TOPLEFT", 8, -70)
+exportFilterStatus:SetTextColor(0.5, 0.5, 0.5)
+exportFilterStatus:SetText("")
+
+-- Toggle state update functions
+local function UpdateFormatButtons()
+    local fmt = ns.Export:GetFormat()
+    fmtCSVBtn._active = (fmt == "csv")
+    fmtAAABtn._active = (fmt == "aaa")
+    fmtCSVBtn:SetBackdropColor(fmt == "csv" and 0.2 or 0.15, fmt == "csv" and 0.4 or 0.15, fmt == "csv" and 0.2 or 0.2, 1)
+    fmtAAABtn:SetBackdropColor(fmt == "aaa" and 0.2 or 0.15, fmt == "aaa" and 0.4 or 0.15, fmt == "aaa" and 0.2 or 0.2, 1)
+
+    if fmt == "aaa" then
+        aaaRow:Show()
+        -- Shift filter row down
+        exportFilterStatus:SetPoint("TOPLEFT", exportPage, "TOPLEFT", 8, -92)
+    else
+        aaaRow:Hide()
+        exportFilterStatus:SetPoint("TOPLEFT", exportPage, "TOPLEFT", 8, -70)
+    end
+end
+
+local function UpdateFilterButtons()
+    local mode = ns.Export:GetFilterMode()
+    filterAllBtn._active = (mode == "everything")
+    filterTSMBtn._active = (mode == "tsmgroup")
+    filterAuctBtn._active = (mode == "auctionator")
+    filterAllBtn:SetBackdropColor(mode == "everything" and 0.2 or 0.15, mode == "everything" and 0.4 or 0.15, mode == "everything" and 0.2 or 0.2, 1)
+    filterTSMBtn:SetBackdropColor(mode == "tsmgroup" and 0.2 or 0.15, mode == "tsmgroup" and 0.4 or 0.15, mode == "tsmgroup" and 0.2 or 0.2, 1)
+    filterAuctBtn:SetBackdropColor(mode == "auctionator" and 0.2 or 0.15, mode == "auctionator" and 0.4 or 0.15, mode == "auctionator" and 0.2 or 0.2, 1)
+
+    -- Hide all filter-specific controls first
+    filterValueBox:Hide()
+    filterValueLabel:SetText("")
+    exportTreeFrame:Hide()
+    exportAuctFrame:Hide()
+    for _, row in ipairs(exportAuctRows) do row:Hide() end
+
+    if mode == "tsmgroup" then
+        -- Show TSM Group Tree navigator
+        if exportGroupTree and ns.TSM and ns.TSM:IsEnabled() then
+            local profile = ns.TSM:GetSelectedProfile()
+            exportTreeFrame:Show()
+            if profile and exportGroupTree._profile ~= profile then
+                exportGroupTree:SetProfile(profile)
+            end
+            -- Show current selection
+            local val = ns.Export:GetFilterValue()
+            if val and val ~= "" then
+                filterValueLabel:SetPoint("TOPLEFT", exportTreeFrame, "BOTTOMLEFT", 6, -2)
+                filterValueLabel:SetText(ns.COLORS.YELLOW .. "Group: " .. val:gsub("`", " > ") .. "|r")
+            end
+        else
+            -- Fallback to text box if TSM not available
+            filterValueBox:Show()
+            filterValueBox:SetText(ns.Export:GetFilterValue())
+            filterValueLabel:SetText("TSM group path")
+        end
+    elseif mode == "auctionator" then
+        -- Show Auctionator list dropdown
+        local listNames = ns:GetAuctionatorListNames()
+        local auctAvailable = #listNames > 0 or type(AUCTIONATOR_SHOPPING_LISTS) == "table"
+
+        if auctAvailable then
+
+            exportAuctFrame:Show()
+            local listHeight = math.min(80, math.max(20, #listNames * 18 + 4))
+            exportAuctFrame:SetHeight(listHeight)
+
+            exportAuctContent:SetWidth(exportAuctScroll:GetWidth() or 200)
+
+            local currentVal = ns.Export:GetFilterValue()
+            local auctY = 0
+            for idx, listName in ipairs(listNames) do
+                local row = exportAuctRows[idx]
+                if not row then
+                    row = CreateFrame("Button", nil, exportAuctContent)
+                    row:SetHeight(18)
+                    row.bg = row:CreateTexture(nil, "BACKGROUND")
+                    row.bg:SetAllPoints()
+                    row.label = row:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+                    row.label:SetPoint("LEFT", row, "LEFT", 6, 0)
+                    row.label:SetPoint("RIGHT", row, "RIGHT", -6, 0)
+                    row.label:SetJustifyH("LEFT")
+                    row:EnableMouse(true)
+                    exportAuctRows[idx] = row
+                end
+                row:ClearAllPoints()
+                row:SetPoint("TOPLEFT", exportAuctContent, "TOPLEFT", 0, -auctY)
+                row:SetPoint("RIGHT", exportAuctContent, "RIGHT", 0, 0)
+
+                local isSelected = (currentVal == listName)
+                if isSelected then
+                    row.bg:SetColorTexture(0.2, 0.35, 0.5, 0.6)
+                    row.label:SetText("|cffffffff" .. listName .. "|r")
+                else
+                    row.bg:SetColorTexture(0, 0, 0, 0)
+                    row.label:SetText(listName)
+                    row.label:SetTextColor(0.8, 0.8, 0.8)
+                end
+
+                local capturedName = listName
+                row:SetScript("OnClick", function()
+                    ns.Export:SetFilter("auctionator", capturedName)
+                    UpdateFilterButtons()
+                end)
+                row:SetScript("OnEnter", function(self)
+                    if not isSelected then self.bg:SetColorTexture(1, 1, 1, 0.05) end
+                end)
+                row:SetScript("OnLeave", function(self)
+                    if not (ns.Export:GetFilterValue() == capturedName) then self.bg:SetColorTexture(0, 0, 0, 0) end
+                end)
+
+                row:Show()
+                auctY = auctY + 18
+            end
+            exportAuctContent:SetHeight(math.max(1, auctY))
+        else
+            -- Fallback to text box
+            filterValueBox:Show()
+            filterValueBox:SetText(ns.Export:GetFilterValue())
+            filterValueLabel:SetText("Shopping list name")
+        end
+    else
+        -- "everything" — nothing extra to show
+    end
+
+    -- Status text
+    if mode == "everything" then
+        exportFilterStatus:SetText("")
+    else
+        local val = ns.Export:GetFilterValue()
+        if mode == "tsmgroup" then
+            exportFilterStatus:SetText(val ~= "" and (ns.COLORS.YELLOW .. "Group: " .. val:gsub("`", " > ") .. "|r") or "")
+        elseif mode == "auctionator" then
+            exportFilterStatus:SetText(val ~= "" and (ns.COLORS.YELLOW .. "List: " .. val .. "|r") or "")
+        else
+            exportFilterStatus:SetText(ns.COLORS.YELLOW .. "Filter: " .. mode .. (val ~= "" and (" = " .. val) or "") .. "|r")
+        end
+    end
+
+    -- Reposition export scroll to account for filter controls height
+    local scrollTop = -90
+    if mode == "tsmgroup" and exportTreeFrame:IsShown() then
+        -- Tree at -48, height 100, plus selected path label + padding
+        scrollTop = -48 - exportTreeFrame:GetHeight() - 20
+        if filterValueLabel:GetText() and filterValueLabel:GetText() ~= "" then
+            scrollTop = scrollTop - 14
+        end
+    elseif mode == "auctionator" and exportAuctFrame:IsShown() then
+        scrollTop = -48 - exportAuctFrame:GetHeight() - 12
+    end
+    exportScroll:ClearAllPoints()
+    exportScroll:SetPoint("TOPLEFT", exportPage, "TOPLEFT", 4, scrollTop)
+    exportScroll:SetPoint("BOTTOMRIGHT", exportPage, "BOTTOMRIGHT", -24, 34)
+    exportFilterStatus:ClearAllPoints()
+    exportFilterStatus:SetPoint("TOPLEFT", exportPage, "TOPLEFT", 8, scrollTop + 16)
+end
+
+fmtCSVBtn:SetScript("OnClick", function()
+    ns.Export:SetFormat("csv")
+    UpdateFormatButtons()
+end)
+fmtAAABtn:SetScript("OnClick", function()
+    ns.Export:SetFormat("aaa")
+    UpdateFormatButtons()
+end)
+
+filterAllBtn:SetScript("OnClick", function()
+    ns.Export:SetFilter("everything", "")
+    UpdateFilterButtons()
+end)
+filterTSMBtn:SetScript("OnClick", function()
+    ns.Export:SetFilter("tsmgroup", filterValueBox:GetText())
+    UpdateFilterButtons()
+end)
+filterAuctBtn:SetScript("OnClick", function()
+    ns.Export:SetFilter("auctionator", filterValueBox:GetText())
+    UpdateFilterButtons()
+end)
+
+-- Export edit box (below controls)
 local exportScroll = CreateFrame("ScrollFrame", "FlipQueueExportScrollInline", exportPage, "UIPanelScrollFrameTemplate")
-exportScroll:SetPoint("TOPLEFT", exportPage, "TOPLEFT", 4, -28)
+exportScroll:SetPoint("TOPLEFT", exportPage, "TOPLEFT", 4, -90)
 exportScroll:SetPoint("BOTTOMRIGHT", exportPage, "BOTTOMRIGHT", -24, 34)
 
 local exportEdit = CreateFrame("EditBox", "FlipQueueExportEditInline", exportScroll)
@@ -832,6 +1348,10 @@ exportStatus:SetText("")
 UI._exportPage = exportPage
 UI._exportEdit = exportEdit
 UI._exportStatus = exportStatus
+UI._updateExportToggles = function()
+    UpdateFormatButtons()
+    UpdateFilterButtons()
+end
 
 -- ==========================================
 -- HIDE/SHOW HELPERS
@@ -849,6 +1369,7 @@ RegisterTable(UI.charsTable)
 RegisterTable(UI.needCharsTable)
 RegisterTable(UI.nextStepsTable)
 RegisterTable(UI.importPreviewTable)
+RegisterTable(UI.generatorPreviewTable)
 
 local function HideAllTables()
     for _, tbl in ipairs(allTables) do
@@ -857,8 +1378,13 @@ local function HideAllTables()
     end
     UI:HideSettingsPage()
     if UI.HideTSMPage then UI:HideTSMPage() end
+    if UI.HideAuctionatorPage then UI:HideAuctionatorPage() end
     importPage:Hide()
     exportPage:Hide()
+    if UI._genInfoFrame then UI._genInfoFrame:Hide() end
+    if UI._genFrame then UI._genFrame:Hide() end
+    if UI._todoOverviewScroll then UI._todoOverviewScroll:Hide() end
+    if UI._charTasksFrame then UI._charTasksFrame:Hide() end
     if UI._nextStepsLabel then UI._nextStepsLabel:Hide() end
     if UI._needCharsLabel then UI._needCharsLabel:Hide() end
     if UI._postSummaryFrame then UI._postSummaryFrame:Hide() end
@@ -960,10 +1486,12 @@ local function BuildPostNowData()
                     if belowThreshold then
                         row.ahPrice = "|cffff4444" .. row.ahPrice .. "|r"
                         row._rowColor = {0.8, 0.2, 0.2, 0.10}
+                        row.location = "|cffff4444TSM: SKIP|r"
                         local threshStr = ns.TSM:FormatCopper(threshold) or "?"
                         local opStr = opName and (" [" .. opName .. "]") or ""
                         row._tooltipExtra = (row._tooltipExtra or "")
-                            .. "\n|cffff4444TSM: AH price below min (" .. threshStr .. ")" .. opStr .. "|r"
+                            .. "\n|cffff4444TSM will skip this item — AH price below min (" .. threshStr .. ")" .. opStr .. "|r"
+                            .. "\n|cffff4444Right-click to skip, or wait for price to recover|r"
                     else
                         row.ahPrice = "|cff00ff00" .. row.ahPrice .. "|r"
                     end
@@ -992,8 +1520,159 @@ local function BuildPostNowData()
     return data
 end
 
+-- Build To-Do data from TodoList (new system)
+local function BuildTodoData()
+    if not ns.db or not ns.TodoList then return nil end
+    local currentList = ns.TodoList:GetCurrentList()
+    if not currentList then return nil end
+
+    local charKey = ns:GetCharKey()
+    local myRealm = charKey:match("%-(.+)$") or ""
+    local tasks = ns.TodoList:GetCharacterTasks(charKey)
+    local data = {}
+
+    for _, task in ipairs(tasks) do
+        local item = task.item
+        if ns:RealmMatches(item.targetRealm or "", myRealm) then
+            local displayName = item.name or "?"
+
+            local lookupIcon, quality, resolvedID
+            pcall(function()
+                lookupIcon, quality, resolvedID = LookupItemInfo(item.itemID, item.itemKey, item.name)
+            end)
+
+            if quality then
+                displayName = QualityColorName(displayName, quality)
+            elseif item.quality and item.quality ~= "" then
+                displayName = QualityColorName(displayName, item.quality)
+            end
+
+            local sourceStr = item.source or ""
+            if sourceStr == "warbank" then
+                sourceStr = ns.COLORS.YELLOW .. "warbank" .. "|r"
+            elseif sourceStr == "bags" then
+                sourceStr = ns.COLORS.GREEN .. "in bags" .. "|r"
+            elseif sourceStr == "bank" then
+                sourceStr = ns.COLORS.BLUE .. "bank" .. "|r"
+            elseif sourceStr == "reagent" then
+                sourceStr = "reagent"
+            end
+
+            local row = {
+                name     = displayName,
+                qty      = item.quantity or 1,
+                price    = item.expectedPrice or "",
+                realm    = item.targetRealm or "",
+                location = sourceStr,
+                _icon    = item.icon or lookupIcon,
+                _tooltipItemID = resolvedID or tonumber(item.itemID),
+                _tooltipText   = item.name or "?",
+                _tooltipExtra  = (item.targetRealm and item.targetRealm ~= ""
+                    and ("Sell on: " .. item.targetRealm .. "  @  " .. (item.expectedPrice or "?")) or nil),
+                _taskIndex = task.taskIndex,
+                _todoItem  = item,
+            }
+
+            -- TSM price data
+            if ns.TSM:IsEnabled() then
+                local priceSource = ns.db.settings.tsmPriceSource or "DBMinBuyout"
+                local copper = ns.TSM:GetPrice(item.itemKey, priceSource)
+                if copper then
+                    row.ahPrice = ns.TSM:FormatCopper(copper)
+                    row._sortAhPrice = copper
+                    local belowThreshold, _, threshold, opName = ns.TSM:IsBelowThreshold(item.itemKey)
+                    if belowThreshold then
+                        row.ahPrice = "|cffff4444" .. row.ahPrice .. "|r"
+                        row._rowColor = {0.8, 0.2, 0.2, 0.10}
+                        row.location = "|cffff4444TSM: SKIP|r"
+                    else
+                        row.ahPrice = "|cff00ff00" .. row.ahPrice .. "|r"
+                    end
+                else
+                    row.ahPrice = "|cff888888" .. "\226\128\148" .. "|r"
+                    row._sortAhPrice = 0
+                end
+            end
+
+            table.insert(data, row)
+        end
+    end
+
+    return data
+end
+
 -- ==========================================
--- NEXT STEPS (shown on Post Now page)
+-- CURRENT CHARACTER TASKS (shown above items on To-Do)
+-- ==========================================
+
+local function BuildCurrentCharTasks()
+    if not ns.db then return {} end
+    local tasks = {}
+    local myCharKey = ns:GetCharKey()
+    local myRealm = myCharKey:match("%-(.+)$") or ""
+
+    -- Auction summary for current character
+    local auctionsByChar = ns.Tracker and ns.Tracker.GetAuctionSummaryByCharacter
+        and ns.Tracker:GetAuctionSummaryByCharacter() or {}
+    local myAuctions = auctionsByChar[myCharKey]
+
+    -- Check AH: expired auctions to collect
+    if myAuctions and myAuctions.done > 0 then
+        table.insert(tasks, {
+            icon   = "Interface\\Icons\\INV_Misc_Coin_02",
+            text   = ns.COLORS.GREEN .. "Check AH:|r " .. myAuctions.done .. " auction(s) expired — collect at AH",
+            sort   = 1,
+        })
+    end
+
+    -- Check Mail: expired items waiting to be collected (not yet marked "collected")
+    -- Only count "expired" status — "sold" and "collected" are already handled
+    -- Note: "expired" means the auction ended without a sale and items are in mailbox
+    local expiredInMail = 0
+    for _, entry in ipairs(ns.db.log) do
+        if entry.charKey == myCharKey and entry.auctionStatus == "expired" then
+            expiredInMail = expiredInMail + 1
+        end
+    end
+    if expiredInMail > 0 then
+        table.insert(tasks, {
+            icon   = "Interface\\Icons\\INV_Letter_15",
+            text   = ns.COLORS.YELLOW .. "Check Mail:|r " .. expiredInMail .. " expired auction(s) to collect",
+            sort   = 2,
+        })
+    end
+
+    -- Expiring soon on this character
+    if myAuctions and myAuctions.active > 0 and myAuctions.soonest then
+        local alertMinutes = ns.db.settings.expiryAlertMinutes or 15
+        if myAuctions.soonest < (alertMinutes * 60) then
+            local h = math.floor(myAuctions.soonest / 3600)
+            local m = math.floor((myAuctions.soonest % 3600) / 60)
+            local countdown = h > 0 and (h .. "h " .. m .. "m") or (m .. "m")
+            table.insert(tasks, {
+                icon   = "Interface\\Icons\\Spell_Holy_BorrowedTime",
+                text   = ns.COLORS.ORANGE .. "Expiring:|r " .. myAuctions.active .. " auction(s) — soonest in " .. countdown,
+                sort   = 3,
+            })
+        end
+    end
+
+    -- Active auctions info (not urgent, just informational)
+    if myAuctions and myAuctions.active > 0 and #tasks == 0 then
+        -- Only show if no urgent tasks — just a status line
+        table.insert(tasks, {
+            icon   = "Interface\\Icons\\INV_Misc_Coin_17",
+            text   = ns.COLORS.GRAY .. myAuctions.active .. " active auction(s) on this character|r",
+            sort   = 10,
+        })
+    end
+
+    table.sort(tasks, function(a, b) return a.sort < b.sort end)
+    return tasks
+end
+
+-- ==========================================
+-- NEXT STEPS (other characters, shown below on To-Do)
 -- ==========================================
 
 -- Gold parsing now uses ns:ParseGoldValue() from Core.lua
@@ -1016,174 +1695,50 @@ local function BuildNextStepsData()
     local myCharKey = ns:GetCharKey()
     local myRealm = myCharKey:match("%-(.+)$") or ""
 
-    -- Track consumed queue indices so each item is counted exactly once
-    local consumed = {}
+    -- 1) Build "Log in" entries from the to-do list (primary source)
+    local todoList = ns.TodoList and ns.TodoList:GetCurrentList()
+    if todoList and todoList.items then
+        local sortMode = (UI.GetGenSortMode and UI:GetGenSortMode()) or "profit"
+        local displayGroups = ns.TodoList:BuildDisplayGroups(todoList.items, sortMode)
 
-    -- Gather all covered realms from inventory (excluding hidden characters)
-    local coveredRealms = {}
-    for charKey, _ in pairs(ns.db.inventory) do
-        if not ns.db.hiddenCharacters[charKey] then
-            local realm = charKey:match("%-(.+)$") or ""
-            if realm ~= "" then
-                if not coveredRealms[realm] then
-                    coveredRealms[realm] = {}
-                end
-                table.insert(coveredRealms[realm], charKey)
+        for _, group in ipairs(displayGroups) do
+            if group.charKey and group.charKey ~= myCharKey then
+                local name = group.charName or "?"
+                local realm = group.realm or ""
+                local charInv = ns.db.inventory and ns.db.inventory[group.charKey]
+                local classColor = charInv and CLASS_COLORS[charInv.class] or "888888"
+                local coloredName = "|cff" .. classColor .. name .. "|r"
+
+                table.insert(data, {
+                    action    = ns.COLORS.YELLOW .. "Log in" .. "|r",
+                    target    = coloredName .. "  (" .. realm .. ")",
+                    itemCount = #group.items,
+                    value     = FormatGoldValue(group.totalGold),
+                    detail    = #group.items .. " items to post",
+                    _sortValue = group.totalGold,
+                    _tooltipText = group.charKey,
+                    _tooltipExtra = string.format("Log in to %s to post %d items\nEstimated value: %s",
+                        group.charKey, #group.items, FormatGoldValue(group.totalGold)),
+                })
+            elseif not group.charKey then
+                -- Unassigned group = "Create char" entry
+                local realmName = group.realm ~= "" and group.realm or "unknown realm"
+                table.insert(data, {
+                    action    = "|cffff6666" .. "Create char" .. "|r",
+                    target    = realmName,
+                    itemCount = #group.items,
+                    value     = FormatGoldValue(group.totalGold),
+                    detail    = "",
+                    _sortValue = -1,  -- always sort last
+                    _tooltipText = realmName,
+                    _tooltipExtra = string.format("Create a character on %s\n%d items worth ~%s waiting",
+                        realmName, #group.items, FormatGoldValue(group.totalGold)),
+                })
             end
         end
     end
 
-    -- Include external accounts as realm coverage
-    if ns.db.externalAccounts then
-        for _, acct in ipairs(ns.db.externalAccounts) do
-            for _, realm in ipairs(acct.realms) do
-                if not coveredRealms[realm] then
-                    coveredRealms[realm] = {}
-                end
-                table.insert(coveredRealms[realm], acct.label .. " (external)")
-            end
-        end
-    end
-
-    -- Shared warbank quantity tracker — prevents the same warbank item
-    -- from being assigned to multiple characters simultaneously
-    local sharedWarbankQty = {}
-
-    -- 0) Consume current character's items (already shown in Post Now)
-    local myTasks = ns.Queue:GetCharacterTasks(myCharKey, sharedWarbankQty)
-    for _, task in ipairs(myTasks) do
-        if ns:RealmMatches(task.queueItem.targetRealm, myRealm) then
-            consumed[task.queueIndex] = true
-        end
-    end
-
-    -- 1) Other characters with pending tasks (not current char, not hidden)
-    -- Process characters with personal inventory matches first, then warbank-only
-    local otherChars = {}
-    for charKey, _ in pairs(ns.db.inventory) do
-        if charKey ~= myCharKey and not ns.db.hiddenCharacters[charKey] then
-            table.insert(otherChars, charKey)
-        end
-    end
-
-    local charTasks = {} -- charKey -> {count, totalGold}
-    for _, charKey in ipairs(otherChars) do
-        local charRealm = charKey:match("%-(.+)$") or ""
-        local tasks = ns.Queue:GetCharacterTasks(charKey, sharedWarbankQty)
-        local realmCount = 0
-        local totalGold = 0
-
-        for _, task in ipairs(tasks) do
-            if not consumed[task.queueIndex] then
-                local targetRealm = task.queueItem.targetRealm or ""
-                if targetRealm ~= "" and ns:RealmMatches(targetRealm, charRealm) then
-                    consumed[task.queueIndex] = true
-                    realmCount = realmCount + 1
-                    totalGold = totalGold + ParseGoldValue(task.queueItem.expectedPrice)
-                end
-            end
-        end
-
-        if realmCount > 0 then
-            charTasks[charKey] = {
-                count = realmCount,
-                totalGold = totalGold,
-            }
-        end
-    end
-
-    for charKey, info in pairs(charTasks) do
-        local name = charKey:match("^(.-)%-") or charKey
-        local realm = charKey:match("%-(.+)$") or ""
-        local charInv = ns.db.inventory[charKey]
-        local classColor = charInv and CLASS_COLORS[charInv.class] or "888888"
-        local coloredName = "|cff" .. classColor .. name .. "|r"
-
-        table.insert(data, {
-            action    = ns.COLORS.YELLOW .. "Log in" .. "|r",
-            target    = coloredName .. "  (" .. realm .. ")",
-            itemCount = info.count,
-            value     = FormatGoldValue(info.totalGold),
-            detail    = info.count .. " items to post",
-            _sortValue = info.totalGold,
-            _tooltipText = charKey,
-            _tooltipExtra = string.format("Log in to %s to post %d items\nEstimated value: %s",
-                charKey, info.count, FormatGoldValue(info.totalGold)),
-        })
-    end
-
-    -- 2) Realms needing new characters
-    -- Only count items that actually exist in the warbank (the only cross-realm storage)
-    local realmNeeds = {} -- realmKey -> {realmStr, count, totalGold}
-
-    -- Build warbank remaining quantity tracker (same approach as GetCharacterTasks)
-    local wbRemaining = {}
-    if ns.db.warbank and ns.db.warbank.items then
-        for wbKey, wbData in pairs(ns.db.warbank.items) do
-            wbRemaining[wbKey] = wbData.quantity or 1
-        end
-    end
-
-    for i, item in ipairs(ns.db.queue) do
-        if item.status == "pending" and not consumed[i]
-            and item.targetRealm and item.targetRealm ~= "" then
-            local hasCoverage = false
-            for realm, _ in pairs(coveredRealms) do
-                if ns:RealmMatches(item.targetRealm, realm) then
-                    hasCoverage = true
-                    break
-                end
-            end
-
-            if not hasCoverage then
-                -- Check if this item actually exists in warbank
-                local inWarbank = false
-                if ns.db.warbank and ns.db.warbank.items then
-                    local resolvedID = ns:ResolveItemID(item)
-                    for wbKey, wbData in pairs(ns.db.warbank.items) do
-                        if (wbRemaining[wbKey] or 0) > 0 then
-                            local matched = ns:ItemsMatch(wbKey, wbData.name, item, resolvedID or false, false)
-                            if matched then
-                                wbRemaining[wbKey] = wbRemaining[wbKey] - (item.quantity or 1)
-                                inWarbank = true
-                                break
-                            end
-                        end
-                    end
-                end
-
-                if inWarbank then
-                    -- Group by exact targetRealm string to avoid cross-cluster merging
-                    local realmKey = ns:NormalizeRealmKey(item.targetRealm)
-                    if not realmNeeds[realmKey] then
-                        realmNeeds[realmKey] = {
-                            realmStr = item.targetRealm,
-                            count = 0,
-                            totalGold = 0,
-                        }
-                    end
-                    realmNeeds[realmKey].count = realmNeeds[realmKey].count + 1
-                    realmNeeds[realmKey].totalGold = realmNeeds[realmKey].totalGold + ParseGoldValue(item.expectedPrice)
-                end
-            end
-        end
-    end
-
-    for _, info in pairs(realmNeeds) do
-        table.insert(data, {
-            action    = "|cffff6666" .. "Create char" .. "|r",
-            target    = info.realmStr,
-            itemCount = info.count,
-            value     = FormatGoldValue(info.totalGold),
-            detail    = "",
-            _sortValue = info.totalGold,
-            _tooltipText = info.realmStr,
-            _tooltipExtra = string.format("Create a character on %s\n%d items worth ~%s waiting",
-                info.realmStr, info.count, FormatGoldValue(info.totalGold)),
-        })
-    end
-
-    -- 3) Characters with done (expired) auctions to check
+    -- 3) Other characters with done (expired) auctions to check
     local auctionsByChar = ns.Tracker and ns.Tracker.GetAuctionSummaryByCharacter
         and ns.Tracker:GetAuctionSummaryByCharacter() or {}
 
@@ -1201,7 +1756,7 @@ local function BuildNextStepsData()
                 itemCount = info.done,
                 value     = FormatGoldValue(info.totalValue or 0),
                 detail    = info.done .. " auction(s) done",
-                _sortValue = 999999 + info.done, -- sort above "create char" items
+                _sortValue = -2,  -- sort after "Log in" entries, before "Create char"
                 _tooltipText = charKey,
                 _tooltipExtra = string.format("Log in to %s to collect %d expired auction(s)%s",
                     charKey, info.done,
@@ -1210,9 +1765,9 @@ local function BuildNextStepsData()
         end
     end
 
-    -- 4) Characters with auctions expiring soon (not current char, not already in "Check AH")
-    local alertHours = ns.db.settings.expiryAlertHours or 6
-    local alertThreshold = alertHours * 3600
+    -- 4) Other characters with auctions expiring soon
+    local alertMinutes = ns.db.settings.expiryAlertMinutes or 15
+    local alertThreshold = alertMinutes * 60
     for charKey, info in pairs(auctionsByChar) do
         if charKey ~= myCharKey and info.active > 0 and info.soonest and info.soonest < alertThreshold then
             -- Skip if already shown as "Check AH" (has done auctions)
@@ -1234,7 +1789,7 @@ local function BuildNextStepsData()
                     itemCount = info.active,
                     value     = FormatGoldValue(info.totalValue or 0),
                     detail    = ns.COLORS.ORANGE .. countdown .. "|r",
-                    _sortValue = 999998 - info.soonest, -- sooner = higher priority
+                    _sortValue = 0,  -- sort after "Log in" entries (positive gold), before "Create char" (-1)
                     _tooltipText = charKey,
                     _tooltipExtra = string.format("%d active auction(s)\nSoonest expires in %s",
                         info.active, countdown),
@@ -1251,6 +1806,7 @@ end
 
 -- Expose for MiniView
 UI.BuildNextStepsData = BuildNextStepsData
+UI.BuildCurrentCharTasks = BuildCurrentCharTasks
 
 -- ==========================================
 -- ITEM QUALITY COLORS
@@ -1579,97 +2135,129 @@ local function BuildLogData()
 end
 
 -- ==========================================
--- INVENTORY (UNTRACKED) PAGE
+-- INVENTORY PAGE (Full Tradeable Inventory)
 -- ==========================================
 
 local BOUND_TYPES = {
     [1] = true, [4] = true, [7] = true, [8] = true, [9] = true,
 }
 
-local function BuildInventoryData()
-    if not ns.db then return {} end
-
-    local queuedKeys = {}
-    local queuedNames = {}
-    for _, item in ipairs(ns.db.queue) do
-        queuedKeys[item.itemKey] = true
-        if item.name and item.name ~= "" then
-            queuedNames[item.name:lower()] = true
-        end
-    end
-    for _, item in ipairs(ns.db.log) do
-        queuedKeys[item.itemKey] = true
-        if item.name and item.name ~= "" then
-            queuedNames[item.name:lower()] = true
-        end
+-- Determine item status: Queued, Posted, DNT, or Untracked
+local function GetItemStatus(key, itemData)
+    -- Check DNT first
+    if ns.Queue:IsDoNotTrack(itemData.itemID) then
+        return "DNT", ns.COLORS.RED .. "DNT" .. "|r"
     end
 
-    local data = {}
-    local seen = {}
-
-    local charKey = ns:GetCharKey()
-    local charData = ns.db.inventory[charKey]
-    if charData and charData.items then
-        for key, itemData in pairs(charData.items) do
-            if not queuedKeys[key]
-                and not (itemData.name and queuedNames[(itemData.name or ""):lower()])
-                and not ns.Queue:IsDoNotTrack(itemData.itemID)
-                and not BOUND_TYPES[itemData.bindType or 0]
-                and not itemData.isBound then
-                seen[key] = true
-                local locParts = {}
-                if itemData.locations then
-                    for loc, qty in pairs(itemData.locations) do
-                        table.insert(locParts, loc .. ": " .. qty)
-                    end
-                end
-                local _, invQuality, invResolvedID = LookupItemInfo(itemData.itemID, key, itemData.name)
-                local invDisplayName = itemData.name or "Unknown"
-                if invQuality then
-                    invDisplayName = QualityColorName(invDisplayName, invQuality)
-                end
-
-                table.insert(data, {
-                    name     = invDisplayName,
-                    qty      = itemData.quantity,
-                    source   = charKey,
-                    location = table.concat(locParts, ", "),
-                    _icon    = itemData.icon,
-                    _tooltipItemID = invResolvedID,
-                    _itemKey  = key,
-                    _itemID   = itemData.itemID,
-                    _itemName = itemData.name,
-                    _quantity = itemData.quantity,
-                })
+    -- Check queue (pending items)
+    local itemName = (itemData.name or ""):lower()
+    for _, qItem in ipairs(ns.db.queue) do
+        if qItem.status == "pending" then
+            if qItem.itemKey == key then
+                return "Queued", ns.COLORS.GREEN .. "Queued" .. "|r", qItem.targetRealm
+            end
+            if itemName ~= "" and qItem.name and qItem.name:lower() == itemName then
+                return "Queued", ns.COLORS.GREEN .. "Queued" .. "|r", qItem.targetRealm
             end
         end
     end
 
+    -- Check log (posted items)
+    for _, entry in ipairs(ns.db.log) do
+        if entry.itemKey == key then
+            return "Posted", ns.COLORS.YELLOW .. "Posted" .. "|r"
+        end
+        if itemName ~= "" and entry.name and entry.name:lower() == itemName then
+            return "Posted", ns.COLORS.YELLOW .. "Posted" .. "|r"
+        end
+    end
+
+    return "Untracked", ns.COLORS.GRAY .. "Untracked" .. "|r"
+end
+
+local function BuildFullInventoryData()
+    if not ns.db then return {} end
+
+    local data = {}
+
+    -- Process each character's inventory
+    for charKey, charData in pairs(ns.db.inventory) do
+        if charData.items then
+            local charName = charKey:match("^(.-)%-") or charKey
+            local classColor = CLASS_COLORS[charData.class] or "888888"
+            local coloredOwner = "|cff" .. classColor .. charName .. "|r"
+
+            for key, itemData in pairs(charData.items) do
+                -- Filter out bound/untradeable
+                if not BOUND_TYPES[itemData.bindType or 0] and not itemData.isBound then
+                    local _, invQuality, invResolvedID = LookupItemInfo(itemData.itemID, key, itemData.name)
+                    local invDisplayName = itemData.name or "Unknown"
+                    if invQuality then
+                        invDisplayName = QualityColorName(invDisplayName, invQuality)
+                    end
+
+                    local statusKey, statusStr, targetRealm = GetItemStatus(key, itemData)
+
+                    -- Build location string
+                    local locParts = {}
+                    if itemData.locations then
+                        for loc, qty in pairs(itemData.locations) do
+                            table.insert(locParts, loc)
+                        end
+                    end
+
+                    table.insert(data, {
+                        name        = invDisplayName,
+                        qty         = itemData.quantity,
+                        owner       = coloredOwner,
+                        location    = table.concat(locParts, ", "),
+                        status      = statusStr,
+                        targetRealm = targetRealm or "",
+                        _icon       = itemData.icon,
+                        _tooltipItemID = invResolvedID,
+                        _itemKey    = key,
+                        _itemID     = itemData.itemID,
+                        _itemName   = itemData.name,
+                        _quantity   = itemData.quantity,
+                        _statusKey  = statusKey,
+                        _sortStatus = statusKey == "Queued" and 1 or statusKey == "Posted" and 2
+                            or statusKey == "Untracked" and 3 or 4,
+                        _charKey    = charKey,
+                    })
+                end
+            end
+        end
+    end
+
+    -- Warbank items
     if ns.db.warbank and ns.db.warbank.items then
         for key, itemData in pairs(ns.db.warbank.items) do
-            if not seen[key]
-                and not queuedKeys[key]
-                and not (itemData.name and queuedNames[(itemData.name or ""):lower()])
-                and not ns.Queue:IsDoNotTrack(itemData.itemID)
-                and not BOUND_TYPES[itemData.bindType or 0]
-                and not itemData.isBound then
+            if not BOUND_TYPES[itemData.bindType or 0] and not itemData.isBound then
                 local _, wbQuality, wbResolvedID = LookupItemInfo(itemData.itemID, key, itemData.name)
                 local wbDisplayName = itemData.name or "Unknown"
                 if wbQuality then
                     wbDisplayName = QualityColorName(wbDisplayName, wbQuality)
                 end
 
+                local statusKey, statusStr, targetRealm = GetItemStatus(key, itemData)
+
                 table.insert(data, {
-                    name     = wbDisplayName,
-                    qty      = itemData.quantity,
-                    source   = "Warbank",
-                    location = "warbank",
-                    _icon    = itemData.icon,
+                    name        = wbDisplayName,
+                    qty         = itemData.quantity,
+                    owner       = ns.COLORS.YELLOW .. "Warbank" .. "|r",
+                    location    = "warbank",
+                    status      = statusStr,
+                    targetRealm = targetRealm or "",
+                    _icon       = itemData.icon,
                     _tooltipItemID = wbResolvedID,
-                    _itemKey  = key,
-                    _itemID   = itemData.itemID,
-                    _itemName = itemData.name,
-                    _quantity = itemData.quantity,
+                    _itemKey    = key,
+                    _itemID     = itemData.itemID,
+                    _itemName   = itemData.name,
+                    _quantity   = itemData.quantity,
+                    _statusKey  = statusKey,
+                    _sortStatus = statusKey == "Queued" and 1 or statusKey == "Posted" and 2
+                        or statusKey == "Untracked" and 3 or 4,
+                    _charKey    = "Warbank",
                 })
             end
         end
@@ -1794,6 +2382,13 @@ local function BuildCharactersData()
             for _ in pairs(inv.items) do itemCount = itemCount + 1 end
         end
 
+        -- Manual character order position
+        local charOrder = ns.db.settings.characterOrder or {}
+        local orderPos = 999
+        for oi, oKey in ipairs(charOrder) do
+            if oKey == charKey then orderPos = oi; break end
+        end
+
         table.insert(charData, {
             name      = coloredName,
             realm     = realm,
@@ -1809,9 +2404,10 @@ local function BuildCharactersData()
             _charKey = charKey,
             _isHidden = isHidden,
             _rowColor = rowColor,
+            _orderPos = orderPos,
             _tooltipText = charKey,
             _tooltipExtra = string.format(
-                "Gold: %s\n%d queue tasks%s\nLast login: %s\nStatus: %s%s\n\nRight-click to %s",
+                "Gold: %s\n%d queue tasks%s\nLast login: %s\nStatus: %s%s\n\nRight-click to %s\nShift+Right-click: move up\nCtrl+Right-click: move down",
                 goldStr, #tasks,
                 auctionInfo and ("\n" .. auctionInfo.active .. " active, " .. auctionInfo.done .. " done auction(s)") or "",
                 lastLoginStr,
@@ -1848,76 +2444,21 @@ local function BuildCharactersData()
         end
     end
 
-    -- Group uncovered queue items by exact targetRealm string (no RealmsOverlap)
-    -- Only count items that actually exist in warbank (matches NextSteps logic)
-    local realmNeedsMap = {} -- realmKey -> {realmStr, count, prices}
-
-    -- Build warbank remaining quantity tracker
-    local wbRemaining = {}
-    if ns.db.warbank and ns.db.warbank.items then
-        for wbKey, wbData in pairs(ns.db.warbank.items) do
-            wbRemaining[wbKey] = wbData.quantity or 1
-        end
-    end
-
-    for _, item in ipairs(ns.db.queue) do
-        if item.status == "pending" and item.targetRealm and item.targetRealm ~= "" then
-            local hasCoverage = false
-            for realm, _ in pairs(coveredRealms) do
-                if ns:RealmMatches(item.targetRealm, realm) then
-                    hasCoverage = true
-                    break
-                end
-            end
-
-            if not hasCoverage then
-                -- Check if this item actually exists in warbank
-                local inWarbank = false
-                if ns.db.warbank and ns.db.warbank.items then
-                    local resolvedID = ns:ResolveItemID(item)
-                    for wbKey, wbData in pairs(ns.db.warbank.items) do
-                        if (wbRemaining[wbKey] or 0) > 0 then
-                            local matched = ns:ItemsMatch(wbKey, wbData.name, item, resolvedID or false, false)
-                            if matched then
-                                wbRemaining[wbKey] = wbRemaining[wbKey] - (item.quantity or 1)
-                                inWarbank = true
-                                break
-                            end
-                        end
-                    end
-                end
-
-                if inWarbank then
-                    local realmKey = ns:NormalizeRealmKey(item.targetRealm)
-                    if not realmNeedsMap[realmKey] then
-                        realmNeedsMap[realmKey] = {
-                            realmStr = item.targetRealm,
-                            count = 0,
-                            prices = {},
-                        }
-                    end
-                    realmNeedsMap[realmKey].count = realmNeedsMap[realmKey].count + 1
-                    if item.expectedPrice and item.expectedPrice ~= "" then
-                        table.insert(realmNeedsMap[realmKey].prices, item.expectedPrice)
-                    end
-                end
-            end
-        end
-    end
-
+    -- "Realms needing characters" from the to-do list unassigned groups
     local needData = {}
-    for _, info in pairs(realmNeedsMap) do
-        local totalGold = 0
-        for _, price in ipairs(info.prices) do
-            totalGold = totalGold + ParseGoldValue(price)
+    local charTodoList = ns.TodoList and ns.TodoList:GetCurrentList()
+    if charTodoList and charTodoList.items then
+        local displayGroups = ns.TodoList:BuildDisplayGroups(charTodoList.items, "profit")
+        for _, group in ipairs(displayGroups) do
+            if not group.charKey then
+                table.insert(needData, {
+                    realm      = group.realm ~= "" and group.realm or "unknown",
+                    itemCount  = #group.items,
+                    totalValue = FormatGoldValue(group.totalGold),
+                    note       = "Create character (flex slot)",
+                })
+            end
         end
-
-        table.insert(needData, {
-            realm      = info.realmStr,
-            itemCount  = info.count,
-            totalValue = FormatGoldValue(totalGold),
-            note       = "Create character (flex slot)",
-        })
     end
 
     return charData, needData
@@ -1939,42 +2480,137 @@ function UI:Refresh()
 
     -- Update summary
     local pending = ns.Queue:GetPendingCount()
+    local todoPending = ns.TodoList and ns.TodoList:GetPendingCount() or 0
     local logCount = #ns.db.log
-    mainFrame.summary:SetText(string.format(
-        "%sQueue: %d|r  %sLog: %d|r  %sTracked: %d|r",
-        ns.COLORS.YELLOW, pending,
-        ns.COLORS.GREEN, logCount,
-        ns.COLORS.GRAY, #ns.db.queue + logCount
-    ))
+
+    -- Tally active auctions across all characters
+    local totalActiveAuctions = 0
+    local totalActiveGold = 0
+    local auctionsByChar = ns.Tracker and ns.Tracker.GetAuctionSummaryByCharacter
+        and ns.Tracker:GetAuctionSummaryByCharacter() or {}
+    for _, info in pairs(auctionsByChar) do
+        totalActiveAuctions = totalActiveAuctions + info.active
+        totalActiveGold = totalActiveGold + (info.totalValue or 0)
+    end
+
+    local summaryParts = {}
+    if todoPending > 0 then
+        table.insert(summaryParts, ns.COLORS.GREEN .. "To-Do: " .. todoPending .. "|r")
+    end
+    if totalActiveAuctions > 0 then
+        local goldStr = totalActiveGold >= 1000 and string.format("%.1fk", totalActiveGold / 1000) or (math.floor(totalActiveGold) .. "g")
+        table.insert(summaryParts, ns.COLORS.ORANGE .. totalActiveAuctions .. " auctions ~" .. goldStr .. "|r")
+    end
+    table.insert(summaryParts, ns.COLORS.YELLOW .. "Deals: " .. pending .. "|r")
+    table.insert(summaryParts, ns.COLORS.GRAY .. "Log: " .. logCount .. "|r")
+    mainFrame.summary:SetText(table.concat(summaryParts, "  "))
 
     -- Update nav badges
     local charKey = ns:GetCharKey()
     local myRealm = charKey:match("%-(.+)$") or ""
-    local allTasks = ns.Queue:GetCharacterTasks(charKey)
+
+    -- To-Do badge: TodoList tasks for this character, or fall back to queue
     local postCount = 0
-    for _, task in ipairs(allTasks) do
-        if ns:RealmMatches(task.queueItem.targetRealm, myRealm) then
-            postCount = postCount + 1
+    if ns.TodoList and ns.TodoList:GetCurrentList() then
+        local todoTasks = ns.TodoList:GetCharacterTasks(charKey)
+        for _, task in ipairs(todoTasks) do
+            if ns:RealmMatches(task.item.targetRealm or "", myRealm) then
+                postCount = postCount + 1
+            end
+        end
+    else
+        local allTasks = ns.Queue:GetCharacterTasks(charKey)
+        for _, task in ipairs(allTasks) do
+            if ns:RealmMatches(task.queueItem.targetRealm, myRealm) then
+                postCount = postCount + 1
+            end
         end
     end
-    if navButtons.postNow then
-        navButtons.postNow.badge:SetText(postCount > 0 and (ns.COLORS.GREEN .. postCount .. "|r") or "")
+    if navButtons.todo then
+        if postCount > 0 then
+            navButtons.todo.badge:SetText(ns.COLORS.GREEN .. postCount .. "|r")
+        elseif todoPending > 0 then
+            -- Show total in gray to indicate tasks exist on other characters
+            navButtons.todo.badge:SetText(ns.COLORS.GRAY .. todoPending .. "|r")
+        else
+            navButtons.todo.badge:SetText("")
+        end
     end
-    if navButtons.queue then
-        navButtons.queue.badge:SetText(pending > 0 and (ns.COLORS.YELLOW .. pending .. "|r") or "")
+    if navButtons.generator then
+        navButtons.generator.badge:SetText(pending > 0 and (ns.COLORS.YELLOW .. pending .. "|r") or "")
     end
     if navButtons.log then
         navButtons.log.badge:SetText(logCount > 0 and (ns.COLORS.GRAY .. logCount .. "|r") or "")
     end
 
     -- Render active page
-    if self.currentPage == "postNow" then
-        mainFrame.pageTitle:SetText(ns.COLORS.GREEN .. "Post Now" .. "|r" ..
+    if self.currentPage == "todo" then
+        mainFrame.pageTitle:SetText(ns.COLORS.GREEN .. "To-Do" .. "|r" ..
             ns.COLORS.GRAY .. " - " .. charKey .. "|r")
-        LayoutActionBtns(mainFrame.actionBtns.pullBank)
+        LayoutActionBtns(mainFrame.actionBtns.clearTodoList, mainFrame.actionBtns.rescan, mainFrame.actionBtns.pullBank)
 
-        local data = BuildPostNowData()
+        -- Try TodoList first, fall back to queue-based data
+        local todoData = BuildTodoData()
+        local data = todoData or BuildPostNowData()
+
+        -- If we have a to-do list but no items for this character, show a helpful message
+        local currentTodoList = ns.TodoList and ns.TodoList:GetCurrentList()
+        local totalTodoTasks = currentTodoList and ns.TodoList:GetPendingCount() or 0
+        local thisCharTasks = #data
         local nextData = BuildNextStepsData()
+        local myTasks = BuildCurrentCharTasks()
+
+        -- Current character tasks frame (Check AH, Check Mail, Expiring)
+        if not self._charTasksFrame then
+            local ctf = CreateFrame("Frame", nil, tableContainer)
+            ctf:SetPoint("TOPLEFT", tableContainer, "TOPLEFT", 0, 0)
+            ctf:SetPoint("TOPRIGHT", tableContainer, "TOPRIGHT", 0, 0)
+            ctf:SetHeight(1)
+            ctf.rows = {}
+            self._charTasksFrame = ctf
+        end
+
+        -- Hide old task rows
+        for _, row in ipairs(self._charTasksFrame.rows) do
+            row:Hide()
+        end
+
+        local charTaskHeight = 0
+        if #myTasks > 0 then
+            self._charTasksFrame:Show()
+            for i, task in ipairs(myTasks) do
+                local row = self._charTasksFrame.rows[i]
+                if not row then
+                    row = CreateFrame("Frame", nil, self._charTasksFrame)
+                    row:SetHeight(22)
+                    row.bg = row:CreateTexture(nil, "BACKGROUND")
+                    row.bg:SetAllPoints()
+                    row.icon = row:CreateTexture(nil, "ARTWORK")
+                    row.icon:SetSize(16, 16)
+                    row.icon:SetPoint("LEFT", row, "LEFT", 6, 0)
+                    row.text = row:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+                    row.text:SetPoint("LEFT", row.icon, "RIGHT", 6, 0)
+                    row.text:SetPoint("RIGHT", row, "RIGHT", -6, 0)
+                    row.text:SetJustifyH("LEFT")
+                    self._charTasksFrame.rows[i] = row
+                end
+                row:ClearAllPoints()
+                row:SetPoint("TOPLEFT", self._charTasksFrame, "TOPLEFT", 0, -(i - 1) * 22)
+                row:SetPoint("RIGHT", self._charTasksFrame, "RIGHT", 0, 0)
+                row.bg:SetColorTexture(0.12, 0.15, 0.12, 0.6)
+                row.icon:SetTexture(task.icon)
+                row.text:SetText(task.text)
+                row:Show()
+            end
+            charTaskHeight = #myTasks * 22 + 4
+            self._charTasksFrame:SetHeight(charTaskHeight)
+        else
+            self._charTasksFrame:Hide()
+            charTaskHeight = 0
+        end
+
+        -- Offset everything below by charTaskHeight
+        local contentOffset = -charTaskHeight
 
         -- Create summary banner (reused across refreshes)
         if not self._postSummaryFrame then
@@ -1998,14 +2634,16 @@ function UI:Refresh()
         end
 
         if #data == 0 then
-            -- Nothing to post on this character — show summary banner + next steps table
-            self._postSummaryFrame:Show()
+            -- Nothing to post on this character
+            self._postSummaryFrame:Hide()
 
-            if #nextData == 0 and ns.Queue:GetPendingCount() == 0 then
-                -- Everything is done! Full-height fun message
+            if totalTodoTasks == 0 and #nextData == 0 and #myTasks == 0 and ns.Queue:GetPendingCount() == 0 then
+                -- Everything is done! Show fun message
+                if not self._postSummaryFrame then self:Refresh() return end
+                self._postSummaryFrame:Show()
                 self._postSummaryFrame:ClearAllPoints()
-                self._postSummaryFrame:SetAllPoints(tableContainer)
-
+                self._postSummaryFrame:SetPoint("TOPLEFT", tableContainer, "TOPLEFT", 0, contentOffset)
+                self._postSummaryFrame:SetPoint("BOTTOMRIGHT", tableContainer, "BOTTOMRIGHT", 0, 0)
                 local doneMessages = {
                     {title = "All done!", sub = "Time to go shopping on FlippingPal!"},
                     {title = "Queue empty!", sub = "Hit the AH browser or import more flips."},
@@ -2018,72 +2656,290 @@ function UI:Refresh()
                 self._postSummaryFrame.title:SetText(ns.COLORS.GREEN .. msg.title .. "|r")
                 self._postSummaryFrame.sub:SetText(ns.COLORS.GRAY .. msg.sub .. "|r")
                 mainFrame.statusText:SetText("Queue empty  |  Import items from FlippingPal to get started")
+
+            elseif totalTodoTasks > 0 and currentTodoList then
+                -- Show the FULL to-do list grouped by character so user can see everything
+                -- Create/reuse the todo overview scroll frame
+                if not self._todoOverviewScroll then
+                    local s = CreateFrame("ScrollFrame", nil, tableContainer, "UIPanelScrollFrameTemplate")
+                    local c = CreateFrame("Frame", nil, s)
+                    c:SetWidth(1)
+                    c:SetHeight(1)
+                    s:SetScrollChild(c)
+                    s:SetScript("OnSizeChanged", function(sf, w) c:SetWidth(w) end)
+                    self._todoOverviewScroll = s
+                    self._todoOverviewContent = c
+                    self._todoOverviewRows = {}
+                end
+
+                local todoScroll = self._todoOverviewScroll
+                local todoContent = self._todoOverviewContent
+                local todoRows = self._todoOverviewRows
+
+                todoScroll:ClearAllPoints()
+                todoScroll:SetPoint("TOPLEFT", tableContainer, "TOPLEFT", 0, contentOffset)
+                todoScroll:SetPoint("BOTTOMRIGHT", tableContainer, "BOTTOMRIGHT", -22, 0)
+                todoScroll:Show()
+                todoContent:SetWidth(todoScroll:GetWidth() or 500)
+
+                -- Hide old rows
+                for _, row in ipairs(todoRows) do row:Hide() end
+
+                -- Build grouped display
+                local displayGroups, missingCount = ns.TodoList:BuildDisplayGroups(
+                    currentTodoList.items, UI:GetGenSortMode())
+
+                local HDR_H = 22
+                local ITEM_H = 18
+                local y = 0
+                local rowIdx = 0
+
+                local function GetRow(height)
+                    rowIdx = rowIdx + 1
+                    local row = todoRows[rowIdx]
+                    if not row then
+                        row = CreateFrame("Frame", nil, todoContent)
+                        row.bg = row:CreateTexture(nil, "BACKGROUND")
+                        row.bg:SetAllPoints()
+                        row.icon = row:CreateTexture(nil, "ARTWORK")
+                        row.icon:SetSize(14, 14)
+                        row.icon:SetPoint("LEFT", row, "LEFT", 2, 0)
+                        row.icon:Hide()
+                        row.text = row:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+                        row.text:SetPoint("LEFT", row, "LEFT", 6, 0)
+                        row.text:SetJustifyH("LEFT")
+                        row.rightText = row:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+                        row.rightText:SetPoint("RIGHT", row, "RIGHT", -6, 0)
+                        row.rightText:SetJustifyH("RIGHT")
+                        row.text:SetPoint("RIGHT", row.rightText, "LEFT", -4, 0)
+                        todoRows[rowIdx] = row
+                    end
+                    row:SetHeight(height)
+                    row:ClearAllPoints()
+                    row:SetPoint("TOPLEFT", todoContent, "TOPLEFT", 0, -y)
+                    row:SetPoint("RIGHT", todoContent, "RIGHT", 0, 0)
+                    row.icon:Hide()
+                    row.text:SetText("")
+                    row.rightText:SetText("")
+                    row.text:ClearAllPoints()
+                    row.text:SetPoint("LEFT", row, "LEFT", 6, 0)
+                    row.text:SetPoint("RIGHT", row.rightText, "LEFT", -4, 0)
+                    row:Show()
+                    return row
+                end
+
+                for gi, group in ipairs(displayGroups) do
+                    local isUnassigned = not group.charKey
+                    local isCurrentChar = group.charKey == charKey
+
+                    -- Group header
+                    local hdr = GetRow(HDR_H)
+                    if isUnassigned then
+                        hdr.bg:SetColorTexture(0.15, 0.08, 0.08, 0.7)
+                        local realmName = group.realm ~= "" and group.realm or "unknown realm"
+                        hdr.text:SetText(ns.COLORS.RED .. "Create character on " .. realmName .. "|r" ..
+                            ns.COLORS.GRAY .. "  (" .. #group.items .. " items)|r")
+                    elseif isCurrentChar then
+                        hdr.bg:SetColorTexture(0.1, 0.2, 0.1, 0.8)
+                        local cc = CLASS_COLORS[ns.db.inventory[group.charKey] and ns.db.inventory[group.charKey].class] or "888888"
+                        hdr.text:SetText("|cff" .. cc .. group.charName .. "|r" ..
+                            ns.COLORS.GRAY .. " - " .. group.realm .. "|r" ..
+                            ns.COLORS.GREEN .. "  (YOU — " .. #group.items .. " items)|r")
+                    else
+                        hdr.bg:SetColorTexture(0.12, 0.15, 0.2, 0.8)
+                        local charInv = ns.db.inventory and ns.db.inventory[group.charKey]
+                        local cc = charInv and CLASS_COLORS[charInv.class] or "888888"
+                        hdr.text:SetText("|cff" .. cc .. group.charName .. "|r" ..
+                            ns.COLORS.GRAY .. " - " .. group.realm .. "  (" .. #group.items .. " items)|r")
+                    end
+
+                    local goldStr = FormatGoldValue(group.totalGold)
+                    local goldColor = isUnassigned and ns.COLORS.GRAY or ns.COLORS.YELLOW
+                    hdr.rightText:SetText(goldColor .. "~" .. goldStr .. "|r")
+                    y = y + HDR_H
+
+                    -- Item rows
+                    for ii, item in ipairs(group.items) do
+                        local row = GetRow(ITEM_H)
+                        if isUnassigned then
+                            row.bg:SetColorTexture(0.1, 0.06, 0.06, 0.4)
+                        else
+                            row.bg:SetColorTexture(ii % 2 == 0 and 0.08 or 0.06, ii % 2 == 0 and 0.08 or 0.06, ii % 2 == 0 and 0.12 or 0.1, 0.5)
+                        end
+
+                        local lookupIcon, quality
+                        pcall(function()
+                            lookupIcon, quality = LookupItemInfo(item.itemID, item.itemKey, item.name)
+                        end)
+                        local itemIcon = item.icon or lookupIcon
+                        if itemIcon then
+                            row.icon:SetTexture(itemIcon)
+                            row.icon:ClearAllPoints()
+                            row.icon:SetPoint("LEFT", row, "LEFT", 14, 0)
+                            row.icon:SetDesaturated(isUnassigned)
+                            row.icon:SetAlpha(isUnassigned and 0.5 or 1)
+                            row.icon:Show()
+                            row.text:ClearAllPoints()
+                            row.text:SetPoint("LEFT", row.icon, "RIGHT", 3, 0)
+                            row.text:SetPoint("RIGHT", row.rightText, "LEFT", -4, 0)
+                        else
+                            row.text:ClearAllPoints()
+                            row.text:SetPoint("LEFT", row, "LEFT", 16, 0)
+                            row.text:SetPoint("RIGHT", row.rightText, "LEFT", -4, 0)
+                        end
+
+                        local displayName = item.name or "?"
+                        if isUnassigned then
+                            displayName = ns.COLORS.GRAY .. displayName .. "|r"
+                        elseif quality then
+                            displayName = QualityColorName(displayName, quality)
+                        elseif item.quality and item.quality ~= "" then
+                            displayName = QualityColorName(displayName, item.quality)
+                        end
+                        local qtyStr = (item.quantity or 1) > 1 and (" x" .. (item.quantity or 1)) or ""
+                        row.text:SetText(displayName .. qtyStr)
+
+                        -- Right side: price + source status
+                        local priceStr = item.expectedPrice or ""
+                        local sourceTag = ""
+                        if isUnassigned then
+                            priceStr = ns.COLORS.GRAY .. priceStr .. "|r"
+                        elseif isCurrentChar then
+                            -- Live check: is this item currently in bags?
+                            local inBags = false
+                            pcall(function()
+                                for _, bagIdx in ipairs(ns.INVENTORY_BAGS) do
+                                    local numSlots = C_Container.GetContainerNumSlots(bagIdx)
+                                    for slot = 1, numSlots do
+                                        local info = C_Container.GetContainerItemInfo(bagIdx, slot)
+                                        if info and info.hyperlink then
+                                            local slotID = tonumber((ns:ParseItemLink(info.hyperlink)))
+                                            local itemNumID = tonumber(item.itemID) or tonumber(item.itemKey and item.itemKey:match("^(%d+)"))
+                                            if slotID and itemNumID and slotID == itemNumID then
+                                                inBags = true
+                                                return
+                                            end
+                                        end
+                                    end
+                                end
+                            end)
+                            if inBags then
+                                sourceTag = ns.COLORS.GREEN .. " [in bags]" .. "|r"
+                            elseif item.source == "warbank" then
+                                sourceTag = ns.COLORS.YELLOW .. " [warbank]" .. "|r"
+                            elseif item.source == "bank" then
+                                sourceTag = ns.COLORS.BLUE .. " [bank]" .. "|r"
+                            else
+                                sourceTag = ns.COLORS.RED .. " [not found]" .. "|r"
+                            end
+                        else
+                            -- Other characters: show source from generation
+                            if item.source == "bags" then
+                                sourceTag = ns.COLORS.GREEN .. " [bags]" .. "|r"
+                            elseif item.source == "warbank" then
+                                sourceTag = ns.COLORS.YELLOW .. " [wb]" .. "|r"
+                            elseif item.source == "bank" then
+                                sourceTag = ns.COLORS.BLUE .. " [bank]" .. "|r"
+                            end
+                        end
+                        row.rightText:SetText(priceStr .. sourceTag)
+
+                        y = y + ITEM_H
+                    end
+                    y = y + 2 -- gap between groups
+                end
+
+                todoContent:SetHeight(math.max(1, y))
+
+                -- Status bar
+                local assignedCount = 0
+                for _, g in ipairs(displayGroups) do
+                    if g.charKey then assignedCount = assignedCount + #g.items end
+                end
+                mainFrame.statusText:SetText(
+                    "Nothing to post on " .. charKey:match("^(.-)%-") ..
+                    "  |  " .. assignedCount .. " tasks across " .. #displayGroups .. " groups" ..
+                    (missingCount > 0 and ("  |  " .. missingCount .. " not in inventory") or ""))
             else
-                -- This character is done, show banner + full next steps table below
+                -- No to-do list, but there are next steps or queue items
+                self._postSummaryFrame:Show()
                 local bannerHeight = 50
                 self._postSummaryFrame:ClearAllPoints()
-                self._postSummaryFrame:SetPoint("TOPLEFT", tableContainer, "TOPLEFT", 0, 0)
-                self._postSummaryFrame:SetPoint("TOPRIGHT", tableContainer, "TOPRIGHT", 0, 0)
+                self._postSummaryFrame:SetPoint("TOPLEFT", tableContainer, "TOPLEFT", 0, contentOffset)
+                self._postSummaryFrame:SetPoint("TOPRIGHT", tableContainer, "TOPRIGHT", 0, contentOffset)
                 self._postSummaryFrame:SetHeight(bannerHeight)
-
                 self._postSummaryFrame.title:ClearAllPoints()
                 self._postSummaryFrame.title:SetPoint("TOP", self._postSummaryFrame, "TOP", 0, -10)
-
-                local remaining = ns.Queue:GetPendingCount()
-                self._postSummaryFrame.title:SetText(ns.COLORS.GREEN .. "Done on this character!" .. "|r")
+                self._postSummaryFrame.title:SetText(ns.COLORS.GREEN .. "No to-do list generated yet|r")
                 self._postSummaryFrame.sub:SetText(
-                    ns.COLORS.GRAY .. remaining .. " items remaining across " ..
-                    #nextData .. " step" .. (#nextData ~= 1 and "s" or "") .. "|r")
+                    ns.COLORS.GRAY .. "Go to the To-Do Generator to build your task list.|r")
 
-                -- Next Steps label
-                if not self._nextStepsLabel then
-                    self._nextStepsLabel = tableContainer:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+                local belowBanner = contentOffset - bannerHeight
+                if #nextData > 0 then
+                    if not self._nextStepsLabel then
+                        self._nextStepsLabel = tableContainer:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+                    end
+                    self._nextStepsLabel:ClearAllPoints()
+                    self._nextStepsLabel:SetPoint("TOPLEFT", tableContainer, "TOPLEFT", 4, belowBanner + 2)
+                    self._nextStepsLabel:SetTextColor(0.6, 0.8, 1.0)
+                    self._nextStepsLabel:SetText("Next Steps (" .. #nextData .. ")")
+                    self._nextStepsLabel:Show()
+
+                    self.nextStepsTable.headerFrame:ClearAllPoints()
+                    self.nextStepsTable.headerFrame:SetPoint("TOPLEFT", tableContainer, "TOPLEFT", 0, belowBanner - 10)
+                    self.nextStepsTable.headerFrame:SetPoint("TOPRIGHT", tableContainer, "TOPRIGHT", 0, belowBanner - 10)
+                    self.nextStepsTable.scrollFrame:ClearAllPoints()
+                    self.nextStepsTable.scrollFrame:SetPoint("TOPLEFT", self.nextStepsTable.headerFrame, "BOTTOMLEFT", 0, 0)
+                    self.nextStepsTable.scrollFrame:SetPoint("BOTTOMRIGHT", tableContainer, "BOTTOMRIGHT", -22, 0)
+                    ShowTable(self.nextStepsTable)
+                    self.nextStepsTable:SetData(nextData)
                 end
-                self._nextStepsLabel:ClearAllPoints()
-                self._nextStepsLabel:SetPoint("TOPLEFT", tableContainer, "TOPLEFT", 4, -bannerHeight + 2)
-                self._nextStepsLabel:SetTextColor(0.6, 0.8, 1.0)
-                self._nextStepsLabel:SetText("Next Steps (" .. #nextData .. ")")
-                self._nextStepsLabel:Show()
 
-                -- Position next steps table below banner
-                self.nextStepsTable.headerFrame:ClearAllPoints()
-                self.nextStepsTable.headerFrame:SetPoint("TOPLEFT", tableContainer, "TOPLEFT", 0, -bannerHeight - 10)
-                self.nextStepsTable.headerFrame:SetPoint("TOPRIGHT", tableContainer, "TOPRIGHT", 0, -bannerHeight - 10)
-
-                self.nextStepsTable.scrollFrame:ClearAllPoints()
-                self.nextStepsTable.scrollFrame:SetPoint("TOPLEFT", self.nextStepsTable.headerFrame, "BOTTOMLEFT", 0, 0)
-                self.nextStepsTable.scrollFrame:SetPoint("BOTTOMRIGHT", tableContainer, "BOTTOMRIGHT", -22, 0)
-
-                ShowTable(self.nextStepsTable)
-                self.nextStepsTable:SetData(nextData)
-
-                mainFrame.statusText:SetText("Done here  |  " .. #nextData ..
-                    " next step" .. (#nextData ~= 1 and "s" or "") ..
-                    "  |  " .. remaining .. " items remaining")
+                mainFrame.statusText:SetText("No to-do list  |  Use the Generator to create one")
             end
         else
-            -- Has items to post — show normal tables
+            -- Has items to post — show char tasks at top, then post table, then next steps
             self._postSummaryFrame:Hide()
+
+            -- Offset the post now table header below char tasks
+            self.postNowTable.headerFrame:ClearAllPoints()
+            self.postNowTable.headerFrame:SetPoint("TOPLEFT", tableContainer, "TOPLEFT", 0, contentOffset)
+            self.postNowTable.headerFrame:SetPoint("TOPRIGHT", tableContainer, "TOPRIGHT", 0, contentOffset)
+
             ShowTable(self.postNowTable)
 
             self.postNowTable:SetRowClickHandler(function(rowData, button)
-                if button == "RightButton" and rowData._queueIndex then
-                    if IsShiftKeyDown() then
-                        ns.Queue:Skip(rowData._queueIndex)
-                        ns:Print(ns.COLORS.ORANGE .. "Skipped:|r " .. rowData.name .. " (will reappear in 24h)")
-                    else
-                        ns.Queue:MarkPosted(rowData._queueIndex)
-                        ns:Print("Posted: " .. rowData.name .. " -> moved to log")
+                if button == "RightButton" then
+                    if rowData._taskIndex and ns.TodoList then
+                        -- TodoList item
+                        if IsShiftKeyDown() then
+                            ns.TodoList:SkipTask(rowData._taskIndex, "manual skip")
+                            ns:Print(ns.COLORS.ORANGE .. "Skipped:|r " .. rowData.name)
+                        else
+                            ns.TodoList:MoveTaskToLog(rowData._taskIndex)
+                            ns:Print("Posted: " .. rowData.name .. " -> moved to log")
+                        end
+                        self:Refresh()
+                        if self.RefreshMini then self:RefreshMini() end
+                    elseif rowData._queueIndex then
+                        -- Queue item (legacy)
+                        if IsShiftKeyDown() then
+                            ns.Queue:Skip(rowData._queueIndex)
+                            ns:Print(ns.COLORS.ORANGE .. "Skipped:|r " .. rowData.name .. " (will reappear in 24h)")
+                        else
+                            ns.Queue:MarkPosted(rowData._queueIndex)
+                            ns:Print("Posted: " .. rowData.name .. " -> moved to log")
+                        end
+                        self:Refresh()
+                        if self.RefreshMini then self:RefreshMini() end
                     end
-                    self:Refresh()
-                    self:RefreshMini()
                 end
             end)
             self.postNowTable:SetData(data)
 
             if #nextData > 0 then
-                local postNowHeight = math.max(60, (#data + 1) * 20 + 22)
-                if postNowHeight > 250 then postNowHeight = 250 end
+                local postNowHeight = math.max(60, (#data + 1) * 20 + 22) + charTaskHeight
+                if postNowHeight > 250 + charTaskHeight then postNowHeight = 250 + charTaskHeight end
 
                 -- Section label
                 if not self._nextStepsLabel then
@@ -2111,7 +2967,7 @@ function UI:Refresh()
                 self.postNowTable.scrollFrame:ClearAllPoints()
                 self.postNowTable.scrollFrame:SetPoint("TOPLEFT", self.postNowTable.headerFrame, "BOTTOMLEFT", 0, 0)
                 self.postNowTable.scrollFrame:SetPoint("RIGHT", tableContainer, "RIGHT", -22, 0)
-                self.postNowTable.scrollFrame:SetHeight(postNowHeight - 22)
+                self.postNowTable.scrollFrame:SetHeight(postNowHeight - charTaskHeight - 22)
             else
                 if self._nextStepsLabel then self._nextStepsLabel:Hide() end
                 -- Reset postNow scroll to fill the full container
@@ -2123,43 +2979,8 @@ function UI:Refresh()
             mainFrame.statusText:SetText(postCount .. " items to post  |  " .. #nextData .. " next steps  |  Right-click: posted  |  Shift+Right: skip")
         end
 
-    elseif self.currentPage == "queue" then
-        mainFrame.pageTitle:SetText(ns.COLORS.YELLOW .. "Full Queue" .. "|r")
-        LayoutActionBtns(mainFrame.actionBtns.clearQueue)
-        ShowTable(self.queueTable)
-
-        local data = BuildQueueData()
-        self.queueTable:SetRowClickHandler(function(rowData, button)
-            if button == "RightButton" and rowData._queueItem then
-                if rowData._queueItem.status == "skipped" then
-                    ns.Queue:Unskip(rowData._queueIndex)
-                    ns:Print(ns.COLORS.GREEN .. "Unskipped:|r " .. rowData.name)
-                    self:Refresh()
-                    self:RefreshMini()
-                elseif rowData._queueItem.status == "pending" then
-                    if IsShiftKeyDown() then
-                        ns.Queue:Skip(rowData._queueIndex)
-                        ns:Print(ns.COLORS.ORANGE .. "Skipped:|r " .. rowData.name)
-                    else
-                        ns.Queue:MarkPosted(rowData._queueIndex)
-                        ns:Print("Posted: " .. rowData.name .. " -> moved to log")
-                    end
-                    self:Refresh()
-                    self:RefreshMini()
-                end
-            end
-        end)
-        self.queueTable:SetData(data)
-        local skippedCount = 0
-        for _, item in ipairs(ns.db.queue) do
-            if item.status == "skipped" then skippedCount = skippedCount + 1 end
-        end
-        local queueStatus = #ns.db.queue .. " items in queue"
-        if skippedCount > 0 then
-            queueStatus = queueStatus .. "  |  " .. skippedCount .. " skipped"
-        end
-        queueStatus = queueStatus .. "  |  Right-click: posted  |  Shift+Right: skip"
-        mainFrame.statusText:SetText(queueStatus)
+    elseif self.currentPage == "generator" then
+        self:RefreshGeneratorPage(pending)
 
     elseif self.currentPage == "log" then
         mainFrame.pageTitle:SetText(ns.COLORS.GREEN .. "Posted Items Log" .. "|r")
@@ -2192,34 +3013,63 @@ function UI:Refresh()
         mainFrame.statusText:SetText(logStatus)
 
     elseif self.currentPage == "inventory" then
-        mainFrame.pageTitle:SetText("Untracked Inventory")
+        mainFrame.pageTitle:SetText("Inventory")
         LayoutActionBtns(mainFrame.actionBtns.dnt)
         ShowTable(self.inventoryTable)
 
-        local data = BuildInventoryData()
+        local data = BuildFullInventoryData()
         self.inventoryTable:SetRowClickHandler(function(rowData, button)
             if button == "RightButton" then
-                if IsShiftKeyDown() then
-                    local added = ns.Queue:Add({{
-                        itemKey  = rowData._itemKey,
-                        itemID   = rowData._itemID or "",
-                        name     = rowData._itemName or "Unknown",
-                        quantity = rowData._quantity or 1,
-                    }})
-                    if added > 0 then
-                        ns:Print(ns.COLORS.GREEN .. "Added to queue:|r " .. (rowData._itemName or rowData.name))
+                local statusKey = rowData._statusKey
+                if statusKey == "Untracked" then
+                    if IsShiftKeyDown() then
+                        local added = ns.Queue:Add({{
+                            itemKey  = rowData._itemKey,
+                            itemID   = rowData._itemID or "",
+                            name     = rowData._itemName or "Unknown",
+                            quantity = rowData._quantity or 1,
+                        }})
+                        if added > 0 then
+                            ns:Print(ns.COLORS.GREEN .. "Added to queue:|r " .. (rowData._itemName or rowData.name))
+                        else
+                            ns:Print(ns.COLORS.GRAY .. "Already in queue:|r " .. (rowData._itemName or rowData.name))
+                        end
                     else
-                        ns:Print(ns.COLORS.GRAY .. "Already in queue:|r " .. (rowData._itemName or rowData.name))
+                        ns.Queue:AddDoNotTrack(rowData._itemID, rowData._itemName)
+                        ns:Print("Do not track: " .. rowData.name)
                     end
-                else
-                    ns.Queue:AddDoNotTrack(rowData._itemID, rowData._itemName)
-                    ns:Print("Do not track: " .. rowData.name)
+                elseif statusKey == "DNT" then
+                    ns.Queue:RemoveDoNotTrack(tostring(rowData._itemID))
+                    ns:Print("Removed from Do Not Track: " .. (rowData._itemName or rowData.name))
+                elseif statusKey == "Queued" then
+                    -- Find and remove from queue
+                    if IsShiftKeyDown() then
+                        for i, qItem in ipairs(ns.db.queue) do
+                            if qItem.itemKey == rowData._itemKey or
+                                (qItem.name and rowData._itemName and qItem.name:lower() == rowData._itemName:lower()) then
+                                table.remove(ns.db.queue, i)
+                                ns:Print(ns.COLORS.RED .. "Removed from queue:|r " .. (rowData._itemName or rowData.name))
+                                break
+                            end
+                        end
+                    end
                 end
                 self:Refresh()
             end
         end)
         self.inventoryTable:SetData(data)
-        mainFrame.statusText:SetText(#data .. " untracked items  |  Right-click: DNT  |  Shift+Right: Add to queue")
+
+        -- Count by status
+        local statusCounts = {Queued = 0, Posted = 0, Untracked = 0, DNT = 0}
+        for _, row in ipairs(data) do
+            statusCounts[row._statusKey] = (statusCounts[row._statusKey] or 0) + 1
+        end
+        local statusParts = {#data .. " tradeable items"}
+        if statusCounts.Queued > 0 then table.insert(statusParts, ns.COLORS.GREEN .. statusCounts.Queued .. " queued|r") end
+        if statusCounts.Posted > 0 then table.insert(statusParts, ns.COLORS.YELLOW .. statusCounts.Posted .. " posted|r") end
+        if statusCounts.Untracked > 0 then table.insert(statusParts, ns.COLORS.GRAY .. statusCounts.Untracked .. " untracked|r") end
+        if statusCounts.DNT > 0 then table.insert(statusParts, ns.COLORS.RED .. statusCounts.DNT .. " DNT|r") end
+        mainFrame.statusText:SetText(table.concat(statusParts, "  |  "))
 
     elseif self.currentPage == "characters" then
         mainFrame.pageTitle:SetText("Characters & Realms")
@@ -2229,16 +3079,53 @@ function UI:Refresh()
 
         -- Show known characters table
         ShowTable(self.charsTable)
-        self.charsTable:SetRowClickHandler(function(rowData, button)
+        self.charsTable:SetRowClickHandler(function(rowData, button, rowIndex)
             if button == "RightButton" and rowData._charKey then
-                if ns.db.hiddenCharacters[rowData._charKey] then
-                    ns.db.hiddenCharacters[rowData._charKey] = nil
-                    ns:Print("Re-enabled character: " .. rowData._charKey)
+                if IsShiftKeyDown() then
+                    -- Shift+Right-click: move character up in manual order
+                    local order = ns.db.settings.characterOrder
+                    -- Ensure all chars are in the order list
+                    local seen = {}
+                    for _, k in ipairs(order) do seen[k] = true end
+                    for ck in pairs(ns.db.inventory) do
+                        if not seen[ck] then table.insert(order, ck) end
+                    end
+                    -- Find and move up
+                    for idx, ck in ipairs(order) do
+                        if ck == rowData._charKey and idx > 1 then
+                            order[idx], order[idx - 1] = order[idx - 1], order[idx]
+                            ns:Print("Moved up: " .. rowData._charKey)
+                            break
+                        end
+                    end
+                    self:Refresh()
+                elseif IsControlKeyDown() then
+                    -- Ctrl+Right-click: move character down in manual order
+                    local order = ns.db.settings.characterOrder
+                    local seen = {}
+                    for _, k in ipairs(order) do seen[k] = true end
+                    for ck in pairs(ns.db.inventory) do
+                        if not seen[ck] then table.insert(order, ck) end
+                    end
+                    for idx, ck in ipairs(order) do
+                        if ck == rowData._charKey and idx < #order then
+                            order[idx], order[idx + 1] = order[idx + 1], order[idx]
+                            ns:Print("Moved down: " .. rowData._charKey)
+                            break
+                        end
+                    end
+                    self:Refresh()
                 else
-                    ns.db.hiddenCharacters[rowData._charKey] = true
-                    ns:Print("Hidden character: " .. rowData._charKey .. " (will be skipped for task routing)")
+                    -- Plain right-click: toggle hide/show
+                    if ns.db.hiddenCharacters[rowData._charKey] then
+                        ns.db.hiddenCharacters[rowData._charKey] = nil
+                        ns:Print("Re-enabled character: " .. rowData._charKey)
+                    else
+                        ns.db.hiddenCharacters[rowData._charKey] = true
+                        ns:Print("Hidden character: " .. rowData._charKey .. " (will be skipped for task routing)")
+                    end
+                    self:Refresh()
                 end
-                self:Refresh()
             end
         end)
         self.charsTable:SetData(charData)
@@ -2262,7 +3149,7 @@ function UI:Refresh()
                 self._needCharsLabel = tableContainer:CreateFontString(nil, "OVERLAY", "GameFontNormal")
             end
             self._needCharsLabel:ClearAllPoints()
-            self._needCharsLabel:SetPoint("TOPLEFT", tableContainer, "TOPLEFT", 4, -charsHeight + 2)
+            self._needCharsLabel:SetPoint("TOPLEFT", tableContainer, "TOPLEFT", 4, -charsHeight - 2)
             self._needCharsLabel:SetTextColor(1, 0.4, 0.4)
             self._needCharsLabel:SetText("Realms Needing a Character (" .. #needData .. ")")
             self._needCharsLabel:Show()
@@ -2315,7 +3202,21 @@ function UI:Refresh()
         LayoutActionBtns(mainFrame.actionBtns.exportSaved, mainFrame.actionBtns.exportAll,
             mainFrame.actionBtns.exportWarbank, mainFrame.actionBtns.exportBank, mainFrame.actionBtns.exportBags)
         exportPage:Show()
-        mainFrame.statusText:SetText("FlippingPalInventoryExport compatible CSV format")
+        if UI._updateExportToggles then UI._updateExportToggles() end
+
+        -- Check for pending export from Generator's "Export to FP"
+        if UI._pendingExportCSV then
+            UI._exportEdit:SetText(UI._pendingExportCSV)
+            UI._exportEdit:HighlightText()
+            UI._exportEdit:SetFocus(true)
+            UI._exportStatus:SetText(ns.COLORS.GREEN .. (UI._pendingExportCount or 0) .. " items|r exported from item pool  |  Ctrl+A then Ctrl+C to copy")
+            mainFrame.statusText:SetText("Item pool export  |  Ctrl+A then Ctrl+C to copy")
+            UI._pendingExportCSV = nil
+            UI._pendingExportCount = nil
+        else
+            local fmtName = ns.Export:GetFormat() == "aaa" and "AAA JSON" or "FP CSV"
+            mainFrame.statusText:SetText(fmtName .. " export  |  Ctrl+A then Ctrl+C to copy")
+        end
 
     elseif self.currentPage == "tsm" then
         mainFrame.pageTitle:SetText("TSM Integration")
@@ -2324,6 +3225,15 @@ function UI:Refresh()
             self:ShowTSMPage()
         end
         mainFrame.statusText:SetText(ns.TSM:IsAvailable() and "TSM detected" or "TSM not installed")
+
+    elseif self.currentPage == "auctionator" then
+        mainFrame.pageTitle:SetText("Auctionator Integration")
+        HideAllActionBtns()
+        if self.ShowAuctionatorPage then
+            self:ShowAuctionatorPage()
+        end
+        local auctAvailable = type(Auctionator) == "table"
+        mainFrame.statusText:SetText(auctAvailable and "Auctionator detected" or "Auctionator not installed")
 
     elseif self.currentPage == "settings" then
         mainFrame.pageTitle:SetText("Settings")
@@ -2369,10 +3279,23 @@ end
 mainFrame:Hide()
 UI.mainFrame = mainFrame
 
+-- Expose internals for GeneratorPage.lua
+UI._LayoutActionBtns = LayoutActionBtns
+UI._HideAllActionBtns = HideAllActionBtns
+UI._ShowTable = ShowTable
+UI._LookupItemInfo = LookupItemInfo
+UI._QualityColorName = QualityColorName
+UI._CLASS_COLORS = CLASS_COLORS
+UI._FormatGoldValue = FormatGoldValue
+
 mainFrame:SetScript("OnShow", function()
     -- Restore saved size
     if ns.db and ns.db.settings.frameWidth and ns.db.settings.frameHeight then
         mainFrame:SetSize(ns.db.settings.frameWidth, ns.db.settings.frameHeight)
+    end
+    -- Restore saved sidebar width
+    if ns.db and ns.db.settings.sidebarWidth then
+        sidebar:SetWidth(math.max(80, math.min(200, ns.db.settings.sidebarWidth)))
     end
     UI:Refresh()
 end)

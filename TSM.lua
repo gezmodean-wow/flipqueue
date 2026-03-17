@@ -78,11 +78,38 @@ end
 --------------------------
 
 -- Get list of available TSM profiles
+-- Merges TSM_API.GetProfiles with profiles found in TradeSkillMasterDB keys
 function TSM:GetProfiles()
-    if not self:IsAvailable() then return {} end
     local result = {}
-    local ok = pcall(TSM_API.GetProfiles, TSM_API, result)
-    return ok and result or {}
+    local seen = {}
+
+    -- Source 1: TSM_API (runtime profiles)
+    if self:IsAvailable() and TSM_API.GetProfiles then
+        local apiProfiles = {}
+        local ok = pcall(TSM_API.GetProfiles, TSM_API, apiProfiles)
+        if ok then
+            for _, name in ipairs(apiProfiles) do
+                if not seen[name] then
+                    seen[name] = true
+                    result[#result + 1] = name
+                end
+            end
+        end
+    end
+
+    -- Source 2: Scan TradeSkillMasterDB keys for "p@<profile>@" patterns
+    if type(TradeSkillMasterDB) == "table" then
+        for key in pairs(TradeSkillMasterDB) do
+            local profile = key:match("^p@(.-)@")
+            if profile and profile ~= "" and not seen[profile] then
+                seen[profile] = true
+                result[#result + 1] = profile
+            end
+        end
+    end
+
+    table.sort(result)
+    return result
 end
 
 -- Get active TSM profile name
@@ -119,6 +146,13 @@ end
 function TSM:GetGroupsDB(profile)
     if not profile or not TradeSkillMasterDB then return nil end
     return TradeSkillMasterDB["p@" .. profile .. "@userData@groups"]
+end
+
+-- Read items table from TradeSkillMasterDB for a profile
+-- Returns: table of tsmItemString -> groupPath (e.g., ["i:12345"] = "Crafts`Enchanting")
+function TSM:GetItemsDB(profile)
+    if not profile or not TradeSkillMasterDB then return nil end
+    return TradeSkillMasterDB["p@" .. profile .. "@userData@items"]
 end
 
 -- Get list of Auctioning operation names for a profile

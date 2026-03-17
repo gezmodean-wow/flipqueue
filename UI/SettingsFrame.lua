@@ -182,7 +182,7 @@ function UI:CreateSettingsPanel(parent)
         local row = CreateFrame("Frame", nil, content)
         row:SetPoint("TOPLEFT", content, "TOPLEFT", LEFT_MARGIN, y)
         row:SetPoint("RIGHT", content, "RIGHT", RIGHT_MARGIN, 0)
-        row:SetHeight(52)
+        row:SetHeight(68)
 
         local title = row:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
         title:SetPoint("TOPLEFT", row, "TOPLEFT", 0, 0)
@@ -221,14 +221,14 @@ function UI:CreateSettingsPanel(parent)
         settingsWidgets.batchSizeSlider = slider
         settingsWidgets.batchSizeLabel = valLabel
     end
-    y = y - 52 - ITEM_SPACING
+    y = y - 68 - ITEM_SPACING
 
     -- Default sell quantity slider
     do
         local row = CreateFrame("Frame", nil, content)
         row:SetPoint("TOPLEFT", content, "TOPLEFT", LEFT_MARGIN, y)
         row:SetPoint("RIGHT", content, "RIGHT", RIGHT_MARGIN, 0)
-        row:SetHeight(52)
+        row:SetHeight(68)
 
         local title = row:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
         title:SetPoint("TOPLEFT", row, "TOPLEFT", 0, 0)
@@ -262,12 +262,59 @@ function UI:CreateSettingsPanel(parent)
         descText:SetJustifyH("LEFT")
         descText:SetWordWrap(true)
         descText:SetTextColor(DESC_COLOR[1], DESC_COLOR[2], DESC_COLOR[3])
-        descText:SetText("How many of each item to post by default. TSM's Auctioning postCap overrides this when higher.")
+        descText:SetText("How many of each item to post by default. If TSM is enabled, its 'Post Cap' setting will override this.")
 
         settingsWidgets.sellQtySlider = slider
         settingsWidgets.sellQtyLabel = valLabel
     end
-    y = y - 52 - SECTION_SPACING
+    y = y - 68 - ITEM_SPACING
+
+    -- Expiry alert timer slider
+    do
+        local row = CreateFrame("Frame", nil, content)
+        row:SetPoint("TOPLEFT", content, "TOPLEFT", LEFT_MARGIN, y)
+        row:SetPoint("RIGHT", content, "RIGHT", RIGHT_MARGIN, 0)
+        row:SetHeight(68)
+
+        local title = row:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+        title:SetPoint("TOPLEFT", row, "TOPLEFT", 0, 0)
+        title:SetText("Expiry alert timer (minutes)")
+
+        local slider = CreateFrame("Slider", "FlipQueueExpiryAlertSlider", row, "OptionsSliderTemplate")
+        slider:SetWidth(180)
+        slider:SetHeight(16)
+        slider:SetPoint("TOPLEFT", title, "BOTTOMLEFT", 4, -8)
+        slider:SetMinMaxValues(5, 360)
+        slider:SetValueStep(5)
+        slider:SetObeyStepOnDrag(true)
+        slider.Low:SetText("5m")
+        slider.High:SetText("6h")
+
+        local valLabel = row:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+        valLabel:SetPoint("LEFT", slider, "RIGHT", 8, 0)
+        valLabel:SetTextColor(1, 1, 1)
+
+        slider:SetScript("OnValueChanged", function(self, value)
+            value = math.floor(value / 5 + 0.5) * 5
+            local displayStr = value >= 60 and string.format("%.1fh", value / 60) or (value .. "m")
+            valLabel:SetText(displayStr)
+            if ns.db then
+                ns.db.settings.expiryAlertMinutes = value
+            end
+        end)
+
+        local descText = row:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+        descText:SetPoint("TOPLEFT", slider, "BOTTOMLEFT", -4, -4)
+        descText:SetPoint("RIGHT", row, "RIGHT", 0, 0)
+        descText:SetJustifyH("LEFT")
+        descText:SetWordWrap(true)
+        descText:SetTextColor(DESC_COLOR[1], DESC_COLOR[2], DESC_COLOR[3])
+        descText:SetText("Show 'expiring soon' alerts for auctions within this many minutes of expiry. Affects login messages, To-Do page, and mini view.")
+
+        settingsWidgets.expiryAlertSlider = slider
+        settingsWidgets.expiryAlertLabel = valLabel
+    end
+    y = y - 68 - SECTION_SPACING
 
     ------------------------------------------------
     -- Section: Bank Tab Selection
@@ -793,6 +840,15 @@ function UI:RefreshSettings()
         settingsWidgets.sellQtySlider:SetValue(sellQty)
         if settingsWidgets.sellQtyLabel then
             settingsWidgets.sellQtyLabel:SetText(tostring(sellQty))
+        end
+    end
+    -- Expiry alert slider
+    if settingsWidgets.expiryAlertSlider then
+        local mins = ns.db.settings.expiryAlertMinutes or 15
+        settingsWidgets.expiryAlertSlider:SetValue(mins)
+        if settingsWidgets.expiryAlertLabel then
+            local displayStr = mins >= 60 and string.format("%.1fh", mins / 60) or (mins .. "m")
+            settingsWidgets.expiryAlertLabel:SetText(displayStr)
         end
     end
     -- Bank tab selection

@@ -22,6 +22,7 @@ Scanner.lua
 Import.lua
 Export.lua
 Queue.lua
+TodoList.lua
 Tracker.lua
 UI\ScrollTable.lua
 UI\ImportFrame.lua
@@ -29,6 +30,9 @@ UI\UntrackedSection.lua
 UI\MiniView.lua
 UI\SettingsFrame.lua
 UI\TSMFrame.lua
+UI\TSMGroupTree.lua
+UI\AuctionatorFrame.lua
 UI\MinimapButton.lua
 UI\MainFrame.lua
+UI\GeneratorPage.lua
 UI\SlashCommands.lua

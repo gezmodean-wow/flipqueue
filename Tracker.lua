@@ -133,7 +133,26 @@ function Tracker:CheckOwnedAuctions()
     if not ns.db or not C_AuctionHouse then return end
 
     local owned = C_AuctionHouse.GetOwnedAuctions()
-    if not owned or #owned == 0 then return end
+    if not owned then return end
+
+    -- If no auctions on AH, reconcile all "active" log entries for this character
+    if #owned == 0 then
+        local charKey = ns:GetCharKey()
+        local cleared = 0
+        for _, entry in ipairs(ns.db.log) do
+            if entry.auctionStatus == "active" and entry.charKey == charKey then
+                entry.auctionStatus = "collected"
+                cleared = cleared + 1
+            end
+        end
+        if cleared > 0 then
+            ns:PrintDebug("Reconciled " .. cleared ..
+                " log entries (no auctions on AH).")
+            if ns.UI and ns.UI.Refresh then ns.UI:Refresh() end
+            if ns.UI and ns.UI.RefreshMini then ns.UI:RefreshMini() end
+        end
+        return
+    end
 
     local currentRealm = GetRealmName()
 
@@ -185,9 +204,9 @@ function Tracker:CheckOwnedAuctions()
     local consumed = {}
 
     local found = 0
+    -- Match against queue items
     for i = #ns.db.queue, 1, -1 do
         local queueItem = ns.db.queue[i]
-        -- Only match queue items targeted at this realm
         if queueItem.status == "pending" and ns:RealmMatches(queueItem.targetRealm, currentRealm) then
             for aIdx, auction in ipairs(owned) do
                 if not consumed[aIdx] then
@@ -201,14 +220,43 @@ function Tracker:CheckOwnedAuctions()
                         local auctionQty = auction.quantity or 1
                         local queueQty = queueItem.quantity or 1
                         if auctionQty < queueQty then
-                            ns:Print(ns.COLORS.YELLOW .. "Already listed:|r " .. queueItem.name ..
+                            ns:PrintDebug("Already listed: " .. queueItem.name ..
                                 " (x" .. auctionQty .. " of " .. queueQty .. ") — moving to log")
                         else
-                            ns:Print(ns.COLORS.YELLOW .. "Already listed:|r " .. queueItem.name .. " — moving to log")
+                            ns:PrintDebug("Already listed: " .. queueItem.name .. " — moving to log")
                         end
                         local expirySec = auction.timeLeftSeconds
                         ns.Queue:MoveToLog(i, nil, expirySec, auctionQty)
                         break
+                    end
+                end
+            end
+        end
+    end
+
+    -- Match against active to-do list items
+    if ns.TodoList then
+        local todoList = ns.TodoList:GetCurrentList()
+        if todoList and todoList.items then
+            local charKey = ns:GetCharKey()
+            for taskIdx, todoItem in ipairs(todoList.items) do
+                if todoItem.status == "pending" and todoItem.assignedChar == charKey
+                    and ns:RealmMatches(todoItem.targetRealm or "", currentRealm) then
+                    for aIdx, auction in ipairs(owned) do
+                        if not consumed[aIdx] then
+                            local auctionName = auctionNames[aIdx]
+                            local auctionKey = tostring(auction.itemKey.itemID) .. ";;"
+                            local todoResolvedID = ns:ResolveItemID(todoItem)
+                            local matches = ns:ItemsMatch(auctionKey, auctionName, todoItem, todoResolvedID or false)
+
+                            if matches then
+                                consumed[aIdx] = true
+                                local auctionQty = auction.quantity or 1
+                                ns:PrintDebug("Listed: " .. (todoItem.name or "?") .. " — marking done")
+                                ns.TodoList:MoveTaskToLog(taskIdx, nil, auction.timeLeftSeconds, auctionQty)
+                                break
+                            end
+                        end
                     end
                 end
             end
@@ -286,10 +334,46 @@ function Tracker:CheckOwnedAuctions()
     end
 
     if recovered > 0 then
-        ns:Print(ns.COLORS.YELLOW .. "Recovered " .. recovered .. " untracked auction(s) from AH.|r")
+        ns:PrintDebug("Recovered " .. recovered .. " untracked auction(s) from AH.")
     end
 
-    if found > 0 or recovered > 0 then
+    -- Reconcile: mark log entries as "collected" if they claim active on this
+    -- character but are NOT found in the owned auctions list.
+    -- The owned auctions list is the source of truth for what's actually on the AH.
+    -- Build a set of item IDs actually on the AH (from owned auctions)
+    local ownedByItemID = {} -- itemID string -> count on AH
+    for _, auction in ipairs(owned) do
+        local aID = tostring(auction.itemKey.itemID)
+        ownedByItemID[aID] = (ownedByItemID[aID] or 0) + 1
+    end
+
+    -- Walk log entries for this character: if "active" but not on AH, mark collected
+    local reconciledCount = 0
+    local ownedConsumed = {} -- track how many owned auctions we've "used up" per ID
+    for _, entry in ipairs(ns.db.log) do
+        if entry.auctionStatus == "active" and entry.charKey == charKey then
+            local entryID = tostring((entry.itemKey or ""):match("^(%d+)"))
+            if entryID and entryID ~= "" then
+                local onAH = ownedByItemID[entryID] or 0
+                local used = ownedConsumed[entryID] or 0
+                if used < onAH then
+                    -- This log entry is accounted for by an actual auction
+                    ownedConsumed[entryID] = used + 1
+                else
+                    -- No matching auction on AH — this entry is stale
+                    entry.auctionStatus = "collected"
+                    reconciledCount = reconciledCount + 1
+                end
+            end
+        end
+    end
+
+    if reconciledCount > 0 then
+        ns:PrintDebug("Reconciled " .. reconciledCount ..
+            " stale log entries (not found on AH).|r")
+    end
+
+    if found > 0 or recovered > 0 or reconciledCount > 0 then
         if ns.UI and ns.UI.Refresh then ns.UI:Refresh() end
         if ns.UI and ns.UI.RefreshMini then ns.UI:RefreshMini() end
     end
@@ -304,62 +388,71 @@ local PULL_TIMEOUT = 5  -- seconds to wait for locks before giving up on a batch
 function Tracker:AutoPullFromBank()
     if not ns.db or not ns.db.settings.autoPullBank then return end
 
-    local allBankTabs = {}
-    for _, b in ipairs(ns:GetEnabledBankTabs()) do table.insert(allBankTabs, b) end
-    for _, b in ipairs(ns:GetEnabledWarbankTabs()) do table.insert(allBankTabs, b) end
+    local charKey = ns:GetCharKey()
+    local currentRealm = charKey:match("%-(.+)$") or GetRealmName()
+    local tsmEnabled = ns.TSM and ns.TSM:IsEnabled()
+    local defaultQty = ns.db.settings.defaultSellQty or 1
 
-    -- Only pull items that are targeted for this character's realm
-    local currentRealm = GetRealmName()
+    -- Build needed list from the active to-do list
+    local needed = {} -- item -> qty still needed from bank
 
-    local needed = {}
-    for _, queueItem in ipairs(ns.db.queue) do
-        if queueItem.status == "pending" and ns:RealmMatches(queueItem.targetRealm, currentRealm) then
-            -- Determine target quantity: TSM postCap > queue quantity > default setting
-            local targetQty = queueItem.quantity or ns.db.settings.defaultSellQty or 1
-            if ns.TSM:IsEnabled() then
-                local op = ns.TSM:GetItemAuctioningOp(queueItem.itemKey)
-                if op and op.postCap then
-                    local tsmQty = tonumber(op.postCap)
-                    if tsmQty and tsmQty > targetQty then
-                        targetQty = tsmQty
+    if ns.TodoList and ns.TodoList:GetCurrentList() then
+        local todoTasks = ns.TodoList:GetCharacterTasks(charKey)
+        for _, task in ipairs(todoTasks) do
+            local item = task.item
+            if ns:RealmMatches(item.targetRealm or "", currentRealm) then
+                local targetQty = math.max(item.quantity or 1, defaultQty)
+                if tsmEnabled then
+                    local op = ns.TSM:GetItemAuctioningOp(item.itemKey)
+                    if op and op.postCap then
+                        local tsmQty = tonumber(op.postCap)
+                        if tsmQty and tsmQty > 0 then targetQty = tsmQty end
                     end
                 end
-            end
-            local inBags = CountInBags(queueItem)
-            local stillNeeded = targetQty - inBags
-            if stillNeeded > 0 then
-                needed[queueItem] = stillNeeded
+                local inBags = CountInBags(item)
+                local stillNeeded = targetQty - inBags
+                if stillNeeded > 0 then
+                    needed[item] = stillNeeded
+                end
             end
         end
     end
 
-    -- Build a list of moves to make (bag, slot, name)
+    if not next(needed) then return end
+
+    local allBankTabs = {}
+    for _, b in ipairs(ns:GetEnabledBankTabs()) do table.insert(allBankTabs, b) end
+    for _, b in ipairs(ns:GetEnabledWarbankTabs()) do table.insert(allBankTabs, b) end
+
+    if not next(needed) then return end
+
+    -- Build a list of moves to make — only pull items that match task queue items
     local moves = {}
     for _, bagIndex in ipairs(allBankTabs) do
         local ok, numSlots = pcall(C_Container.GetContainerNumSlots, bagIndex)
         if ok and numSlots then
             for slot = 1, numSlots do
                 local ok2, info = pcall(C_Container.GetContainerItemInfo, bagIndex, slot)
-                if ok2 and info and info.hyperlink then
+                if ok2 and info and info.hyperlink and not info.isBound then
                     local itemID, bonusIDs, modifiers = ns:ParseItemLink(info.hyperlink)
                     if itemID then
                         local key = ns:MakeItemKey(itemID, bonusIDs, modifiers)
                         local slotName  -- lazy name cache per slot
                         for queueItem, count in pairs(needed) do
                             if count > 0 then
-                            -- Try key/ID matching first, only resolve name if needed
-                            local matched = ns:ItemsMatch(key, nil, queueItem, nil, false)
-                            if not matched then
-                                if slotName == nil then slotName = GetNameFromLink(info.hyperlink) or false end
-                                if slotName then
-                                    matched = ns:ItemsMatch(key, slotName, queueItem, nil, false)
+                                -- Use false for resolvedID to prevent wrong ID matches
+                                local matched = ns:ItemsMatch(key, nil, queueItem, false, false)
+                                if not matched then
+                                    if slotName == nil then slotName = GetNameFromLink(info.hyperlink) or false end
+                                    if slotName then
+                                        matched = ns:ItemsMatch(key, slotName, queueItem, false, false)
+                                    end
                                 end
-                            end
-                            if matched then
-                                table.insert(moves, {bag = bagIndex, slot = slot, name = queueItem.name or "?"})
-                                needed[queueItem] = count - (info.stackCount or 1)
-                                break
-                            end
+                                if matched then
+                                    table.insert(moves, {bag = bagIndex, slot = slot, name = queueItem.name or "?"})
+                                    needed[queueItem] = count - (info.stackCount or 1)
+                                    break
+                                end
                             end -- count > 0
                         end
                     end
@@ -402,6 +495,7 @@ function Tracker:AutoPullFromBank()
         C_Timer.After(1, function()
             if ns.Scanner then ns.Scanner:ScanCurrentCharacter() end
             if ns.UI and ns.UI.Refresh then ns.UI:Refresh() end
+            if ns.UI and ns.UI.RefreshMini then ns.UI:RefreshMini() end
         end)
     end
 
@@ -487,7 +581,7 @@ function Tracker:AutoPullFromBank()
         end
     end
 
-    ns:Print(ns.COLORS.YELLOW .. "Pulling " .. totalMoves .. " item(s) from bank..." .. "|r")
+    ns:PrintDebug("Pulling " .. totalMoves .. " item(s) from bank...")
     ExecuteNextBatch()
 end
 
@@ -495,33 +589,172 @@ end
 -- Warbank Gold Withdrawal
 --------------------------
 
+-- Track withdrawals per session to avoid re-withdrawing
+local sessionWithdrawnCopper = 0
+local sessionWithdrawnRealm = nil
+
 function Tracker:AutoWithdrawGold()
     if not ns.db or not ns.db.settings.autoWithdrawGold then return end
     if not C_Bank or not C_Bank.WithdrawMoney then return end
 
-    local currentRealm = GetRealmName()
+    -- Only withdraw if this character actually has tasks on its realm
+    local charKey = ns:GetCharKey()
+    local currentRealm = charKey:match("%-(.+)$") or GetRealmName()
+    local hasTasks = false
+    if ns.Queue then
+        local allTasks = ns.Queue:GetCharacterTasks(charKey)
+        for _, task in ipairs(allTasks) do
+            if ns:RealmMatches(task.queueItem.targetRealm, currentRealm) then
+                hasTasks = true
+                break
+            end
+        end
+    end
+    if not hasTasks then return end
 
-    -- Calculate estimated AH fees from queue items for this realm
-    local totalExpectedGold = 0
-    for _, queueItem in ipairs(ns.db.queue) do
-        if queueItem.status == "pending" and ns:RealmMatches(queueItem.targetRealm, currentRealm) then
-            totalExpectedGold = totalExpectedGold + ns:ParseGoldValue(queueItem.expectedPrice)
+    -- Reset session tracker if realm changed
+    if sessionWithdrawnRealm ~= currentRealm then
+        sessionWithdrawnCopper = 0
+        sessionWithdrawnRealm = currentRealm
+    end
+
+    -- Calculate fees ONLY for items in GetCharacterTasks — same source as pull
+    local DURATION_MULT = {[1] = 0.15, [2] = 0.30, [3] = 0.60}
+    local DURATION_LABEL = {[1] = "12h", [2] = "24h", [3] = "48h"}
+    local tsmEnabled = ns.TSM and ns.TSM:IsEnabled()
+
+    local goldTasks = ns.Queue:GetCharacterTasks(charKey)
+    local totalDepositCopper = 0
+    local itemCount = 0
+    local depositDetails = {} -- for verbose logging
+
+    for _, task in ipairs(goldTasks) do
+        if ns:RealmMatches(task.queueItem.targetRealm, currentRealm) then
+            local queueItem = task.queueItem
+            itemCount = itemCount + 1
+
+            -- Determine post quantity: defaultSellQty as base, TSM postCap overrides
+            local postQty = math.max(queueItem.quantity or 1, ns.db.settings.defaultSellQty or 1)
+            local durationMult = 0.60 -- default: assume 48h
+            local durationLabel = "48h"
+            if tsmEnabled then
+                local op = ns.TSM:GetItemAuctioningOp(queueItem.itemKey)
+                if op then
+                    if op.postCap then
+                        local tsmQty = tonumber(op.postCap)
+                        if tsmQty and tsmQty > 0 then
+                            postQty = tsmQty
+                        end
+                    end
+                    if op.duration then
+                        durationMult = DURATION_MULT[op.duration] or 0.60
+                        durationLabel = DURATION_LABEL[op.duration] or "48h"
+                    end
+                end
+            end
+
+            -- Look up vendor sell price from item ID
+            local numID = tonumber(queueItem.itemID)
+            if not numID or numID <= 0 then
+                numID = tonumber((queueItem.itemKey or ""):match("^(%d+)"))
+            end
+            local itemDeposit = 0
+            local vendorPrice = 0
+            if numID and numID > 0 then
+                -- Try to find the actual item link from bags for accurate vendor price
+                -- Queue data often lacks bonus IDs, so base ID returns wrong price
+                local sellPrice = nil
+
+                -- Search bags for the actual item to get its real link
+                for _, bagIndex in ipairs(ns.INVENTORY_BAGS) do
+                    local numSlots = C_Container.GetContainerNumSlots(bagIndex)
+                    for slot = 1, numSlots do
+                        local info = C_Container.GetContainerItemInfo(bagIndex, slot)
+                        if info and info.hyperlink then
+                            local slotID = tonumber((ns:ParseItemLink(info.hyperlink)))
+                            if slotID == numID then
+                                -- Found it in bags — use the real link for vendor price
+                                local ok, _, _, _, _, _, _, _, _, _, _, sp =
+                                    pcall(C_Item.GetItemInfo, info.hyperlink)
+                                if ok and sp and type(sp) == "number" and sp > 0 then
+                                    sellPrice = sp
+                                end
+                                break
+                            end
+                        end
+                    end
+                    if sellPrice then break end
+                end
+
+                -- Fallback: use base item ID (may be inaccurate for bonus ID items)
+                if not sellPrice then
+                    local ok, _, _, _, _, _, _, _, _, _, _, sp =
+                        pcall(C_Item.GetItemInfo, numID)
+                    if ok and sp and type(sp) == "number" and sp > 0 then
+                        sellPrice = sp
+                    end
+                end
+
+                if sellPrice then
+                    vendorPrice = sellPrice
+                    itemDeposit = math.ceil(sellPrice * durationMult) * postQty
+                else
+                    -- No vendor price found — estimate from expected sale price (5% of market)
+                    local expectedGold = ns:ParseGoldValue(queueItem.expectedPrice or "")
+                    if expectedGold > 0 then
+                        vendorPrice = expectedGold * 100 * 0.05  -- 5% of gold as copper
+                        itemDeposit = math.ceil(vendorPrice * durationMult) * postQty
+                    else
+                        -- Absolute minimum: 1s per item
+                        vendorPrice = 100
+                        itemDeposit = math.ceil(100 * durationMult) * postQty
+                    end
+                end
+                totalDepositCopper = totalDepositCopper + itemDeposit
+            end
+
+            table.insert(depositDetails, {
+                name = queueItem.name or tostring(queueItem.itemID),
+                vendorCopper = vendorPrice,
+                duration = durationLabel,
+                mult = durationMult,
+                deposit = itemDeposit,
+                qty = postQty,
+            })
         end
     end
 
-    if totalExpectedGold <= 0 then return end
+    if itemCount == 0 then return end
 
-    -- AH deposits are 15%/30%/60% of vendor sell price based on 12h/24h/48h duration.
-    -- Vendor price is typically ~1-5% of AH market value.
-    -- Conservatively estimate: vendor ~5% of AH price, at 60% deposit (48h worst case).
-    -- So deposit ≈ 3% of expected AH value. Cap at 200g to be safe.
-    local estimatedFees = math.min(math.ceil(totalExpectedGold * 0.03), 200)
+    -- Print deposit breakdown (debug only)
+    ns:PrintDebug(ns.COLORS.YELLOW .. "AH fee calc for " .. itemCount .. " task(s):|r")
+    for _, d in ipairs(depositDetails) do
+        local vendorStr = ns:FormatGold(d.vendorCopper)
+        local depositStr = ns:FormatGold(d.deposit)
+        ns:PrintDebug("  " .. d.name .. ": vendor=" .. vendorStr ..
+            " x" .. d.qty .. " @ " .. d.duration ..
+            " (" .. string.format("%.0f%%", d.mult * 100) .. ") = " .. depositStr)
+    end
 
-    local playerGold = math.floor(GetMoney() / 10000)
-    if playerGold >= estimatedFees then return end -- already have enough
+    -- Add a small buffer (1g minimum, 10% extra for rounding)
+    local estimatedFeesCopper = math.max(10000, math.ceil(totalDepositCopper * 1.1))
+    local estimatedFeesGold = math.ceil(estimatedFeesCopper / 10000)
 
-    local shortfall = estimatedFees - playerGold
-    local shortfallCopper = shortfall * 10000
+    ns:PrintDebug("  Total deposit: " .. ns:FormatGold(totalDepositCopper) ..
+        " + 10% buffer = " .. ns:FormatGold(estimatedFeesCopper))
+
+    -- Account for what we've already withdrawn this session
+    local playerCopper = GetMoney()
+    local effectiveCopper = playerCopper + sessionWithdrawnCopper
+
+    if effectiveCopper >= estimatedFeesCopper then return end -- already have enough (including prior withdrawals)
+
+    -- Also just check raw gold — if player has enough, skip
+    if playerCopper >= estimatedFeesCopper then return end
+
+    local shortfallCopper = estimatedFeesCopper - playerCopper
+    local shortfallGold = math.ceil(shortfallCopper / 10000)
+    local playerGold = math.floor(playerCopper / 10000)
 
     -- Check permission
     local ok, canWithdraw = pcall(C_Bank.CanWithdrawMoney, Enum.BankType.Account)
@@ -537,9 +770,12 @@ function Tracker:AutoWithdrawGold()
         return
     end
 
+    -- Round up to whole gold
+    shortfallCopper = shortfallGold * 10000
+
     if warbankCopper < shortfallCopper then
         local warbankGold = math.floor(warbankCopper / 10000)
-        ns:Print(ns.COLORS.RED .. "Not enough in warbank.|r Need " .. shortfall ..
+        ns:Print(ns.COLORS.RED .. "Not enough in warbank.|r Need " .. shortfallGold ..
             "g more, warbank has " .. warbankGold .. "g")
         return
     end
@@ -547,8 +783,9 @@ function Tracker:AutoWithdrawGold()
     -- Withdraw
     local ok3, err = pcall(C_Bank.WithdrawMoney, Enum.BankType.Account, shortfallCopper)
     if ok3 then
-        ns:Print(ns.COLORS.GREEN .. "Withdrew " .. shortfall .. "g|r from warbank" ..
-            " (est. " .. estimatedFees .. "g needed for AH fees, had " .. playerGold .. "g)")
+        sessionWithdrawnCopper = sessionWithdrawnCopper + shortfallCopper
+        ns:Print(ns.COLORS.GREEN .. "Withdrew " .. shortfallGold .. "g|r from warbank" ..
+            " (est. " .. estimatedFeesGold .. "g fees for " .. itemCount .. " items, had " .. playerGold .. "g)")
     else
         ns:Print(ns.COLORS.RED .. "Failed to withdraw: " .. tostring(err) .. "|r")
     end
@@ -615,8 +852,8 @@ function Tracker:CheckExpiringAuctions()
     if not ns.db then return {} end
 
     local now = time()
-    local alertHours = ns.db.settings.expiryAlertHours or 6
-    local threshold = alertHours * 3600
+    local alertMinutes = ns.db.settings.expiryAlertMinutes or 15
+    local threshold = alertMinutes * 60
     local expiring = {}
 
     for _, entry in ipairs(ns.db.log) do
@@ -835,6 +1072,22 @@ function Tracker:StartExpiryTicker()
                 entry.auctionStatus = "expired"
                 local ck = entry.charKey or "Unknown"
                 newlyExpired[ck] = (newlyExpired[ck] or 0) + 1
+
+                -- Auto-skip the matching queue item so it won't be re-pulled
+                -- It stays in the queue for the generator to reassign
+                if ns.Queue then
+                    for i, qItem in ipairs(ns.db.queue) do
+                        if qItem.status == "pending" then
+                            local nameMatch = entry.name and qItem.name
+                                and entry.name:lower() == qItem.name:lower()
+                            local keyMatch = entry.itemKey and entry.itemKey == qItem.itemKey
+                            if keyMatch or nameMatch then
+                                ns.Queue:Skip(i)
+                                break
+                            end
+                        end
+                    end
+                end
             end
         end
 
@@ -869,23 +1122,42 @@ frame:SetScript("OnEvent", function(self, event)
         -- Mark expired auctions as collected (user is at the AH)
         if ns.db then
             local charKey = ns:GetCharKey()
+            local cleared = 0
             for _, entry in ipairs(ns.db.log) do
                 if entry.auctionStatus == "expired" and entry.charKey == charKey then
                     entry.auctionStatus = "collected"
+                    cleared = cleared + 1
                 end
+            end
+            if cleared > 0 then
+                ns:Print(ns.COLORS.GREEN .. "Collected " .. cleared .. " expired auction(s).|r")
             end
         end
 
         if ns.Queue then
-            local tasks = ns.Queue:GetCharacterTasks(ns:GetCharKey())
-            if tasks and #tasks > 0 then
-                ns:Print(ns.COLORS.GREEN .. #tasks .. " items|r in your queue ready to post!")
+            local charKey = ns:GetCharKey()
+            local myRealm = charKey:match("%-(.+)$") or ""
+            local allTasks = ns.Queue:GetCharacterTasks(charKey)
+            local realmTasks = 0
+            for _, task in ipairs(allTasks) do
+                if ns:RealmMatches(task.queueItem.targetRealm, myRealm) then
+                    realmTasks = realmTasks + 1
+                end
+            end
+            if realmTasks > 0 then
+                ns:Print(ns.COLORS.GREEN .. realmTasks .. " items|r in your queue ready to post!")
             end
         end
 
         -- Request owned auctions to check for already-listed items
         if C_AuctionHouse and C_AuctionHouse.QueryOwnedAuctions then
             C_AuctionHouse.QueryOwnedAuctions({})
+        end
+
+        -- Refresh UI to clear "Check AH" tasks
+        if ns.UI then
+            if ns.UI.RefreshMini then ns.UI:RefreshMini() end
+            if ns.UI.Refresh then ns.UI:Refresh() end
         end
 
     elseif event == "AUCTION_HOUSE_CLOSED" then
@@ -896,13 +1168,18 @@ frame:SetScript("OnEvent", function(self, event)
         if isAHOpen and next(prePostSnapshot) then
             C_Timer.After(0.3, CheckForPosts)
         end
+        -- Refresh main window to update bag status indicators on To-Do page
+        if ns.UI and ns.UI.mainFrame and ns.UI.mainFrame:IsShown() then
+            if ns.UI.currentPage == "todo" then
+                C_Timer.After(0.5, function()
+                    if ns.UI.mainFrame:IsShown() then ns.UI:Refresh() end
+                end)
+            end
+        end
 
     elseif event == "BANKFRAME_OPENED" then
         C_Timer.After(1, function()
-            -- Rescan warbank so task counts stay in sync
-            if ns.Scanner and ns.Scanner.ScanWarbank then
-                ns.Scanner:ScanWarbank()
-            end
+            -- Scanner already scans bags/bank/warbank at 0.5s — just do auto-pull and gold here
             Tracker:AutoPullFromBank()
             Tracker:AutoWithdrawGold()
         end)
@@ -918,6 +1195,23 @@ frame:SetScript("OnEvent", function(self, event)
     elseif event == "MAIL_SHOW" then
         isMailOpen = true
         mailScanRetries = 0
+
+        -- Mark expired auctions as collected (user is checking mail)
+        if ns.db then
+            local charKey = ns:GetCharKey()
+            for _, entry in ipairs(ns.db.log) do
+                if entry.auctionStatus == "expired" and entry.charKey == charKey then
+                    entry.auctionStatus = "collected"
+                end
+            end
+        end
+
+        -- Refresh UI to clear "Check Mail" tasks
+        if ns.UI then
+            if ns.UI.RefreshMini then ns.UI:RefreshMini() end
+            if ns.UI.Refresh then ns.UI:Refresh() end
+        end
+
         -- Delay to allow mail data to load
         C_Timer.After(1, function()
             if isMailOpen then

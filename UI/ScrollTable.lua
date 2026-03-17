@@ -87,6 +87,86 @@ function ScrollTableMixin:CreateHeader(parent)
         self.headerButtons[i] = btn
         xOffset = xOffset + col.width
     end
+
+    -- Column resize handles (between headers)
+    self.resizeHandles = self.resizeHandles or {}
+    for _, handle in ipairs(self.resizeHandles) do handle:Hide() end
+
+    for i = 1, #self.columns - 1 do
+        local handle = self.resizeHandles[i]
+        if not handle then
+            handle = CreateFrame("Button", nil, self.headerFrame)
+            handle:SetWidth(6)
+            handle.tex = handle:CreateTexture(nil, "OVERLAY")
+            handle.tex:SetAllPoints()
+            handle.tex:SetColorTexture(0.4, 0.4, 0.5, 0)
+            self.resizeHandles[i] = handle
+        end
+        handle:SetHeight(HEADER_HEIGHT)
+        handle:ClearAllPoints()
+        handle:SetPoint("LEFT", self.headerButtons[i], "RIGHT", -3, 0)
+        handle:SetFrameLevel(self.headerFrame:GetFrameLevel() + 2)
+        handle:Show()
+
+        handle:SetScript("OnEnter", function(h)
+            h.tex:SetColorTexture(1, 0.82, 0, 0.4)
+        end)
+        handle:SetScript("OnLeave", function(h)
+            if not h._dragging then
+                h.tex:SetColorTexture(0.4, 0.4, 0.5, 0)
+            end
+        end)
+
+        local colIdx = i
+        local tbl = self
+        handle:SetScript("OnMouseDown", function(h, button)
+            if button ~= "LeftButton" then return end
+            h._dragging = true
+            h._startX = GetCursorPosition() / UIParent:GetEffectiveScale()
+            h._startW1 = tbl.columns[colIdx].width
+            h._startW2 = tbl.columns[colIdx + 1].width
+            h.tex:SetColorTexture(1, 0.82, 0, 0.6)
+            h:SetScript("OnUpdate", function()
+                local curX = GetCursorPosition() / UIParent:GetEffectiveScale()
+                local delta = curX - h._startX
+                local newW1 = math.max(30, h._startW1 + delta)
+                local newW2 = math.max(30, h._startW2 - delta)
+                -- Constrain so total stays constant
+                if newW1 >= 30 and newW2 >= 30 then
+                    tbl.columns[colIdx].width = newW1
+                    tbl.columns[colIdx + 1].width = newW2
+                    -- Update header button widths and positions
+                    local x = 0
+                    for j, col in ipairs(tbl.columns) do
+                        tbl.headerButtons[j]:SetWidth(col.width)
+                        tbl.headerButtons[j]:ClearAllPoints()
+                        tbl.headerButtons[j]:SetPoint("LEFT", tbl.headerFrame, "LEFT", x, 0)
+                        x = x + col.width
+                    end
+                    -- Update resize handle positions
+                    for j = 1, #tbl.columns - 1 do
+                        if tbl.resizeHandles[j] then
+                            tbl.resizeHandles[j]:ClearAllPoints()
+                            tbl.resizeHandles[j]:SetPoint("LEFT", tbl.headerButtons[j], "RIGHT", -3, 0)
+                        end
+                    end
+                end
+            end)
+        end)
+        handle:SetScript("OnMouseUp", function(h)
+            h._dragging = false
+            h.tex:SetColorTexture(0.4, 0.4, 0.5, 0)
+            h:SetScript("OnUpdate", nil)
+            -- Re-render rows with new widths
+            -- Rebuild rows since cell widths are baked in
+            for _, row in ipairs(tbl.rows) do
+                row:Hide()
+                row:SetParent(nil)
+            end
+            wipe(tbl.rows)
+            tbl:Render()
+        end)
+    end
 end
 
 function ScrollTableMixin:CreateScrollArea(parent)

@@ -339,6 +339,206 @@ function Export:ExportSaved(mode)
 end
 
 --------------------------
+-- Filter System
+--------------------------
+
+-- Filter state
+local filterMode = "everything"  -- "everything", "tsmgroup", "auctionator"
+local filterValue = ""           -- group path or list name
+
+-- Export format state
+local exportFormat = "csv"       -- "csv" or "aaa"
+local aaaDiscount = 90           -- default: buy at 10% of market
+local aaaPriceSource = "DBMarket"
+
+function Export:GetFilterMode() return filterMode end
+function Export:GetFilterValue() return filterValue end
+function Export:GetFormat() return exportFormat end
+function Export:GetAAADiscount() return aaaDiscount end
+function Export:GetAAAPriceSource() return aaaPriceSource end
+
+function Export:SetFilter(mode, value)
+    filterMode = mode or "everything"
+    filterValue = value or ""
+end
+
+function Export:SetFormat(fmt)
+    exportFormat = fmt or "csv"
+end
+
+function Export:SetAAASettings(discount, priceSource)
+    if discount then aaaDiscount = discount end
+    if priceSource then aaaPriceSource = priceSource end
+end
+
+-- Build lookup table from TSM group
+local function GetTSMGroupItems(groupPath)
+    if not ns.TSM or not ns.TSM:IsAvailable() then return nil end
+    if not groupPath or groupPath == "" then return nil end
+
+    local set = {}
+
+    -- Method 1: TSM_API.GetGroupItems (if it exists)
+    local ok, items = pcall(function()
+        local result = {}
+        if TSM_API.GetGroupItems then
+            TSM_API:GetGroupItems(groupPath, true, result)
+        end
+        return result
+    end)
+    if ok and items and #items > 0 then
+        for _, tsmStr in ipairs(items) do
+            local baseID = tsmStr:match("^i:(%d+)")
+            if baseID then set[baseID] = true end
+            set[tsmStr] = true
+        end
+    end
+
+    -- Method 2: Read items DB directly (fallback / supplement)
+    if not next(set) then
+        local profile = ns.TSM:GetSelectedProfile()
+        local itemsDB = profile and ns.TSM:GetItemsDB(profile)
+        if itemsDB then
+            for tsmStr, itemGroupPath in pairs(itemsDB) do
+                if type(itemGroupPath) == "string" then
+                    if itemGroupPath == groupPath
+                        or itemGroupPath:find(groupPath .. "`", 1, true) == 1 then
+                        local baseID = tsmStr:match("^i:(%d+)")
+                        if baseID then set[baseID] = true end
+                        set[tsmStr] = true
+                    end
+                end
+            end
+        end
+    end
+
+    return next(set) and set or nil
+end
+
+-- Build lookup table from Auctionator shopping list
+local function GetAuctionatorListItems(listName)
+    if not listName or listName == "" then return nil end
+    if type(Auctionator) ~= "table" or type(Auctionator.API) ~= "table"
+        or type(Auctionator.API.v1) ~= "table" then
+        return nil
+    end
+
+    local ok, items = pcall(Auctionator.API.v1.GetShoppingListItems, "FlipQueue", listName)
+    if ok and items and #items > 0 then
+        local set = {}
+        for _, searchStr in ipairs(items) do
+            -- Extract item name from search string (before first ';')
+            local name = searchStr:match("^([^;]+)") or searchStr
+            set[name:lower()] = true
+        end
+        return set
+    end
+    return nil
+end
+
+function Export:ApplyFilter(itemDataList)
+    if filterMode == "everything" then return itemDataList end
+
+    local filtered = {}
+
+    if filterMode == "tsmgroup" then
+        local groupItems = GetTSMGroupItems(filterValue)
+        if not groupItems then return itemDataList end -- fallback if group lookup fails
+
+        for _, data in ipairs(itemDataList) do
+            local idStr = tostring(data.itemID)
+            local tsmStr = ns.TSM and ns.TSM:ItemKeyToTSMString(
+                ns:MakeItemKey(data.itemID, data.bonusIDs, data.modifiers))
+            if groupItems[idStr] or (tsmStr and groupItems[tsmStr]) then
+                table.insert(filtered, data)
+            end
+        end
+
+    elseif filterMode == "auctionator" then
+        local listItems = GetAuctionatorListItems(filterValue)
+        if not listItems then return itemDataList end
+
+        for _, data in ipairs(itemDataList) do
+            local name = (data.itemName or ""):lower()
+            if listItems[name] then
+                table.insert(filtered, data)
+            end
+        end
+    end
+
+    return filtered
+end
+
+--------------------------
+-- AAA JSON Export
+--------------------------
+
+function Export:ExportAAA(itemDataList, discount, priceSource)
+    discount = discount or aaaDiscount
+    priceSource = priceSource or aaaPriceSource
+
+    local items = {}    -- itemID -> price in gold
+    local pets = {}     -- speciesID -> price in gold
+
+    for _, data in ipairs(itemDataList) do
+        local idStr = tostring(data.itemID)
+
+        -- Skip pets for items block, handle separately
+        local speciesID = idStr:match("^pet:(%d+)$")
+
+        -- Skip items with bonus IDs (AAA uses base item IDs only)
+        if not speciesID and (data.bonusIDs and data.bonusIDs ~= "") then
+            -- skip — AAA doesn't support bonus ID variants
+        else
+            -- Get TSM price
+            local fqKey = ns:MakeItemKey(data.itemID, data.bonusIDs or "", data.modifiers or "")
+            local copper = ns.TSM and ns.TSM:GetPrice(fqKey, priceSource)
+
+            if copper and copper > 0 then
+                local goldPrice = (copper / 10000) * ((100 - discount) / 100)
+                goldPrice = math.floor(goldPrice * 100 + 0.5) / 100 -- round to 2 decimals
+
+                if speciesID then
+                    pets[speciesID] = goldPrice
+                else
+                    local numID = tostring(tonumber(idStr))
+                    if numID then
+                        items[numID] = goldPrice
+                    end
+                end
+            end
+        end
+    end
+
+    -- Format as JSON
+    local function formatJSON(tbl)
+        local parts = {}
+        -- Sort keys for consistent output
+        local keys = {}
+        for k in pairs(tbl) do table.insert(keys, k) end
+        table.sort(keys, function(a, b) return tonumber(a) < tonumber(b) end)
+
+        for _, k in ipairs(keys) do
+            table.insert(parts, string.format('  "%s": %s', k, tostring(tbl[k])))
+        end
+        if #parts == 0 then return "{}" end
+        return "{\n" .. table.concat(parts, ",\n") .. "\n}"
+    end
+
+    return {
+        items = formatJSON(items),
+        pets = formatJSON(pets),
+        itemCount = 0, -- will be set below
+        petCount = 0,
+    }, function()
+        local ic, pc = 0, 0
+        for _ in pairs(items) do ic = ic + 1 end
+        for _ in pairs(pets) do pc = pc + 1 end
+        return ic, pc
+    end
+end
+
+--------------------------
 -- Export UI Frame
 --------------------------
 

@@ -42,8 +42,8 @@ SlashCmdList["FLIPQUEUE"] = function(msg)
         UI.mainFrame:Show()
         UI:Refresh()
 
-    elseif msg == "queue" then
-        UI.currentPage = "queue"
+    elseif msg == "queue" or msg == "generator" then
+        UI.currentPage = "generator"
         UI.mainFrame:Show()
         UI:Refresh()
 
@@ -113,15 +113,23 @@ SlashCmdList["FLIPQUEUE"] = function(msg)
             UI:Refresh()
         end
 
+    elseif msg == "debug" then
+        if ns.db then
+            ns.db.settings.debugMessages = not ns.db.settings.debugMessages
+            ns:Print("Debug messages: " .. (ns.db.settings.debugMessages and
+                ns.COLORS.GREEN .. "ON" or ns.COLORS.RED .. "OFF") .. "|r")
+        end
+
     elseif msg == "help" then
         ns:Print("Commands:")
         print("  /fq - Toggle main window")
-        print("  /fq import - Open import dialog")
+        print("  /fq import - Open import page")
         print("  /fq log - Show posted items log")
+        print("  /fq queue - Open To-Do Generator")
+        print("  /fq inv - Open full inventory page")
         print("  /fq scan - Rescan current character's bags")
         print("  /fq bank - Scan bank + warbank (must be at bank)")
-        print("  /fq export - Export bags as FP-compatible CSV")
-        print("  /fq export [bank|warbank|all] - Export other containers")
+        print("  /fq export - Export page (CSV/AAA formats)")
         print("  /fq sort - Toggle sort mode (realm/name)")
         print("  /fq clear - Clear entire queue")
         print("  /fq clear posted - Clear posted items only")
@@ -130,12 +138,13 @@ SlashCmdList["FLIPQUEUE"] = function(msg)
         print("  /fq gold - Toggle auto-withdraw gold for AH fees")
         print("  /fq dnt - Show Do Not Track list")
         print("  /fq mini - Toggle mini overlay")
+        print("  /fq debug - Toggle debug messages")
         print("  /fq settings - Open settings panel")
         print("  /fq dnt add <name> - Add item to Do Not Track")
         print("  /fq dnt remove <name> - Remove from Do Not Track")
         print("")
-        print("  Right-click items to mark as posted (moves to log).")
-        print("  In Untracked: Right-click = Do Not Track, Shift+Right = Add to Queue.")
+        print("  Inventory: Right-click by status (DNT/remove DNT/queue info)")
+        print("  To-Do: Right-click = posted, Shift+Right = skip")
     else
         -- Toggle main window
         if UI.mainFrame:IsShown() then

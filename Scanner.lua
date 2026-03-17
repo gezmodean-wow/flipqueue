@@ -128,6 +128,73 @@ local function MergeItems(target, source, location)
 end
 
 --------------------------
+-- Queue Enrichment
+--------------------------
+
+-- When we scan physical items, backfill queue entries that have incomplete data.
+-- Imports from FP often arrive with bare item IDs (no bonus IDs, no icon, no quality).
+-- The scanned item has the real hyperlink data — use it to fill the gaps.
+local function EnrichQueueFromInventory(scannedItems)
+    if not ns.db or not ns.db.queue then return end
+
+    for _, queueItem in ipairs(ns.db.queue) do
+        if queueItem.status == "pending" then
+            local queueNumID = tonumber(queueItem.itemID) or tonumber((queueItem.itemKey or ""):match("^(%d+)"))
+            local queueName = (queueItem.name or ""):lower()
+            local queueHasBonuses = queueItem.itemKey and queueItem.itemKey:match("^[^;]*;([^;]*)") or ""
+
+            -- Only enrich if the queue item is missing bonus IDs
+            if queueHasBonuses == "" and queueNumID then
+                for key, itemData in pairs(scannedItems) do
+                    local scannedNumID = tonumber((key:match("^(%d+)")))
+                    local scannedBonuses = key:match("^[^;]*;([^;]*)") or ""
+                    local nameMatch = queueName ~= "" and itemData.name
+                        and itemData.name:lower() == queueName
+
+                    if (scannedNumID and scannedNumID == queueNumID) or nameMatch then
+                        -- Found a match with real data — enrich the queue item
+                        local enriched = false
+
+                        if scannedBonuses ~= "" then
+                            queueItem.itemKey = key
+                            queueItem.bonusIDs = itemData.bonusIDs
+                            queueItem.modifiers = itemData.modifiers
+                            enriched = true
+                        end
+
+                        if not queueItem.icon and itemData.icon then
+                            queueItem.icon = itemData.icon
+                            enriched = true
+                        end
+
+                        if (not queueItem.name or queueItem.name == "") and itemData.name then
+                            queueItem.name = itemData.name
+                            enriched = true
+                        end
+
+                        -- Look up quality if missing
+                        if not queueItem.quality or queueItem.quality == "" then
+                            local numID = tonumber(itemData.itemID)
+                            if numID and numID > 0 then
+                                local ok, _, _, q = pcall(C_Item.GetItemInfo, numID)
+                                if ok and q then
+                                    local qualityNames = {[0]="Poor",[1]="Common",[2]="Uncommon",
+                                        [3]="Rare",[4]="Epic",[5]="Legendary"}
+                                    queueItem.quality = qualityNames[q] or ""
+                                    enriched = true
+                                end
+                            end
+                        end
+
+                        break -- only match one inventory item per queue item
+                    end
+                end
+            end
+        end
+    end
+end
+
+--------------------------
 -- Public Scan Functions
 --------------------------
 
@@ -151,7 +218,9 @@ function Scanner:ScanCurrentCharacter()
 
     local count = 0
     for _ in pairs(allItems) do count = count + 1 end
-    ns:Print("Scanned " .. count .. " unique items on " .. charKey)
+    ns:PrintDebug("Scanned " .. count .. " unique items on " .. charKey)
+
+    EnrichQueueFromInventory(allItems)
 end
 
 function Scanner:ScanBank()
@@ -170,7 +239,9 @@ function Scanner:ScanBank()
 
     local count = 0
     for _ in pairs(bankItems) do count = count + 1 end
-    ns:Print("Bank scanned: " .. count .. " unique items.")
+    ns:PrintDebug("Bank scanned: " .. count .. " unique items.")
+
+    EnrichQueueFromInventory(bankItems)
 end
 
 function Scanner:ScanWarbank()
@@ -198,7 +269,9 @@ function Scanner:ScanWarbank()
 
     local count = 0
     for _ in pairs(items) do count = count + 1 end
-    ns:Print("Warbank scanned: " .. count .. " unique items.")
+    ns:PrintDebug("Warbank scanned: " .. count .. " unique items.")
+
+    EnrichQueueFromInventory(items)
 end
 
 --------------------------
@@ -242,6 +315,19 @@ frame:SetScript("OnEvent", function(self, event)
         -- Start periodic expiry checker
         if ns.Tracker and ns.Tracker.StartExpiryTicker then
             ns.Tracker:StartExpiryTicker()
+        end
+
+        -- One-time migration: generate initial todo list from pending queue deals
+        if ns.db.todoLists and ns.db.todoLists._needsMigration then
+            ns.db.todoLists._needsMigration = nil
+            if ns.TodoList then
+                local preview = ns.TodoList:GenerateTodoList("gold")
+                if preview and preview.items and #preview.items > 0 then
+                    ns.TodoList:CommitList(preview, "replace")
+                    ns:Print(ns.COLORS.GREEN .. "Migrated " .. #preview.items
+                        .. " queue items to new To-Do system.|r")
+                end
+            end
         end
 
         if ns.db.settings.autoScan then

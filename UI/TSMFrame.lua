@@ -384,7 +384,7 @@ function UI:CreateTSMPanel(parent)
         local ageRow = CreateFrame("Frame", nil, content)
         ageRow:SetPoint("TOPLEFT", content, "TOPLEFT", LEFT_MARGIN, y)
         ageRow:SetPoint("RIGHT", content, "RIGHT", RIGHT_MARGIN, 0)
-        ageRow:SetHeight(52)
+        ageRow:SetHeight(68)
 
         local ageTitle = ageRow:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
         ageTitle:SetPoint("TOPLEFT", ageRow, "TOPLEFT", 0, 0)
@@ -423,7 +423,7 @@ function UI:CreateTSMPanel(parent)
         tsmWidgets.ageSlider = ageSlider
         tsmWidgets.ageLabel = ageLabel
     end
-    y = y - 52 - SECTION_SPACING
+    y = y - 68 - SECTION_SPACING
 
     content:SetHeight(math.abs(y) + 10)
 

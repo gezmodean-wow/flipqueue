@@ -37,6 +37,12 @@ function ns:PrintError(msg)
     print(ns.COLORS.RED .. "FlipQueue:|r " .. msg)
 end
 
+function ns:PrintDebug(msg)
+    if ns.db and ns.db.settings.debugMessages then
+        print(ns.COLORS.GRAY .. "FlipQueue [debug]:|r " .. msg)
+    end
+end
+
 --------------------------
 -- Item Key Generation
 --------------------------
@@ -134,22 +140,57 @@ local ACCENT_MAP = {
     ["\195\152"] = "o",                      -- Ø
     ["\195\153"] = "u", ["\195\154"] = "u", ["\195\155"] = "u", ["\195\156"] = "u", -- Ù Ú Û Ü
     ["\195\157"] = "y", ["\195\158"] = "th", ["\195\159"] = "ss", -- Ý Þ ß
+    -- Latin Extended-A (U+0100–U+017F, \196 and \197 prefixes)
+    ["\196\128"] = "a", ["\196\129"] = "a",   -- Ā ā
+    ["\196\130"] = "a", ["\196\131"] = "a",   -- Ă ă
+    ["\196\132"] = "a", ["\196\133"] = "a",   -- Ą ą
+    ["\196\134"] = "c", ["\196\135"] = "c",   -- Ć ć
+    ["\196\140"] = "c", ["\196\141"] = "c",   -- Č č
+    ["\196\142"] = "d", ["\196\143"] = "d",   -- Ď ď
+    ["\196\146"] = "e", ["\196\147"] = "e",   -- Ē ē
+    ["\196\152"] = "e", ["\196\153"] = "e",   -- Ę ę
+    ["\196\154"] = "e", ["\196\155"] = "e",   -- Ě ě
+    ["\196\168"] = "i", ["\196\169"] = "i",   -- Ĩ ĩ
+    ["\196\170"] = "i", ["\196\171"] = "i",   -- Ī ī
+    ["\196\185"] = "l", ["\196\186"] = "l",   -- Ĺ ĺ
+    ["\196\187"] = "l", ["\196\188"] = "l",   -- Ļ ļ
+    ["\197\129"] = "l", ["\197\130"] = "l",   -- Ł ł
+    ["\197\131"] = "n", ["\197\132"] = "n",   -- Ń ń
+    ["\197\135"] = "n", ["\197\136"] = "n",   -- Ň ň
+    ["\197\140"] = "o", ["\197\141"] = "o",   -- Ō ō
+    ["\197\144"] = "o", ["\197\145"] = "o",   -- Ő ő
+    ["\197\146"] = "oe", ["\197\147"] = "oe", -- Œ œ
+    ["\197\152"] = "r", ["\197\153"] = "r",   -- Ř ř
+    ["\197\154"] = "s", ["\197\155"] = "s",   -- Ś ś
+    ["\197\158"] = "s", ["\197\159"] = "s",   -- Ş ş
+    ["\197\160"] = "s", ["\197\161"] = "s",   -- Š š
+    ["\197\164"] = "t", ["\197\165"] = "t",   -- Ť ť
+    ["\197\168"] = "u", ["\197\169"] = "u",   -- Ũ ũ
+    ["\197\170"] = "u", ["\197\171"] = "u",   -- Ū ū
+    ["\197\174"] = "u", ["\197\175"] = "u",   -- Ů ů
+    ["\197\176"] = "u", ["\197\177"] = "u",   -- Ű ű
+    ["\197\185"] = "z", ["\197\186"] = "z",   -- Ź ź
+    ["\197\187"] = "z", ["\197\188"] = "z",   -- Ż ż
+    ["\197\189"] = "z", ["\197\190"] = "z",   -- Ž ž
 }
 
 -- Normalize a string for accent-insensitive comparison
 -- Strips diacritics and lowercases
 function ns:NormalizeAccents(str)
     if not str then return "" end
-    return str:gsub("[\195][\128-\191]", ACCENT_MAP):lower()
+    return str:gsub("[\195-\197][\128-\191]", ACCENT_MAP):lower()
 end
 
 -- Check if a target realm string matches a given realm name
 -- Supports linked realm clusters like "Aegwynn, Lightninghoof, Maelstrom"
 -- Accent-insensitive: "Confrérie du Thorium" matches "Confrerie du Thorium"
+-- Bidirectional: "Aggra" matches "Aggra (Português)" and vice versa
 function ns:RealmMatches(targetRealm, realmName)
     if not targetRealm or targetRealm == "" then return true end
     if not realmName or realmName == "" then return false end
-    return ns:NormalizeAccents(targetRealm):find(ns:NormalizeAccents(realmName), 1, true) ~= nil
+    local t = ns:NormalizeAccents(targetRealm)
+    local r = ns:NormalizeAccents(realmName)
+    return t:find(r, 1, true) ~= nil or r:find(t, 1, true) ~= nil
 end
 
 -- Check if two realm strings refer to the same connected AH
@@ -300,7 +341,12 @@ function ns:InitDB()
     db.externalAccounts = db.externalAccounts or {}
     db.settings.collapsed = db.settings.collapsed or {}
     db.settings.sortMode  = db.settings.sortMode or "realm"
-    db.settings.expiryAlertHours = db.settings.expiryAlertHours or 6
+    -- Migrate old expiryAlertHours to expiryAlertMinutes
+    if db.settings.expiryAlertHours and not db.settings.expiryAlertMinutes then
+        db.settings.expiryAlertMinutes = db.settings.expiryAlertHours * 60
+        db.settings.expiryAlertHours = nil
+    end
+    db.settings.expiryAlertMinutes = db.settings.expiryAlertMinutes or 15
     if db.settings.hideMiniInCombat == nil then db.settings.hideMiniInCombat = true end
     db.settings.pullBatchSize = db.settings.pullBatchSize or 5
     -- TSM integration defaults
@@ -312,6 +358,13 @@ function ns:InitDB()
     if db.settings.tsmAutoUpdatePrice == nil then db.settings.tsmAutoUpdatePrice = false end
     db.settings.tsmPriceMaxAge     = db.settings.tsmPriceMaxAge or 3600 -- seconds before TSM can overwrite (1h)
     db.settings.defaultSellQty     = db.settings.defaultSellQty or 1   -- default posting quantity per item
+    -- Character ordering for manual sort
+    db.settings.characterOrder = db.settings.characterOrder or {}
+    -- Generator settings (persisted across sessions)
+    db.settings.genAllocationOrder = db.settings.genAllocationOrder or {"gold", "noCompetition", "population"}
+    db.settings.genSortMode = db.settings.genSortMode or "profit"
+    -- Debug messages (off by default)
+    if db.settings.debugMessages == nil then db.settings.debugMessages = false end
     -- Bank tab selection: default "all", can customize warbank globally or bank per-character
     -- pullTabs.mode: "all" (use everything) or "custom"
     -- pullTabs.warbank: {[1]=true, [2]=true, ...} — which warbank tabs (1-5) to use
@@ -319,6 +372,25 @@ function ns:InitDB()
     if not db.settings.pullTabs then
         db.settings.pullTabs = { mode = "all" }
     end
+
+    -- Todo Lists (Phase 2-3: Inventory -> Generator -> To-Do Lists -> Log)
+    if not db.todoLists then
+        db.todoLists = { current = nil, queue = {} }
+        -- One-time migration flag: generate initial todo list from pending queue deals
+        local hasPending = false
+        if db.queue then
+            for _, qi in ipairs(db.queue) do
+                if qi.status == "pending" then
+                    hasPending = true
+                    break
+                end
+            end
+        end
+        if hasPending then
+            db.todoLists._needsMigration = true
+        end
+    end
+
     ns.db = db
 end
 
@@ -396,6 +468,23 @@ function ns:FormatRelativeTime(timestamp)
     if diff < 3600 then return math.floor(diff / 60) .. "m ago" end
     if diff < 86400 then return math.floor(diff / 3600) .. "h ago" end
     return math.floor(diff / 86400) .. "d ago"
+end
+
+--------------------------
+-- Auctionator Shopping Lists
+--------------------------
+
+-- Get Auctionator shopping list names.
+-- Auctionator has no public API for this, so we read the SavedVariable directly.
+function ns:GetAuctionatorListNames()
+    if type(AUCTIONATOR_SHOPPING_LISTS) ~= "table" then return {} end
+    local names = {}
+    for _, list in ipairs(AUCTIONATOR_SHOPPING_LISTS) do
+        if type(list) == "table" and list.name and not list.isTemporary then
+            names[#names + 1] = list.name
+        end
+    end
+    return names
 end
 
 --------------------------
