@@ -12,6 +12,7 @@ local isAHOpen = false
 -- Pre-post snapshot: queueIndex -> {queueItem, qty, bagKey}
 -- Tracks bag quantities per queue item so we can detect decreases
 local prePostSnapshot = {}
+local preTodoSnapshot = {} -- taskIdx -> {todoItem, qty}
 
 --------------------------
 -- Item Name Extraction
@@ -61,6 +62,7 @@ end
 
 local function SnapshotBags()
     wipe(prePostSnapshot)
+    wipe(preTodoSnapshot)
     if not ns.db then return end
 
     -- Only snapshot queue items targeted at this character's realm
@@ -74,48 +76,89 @@ local function SnapshotBags()
             }
         end
     end
+
+    -- Snapshot todo list items for bag-based post detection
+    if ns.TodoList then
+        local charKey = ns:GetCharKey()
+        local todoList = ns.TodoList:GetCurrentList()
+        if todoList and todoList.items then
+            for taskIdx, todoItem in ipairs(todoList.items) do
+                if todoItem.status == "pending" and todoItem.assignedChar == charKey
+                    and ns:RealmMatches(todoItem.targetRealm or "", currentRealm) then
+                    preTodoSnapshot[taskIdx] = {
+                        todoItem = todoItem,
+                        qty = CountInBags(todoItem),
+                    }
+                end
+            end
+        end
+    end
 end
 
 local function CheckForPosts()
     if not ns.db then return end
 
-    -- Check each tracked queue item for quantity decreases
-    local posted = {}
-    for qIdx, snap in pairs(prePostSnapshot) do
-        -- Queue may have shifted indices if items were removed, find by reference
-        local currentIdx
-        for i, qi in ipairs(ns.db.queue) do
-            if qi == snap.queueItem then
-                currentIdx = i
-                break
-            end
-        end
+    local hasTodoTracking = next(preTodoSnapshot) ~= nil
 
-        if currentIdx and snap.queueItem.status == "pending" then
-            local curQty = CountInBags(snap.queueItem)
+    -- Check todo list items first (primary system in v0.6.0)
+    local todoPosted = {}
+    for taskIdx, snap in pairs(preTodoSnapshot) do
+        if snap.todoItem.status == "pending" then
+            local curQty = CountInBags(snap.todoItem)
             if curQty < snap.qty then
                 local count = snap.qty - curQty
-                table.insert(posted, {idx = currentIdx, item = snap.queueItem, count = count})
+                table.insert(todoPosted, {taskIdx = taskIdx, item = snap.todoItem, count = count})
             end
         end
     end
 
-    -- Process posts in reverse order so index removal doesn't shift later entries
-    table.sort(posted, function(a, b) return a.idx > b.idx end)
-
-    -- Each detected bag decrease should only satisfy one queue item
-    -- (items with same name across different realms are filtered out by SnapshotBags)
-    for _, p in ipairs(posted) do
-        local queueQty = p.item.quantity or 1
-        if p.count < queueQty then
-            ns:Print(ns.COLORS.GREEN .. "Posted:|r " .. p.item.name .. " (x" .. p.count .. " of " .. queueQty .. ")")
+    -- Process todo posts (reverse order to preserve indices)
+    table.sort(todoPosted, function(a, b) return a.taskIdx > b.taskIdx end)
+    for _, p in ipairs(todoPosted) do
+        local taskQty = p.item.quantity or 1
+        if p.count < taskQty then
+            ns:Print(ns.COLORS.GREEN .. "Posted:|r " .. p.item.name .. " (x" .. p.count .. " of " .. taskQty .. ")")
         else
             ns:Print(ns.COLORS.GREEN .. "Posted:|r " .. p.item.name .. " (x" .. p.count .. ")")
         end
-        ns.Queue:MoveToLog(p.idx, nil, nil, p.count)
+        ns.TodoList:MoveTaskToLog(p.taskIdx, nil, nil, p.count)
     end
 
-    if #posted > 0 then
+    -- Check queue items (legacy — skip if todo tracking is active to avoid double-counting)
+    local posted = {}
+    if not hasTodoTracking then
+        for qIdx, snap in pairs(prePostSnapshot) do
+            -- Queue may have shifted indices if items were removed, find by reference
+            local currentIdx
+            for i, qi in ipairs(ns.db.queue) do
+                if qi == snap.queueItem then
+                    currentIdx = i
+                    break
+                end
+            end
+
+            if currentIdx and snap.queueItem.status == "pending" then
+                local curQty = CountInBags(snap.queueItem)
+                if curQty < snap.qty then
+                    local count = snap.qty - curQty
+                    table.insert(posted, {idx = currentIdx, item = snap.queueItem, count = count})
+                end
+            end
+        end
+
+        table.sort(posted, function(a, b) return a.idx > b.idx end)
+        for _, p in ipairs(posted) do
+            local queueQty = p.item.quantity or 1
+            if p.count < queueQty then
+                ns:Print(ns.COLORS.GREEN .. "Posted:|r " .. p.item.name .. " (x" .. p.count .. " of " .. queueQty .. ")")
+            else
+                ns:Print(ns.COLORS.GREEN .. "Posted:|r " .. p.item.name .. " (x" .. p.count .. ")")
+            end
+            ns.Queue:MoveToLog(p.idx, nil, nil, p.count)
+        end
+    end
+
+    if #todoPosted > 0 or #posted > 0 then
         if ns.UI and ns.UI.Refresh then ns.UI:Refresh() end
         if ns.UI and ns.UI.RefreshMini then ns.UI:RefreshMini() end
     end
@@ -236,7 +279,7 @@ function Tracker:CheckOwnedAuctions()
         end
     end
 
-    -- Match against active to-do list items
+    -- Match against active to-do list items (consume multiple auctions per todo item)
     if ns.TodoList then
         local todoList = ns.TodoList:GetCurrentList()
         if todoList and todoList.items then
@@ -244,21 +287,32 @@ function Tracker:CheckOwnedAuctions()
             for taskIdx, todoItem in ipairs(todoList.items) do
                 if todoItem.status == "pending" and todoItem.assignedChar == charKey
                     and ns:RealmMatches(todoItem.targetRealm or "", currentRealm) then
+                    local remainingQty = todoItem.quantity or 1
+                    local totalMatched = 0
+                    local firstExpiry = nil
+                    local todoResolvedID = ns:ResolveItemID(todoItem)
+
                     for aIdx, auction in ipairs(owned) do
-                        if not consumed[aIdx] then
+                        if not consumed[aIdx] and remainingQty > 0 then
                             local auctionName = auctionNames[aIdx]
                             local auctionKey = tostring(auction.itemKey.itemID) .. ";;"
-                            local todoResolvedID = ns:ResolveItemID(todoItem)
                             local matches = ns:ItemsMatch(auctionKey, auctionName, todoItem, todoResolvedID or false)
 
                             if matches then
                                 consumed[aIdx] = true
                                 local auctionQty = auction.quantity or 1
-                                ns:PrintDebug("Listed: " .. (todoItem.name or "?") .. " — marking done")
-                                ns.TodoList:MoveTaskToLog(taskIdx, nil, auction.timeLeftSeconds, auctionQty)
-                                break
+                                totalMatched = totalMatched + auctionQty
+                                remainingQty = remainingQty - auctionQty
+                                if not firstExpiry and auction.timeLeftSeconds then
+                                    firstExpiry = auction.timeLeftSeconds
+                                end
                             end
                         end
+                    end
+
+                    if totalMatched > 0 then
+                        ns:PrintDebug("Listed: " .. (todoItem.name or "?") .. " x" .. totalMatched .. " — marking done")
+                        ns.TodoList:MoveTaskToLog(taskIdx, nil, firstExpiry, totalMatched)
                     end
                 end
             end
@@ -495,7 +549,13 @@ function Tracker:AutoPullFromBank()
             ns:Print(ns.COLORS.YELLOW .. pullErrors .. " item(s) failed to move. Try opening your bank again.|r")
         end
         C_Timer.After(1, function()
-            if ns.Scanner then ns.Scanner:ScanCurrentCharacter() end
+            if ns.Scanner then
+                ns.Scanner:ScanCurrentCharacter()
+                ns.Scanner:ScanBank()
+            end
+            if ns.TodoList and ns.TodoList.RefreshLocations then
+                ns.TodoList:RefreshLocations()
+            end
             if ns.UI and ns.UI.Refresh then ns.UI:Refresh() end
             if ns.UI and ns.UI.RefreshMini then ns.UI:RefreshMini() end
         end)
@@ -1167,19 +1227,24 @@ frame:SetScript("OnEvent", function(self, event)
     elseif event == "AUCTION_HOUSE_CLOSED" then
         isAHOpen = false
         wipe(prePostSnapshot)
+        wipe(preTodoSnapshot)
 
     elseif event == "BAG_UPDATE_DELAYED" then
-        if isAHOpen and next(prePostSnapshot) then
+        if isAHOpen and (next(prePostSnapshot) or next(preTodoSnapshot)) then
             C_Timer.After(0.3, CheckForPosts)
         end
-        -- Refresh main window to update bag status indicators on To-Do page
-        if ns.UI and ns.UI.mainFrame and ns.UI.mainFrame:IsShown() then
-            if ns.UI.currentPage == "todo" then
-                C_Timer.After(0.5, function()
-                    if ns.UI.mainFrame:IsShown() then ns.UI:Refresh() end
-                end)
+        -- Rescan inventory and refresh todo locations on every item movement
+        C_Timer.After(0.5, function()
+            if ns.Scanner then ns.Scanner:ScanCurrentCharacter() end
+            if ns.TodoList and ns.TodoList.RefreshLocations then
+                ns.TodoList:RefreshLocations()
             end
-        end
+            if ns.UI and ns.UI.mainFrame and ns.UI.mainFrame:IsShown() then
+                if ns.UI.currentPage == "todo" or ns.UI.currentPage == "generator" then
+                    ns.UI:Refresh()
+                end
+            end
+        end)
 
     elseif event == "BANKFRAME_OPENED" then
         C_Timer.After(1, function()

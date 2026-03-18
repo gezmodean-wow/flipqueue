@@ -868,6 +868,65 @@ function TodoList:GetStatusCounts()
 end
 
 --------------------------
+-- Location Refresh
+--------------------------
+
+-- Update the source field of pending todo items based on live bag contents.
+-- Called after BAG_UPDATE_DELAYED so locations stay in sync with inventory.
+-- Returns true if any sources changed.
+function TodoList:RefreshLocations()
+    local current = self:GetCurrentList()
+    if not current or not current.items then return false end
+
+    local charKey = ns:GetCharKey()
+
+    -- Live scan current character's bags for item keys and IDs
+    local bagsItemKeys = {} -- itemKey -> qty
+    local bagsItemIDs = {}  -- numericID -> qty
+    pcall(function()
+        for _, bagIdx in ipairs(ns.INVENTORY_BAGS) do
+            local numSlots = C_Container.GetContainerNumSlots(bagIdx)
+            for slot = 1, numSlots do
+                local info = C_Container.GetContainerItemInfo(bagIdx, slot)
+                if info and info.hyperlink then
+                    local itemID, bonusIDs, modifiers = ns:ParseItemLink(info.hyperlink)
+                    if itemID then
+                        local key = ns:MakeItemKey(itemID, bonusIDs, modifiers)
+                        bagsItemKeys[key] = (bagsItemKeys[key] or 0) + (info.stackCount or 1)
+                        local numID = tonumber(itemID)
+                        if numID then
+                            bagsItemIDs[numID] = (bagsItemIDs[numID] or 0) + (info.stackCount or 1)
+                        end
+                    end
+                end
+            end
+        end
+    end)
+
+    local changed = false
+    for _, item in ipairs(current.items) do
+        if item.status == "pending" and item.assignedChar == charKey then
+            local itemKey = item.itemKey or ""
+            local itemNumID = tonumber(item.itemID) or tonumber(itemKey:match("^(%d+)"))
+            local inBags = (bagsItemKeys[itemKey] and bagsItemKeys[itemKey] > 0)
+                or (itemNumID and bagsItemIDs[itemNumID] and bagsItemIDs[itemNumID] > 0)
+
+            if inBags and item.source ~= "bags" then
+                item.source = "bags"
+                changed = true
+            elseif not inBags and item.source == "bags" then
+                -- Item left bags (posted, deposited, etc.) — mark unavailable
+                -- Full scan (bank open, etc.) will set the correct location
+                item.source = "unavailable"
+                changed = true
+            end
+        end
+    end
+
+    return changed
+end
+
+--------------------------
 -- Task Status Updates
 --------------------------
 

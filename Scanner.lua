@@ -212,10 +212,36 @@ function Scanner:ScanCurrentCharacter()
     local reagentItems = ScanContainers({ns.REAGENT_BAG}, true)
     MergeItems(allItems, reagentItems, "reagent")
 
+    -- Preserve bank locations from previous scan (bank can only be scanned when open)
+    local prevData = ns.db.inventory[charKey]
+    if prevData and prevData.items then
+        for key, prevItem in pairs(prevData.items) do
+            if prevItem.locations and prevItem.locations.bank and prevItem.locations.bank > 0 then
+                if not allItems[key] then
+                    allItems[key] = {
+                        itemID    = prevItem.itemID,
+                        name      = prevItem.name,
+                        bonusIDs  = prevItem.bonusIDs,
+                        modifiers = prevItem.modifiers,
+                        quantity  = 0,
+                        icon      = prevItem.icon,
+                        locations = {},
+                        bindType  = prevItem.bindType,
+                        isBound   = prevItem.isBound,
+                    }
+                end
+                allItems[key].locations.bank = prevItem.locations.bank
+                allItems[key].quantity = allItems[key].quantity + prevItem.locations.bank
+            end
+        end
+    end
+
+    local prevBankScan = prevData and prevData.lastBankScan or nil
     ns.db.inventory[charKey] = {
-        lastScan = time(),
-        class    = select(2, UnitClass("player")),
-        items    = allItems,
+        lastScan     = time(),
+        lastBankScan = prevBankScan,
+        class        = select(2, UnitClass("player")),
+        items        = allItems,
     }
 
     local count = 0
@@ -235,9 +261,24 @@ function Scanner:ScanBank()
         charData = ns.db.inventory[charKey]
     end
 
+    -- Clear existing bank locations (authoritative scan replaces all bank data)
+    for key, item in pairs(charData.items) do
+        if item.locations and item.locations.bank and item.locations.bank > 0 then
+            item.quantity = item.quantity - item.locations.bank
+            item.locations.bank = nil
+        end
+    end
+    -- Remove items that only existed in bank (zero quantity after clearing)
+    for key, item in pairs(charData.items) do
+        if item.quantity <= 0 then
+            charData.items[key] = nil
+        end
+    end
+
     local bankItems = ScanContainers(ns:GetEnabledBankTabs(), true)
     MergeItems(charData.items, bankItems, "bank")
     charData.lastScan = time()
+    charData.lastBankScan = time()
 
     local count = 0
     for _ in pairs(bankItems) do count = count + 1 end

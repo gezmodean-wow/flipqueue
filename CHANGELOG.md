@@ -1,6 +1,17 @@
 # Changelog
 
-## v0.6.1-alpha
+## v0.6.1-alpha.2
+- **Live inventory tracking**: inventory DB updates on every item movement via BAG_UPDATE_DELAYED (#53, #55)
+- **To-do location refresh**: item sources update in real-time when pulled to bags — no more frozen "bank" labels (#53)
+- **Bank quantity reconciliation**: ScanBank clears stale locations before merging fresh data, fixes inflated item counts (#55)
+- **TSM multi-post detection**: logs all posted copies, not just the first — CheckOwnedAuctions consumes all matching auctions (#54)
+- **Todo bag-based post detection**: SnapshotBags + CheckForPosts now track todo list items alongside legacy queue items (#54)
+- Bank data preserved across bag-only scans (no longer lost between bank visits)
+- Auto-pull FinishPull rescans bank + refreshes todo locations immediately
+- Items leaving bags marked "unavailable" until next authoritative scan
+- `lastBankScan` timestamp tracked per character for staleness detection
+
+## v0.6.1-alpha.1
 - **Deposit subtasks**: tracks which character holds items that need depositing to warbank, shows "via CharName" source tags (#47)
 - **Smart character ordering**: Next Steps sorts depositors before receivers so players don't bounce between characters (#47)
 - **Auto-generate To-Do on import**: checkbox on Import page to skip the Generator and auto-build a to-do list (#48)
