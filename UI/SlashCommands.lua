@@ -22,6 +22,22 @@ SlashCmdList["FLIPQUEUE"] = function(msg)
         ns.Scanner:ScanBank()
         ns.Scanner:ScanWarbank()
 
+    elseif msg == "gbank" then
+        ns.Scanner:ScanGuildBank()
+
+    elseif msg == "cleanup" then
+        if ns.db then
+            ns.db._cleanupVersion = nil  -- force re-run
+            ns:CleanupLegacyData()
+            if ns.db._cleanupSummary then
+                ns:Print(ns.COLORS.GREEN .. "Data cleanup: " .. ns.db._cleanupSummary .. "|r")
+                ns.db._cleanupSummary = nil
+            else
+                ns:Print(ns.COLORS.GREEN .. "Data cleanup complete — no issues found.|r")
+            end
+            UI:Refresh()
+        end
+
     elseif msg == "clear" then
         ns.Queue:Clear()
         ns:Print("Queue cleared.")
@@ -129,6 +145,8 @@ SlashCmdList["FLIPQUEUE"] = function(msg)
         print("  /fq inv - Open full inventory page")
         print("  /fq scan - Rescan current character's bags")
         print("  /fq bank - Scan bank + warbank (must be at bank)")
+        print("  /fq gbank - Scan guild bank (must have guild bank open)")
+        print("  /fq cleanup - Clean up legacy data and normalize saved variables")
         print("  /fq export - Export page (CSV/AAA formats)")
         print("  /fq sort - Toggle sort mode (realm/name)")
         print("  /fq clear - Clear entire queue")

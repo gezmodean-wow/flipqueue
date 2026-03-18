@@ -59,9 +59,11 @@ end
 local function ScanContainers(bagIndices, captureBindInfo)
     local items = {}
     for _, bagIndex in ipairs(bagIndices) do
-        local numSlots = C_Container.GetContainerNumSlots(bagIndex)
+        local okSlots, numSlots = pcall(C_Container.GetContainerNumSlots, bagIndex)
+        if not okSlots or not numSlots then numSlots = 0 end
         for slot = 1, numSlots do
-            local info = C_Container.GetContainerItemInfo(bagIndex, slot)
+            local okInfo, info = pcall(C_Container.GetContainerItemInfo, bagIndex, slot)
+            if not okInfo then info = nil end
             if info and info.hyperlink then
                 local itemID, bonusIDs, modifiers = ns:ParseItemLink(info.hyperlink)
                 if itemID then
@@ -247,6 +249,13 @@ end
 function Scanner:ScanWarbank()
     if not ns.db then return end
 
+    -- Check if warbank is accessible (follows Baganator/Syndicator pattern)
+    local okLock, lockReason = pcall(C_Bank.FetchBankLockedReason, Enum.BankType.Account)
+    if not okLock or lockReason ~= nil then
+        ns:PrintDebug("Warbank not accessible, skipping scan.")
+        return
+    end
+
     local warbankItems = ScanContainers(ns:GetEnabledWarbankTabs(), true)
     local items = {}
     for key, data in pairs(warbankItems) do
@@ -275,8 +284,133 @@ function Scanner:ScanWarbank()
 end
 
 --------------------------
--- Event Handling
+-- Guild Bank Scanning
 --------------------------
+
+local guildBankOpen = false
+local guildBankScanning = false
+local guildScanQueue = {}  -- tabs remaining to scan
+local guildScanData = {}   -- accumulated scan results
+
+-- Scan a single guild bank tab (items already loaded by QueryGuildBankTab)
+local function ScanGuildBankTab(tab)
+    local items = {}
+    for slot = 1, 98 do
+        local ok, texture, itemCount, locked = pcall(GetGuildBankItemInfo, tab, slot)
+        if ok and texture and itemCount and itemCount > 0 then
+            local okLink, link = pcall(GetGuildBankItemLink, tab, slot)
+            if okLink and link then
+                local itemID, bonusIDs, modifiers = ns:ParseItemLink(link)
+                if itemID then
+                    local key = ns:MakeItemKey(itemID, bonusIDs, modifiers)
+                    if not items[key] then
+                        local itemName
+                        if link:find("|Hbattlepet:") then
+                            itemName = link:match("|h%[(.-)%]|h")
+                        else
+                            local okName, n = pcall(C_Item.GetItemInfo, link)
+                            itemName = okName and n or nil
+                        end
+                        items[key] = {
+                            itemID    = itemID,
+                            name      = itemName or "Unknown",
+                            bonusIDs  = bonusIDs,
+                            modifiers = modifiers,
+                            quantity  = 0,
+                            icon      = texture,
+                        }
+                    end
+                    items[key].quantity = items[key].quantity + itemCount
+                end
+            end
+        end
+    end
+    return items
+end
+
+-- Process next tab in the scan queue
+local function ProcessNextGuildTab()
+    if #guildScanQueue == 0 then
+        -- All tabs scanned — save results
+        guildBankScanning = false
+        if not ns.db then return end
+        local guildName = GetGuildInfo("player") or "Unknown Guild"
+        ns.db.guildbank = ns.db.guildbank or {}
+        ns.db.guildbank[guildName] = {
+            lastScan = time(),
+            items    = guildScanData,
+        }
+        local count = 0
+        for _ in pairs(guildScanData) do count = count + 1 end
+        ns:Print(ns.COLORS.CYAN .. "Guild bank scanned: " .. count .. " unique items (" .. guildName .. ")|r")
+        guildScanData = {}
+        return
+    end
+
+    local tab = table.remove(guildScanQueue, 1)
+    QueryGuildBankTab(tab)
+    -- GUILDBANKBAGSLOTS_CHANGED will fire when data is ready
+end
+
+-- Called when GUILDBANKBAGSLOTS_CHANGED fires during a scan
+local function OnGuildBankSlotsChanged()
+    if not guildBankOpen or not guildBankScanning then return end
+
+    local currentTab = GetCurrentGuildBankTab()
+    if currentTab then
+        local tabItems = ScanGuildBankTab(currentTab)
+        -- Merge into accumulated data
+        for key, data in pairs(tabItems) do
+            if not guildScanData[key] then
+                guildScanData[key] = {
+                    itemID    = data.itemID,
+                    name      = data.name,
+                    bonusIDs  = data.bonusIDs,
+                    modifiers = data.modifiers,
+                    quantity  = 0,
+                    icon      = data.icon,
+                }
+            end
+            guildScanData[key].quantity = guildScanData[key].quantity + data.quantity
+        end
+    end
+
+    -- Continue to next tab after a short delay (server throttle)
+    C_Timer.After(0.3, ProcessNextGuildTab)
+end
+
+function Scanner:ScanGuildBank()
+    if not ns.db then return end
+    if not guildBankOpen then
+        ns:PrintError("Guild bank must be open to scan.")
+        return
+    end
+
+    local numTabs = GetNumGuildBankTabs()
+    if numTabs == 0 then
+        ns:PrintError("No guild bank tabs available.")
+        return
+    end
+
+    guildScanData = {}
+    guildScanQueue = {}
+
+    for tab = 1, numTabs do
+        local ok, name, icon, isViewable = pcall(GetGuildBankTabInfo, tab)
+        if ok and isViewable then
+            table.insert(guildScanQueue, tab)
+        end
+    end
+
+    if #guildScanQueue == 0 then
+        ns:PrintError("No viewable guild bank tabs.")
+        return
+    end
+
+    guildBankScanning = true
+    ns:PrintDebug("Scanning " .. #guildScanQueue .. " guild bank tab(s)...")
+    ProcessNextGuildTab()
+end
 
 --------------------------
 -- Character Metadata
@@ -301,11 +435,20 @@ local frame = CreateFrame("Frame")
 frame:RegisterEvent("PLAYER_LOGIN")
 frame:RegisterEvent("BANKFRAME_OPENED")
 frame:RegisterEvent("PLAYER_MONEY")
+frame:RegisterEvent("PLAYER_INTERACTION_MANAGER_FRAME_SHOW")
+frame:RegisterEvent("PLAYER_INTERACTION_MANAGER_FRAME_HIDE")
+frame:RegisterEvent("GUILDBANKBAGSLOTS_CHANGED")
 
-frame:SetScript("OnEvent", function(self, event)
+frame:SetScript("OnEvent", function(self, event, ...)
     if event == "PLAYER_LOGIN" then
         ns:InitDB()
         UpdateCharacterMeta()
+
+        -- Print cleanup summary if data was migrated/cleaned
+        if ns.db._cleanupSummary then
+            ns:Print(ns.COLORS.GRAY .. "Data cleanup: " .. ns.db._cleanupSummary .. "|r")
+            ns.db._cleanupSummary = nil
+        end
 
         -- Auto-unskip items that have been skipped for more than 24h
         if ns.Queue and ns.Queue.UnskipExpired then
@@ -332,7 +475,20 @@ frame:SetScript("OnEvent", function(self, event)
 
         if ns.db.settings.autoScan then
             C_Timer.After(2, function()
+                -- Check if this is a new character being scanned for the first time
+                local isFirstScan = not ns.db.inventory[ns:GetCharKey()]
                 Scanner:ScanCurrentCharacter()
+
+                -- First-time onboarding: if there are deals but few characters, show hint
+                if isFirstScan then
+                    local charCount = 0
+                    for _ in pairs(ns.db.inventory) do charCount = charCount + 1 end
+                    local dealCount = #(ns.db.queue or {})
+                    if dealCount > 0 and charCount <= 2 then
+                        ns:Print(ns.COLORS.YELLOW .. "Character registered!|r Log into each of your posting characters once so FlipQueue can match deals to them.")
+                    end
+                end
+
                 if ns.db.settings.showLoginMessage and ns.Queue then
                     local charKey = ns:GetCharKey()
                     local myRealm = charKey:match("%-(.+)$") or ""
@@ -390,6 +546,32 @@ frame:SetScript("OnEvent", function(self, event)
             if ns.db.characters[charKey] then
                 ns.db.characters[charKey].gold = GetMoney()
             end
+        end
+
+    elseif event == "PLAYER_INTERACTION_MANAGER_FRAME_SHOW" then
+        local interactionType = ...
+        -- GuildBanker = 10 (Enum.PlayerInteractionType.GuildBanker)
+        if interactionType == 10 or (Enum.PlayerInteractionType and interactionType == Enum.PlayerInteractionType.GuildBanker) then
+            guildBankOpen = true
+            -- Auto-scan after a short delay to let data load
+            C_Timer.After(1, function()
+                if guildBankOpen then
+                    Scanner:ScanGuildBank()
+                end
+            end)
+        end
+
+    elseif event == "PLAYER_INTERACTION_MANAGER_FRAME_HIDE" then
+        local interactionType = ...
+        if interactionType == 10 or (Enum.PlayerInteractionType and interactionType == Enum.PlayerInteractionType.GuildBanker) then
+            guildBankOpen = false
+            guildBankScanning = false
+            guildScanQueue = {}
+        end
+
+    elseif event == "GUILDBANKBAGSLOTS_CHANGED" then
+        if guildBankOpen then
+            OnGuildBankSlotsChanged()
         end
     end
 end)

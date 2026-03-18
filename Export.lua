@@ -183,10 +183,12 @@ local function ScanAndExport(bagIndices)
     local totalItems = 0
     local skipped = 0
     for _, bagIndex in ipairs(bagIndices) do
-        local numSlots = C_Container.GetContainerNumSlots(bagIndex)
+        local okSlots, numSlots = pcall(C_Container.GetContainerNumSlots, bagIndex)
+        if not okSlots or not numSlots then numSlots = 0 end
         totalSlots = totalSlots + numSlots
         for slot = 1, numSlots do
-            local info = C_Container.GetContainerItemInfo(bagIndex, slot)
+            local okInfo, info = pcall(C_Container.GetContainerItemInfo, bagIndex, slot)
+            if not okInfo then info = nil end
             if info and info.hyperlink then
                 totalItems = totalItems + 1
                 local ok, data = pcall(GetItemExportData, info.hyperlink, info.stackCount, info, bagIndex, slot)
@@ -225,6 +227,11 @@ function Export:ExportBank()
 end
 
 function Export:ExportWarbank()
+    local okLock, lockReason = pcall(C_Bank.FetchBankLockedReason, Enum.BankType.Account)
+    if not okLock or lockReason ~= nil then
+        ns:Print(ns.COLORS.YELLOW .. "Warbank not accessible for export.|r")
+        return "", 0
+    end
     return ScanAndExport(ns.WARBANK_TABS)
 end
 

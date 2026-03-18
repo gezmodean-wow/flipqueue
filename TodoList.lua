@@ -89,6 +89,21 @@ function TodoList:BuildItemPool()
         end
     end
 
+    -- Guild bank(s)
+    if ns.db.guildbank then
+        for guildName, gbData in pairs(ns.db.guildbank) do
+            if gbData.items then
+                for itemKey, itemData in pairs(gbData.items) do
+                    local numID = tonumber(itemData.itemID)
+                    local isDNT = numID and ns.Queue and ns.Queue:IsDoNotTrack(numID)
+                    if not isDNT and (itemData.quantity or 0) > 0 then
+                        AddToPool(itemKey, itemData, "Guild:" .. guildName, "guildbank", itemData.quantity)
+                    end
+                end
+            end
+        end
+    end
+
     return pool
 end
 
@@ -236,7 +251,7 @@ end
 local function FindBestAssignment(poolItem, targetRealm, inventory)
     if not targetRealm or targetRealm == "" then return nil end
 
-    local PRIORITY = { bags = 1, reagent = 2, bank = 3, warbank = 4 }
+    local PRIORITY = { bags = 1, reagent = 2, bank = 3, warbank = 4, guildbank = 5 }
 
     -- Characters on the target realm
     local realmChars = {}
@@ -261,6 +276,13 @@ local function FindBestAssignment(poolItem, targetRealm, inventory)
                     quantity = src.quantity,
                     priority = PRIORITY.warbank,
                 })
+            elseif src.location == "guildbank" then
+                table.insert(candidates, {
+                    charKey  = realmChars[1],
+                    location = "guildbank",
+                    quantity = src.quantity,
+                    priority = PRIORITY.guildbank,
+                })
             else
                 for _, charKey in ipairs(realmChars) do
                     if src.source == charKey then
@@ -277,7 +299,21 @@ local function FindBestAssignment(poolItem, targetRealm, inventory)
         end
     end
 
-    if #candidates == 0 then return nil end
+    if #candidates == 0 then
+        -- Characters exist on realm but item not in accessible inventory
+        -- Find which characters actually hold this item (for deposit prompts)
+        local depositSources = {}
+        for _, src in ipairs(poolItem.sources) do
+            if src.quantity > 0 and src.source ~= "Warbank" then
+                table.insert(depositSources, {
+                    charKey  = src.source,
+                    location = src.location,
+                    quantity = src.quantity,
+                })
+            end
+        end
+        return { charKey = realmChars[1], location = nil, quantity = 0, depositSources = depositSources }
+    end
 
     table.sort(candidates, function(a, b)
         if a.priority ~= b.priority then return a.priority < b.priority end
@@ -475,7 +511,7 @@ function TodoList:GenerateTodoList(allocationOrder)
             local assignment = FindBestAssignment(
                 poolItem, deal.targetRealm, ns.db.inventory)
 
-            if assignment then
+            if assignment and assignment.location then
                 -- Post quantity: defaultSellQty as base, TSM postCap overrides
                 local qty = math.max(deal.quantity or 1, defaultQty)
                 if tsmEnabled then
@@ -535,8 +571,36 @@ function TodoList:GenerateTodoList(allocationOrder)
                     })
                     poolRemaining[poolIdx] = poolRemaining[poolIdx] - qty
                 end
+            elseif assignment then
+                -- Character exists on realm but item not in their bags/bank/warbank
+                -- Assign to the character so it groups under "Log in", not "Create char"
+                -- Don't consume pool — item needs to be moved to warbank first
+                local depositFrom, depositLocation
+                if assignment.depositSources and #assignment.depositSources > 0 then
+                    depositFrom = assignment.depositSources[1].charKey
+                    depositLocation = assignment.depositSources[1].location
+                end
+                table.insert(preview.items, {
+                    itemKey         = poolItem.itemKey,
+                    itemID          = poolItem.itemID,
+                    name            = poolItem.name,
+                    icon            = poolItem.icon,
+                    targetRealm     = deal.targetRealm,
+                    expectedPrice   = deal.expectedPrice,
+                    quantity        = math.max(deal.quantity or 1, defaultQty),
+                    assignedChar    = assignment.charKey,
+                    status          = "pending",
+                    source          = "unavailable",
+                    depositFrom     = depositFrom,
+                    depositLocation = depositLocation,
+                    quality         = deal.quality,
+                    sellRate        = deal.sellRate,
+                    noCompetition   = deal.noCompetition,
+                    category        = deal.category,
+                    attempts        = 0,
+                })
             else
-                -- Item exists in pool but no character on target realm
+                -- No character on target realm at all
                 table.insert(preview.items, {
                     itemKey       = poolItem.itemKey,
                     itemID        = poolItem.itemID,

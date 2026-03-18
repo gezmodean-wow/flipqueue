@@ -94,6 +94,13 @@ local function BuildGeneratorPreviewData(todoList)
             sourceStr = ns.COLORS.GREEN .. "bags" .. "|r"
         elseif sourceStr == "bank" then
             sourceStr = ns.COLORS.BLUE .. "bank" .. "|r"
+        elseif sourceStr == "guildbank" then
+            sourceStr = ns.COLORS.ORANGE .. "guild" .. "|r"
+        elseif sourceStr == "unavailable" and item.depositFrom then
+            local depName = item.depositFrom:match("^(.-)%-") or item.depositFrom
+            sourceStr = ns.COLORS.CYAN .. "via " .. depName .. "|r"
+        elseif sourceStr == "unavailable" then
+            sourceStr = ns.COLORS.RED .. "unavail" .. "|r"
         end
 
         local rowColor = nil
@@ -1498,7 +1505,8 @@ function UI:RefreshGeneratorPage(pending)
             local realmName = group.realm ~= "" and group.realm or "unknown realm"
             hdr.nameText:SetText(
                 ns.COLORS.RED .. "Create character on " .. realmName .. "|r" ..
-                ns.COLORS.GRAY .. "  (" .. #group.items .. " items — not in to-do list)|r")
+                ns.COLORS.GRAY .. "  (" .. #group.items .. " items — not in to-do list)" ..
+                "\n  Tip: Log in to a character on this realm once so FlipQueue can find it|r")
         else
             -- Assigned: normal header with class-colored character name
             hdr.bg:SetColorTexture(0.12, 0.15, 0.2, 0.8)
@@ -1653,6 +1661,9 @@ function UI:RefreshGeneratorPage(pending)
     elseif currentList then
         local counts = ns.TodoList:GetStatusCounts()
         table.insert(genStatusParts, counts.pending .. " active")
+        if counts.unassigned and counts.unassigned > 0 then
+            table.insert(genStatusParts, ns.COLORS.ORANGE .. counts.unassigned .. " need chars|r")
+        end
         table.insert(genStatusParts, "Generate to rebuild")
     else
         table.insert(genStatusParts, pending .. " deals")
@@ -1662,5 +1673,13 @@ function UI:RefreshGeneratorPage(pending)
     if excludeCount > 0 then
         table.insert(genStatusParts, excludeCount .. " excluded")
     end
+
+    -- Onboarding hint: show if no characters scanned yet
+    local charCount = 0
+    for _ in pairs(ns.db.inventory or {}) do charCount = charCount + 1 end
+    if charCount == 0 then
+        table.insert(genStatusParts, ns.COLORS.YELLOW .. "Log in to each character once to enable matching|r")
+    end
+
     mainFrame.statusText:SetText(table.concat(genStatusParts, "  |  "))
 end

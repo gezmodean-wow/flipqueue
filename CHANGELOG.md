@@ -1,5 +1,21 @@
 # Changelog
 
+## v0.6.1-alpha
+- **Deposit subtasks**: tracks which character holds items that need depositing to warbank, shows "via CharName" source tags (#47)
+- **Smart character ordering**: Next Steps sorts depositors before receivers so players don't bounce between characters (#47)
+- **Auto-generate To-Do on import**: checkbox on Import page to skip the Generator and auto-build a to-do list (#48)
+- **Text overflow fix**: ScrollTable cells clipped to column bounds, prevents text overlapping adjacent columns (#49)
+- **Guild bank scanning**: auto-scans when guild bank is opened, items appear in inventory and item pool (#52)
+- **Character ignore UX**: left-click toggle column in Characters table, visible O/X indicator (#51)
+- **Character onboarding**: first-login hint to log into each character, Generator tips for unassigned realms (#50)
+- **Legacy data cleanup**: automatic migration/normalization on login — prunes old logs, fixes stale fields, removes zero-qty items
+- TSM AH Price columns widened to fit large gold values
+- Next Steps Detail column widened for deposit info
+- Grouped items view shows `[via CharName]` or `[unavail]` source tags
+- Current character tasks show "Deposit: N item(s) to warbank" when relevant
+- `/fq gbank` slash command for manual guild bank scan
+- `/fq cleanup` slash command for manual data normalization
+
 ## v0.5.0
 - **Partial post detection**: posting fewer than queued quantity keeps remainder in queue (#6)
 - **Mail scan updates**: detects expired/cancelled auction returns, marks as collected (#30)

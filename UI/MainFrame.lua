@@ -509,6 +509,7 @@ mainFrame.actionBtns.importDo = CreateActionBtn("Import", "Import previewed item
         UI._importPreviewClear()
         UI.importPreviewTable:SetData({})
         UI._importStatus:SetText(ns.COLORS.GREEN .. added .. " items imported!|r")
+        if UI._tryAutoGenerateTodo then UI._tryAutoGenerateTodo() end
         UI:Refresh()
         UI:RefreshMini()
     else
@@ -523,6 +524,7 @@ mainFrame.actionBtns.importDo = CreateActionBtn("Import", "Import previewed item
                 UI._importPreviewClear()
                 UI.importPreviewTable:SetData({})
                 UI._importStatus:SetText(ns.COLORS.GREEN .. added .. " items imported!|r")
+                if UI._tryAutoGenerateTodo then UI._tryAutoGenerateTodo() end
                 UI:Refresh()
                 UI:RefreshMini()
             else
@@ -642,12 +644,12 @@ local POST_NOW_COLS_BASE = {
     {key = "location", label = "Location", width = 100, sortable = true},
 }
 local POST_NOW_COLS_TSM = {
-    {key = "name",     label = "Item",     width = 180, sortable = true},
+    {key = "name",     label = "Item",     width = 170, sortable = true},
     {key = "qty",      label = "Qty",      width = 35,  align = "CENTER", sortable = true},
-    {key = "price",    label = "Price",    width = 75,  sortable = true},
-    {key = "ahPrice",  label = "AH Price", width = 80,  sortable = true},
-    {key = "realm",    label = "Realm",    width = 120, sortable = true},
-    {key = "location", label = "Location", width = 80,  sortable = true},
+    {key = "price",    label = "Price",    width = 70,  sortable = true},
+    {key = "ahPrice",  label = "AH Price", width = 95,  sortable = true},
+    {key = "realm",    label = "Realm",    width = 115, sortable = true},
+    {key = "location", label = "Location", width = 85,  sortable = true},
 }
 
 UI.postNowTable = UI:CreateScrollTable(tableContainer, POST_NOW_COLS_BASE)
@@ -663,12 +665,12 @@ local QUEUE_COLS_BASE = {
     {key = "status",  label = "Status",   width = 60,  align = "CENTER", sortable = true},
 }
 local QUEUE_COLS_TSM = {
-    {key = "name",    label = "Item",     width = 160, sortable = true},
+    {key = "name",    label = "Item",     width = 150, sortable = true},
     {key = "qty",     label = "Qty",      width = 35,  align = "CENTER", sortable = true},
-    {key = "price",   label = "Price",    width = 70,  sortable = true},
-    {key = "ahPrice", label = "AH Price", width = 70,  sortable = true},
-    {key = "realm",   label = "Sell Realm", width = 110, sortable = true},
-    {key = "foundOn", label = "Found On", width = 110, sortable = true},
+    {key = "price",   label = "Price",    width = 65,  sortable = true},
+    {key = "ahPrice", label = "AH Price", width = 90,  sortable = true},
+    {key = "realm",   label = "Sell Realm", width = 105, sortable = true},
+    {key = "foundOn", label = "Found On", width = 105, sortable = true},
     {key = "status",  label = "Status",   width = 55,  align = "CENTER", sortable = true},
 }
 
@@ -723,13 +725,14 @@ UI.inventoryTable:SetSort("name", true)
 
 -- Characters table
 UI.charsTable = UI:CreateScrollTable(tableContainer, {
-    {key = "name",      label = "Character",   width = 110, sortable = true},
-    {key = "realm",     label = "Realm",        width = 130, sortable = true},
+    {key = "toggle",    label = "",             width = 28,  align = "CENTER", sortable = false},
+    {key = "name",      label = "Character",   width = 105, sortable = true},
+    {key = "realm",     label = "Realm",        width = 120, sortable = true},
     {key = "gold",      label = "Gold",         width = 70,  align = "RIGHT", sortable = true},
     {key = "tasks",     label = "Tasks",        width = 40,  align = "CENTER", sortable = true},
-    {key = "auctions",  label = "Auctions",     width = 110, align = "CENTER", sortable = true},
+    {key = "auctions",  label = "Auctions",     width = 100, align = "CENTER", sortable = true},
     {key = "lastLogin", label = "Last Login",   width = 75,  sortable = true},
-    {key = "status",    label = "Status",       width = 65,  sortable = true},
+    {key = "status",    label = "Status",       width = 62,  sortable = true},
 })
 UI.charsTable:SetSort("name", true)
 
@@ -744,11 +747,11 @@ UI.needCharsTable:SetSort("itemCount", false)
 
 -- Next Steps table (shown on Post Now page)
 UI.nextStepsTable = UI:CreateScrollTable(tableContainer, {
-    {key = "action",    label = "Action",     width = 90,  sortable = true},
-    {key = "target",    label = "Target",     width = 200, sortable = true},
-    {key = "itemCount", label = "Items",      width = 50,  align = "CENTER", sortable = true},
-    {key = "value",     label = "Est. Value", width = 90,  sortable = true},
-    {key = "detail",    label = "Detail",     width = 130, sortable = false},
+    {key = "action",    label = "Action",     width = 85,  sortable = true},
+    {key = "target",    label = "Target",     width = 185, sortable = true},
+    {key = "itemCount", label = "Items",      width = 45,  align = "CENTER", sortable = true},
+    {key = "value",     label = "Est. Value", width = 85,  sortable = true},
+    {key = "detail",    label = "Detail",     width = 160, sortable = false},
 })
 UI.nextStepsTable:SetSort("_sortValue", false)
 
@@ -841,14 +844,47 @@ importStatus:SetPoint("LEFT", importPage, "BOTTOMLEFT", 8, 10)
 importStatus:SetTextColor(0.5, 0.5, 0.5)
 importStatus:SetText("")
 
+-- Auto-generate To-Do checkbox (right side, next to auto-import)
+local importAutoGenCheck = CreateFrame("CheckButton", "FlipQueueImportAutoGenCheck", importPage, "UICheckButtonTemplate")
+importAutoGenCheck:SetSize(22, 22)
+importAutoGenCheck:SetPoint("RIGHT", importPage, "BOTTOMRIGHT", -8, 10)
+local importAutoGenLabel = importPage:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+importAutoGenLabel:SetPoint("RIGHT", importAutoGenCheck, "LEFT", -2, 0)
+importAutoGenLabel:SetText("Auto-generate To-Do")
+importAutoGenLabel:SetTextColor(0.5, 0.5, 0.5)
+importAutoGenCheck:SetScript("OnEnter", function(self)
+    GameTooltip:SetOwner(self, "ANCHOR_TOP")
+    GameTooltip:SetText("Auto-generate To-Do List", 1, 1, 1)
+    GameTooltip:AddLine("After import, automatically generate and save a\nTo-Do list using your current Generator settings.\n\n|cffff8800Warning:|r This replaces your current To-Do list.", 0.7, 0.7, 0.7, true)
+    GameTooltip:Show()
+end)
+importAutoGenCheck:SetScript("OnLeave", function() GameTooltip:Hide() end)
+importAutoGenCheck:SetScript("OnClick", function(self)
+    if ns.db then ns.db.settings.importAutoGenerate = self:GetChecked() end
+end)
+
 -- Skip-preview checkbox
 local importSkipCheck = CreateFrame("CheckButton", "FlipQueueImportSkipCheck", importPage, "UICheckButtonTemplate")
 importSkipCheck:SetSize(22, 22)
-importSkipCheck:SetPoint("RIGHT", importPage, "BOTTOMRIGHT", -8, 10)
+importSkipCheck:SetPoint("RIGHT", importAutoGenLabel, "LEFT", -12, 0)
 local importSkipLabel = importPage:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
 importSkipLabel:SetPoint("RIGHT", importSkipCheck, "LEFT", -2, 0)
 importSkipLabel:SetText("Auto-import")
 importSkipLabel:SetTextColor(0.5, 0.5, 0.5)
+
+-- Auto-generate To-Do list after import (if checkbox is checked)
+local function TryAutoGenerateTodo()
+    if not importAutoGenCheck:GetChecked() then return end
+    if not ns.TodoList then return end
+    local allocationOrder = UI:GetGenAllocationOrder()
+    local preview = ns.TodoList:GenerateTodoList(allocationOrder)
+    if preview and preview.items and #preview.items > 0 then
+        ns.TodoList:CommitList(preview, "replace")
+        local count = #preview.items
+        ns:Print(ns.COLORS.CYAN .. "Auto-generated To-Do list with " .. count .. " tasks (replaced previous list).|r")
+    end
+end
+UI._tryAutoGenerateTodo = TryAutoGenerateTodo
 
 -- Stored preview data for import confirmation
 local importPreviewData = nil -- raw items from Parse
@@ -873,6 +909,7 @@ importEdit:SetScript("OnTextChanged", function(self, userInput)
                 UI.importPreviewTable:SetData({})
                 importStatus:SetText(ns.COLORS.GREEN .. added .. " items imported!|r")
                 importLastLen = 0
+                TryAutoGenerateTodo()
                 UI:Refresh()
                 UI:RefreshMini()
             else
@@ -1556,6 +1593,13 @@ local function BuildTodoData()
                 sourceStr = ns.COLORS.BLUE .. "bank" .. "|r"
             elseif sourceStr == "reagent" then
                 sourceStr = "reagent"
+            elseif sourceStr == "guildbank" then
+                sourceStr = ns.COLORS.ORANGE .. "guild bank" .. "|r"
+            elseif sourceStr == "unavailable" and item.depositFrom then
+                local depName = item.depositFrom:match("^(.-)%-") or item.depositFrom
+                sourceStr = ns.COLORS.CYAN .. "via " .. depName .. "|r"
+            elseif sourceStr == "unavailable" then
+                sourceStr = ns.COLORS.RED .. "unavailable" .. "|r"
             end
 
             local row = {
@@ -1667,6 +1711,24 @@ local function BuildCurrentCharTasks()
         })
     end
 
+    -- Deposit to warbank: items on this character that another character needs
+    local todoList = ns.TodoList and ns.TodoList:GetCurrentList()
+    if todoList and todoList.items then
+        local depositCount = 0
+        for _, item in ipairs(todoList.items) do
+            if item.source == "unavailable" and item.depositFrom == myCharKey then
+                depositCount = depositCount + 1
+            end
+        end
+        if depositCount > 0 then
+            table.insert(tasks, {
+                icon   = "Interface\\Icons\\INV_Misc_Bag_10",
+                text   = ns.COLORS.CYAN .. "Deposit:|r " .. depositCount .. " item(s) to warbank for other characters",
+                sort   = 0,  -- highest priority
+            })
+        end
+    end
+
     table.sort(tasks, function(a, b) return a.sort < b.sort end)
     return tasks
 end
@@ -1697,7 +1759,30 @@ local function BuildNextStepsData()
 
     -- 1) Build "Log in" entries from the to-do list (primary source)
     local todoList = ns.TodoList and ns.TodoList:GetCurrentList()
+    local depositsByChar = {}  -- charKey -> { count, items }
+    local receiverOf = {}      -- receiverCharKey -> { depositorCharKey = true }
+
     if todoList and todoList.items then
+        -- Collect deposit dependencies
+        for _, item in ipairs(todoList.items) do
+            if item.source == "unavailable" and item.depositFrom then
+                if not depositsByChar[item.depositFrom] then
+                    depositsByChar[item.depositFrom] = { count = 0, gold = 0 }
+                end
+                depositsByChar[item.depositFrom].count = depositsByChar[item.depositFrom].count + 1
+                depositsByChar[item.depositFrom].gold = depositsByChar[item.depositFrom].gold
+                    + (ns:ParseGoldValue(item.expectedPrice or "") or 0)
+
+                -- Track dependency: receiver depends on depositor
+                if item.assignedChar and item.depositFrom ~= item.assignedChar then
+                    if not receiverOf[item.assignedChar] then
+                        receiverOf[item.assignedChar] = {}
+                    end
+                    receiverOf[item.assignedChar][item.depositFrom] = true
+                end
+            end
+        end
+
         local sortMode = (UI.GetGenSortMode and UI:GetGenSortMode()) or "profit"
         local displayGroups = ns.TodoList:BuildDisplayGroups(todoList.items, sortMode)
 
@@ -1709,13 +1794,22 @@ local function BuildNextStepsData()
                 local classColor = charInv and CLASS_COLORS[charInv.class] or "888888"
                 local coloredName = "|cff" .. classColor .. name .. "|r"
 
+                -- Check if this character also has deposit tasks
+                local depInfo = depositsByChar[group.charKey]
+                local detailStr = #group.items .. " items to post"
+                if depInfo then
+                    detailStr = detailStr .. " + " .. depInfo.count .. " to deposit"
+                    depositsByChar[group.charKey] = nil  -- merged, don't create standalone
+                end
+
                 table.insert(data, {
                     action    = ns.COLORS.YELLOW .. "Log in" .. "|r",
                     target    = coloredName .. "  (" .. realm .. ")",
-                    itemCount = #group.items,
+                    itemCount = #group.items + (depInfo and depInfo.count or 0),
                     value     = FormatGoldValue(group.totalGold),
-                    detail    = #group.items .. " items to post",
+                    detail    = detailStr,
                     _sortValue = group.totalGold,
+                    _charKey   = group.charKey,
                     _tooltipText = group.charKey,
                     _tooltipExtra = string.format("Log in to %s to post %d items\nEstimated value: %s",
                         group.charKey, #group.items, FormatGoldValue(group.totalGold)),
@@ -1735,6 +1829,30 @@ local function BuildNextStepsData()
                         realmName, #group.items, FormatGoldValue(group.totalGold)),
                 })
             end
+        end
+    end
+
+    -- 2) Standalone deposit entries (depositors not already merged with "Log in")
+    for charKey, depInfo in pairs(depositsByChar) do
+        if charKey ~= myCharKey then
+            local name = charKey:match("^(.-)%-") or charKey
+            local realm = charKey:match("%-(.+)$") or ""
+            local charInv = ns.db.inventory and ns.db.inventory[charKey]
+            local classColor = charInv and CLASS_COLORS[charInv.class] or "888888"
+            local coloredName = "|cff" .. classColor .. name .. "|r"
+
+            table.insert(data, {
+                action    = ns.COLORS.CYAN .. "Deposit" .. "|r",
+                target    = coloredName .. "  (" .. realm .. ")",
+                itemCount = depInfo.count,
+                value     = FormatGoldValue(depInfo.gold),
+                detail    = depInfo.count .. " to warbank",
+                _sortValue = depInfo.gold,
+                _charKey   = charKey,
+                _tooltipText = charKey,
+                _tooltipExtra = string.format("Log in to %s to deposit %d item(s) to warbank",
+                    charKey, depInfo.count),
+            })
         end
     end
 
@@ -1798,8 +1916,21 @@ local function BuildNextStepsData()
         end
     end
 
-    -- Sort by value descending
-    table.sort(data, function(a, b) return (a._sortValue or 0) > (b._sortValue or 0) end)
+    -- Dependency-aware sort: depositors before their receivers, then by gold value
+    table.sort(data, function(a, b)
+        local aKey = a._charKey
+        local bKey = b._charKey
+
+        -- If B depends on A (A deposits for B), A comes first
+        if aKey and bKey and receiverOf[bKey] and receiverOf[bKey][aKey] then
+            return true
+        end
+        if aKey and bKey and receiverOf[aKey] and receiverOf[aKey][bKey] then
+            return false
+        end
+
+        return (a._sortValue or 0) > (b._sortValue or 0)
+    end)
 
     return data
 end
@@ -2263,6 +2394,42 @@ local function BuildFullInventoryData()
         end
     end
 
+    -- Guild bank items
+    if ns.db.guildbank then
+        for guildName, gbData in pairs(ns.db.guildbank) do
+            if gbData.items then
+                for key, itemData in pairs(gbData.items) do
+                    local _, gbQuality, gbResolvedID = LookupItemInfo(itemData.itemID, key, itemData.name)
+                    local gbDisplayName = itemData.name or "Unknown"
+                    if gbQuality then
+                        gbDisplayName = QualityColorName(gbDisplayName, gbQuality)
+                    end
+
+                    local statusKey, statusStr, targetRealm = GetItemStatus(key, itemData)
+
+                    table.insert(data, {
+                        name        = gbDisplayName,
+                        qty         = itemData.quantity,
+                        owner       = ns.COLORS.ORANGE .. guildName .. "|r",
+                        location    = "guild bank",
+                        status      = statusStr,
+                        targetRealm = targetRealm or "",
+                        _icon       = itemData.icon,
+                        _tooltipItemID = gbResolvedID,
+                        _itemKey    = key,
+                        _itemID     = itemData.itemID,
+                        _itemName   = itemData.name,
+                        _quantity   = itemData.quantity,
+                        _statusKey  = statusKey,
+                        _sortStatus = statusKey == "Queued" and 1 or statusKey == "Posted" and 2
+                            or statusKey == "Untracked" and 3 or 4,
+                        _charKey    = "Guild:" .. guildName,
+                    })
+                end
+            end
+        end
+    end
+
     return data
 end
 
@@ -2389,7 +2556,9 @@ local function BuildCharactersData()
             if oKey == charKey then orderPos = oi; break end
         end
 
+        local toggleIcon = isHidden and "|cff666666X|r" or "|cff00ff00O|r"
         table.insert(charData, {
+            toggle    = toggleIcon,
             name      = coloredName,
             realm     = realm,
             gold      = goldStr,
@@ -2407,7 +2576,7 @@ local function BuildCharactersData()
             _orderPos = orderPos,
             _tooltipText = charKey,
             _tooltipExtra = string.format(
-                "Gold: %s\n%d queue tasks%s\nLast login: %s\nStatus: %s%s\n\nRight-click to %s\nShift+Right-click: move up\nCtrl+Right-click: move down",
+                "Gold: %s\n%d queue tasks%s\nLast login: %s\nStatus: %s%s\n\nClick to %s\nShift+Right-click: move up\nCtrl+Right-click: move down",
                 goldStr, #tasks,
                 auctionInfo and ("\n" .. auctionInfo.active .. " active, " .. auctionInfo.done .. " done auction(s)") or "",
                 lastLoginStr,
@@ -2708,9 +2877,12 @@ function UI:Refresh()
                         row.text = row:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
                         row.text:SetPoint("LEFT", row, "LEFT", 6, 0)
                         row.text:SetJustifyH("LEFT")
+                        row.text:SetWordWrap(false)
                         row.rightText = row:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
                         row.rightText:SetPoint("RIGHT", row, "RIGHT", -6, 0)
                         row.rightText:SetJustifyH("RIGHT")
+                        row.rightText:SetWordWrap(false)
+                        row.rightText:SetMaxLines(1)
                         row.text:SetPoint("RIGHT", row.rightText, "LEFT", -4, 0)
                         todoRows[rowIdx] = row
                     end
@@ -2840,6 +3012,13 @@ function UI:Refresh()
                                 sourceTag = ns.COLORS.YELLOW .. " [wb]" .. "|r"
                             elseif item.source == "bank" then
                                 sourceTag = ns.COLORS.BLUE .. " [bank]" .. "|r"
+                            elseif item.source == "guildbank" then
+                                sourceTag = ns.COLORS.ORANGE .. " [guild]" .. "|r"
+                            elseif item.source == "unavailable" and item.depositFrom then
+                                local depName = item.depositFrom:match("^(.-)%-") or item.depositFrom
+                                sourceTag = ns.COLORS.CYAN .. " [via " .. depName .. "]" .. "|r"
+                            elseif item.source == "unavailable" then
+                                sourceTag = ns.COLORS.RED .. " [unavail]" .. "|r"
                             end
                         end
                         row.rightText:SetText(priceStr .. sourceTag)
@@ -3080,7 +3259,17 @@ function UI:Refresh()
         -- Show known characters table
         ShowTable(self.charsTable)
         self.charsTable:SetRowClickHandler(function(rowData, button, rowIndex)
-            if button == "RightButton" and rowData._charKey then
+            if button == "LeftButton" and rowData._charKey then
+                -- Left-click: toggle hide/show
+                if ns.db.hiddenCharacters[rowData._charKey] then
+                    ns.db.hiddenCharacters[rowData._charKey] = nil
+                    ns:Print("Re-enabled character: " .. rowData._charKey)
+                else
+                    ns.db.hiddenCharacters[rowData._charKey] = true
+                    ns:Print("Hidden character: " .. rowData._charKey .. " (will be skipped for task routing)")
+                end
+                self:Refresh()
+            elseif button == "RightButton" and rowData._charKey then
                 if IsShiftKeyDown() then
                     -- Shift+Right-click: move character up in manual order
                     local order = ns.db.settings.characterOrder
@@ -3183,12 +3372,15 @@ function UI:Refresh()
             table.insert(statusParts, hiddenCount .. " hidden")
         end
         table.insert(statusParts, #needData .. " realms need chars")
+        table.insert(statusParts, ns.COLORS.GRAY .. "Click to hide/show" .. "|r")
         mainFrame.statusText:SetText(table.concat(statusParts, "  |  "))
 
     elseif self.currentPage == "import" then
         mainFrame.pageTitle:SetText(ns.COLORS.YELLOW .. "Import" .. "|r")
         LayoutActionBtns(mainFrame.actionBtns.importClear, mainFrame.actionBtns.importDo, mainFrame.actionBtns.importPreview)
         importPage:Show()
+        -- Restore checkbox states from settings
+        importAutoGenCheck:SetChecked(ns.db.settings.importAutoGenerate or false)
         -- Show preview table if we have data
         if UI._importPreviewData() then
             UI.importPreviewTable.headerFrame:Show()

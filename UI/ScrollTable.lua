@@ -260,24 +260,33 @@ function ScrollTableMixin:GetOrCreateRow(index)
         GameTooltip:Hide()
     end)
 
-    -- Create cell font strings for each column
+    -- Create cell font strings for each column (with clipping frames to prevent overflow)
     row.cells = {}
+    row._cellClips = {}
     local xOffset = 0
     for i, col in ipairs(self.columns) do
-        local cell = row:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+        -- Clipping frame constrains text to column bounds
+        local clip = CreateFrame("Frame", nil, row)
+        clip:SetHeight(ROW_HEIGHT)
+        clip:SetWidth(col.width)
+        clip:SetPoint("LEFT", row, "LEFT", xOffset, 0)
+        clip:SetClipsChildren(true)
+
+        local cell = clip:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
         cell:SetHeight(ROW_HEIGHT)
         cell:SetWidth(col.width - COL_PADDING * 2)
-        cell:SetPoint("LEFT", row, "LEFT", xOffset + COL_PADDING, 0)
+        cell:SetPoint("LEFT", clip, "LEFT", COL_PADDING, 0)
         cell:SetJustifyH(col.align or "LEFT")
         cell:SetWordWrap(false)
         row.cells[i] = cell
+        row._cellClips[i] = clip
         xOffset = xOffset + col.width
     end
 
-    -- Icon (optional, placed at start of first column)
-    row.icon = row:CreateTexture(nil, "ARTWORK")
+    -- Icon (optional, placed at start of first column's clip frame)
+    row.icon = row._cellClips[1]:CreateTexture(nil, "ARTWORK")
     row.icon:SetSize(ROW_HEIGHT - 4, ROW_HEIGHT - 4)
-    row.icon:SetPoint("LEFT", row, "LEFT", 2, 0)
+    row.icon:SetPoint("LEFT", row._cellClips[1], "LEFT", 2, 0)
     row.icon:Hide()
 
     self.rows[index] = row
@@ -340,6 +349,18 @@ function ScrollTableMixin:Render()
             end)
         end
 
+        -- Update clip frame widths (in case columns were resized)
+        local cx = 0
+        for j, col in ipairs(self.columns) do
+            if row._cellClips and row._cellClips[j] then
+                row._cellClips[j]:SetWidth(col.width)
+                row._cellClips[j]:ClearAllPoints()
+                row._cellClips[j]:SetPoint("LEFT", row, "LEFT", cx, 0)
+                row.cells[j]:SetWidth(col.width - COL_PADDING * 2)
+            end
+            cx = cx + col.width
+        end
+
         -- Icon
         if rowData._icon then
             row.icon:SetTexture(rowData._icon)
@@ -348,7 +369,7 @@ function ScrollTableMixin:Render()
             row.cells[1]:SetPoint("LEFT", row.icon, "RIGHT", 2, 0)
         else
             row.icon:Hide()
-            row.cells[1]:SetPoint("LEFT", row, "LEFT", COL_PADDING, 0)
+            row.cells[1]:SetPoint("LEFT", row._cellClips[1], "LEFT", COL_PADDING, 0)
         end
 
         -- Tooltip

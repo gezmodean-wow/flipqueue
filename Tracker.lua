@@ -31,9 +31,11 @@ end
 local function CountInBags(queueItem)
     local total = 0
     for _, bagIndex in ipairs(ns.INVENTORY_BAGS) do
-        local numSlots = C_Container.GetContainerNumSlots(bagIndex)
+        local okSlots, numSlots = pcall(C_Container.GetContainerNumSlots, bagIndex)
+        if not okSlots or not numSlots then numSlots = 0 end
         for slot = 1, numSlots do
-            local info = C_Container.GetContainerItemInfo(bagIndex, slot)
+            local okInfo, info = pcall(C_Container.GetContainerItemInfo, bagIndex, slot)
+            if not okInfo then info = nil end
             if info and info.hyperlink then
                 local itemID, bonusIDs, modifiers = ns:ParseItemLink(info.hyperlink)
                 if itemID then
@@ -667,9 +669,11 @@ function Tracker:AutoWithdrawGold()
 
                 -- Search bags for the actual item to get its real link
                 for _, bagIndex in ipairs(ns.INVENTORY_BAGS) do
-                    local numSlots = C_Container.GetContainerNumSlots(bagIndex)
+                    local okSlots, numSlots = pcall(C_Container.GetContainerNumSlots, bagIndex)
+                    if not okSlots or not numSlots then numSlots = 0 end
                     for slot = 1, numSlots do
-                        local info = C_Container.GetContainerItemInfo(bagIndex, slot)
+                        local okInfo, info = pcall(C_Container.GetContainerItemInfo, bagIndex, slot)
+                        if not okInfo then info = nil end
                         if info and info.hyperlink then
                             local slotID = tonumber((ns:ParseItemLink(info.hyperlink)))
                             if slotID == numID then

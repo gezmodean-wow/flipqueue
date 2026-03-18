@@ -22,6 +22,7 @@ ns.COLORS = {
     ORANGE  = "|cffff8800",
     WHITE   = "|cffffffff",
     GRAY    = "|cff888888",
+    CYAN    = "|cff00ccff",
     RESET   = "|r",
 }
 
@@ -327,6 +328,7 @@ function ns:InitDB()
     local db = FlipQueueDB
     db.inventory  = db.inventory or {}
     db.warbank    = db.warbank or {}
+    db.guildbank  = db.guildbank or {}
     db.queue      = db.queue or {}
     db.log        = db.log or {}
     db.doNotTrack = db.doNotTrack or {}
@@ -363,6 +365,8 @@ function ns:InitDB()
     -- Generator settings (persisted across sessions)
     db.settings.genAllocationOrder = db.settings.genAllocationOrder or {"gold", "noCompetition", "population"}
     db.settings.genSortMode = db.settings.genSortMode or "profit"
+    -- Import auto-generate (off by default)
+    if db.settings.importAutoGenerate == nil then db.settings.importAutoGenerate = false end
     -- Debug messages (off by default)
     if db.settings.debugMessages == nil then db.settings.debugMessages = false end
     -- Bank tab selection: default "all", can customize warbank globally or bank per-character
@@ -392,6 +396,220 @@ function ns:InitDB()
     end
 
     ns.db = db
+
+    -- Run data cleanup/migration
+    ns:CleanupLegacyData()
+end
+
+--------------------------
+-- Data Cleanup & Migration
+--------------------------
+
+function ns:CleanupLegacyData()
+    local db = ns.db
+    if not db then return end
+
+    -- Track what was cleaned for a one-time summary
+    local cleaned = {}
+
+    -- 1) Clean stale settings fields
+    if db.settings.expiryAlertHours ~= nil then
+        db.settings.expiryAlertHours = nil
+        cleaned.staleSettings = (cleaned.staleSettings or 0) + 1
+    end
+    -- Remove obsolete collapsed state (pre-sidebar)
+    if db.settings.collapsed and type(db.settings.collapsed) == "table" then
+        local hasOld = false
+        for k in pairs(db.settings.collapsed) do
+            if type(k) == "string" and (k:find("section_") or k == "true" or k == "false") then
+                hasOld = true
+                break
+            end
+        end
+        if hasOld then
+            wipe(db.settings.collapsed)
+            cleaned.staleSettings = (cleaned.staleSettings or 0) + 1
+        end
+    end
+
+    -- 2) Normalize queue items: ensure consistent fields, remove dead fields
+    if db.queue then
+        for _, qi in ipairs(db.queue) do
+            -- postedAt is always nil on queue items (log items have it); remove if present
+            if qi.postedAt ~= nil then
+                qi.postedAt = nil
+                cleaned.queueFields = (cleaned.queueFields or 0) + 1
+            end
+            -- Ensure itemKey exists (very old imports might not have it)
+            if not qi.itemKey and qi.itemID then
+                qi.itemKey = tostring(qi.itemID) .. ";;"
+                cleaned.queueFields = (cleaned.queueFields or 0) + 1
+            end
+            -- Normalize empty strings to consistent format
+            qi.bonusIDs = qi.bonusIDs or ""
+            qi.modifiers = qi.modifiers or ""
+            qi.quality = qi.quality or ""
+            qi.status = qi.status or "pending"
+        end
+    end
+
+    -- 3) Normalize todo list items: add new fields with safe defaults
+    if db.todoLists and db.todoLists.current and db.todoLists.current.items then
+        for _, item in ipairs(db.todoLists.current.items) do
+            -- New fields from deposit tracking (v0.6.0-alpha.2+)
+            -- depositFrom / depositLocation may not exist on old items
+            -- No action needed — nil is the expected default for "no deposit info"
+
+            -- Ensure consistent field types
+            item.attempts = item.attempts or 0
+            item.status = item.status or "pending"
+            item.quantity = item.quantity or 1
+
+            -- Fix items with source "unavailable" but no status context
+            -- Old generator didn't set failReason for unavailable items
+            if item.source == "unavailable" and not item.failReason then
+                item.failReason = "Item not in accessible inventory — may need depositing to warbank"
+            end
+        end
+    end
+
+    -- 4) Clean up old log entries: remove "collected" entries older than 30 days
+    if db.log then
+        local now = time()
+        local thirtyDays = 30 * 24 * 3600
+        local removedLogs = 0
+        for i = #db.log, 1, -1 do
+            local entry = db.log[i]
+            if entry.auctionStatus == "collected" then
+                local entryTime = entry.soldAt or entry.postedAt or 0
+                if entryTime > 0 and (now - entryTime) > thirtyDays then
+                    table.remove(db.log, i)
+                    removedLogs = removedLogs + 1
+                end
+            end
+        end
+        if removedLogs > 0 then
+            cleaned.oldLogs = removedLogs
+        end
+    end
+
+    -- 5) Normalize inventory: ensure all character entries have required fields
+    if db.inventory then
+        for charKey, charData in pairs(db.inventory) do
+            charData.lastScan = charData.lastScan or 0
+            charData.class = charData.class or "UNKNOWN"
+            charData.items = charData.items or {}
+
+            -- Ensure character metadata exists
+            db.characters[charKey] = db.characters[charKey] or {}
+            local meta = db.characters[charKey]
+            meta.class = meta.class or charData.class
+            meta.lastLogin = meta.lastLogin or charData.lastScan
+            meta.gold = meta.gold or 0
+            meta.level = meta.level or 0
+        end
+    end
+
+    -- 6) Normalize warbank data
+    if db.warbank and db.warbank.items then
+        for key, itemData in pairs(db.warbank.items) do
+            itemData.quantity = itemData.quantity or 0
+            if itemData.quantity <= 0 then
+                db.warbank.items[key] = nil
+                cleaned.emptyItems = (cleaned.emptyItems or 0) + 1
+            end
+        end
+    end
+
+    -- 7) Clean inventory items with zero quantity
+    if db.inventory then
+        for charKey, charData in pairs(db.inventory) do
+            if charData.items then
+                for key, itemData in pairs(charData.items) do
+                    if (itemData.quantity or 0) <= 0 then
+                        charData.items[key] = nil
+                        cleaned.emptyItems = (cleaned.emptyItems or 0) + 1
+                    end
+                end
+            end
+        end
+    end
+
+    -- 8) Clean guild bank items with zero quantity
+    if db.guildbank then
+        for guildName, gbData in pairs(db.guildbank) do
+            if gbData.items then
+                for key, itemData in pairs(gbData.items) do
+                    if (itemData.quantity or 0) <= 0 then
+                        gbData.items[key] = nil
+                        cleaned.emptyItems = (cleaned.emptyItems or 0) + 1
+                    end
+                end
+            end
+        end
+    end
+
+    -- 9) Remove orphaned hiddenCharacters entries (characters no longer in inventory)
+    if db.hiddenCharacters then
+        for charKey in pairs(db.hiddenCharacters) do
+            if not db.inventory[charKey] then
+                db.hiddenCharacters[charKey] = nil
+                cleaned.orphanedHidden = (cleaned.orphanedHidden or 0) + 1
+            end
+        end
+    end
+
+    -- 10) Remove orphaned character order entries
+    if db.settings.characterOrder then
+        local newOrder = {}
+        for _, charKey in ipairs(db.settings.characterOrder) do
+            if db.inventory[charKey] then
+                table.insert(newOrder, charKey)
+            else
+                cleaned.orphanedOrder = (cleaned.orphanedOrder or 0) + 1
+            end
+        end
+        if cleaned.orphanedOrder then
+            db.settings.characterOrder = newOrder
+        end
+    end
+
+    -- 11) Re-migrate: if player has pending queue deals but no todo list, auto-generate
+    -- This catches cases where migration ran but failed, or new items were added later
+    if db.todoLists and not db.todoLists.current then
+        local hasPending = false
+        if db.queue then
+            for _, qi in ipairs(db.queue) do
+                if qi.status == "pending" then
+                    hasPending = true
+                    break
+                end
+            end
+        end
+        if hasPending and not db.todoLists._needsMigration then
+            db.todoLists._needsMigration = true
+            cleaned.reMigration = true
+        end
+    end
+
+    -- Store cleanup version to avoid re-logging on every login
+    local currentVersion = 2  -- increment when adding new cleanup steps
+    if db._cleanupVersion ~= currentVersion then
+        -- Log summary on version bump
+        local parts = {}
+        if cleaned.staleSettings then table.insert(parts, cleaned.staleSettings .. " stale settings") end
+        if cleaned.queueFields then table.insert(parts, cleaned.queueFields .. " queue fields normalized") end
+        if cleaned.oldLogs then table.insert(parts, cleaned.oldLogs .. " old log entries pruned") end
+        if cleaned.emptyItems then table.insert(parts, cleaned.emptyItems .. " empty items removed") end
+        if cleaned.orphanedHidden then table.insert(parts, cleaned.orphanedHidden .. " orphaned hidden entries") end
+        if cleaned.orphanedOrder then table.insert(parts, cleaned.orphanedOrder .. " orphaned order entries") end
+        if cleaned.reMigration then table.insert(parts, "queued re-migration") end
+        if #parts > 0 then
+            -- Defer print until after PLAYER_LOGIN (InitDB runs before print is safe)
+            db._cleanupSummary = table.concat(parts, ", ")
+        end
+        db._cleanupVersion = currentVersion
+    end
 end
 
 --------------------------
