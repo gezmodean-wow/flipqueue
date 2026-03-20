@@ -17,15 +17,21 @@ Libs\LibDataBroker-1.1\LibDataBroker-1.1.lua
 Libs\LibDBIcon-1.0\LibDBIcon-1.0.lua
 
 Core.lua
+Migration.lua
+DB.lua
 TSM.lua
 Scanner.lua
 Import.lua
 Export.lua
-Queue.lua
 TodoList.lua
+TodoGenerator.lua
 Tracker.lua
+TrackerAuctions.lua
+TrackerBank.lua
+TrackerMail.lua
 UI\ScrollTable.lua
-UI\ImportFrame.lua
+UI\Shared.lua
+UI\ExportPopup.lua
 UI\UntrackedSection.lua
 UI\MiniView.lua
 UI\SettingsFrame.lua
@@ -34,5 +40,11 @@ UI\TSMGroupTree.lua
 UI\AuctionatorFrame.lua
 UI\MinimapButton.lua
 UI\MainFrame.lua
+UI\TodoPage.lua
+UI\InventoryPage.lua
+UI\CharactersPage.lua
+UI\LogPage.lua
+UI\ImportPage.lua
+UI\ExportPage.lua
 UI\GeneratorPage.lua
 UI\SlashCommands.lua

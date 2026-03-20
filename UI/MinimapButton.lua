@@ -34,10 +34,10 @@ local dataObject = {
 
     OnTooltipShow = function(tooltip)
         tooltip:SetText("FlipQueue", 1, 0.82, 0)
-        local pending = ns.Queue and ns.Queue:GetPendingCount() or 0
+        local pending = ns:ImportGetCount("fpScanner")
         local logCount = ns.db and #ns.db.log or 0
         if pending > 0 then
-            tooltip:AddLine(pending .. " items in queue", 1, 1, 0)
+            tooltip:AddLine(pending .. " imported deals", 1, 1, 0)
         end
         if logCount > 0 then
             tooltip:AddLine(logCount .. " posted", 0, 1, 0)

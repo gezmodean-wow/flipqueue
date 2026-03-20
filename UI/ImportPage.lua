@@ -1,0 +1,284 @@
+-- UI/ImportPage.lua
+-- Import page: paste box, format detection, preview table, commit flow
+local addonName, ns = ...
+
+local UI = ns.UI
+local tableContainer = UI.tableContainer
+
+-- ==========================================
+-- IMPORT PAGE FRAME CREATION
+-- ==========================================
+
+local importPage = CreateFrame("Frame", nil, tableContainer)
+importPage:SetAllPoints()
+importPage:Hide()
+
+local importInstr = importPage:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+importInstr:SetPoint("TOPLEFT", importPage, "TOPLEFT", 8, -4)
+importInstr:SetText("Paste FlippingPal data below, then click Preview:")
+importInstr:SetTextColor(0.7, 0.7, 0.7)
+
+-- Edit box area (top 100px)
+local importEditBg = CreateFrame("Frame", nil, importPage, "BackdropTemplate")
+importEditBg:SetPoint("TOPLEFT", importPage, "TOPLEFT", 4, -20)
+importEditBg:SetPoint("TOPRIGHT", importPage, "TOPRIGHT", -4, -20)
+importEditBg:SetHeight(80)
+importEditBg:SetBackdrop({
+    bgFile = "Interface\\Tooltips\\UI-Tooltip-Background",
+    edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
+    edgeSize = 10,
+    insets = {left = 2, right = 2, top = 2, bottom = 2},
+})
+importEditBg:SetBackdropColor(0.05, 0.05, 0.08, 1)
+importEditBg:SetBackdropBorderColor(0.25, 0.25, 0.35, 0.8)
+
+local importScroll = CreateFrame("ScrollFrame", "FlipQueueImportScrollInline", importEditBg, "UIPanelScrollFrameTemplate")
+importScroll:SetPoint("TOPLEFT", importEditBg, "TOPLEFT", 6, -4)
+importScroll:SetPoint("BOTTOMRIGHT", importEditBg, "BOTTOMRIGHT", -22, 4)
+
+local importEdit = CreateFrame("EditBox", "FlipQueueImportEditInline", importScroll)
+importEdit:SetMultiLine(true)
+importEdit:SetAutoFocus(false)
+importEdit:SetMaxLetters(0)
+importEdit:SetFontObject("ChatFontNormal")
+importEdit:SetWidth(importScroll:GetWidth() or 500)
+importScroll:SetScrollChild(importEdit)
+importScroll:SetScript("OnSizeChanged", function(sf, w)
+    importEdit:SetWidth(w)
+end)
+
+-- Preview table (below editbox, fills remaining space)
+UI.importPreviewTable = UI:CreateScrollTable(importPage, {
+    {key = "status",   label = "Status",  width = 52,  align = "CENTER", sortable = true},
+    {key = "name",     label = "Item",    width = 160, sortable = true},
+    {key = "realm",    label = "Realm",   width = 110, sortable = true},
+    {key = "price",    label = "Price",   width = 70,  sortable = true},
+    {key = "qty",      label = "Qty",     width = 30,  align = "CENTER", sortable = true},
+    {key = "reason",   label = "Reason",  width = 128, sortable = true},
+})
+UI.importPreviewTable:SetSort("status", true)
+
+-- Position the preview table below the editbox
+UI.importPreviewTable.headerFrame:SetParent(importPage)
+UI.importPreviewTable.headerFrame:ClearAllPoints()
+UI.importPreviewTable.headerFrame:SetPoint("TOPLEFT", importEditBg, "BOTTOMLEFT", 0, -4)
+UI.importPreviewTable.headerFrame:SetPoint("TOPRIGHT", importEditBg, "BOTTOMRIGHT", 0, -4)
+
+UI.importPreviewTable.scrollFrame:SetParent(importPage)
+UI.importPreviewTable.scrollFrame:ClearAllPoints()
+UI.importPreviewTable.scrollFrame:SetPoint("TOPLEFT", UI.importPreviewTable.headerFrame, "BOTTOMLEFT", 0, 0)
+UI.importPreviewTable.scrollFrame:SetPoint("BOTTOMRIGHT", importPage, "BOTTOMRIGHT", -22, 20)
+
+local importStatus = importPage:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+importStatus:SetPoint("LEFT", importPage, "BOTTOMLEFT", 8, 10)
+importStatus:SetTextColor(0.5, 0.5, 0.5)
+importStatus:SetText("")
+
+-- Auto-generate To-Do checkbox
+local importAutoGenCheck = CreateFrame("CheckButton", "FlipQueueImportAutoGenCheck", importPage, "UICheckButtonTemplate")
+importAutoGenCheck:SetSize(22, 22)
+importAutoGenCheck:SetPoint("RIGHT", importPage, "BOTTOMRIGHT", -8, 10)
+local importAutoGenLabel = importPage:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+importAutoGenLabel:SetPoint("RIGHT", importAutoGenCheck, "LEFT", -2, 0)
+importAutoGenLabel:SetText("Auto-generate To-Do")
+importAutoGenLabel:SetTextColor(0.5, 0.5, 0.5)
+importAutoGenCheck:SetScript("OnEnter", function(self)
+    GameTooltip:SetOwner(self, "ANCHOR_TOP")
+    GameTooltip:SetText("Auto-generate To-Do List", 1, 1, 1)
+    GameTooltip:AddLine("After import, automatically generate and save a\nTo-Do list using your current Generator settings.\n\n|cffff8800Warning:|r This replaces your current To-Do list.", 0.7, 0.7, 0.7, true)
+    GameTooltip:Show()
+end)
+importAutoGenCheck:SetScript("OnLeave", function() GameTooltip:Hide() end)
+importAutoGenCheck:SetScript("OnClick", function(self)
+    if ns.db then ns.db.settings.importAutoGenerate = self:GetChecked() end
+end)
+
+-- Skip-preview checkbox
+local importSkipCheck = CreateFrame("CheckButton", "FlipQueueImportSkipCheck", importPage, "UICheckButtonTemplate")
+importSkipCheck:SetSize(22, 22)
+importSkipCheck:SetPoint("RIGHT", importAutoGenLabel, "LEFT", -12, 0)
+local importSkipLabel = importPage:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+importSkipLabel:SetPoint("RIGHT", importSkipCheck, "LEFT", -2, 0)
+importSkipLabel:SetText("Auto-import")
+importSkipLabel:SetTextColor(0.5, 0.5, 0.5)
+
+-- Auto-generate To-Do list after import
+local function TryAutoGenerateTodo()
+    if not importAutoGenCheck:GetChecked() then return end
+    if not ns.TodoList then return end
+    local allocationOrder = UI:GetGenAllocationOrder()
+    local preview = ns.TodoList:GenerateTodoList("fpScanner", allocationOrder)
+    if preview and preview.items and #preview.items > 0 then
+        local count = #preview.items
+        local existingList = ns.TodoList:GetCurrentList()
+        if existingList then
+            ns.TodoList:CommitList(preview, "upcoming")
+        else
+            ns.TodoList:CommitList(preview, "replace")
+        end
+        ns:Print(ns.COLORS.CYAN .. "Auto-generated To-Do list with " .. count .. " tasks (replaced previous list).|r")
+    end
+end
+UI._tryAutoGenerateTodo = TryAutoGenerateTodo
+
+-- Stored preview data
+local importPreviewData = nil
+local importPreviewResults = nil
+
+-- Auto-detect paste and build preview
+local importLastLen = 0
+importEdit:SetScript("OnTextChanged", function(self, userInput)
+    if not userInput then return end
+    local text = self:GetText()
+    local newLen = #text
+    if importLastLen < 10 and newLen > 50 and text:find("\n") then
+        local items = ns.Import:Parse(text)
+        if #items > 0 then
+            if importSkipCheck:GetChecked() then
+                local added = ns.Import:Save(items)
+                ns:Print("Imported " .. added .. " new items (" .. #items .. " parsed, duplicates merged).")
+                importEdit:SetText("")
+                importPreviewData = nil
+                importPreviewResults = nil
+                UI.importPreviewTable:SetData({})
+                importStatus:SetText(ns.COLORS.GREEN .. added .. " items imported!|r")
+                importLastLen = 0
+                TryAutoGenerateTodo()
+                UI:Refresh()
+                UI:RefreshMini()
+            else
+                importPreviewData = items
+                importPreviewResults = ns.Import:PreviewAdd(items)
+                UI:RefreshImportPreview()
+            end
+        else
+            importStatus:SetText(ns.COLORS.RED .. "No items found in pasted data.|r")
+        end
+    end
+    importLastLen = newLen
+end)
+importEdit:SetScript("OnEscapePressed", function() importEdit:ClearFocus() end)
+
+-- Quality color map for preview
+local IMPORT_QUALITY_COLORS = {
+    Poor = "9d9d9d", Common = "ffffff", Uncommon = "1eff00",
+    Rare = "0070dd", Epic = "a335ee", Legendary = "ff8000",
+    Artifact = "e6cc80", Heirloom = "00ccff",
+}
+
+-- Build preview table display data
+function UI:RefreshImportPreview()
+    if not importPreviewResults then
+        UI.importPreviewTable:SetData({})
+        return
+    end
+
+    local data = {}
+    local newCount, dupCount, updateCount = 0, 0, 0
+
+    for _, result in ipairs(importPreviewResults) do
+        local item = result.item
+        local st = result._importStatus
+
+        local dupeReason = result._dupeReason
+        local statusStr, statusSort
+        if st == "new" then
+            statusStr = ns.COLORS.GREEN .. "New" .. "|r"
+            statusSort = "1new"
+            newCount = newCount + 1
+        elseif st == "update" then
+            statusStr = ns.COLORS.YELLOW .. "Update" .. "|r"
+            statusSort = "2update"
+            updateCount = updateCount + 1
+        elseif st == "duplicate" then
+            statusStr = ns.COLORS.GRAY .. "Dupe" .. "|r"
+            statusSort = "3dupe"
+            dupCount = dupCount + 1
+        else
+            statusStr = st or "?"
+            statusSort = "4" .. (st or "")
+        end
+
+        local displayName = item.name or "?"
+        local qColor = item.quality and IMPORT_QUALITY_COLORS[item.quality]
+        if qColor then
+            displayName = "|cff" .. qColor .. displayName .. "|r"
+        end
+
+        local reasonStr = ""
+        if dupeReason then
+            if st == "duplicate" then
+                reasonStr = ns.COLORS.GRAY .. dupeReason .. "|r"
+            elseif st == "update" then
+                reasonStr = ns.COLORS.YELLOW .. dupeReason .. "|r"
+            end
+        end
+
+        table.insert(data, {
+            status   = statusStr,
+            name     = displayName,
+            realm    = item.targetRealm or "",
+            price    = item.expectedPrice or "",
+            qty      = item.quantity or 1,
+            reason   = reasonStr,
+            _sortStatus = statusSort,
+            _tooltipText = item.name,
+            _tooltipExtra = (item.targetRealm and item.targetRealm ~= "" and ("Sell on: " .. item.targetRealm) or "")
+                .. (item.expectedPrice and item.expectedPrice ~= "" and ("\nPrice: " .. item.expectedPrice) or "")
+                .. (st == "duplicate" and "\n" .. ns.COLORS.GRAY .. "Already in queue (" .. (dupeReason or "exact match") .. ") — will be skipped|r" or "")
+                .. (st == "update" and "\n" .. ns.COLORS.YELLOW .. "Will update existing entry (" .. (dupeReason or "match") .. ")|r" or ""),
+        })
+    end
+
+    UI.importPreviewTable:SetData(data)
+
+    UI.importPreviewTable.headerFrame:Show()
+    UI.importPreviewTable.scrollFrame:Show()
+
+    local parts = {}
+    if newCount > 0 then table.insert(parts, ns.COLORS.GREEN .. newCount .. " new|r") end
+    if updateCount > 0 then table.insert(parts, ns.COLORS.YELLOW .. updateCount .. " updates|r") end
+    if dupCount > 0 then table.insert(parts, ns.COLORS.GRAY .. dupCount .. " dupes|r") end
+    importStatus:SetText(table.concat(parts, "  ") .. "  — click Import to confirm")
+end
+
+-- ==========================================
+-- EXPOSE REFERENCES
+-- ==========================================
+
+-- Register with MainFrame's table hide system
+if UI._RegisterTable then UI._RegisterTable(UI.importPreviewTable) end
+
+UI._importPage = importPage
+UI._importEdit = importEdit
+UI._importStatus = importStatus
+UI._importPreviewData = function() return importPreviewData end
+UI._importPreviewClear = function()
+    importPreviewData = nil
+    importPreviewResults = nil
+    importLastLen = 0
+end
+UI._importSetPreview = function(items, results)
+    importPreviewData = items
+    importPreviewResults = results
+end
+
+-- ==========================================
+-- REFRESH
+-- ==========================================
+
+function UI:RefreshImportPage()
+    local mainFrame = UI.mainFrame
+    mainFrame.pageTitle:SetText(ns.COLORS.YELLOW .. "Import" .. "|r")
+    UI._LayoutActionBtns(mainFrame.actionBtns.importClear, mainFrame.actionBtns.importDo, mainFrame.actionBtns.importPreview)
+    importPage:Show()
+    -- Restore checkbox states from settings
+    importAutoGenCheck:SetChecked(ns.db.settings.importAutoGenerate or false)
+    -- Show preview table if we have data
+    if UI._importPreviewData() then
+        UI.importPreviewTable.headerFrame:Show()
+        UI.importPreviewTable.scrollFrame:Show()
+    end
+    UI._importEdit:SetFocus(true)
+    mainFrame.statusText:SetText("Paste FlippingPal website, CSV, or tab-delimited data")
+end

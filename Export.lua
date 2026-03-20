@@ -253,7 +253,8 @@ function Export:ExportSaved(mode)
 
     mode = mode or "all"
     local charKey = ns:GetCharKey()
-    local charData = ns.db.inventory[charKey]
+    local charEntry = ns.db.characters[charKey]
+    local charData = charEntry and charEntry.inventory
     local itemDataList = {}
 
     local function processItem(itemData, qty)

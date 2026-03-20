@@ -1,0 +1,427 @@
+-- TrackerBank.lua
+-- Bank auto-pull and warbank gold withdrawal for to-do list items
+local addonName, ns = ...
+
+local Tracker = ns.Tracker
+
+--------------------------
+-- Bank Auto-Pull
+--------------------------
+
+local PULL_TIMEOUT = 5  -- seconds to wait for locks before giving up on a batch
+
+function Tracker:AutoPullFromBank()
+    if not ns.db or not ns.db.settings.autoPullBank then return end
+
+    local charKey = ns:GetCharKey()
+    local currentRealm = charKey:match("%-(.+)$") or GetRealmName()
+    local sellQtyMode = ns.db.settings.sellQtyMode or "tsm"
+    local tsmEnabled = sellQtyMode == "tsm" and ns.TSM and ns.TSM:IsEnabled()
+    local defaultQty = ns.db.settings.defaultSellQty or 1
+
+    -- Build needed list from the active to-do list
+    local needed = {} -- item -> qty still needed from bank
+
+    if ns.TodoList and ns.TodoList:GetCurrentList() then
+        local todoTasks = ns.TodoList:GetCharacterTasks(charKey)
+        for _, task in ipairs(todoTasks) do
+            local item = task.item
+            if ns:RealmMatches(item.targetRealm or "", currentRealm) then
+                local targetQty = math.max(item.quantity or 1, defaultQty)
+                if tsmEnabled then
+                    local op = ns.TSM:GetItemAuctioningOp(item.itemKey)
+                    if op and op.postCap then
+                        local tsmQty = tonumber(op.postCap)
+                        if tsmQty and tsmQty > 0 then targetQty = tsmQty end
+                    end
+                end
+                local inBags = Tracker._CountInBags(item)
+                local stillNeeded = targetQty - inBags
+                if stillNeeded > 0 then
+                    needed[item] = stillNeeded
+                end
+            end
+        end
+    end
+
+    if not next(needed) then return end
+
+    local allBankTabs = {}
+    for _, b in ipairs(ns:GetEnabledBankTabs()) do table.insert(allBankTabs, b) end
+    for _, b in ipairs(ns:GetEnabledWarbankTabs()) do table.insert(allBankTabs, b) end
+
+    if not next(needed) then return end
+
+    -- Build a list of moves to make — only pull items that match to-do task items
+    local moves = {}
+    for _, bagIndex in ipairs(allBankTabs) do
+        local ok, numSlots = pcall(C_Container.GetContainerNumSlots, bagIndex)
+        if ok and numSlots then
+            for slot = 1, numSlots do
+                local ok2, info = pcall(C_Container.GetContainerItemInfo, bagIndex, slot)
+                if ok2 and info and info.hyperlink and not info.isBound then
+                    local itemID, bonusIDs, modifiers = ns:ParseItemLink(info.hyperlink)
+                    if itemID then
+                        local key = ns:MakeItemKey(itemID, bonusIDs, modifiers)
+                        local slotName  -- lazy name cache per slot
+                        for queueItem, count in pairs(needed) do
+                            if count > 0 then
+                                -- Use false for resolvedID to prevent wrong ID matches
+                                local matched = ns:ItemsMatch(key, nil, queueItem, false, false)
+                                if not matched then
+                                    if slotName == nil then slotName = Tracker._GetNameFromLink(info.hyperlink) or false end
+                                    if slotName then
+                                        matched = ns:ItemsMatch(key, slotName, queueItem, false, false)
+                                    end
+                                end
+                                if matched then
+                                    table.insert(moves, {bag = bagIndex, slot = slot, name = queueItem.name or "?"})
+                                    needed[queueItem] = count - (info.stackCount or 1)
+                                    break
+                                end
+                            end -- count > 0
+                        end
+                    end
+                end
+            end
+        end
+    end
+
+    if #moves == 0 then return end
+
+    -- Event-driven batch execution
+    -- Pattern from Baganator: move a small batch, wait for ITEM_LOCK_CHANGED
+    -- to signal the server has processed the moves, then continue
+    local totalMoves = #moves
+    local moveIndex = 1
+    local pulledNames = {}
+    local pullErrors = 0
+    local aborted = false
+
+    local listener = CreateFrame("Frame")
+
+    local function Cleanup()
+        listener:UnregisterAllEvents()
+        listener:SetScript("OnEvent", nil)
+    end
+
+    local function FinishPull()
+        Cleanup()
+        local successCount = #pulledNames
+        if successCount > 0 then
+            if successCount == totalMoves then
+                ns:Print("Auto-pulled " .. successCount .. " item(s) from bank: " .. table.concat(pulledNames, ", "))
+            else
+                ns:Print("Auto-pulled " .. successCount .. " of " .. totalMoves .. " item(s) from bank: " .. table.concat(pulledNames, ", "))
+            end
+        end
+        if pullErrors > 0 then
+            ns:Print(ns.COLORS.YELLOW .. pullErrors .. " item(s) failed to move. Try opening your bank again.|r")
+        end
+        C_Timer.After(1, function()
+            if ns.Scanner then
+                ns.Scanner:ScanCurrentCharacter()
+                ns.Scanner:ScanBank()
+            end
+            if ns.TodoList and ns.TodoList.RefreshLocations then
+                ns.TodoList:RefreshLocations()
+            end
+            if ns.UI and ns.UI.Refresh then ns.UI:Refresh() end
+            if ns.UI and ns.UI.RefreshMini then ns.UI:RefreshMini() end
+        end)
+    end
+
+    local function ExecuteNextBatch()
+        if aborted or moveIndex > totalMoves then
+            FinishPull()
+            return
+        end
+
+        local batchSize = ns.db and ns.db.settings.pullBatchSize or 5
+        local batchEnd = math.min(moveIndex + batchSize - 1, totalMoves)
+        local batchMoved = 0
+
+        for i = moveIndex, batchEnd do
+            local move = moves[i]
+            -- Check if slot is locked before attempting
+            local okLock, isLocked = pcall(C_Container.GetContainerItemInfo, move.bag, move.slot)
+            if okLock and isLocked and isLocked.isLocked then
+                -- Slot is locked from a previous operation — skip, will retry
+                pullErrors = pullErrors + 1
+            else
+                local ok3, err = pcall(C_Container.UseContainerItem, move.bag, move.slot)
+                if ok3 then
+                    table.insert(pulledNames, move.name)
+                    batchMoved = batchMoved + 1
+                else
+                    pullErrors = pullErrors + 1
+                end
+            end
+        end
+
+        moveIndex = batchEnd + 1
+
+        if moveIndex > totalMoves then
+            -- All batches issued — wait briefly for any trailing events
+            C_Timer.After(0.3, FinishPull)
+        elseif batchMoved > 0 then
+            -- Wait for items to unlock before continuing
+            -- ITEM_LOCK_CHANGED fires when server finishes processing
+            local waitingForUnlock = true
+            listener:RegisterEvent("ITEM_LOCK_CHANGED")
+            listener:RegisterEvent("UI_ERROR_MESSAGE")
+            listener:SetScript("OnEvent", function(_, event, errorType, message)
+                if event == "UI_ERROR_MESSAGE" then
+                    if message == ERR_INTERNAL_BAG_ERROR
+                        or (message and message:find("Internal Bag Error")) then
+                        aborted = true
+                        pullErrors = pullErrors + 1
+                        listener:UnregisterEvent("ITEM_LOCK_CHANGED")
+                        listener:UnregisterEvent("UI_ERROR_MESSAGE")
+                        FinishPull()
+                        return
+                    elseif message == ERR_INV_FULL
+                        or (message and message:find("Inventory is full")) then
+                        aborted = true
+                        listener:UnregisterEvent("ITEM_LOCK_CHANGED")
+                        listener:UnregisterEvent("UI_ERROR_MESSAGE")
+                        FinishPull()
+                        return
+                    end
+                elseif event == "ITEM_LOCK_CHANGED" and waitingForUnlock then
+                    waitingForUnlock = false
+                    listener:UnregisterEvent("ITEM_LOCK_CHANGED")
+                    listener:UnregisterEvent("UI_ERROR_MESSAGE")
+                    -- Items unlocked — server processed the batch, continue
+                    C_Timer.After(0.1, ExecuteNextBatch)
+                end
+            end)
+
+            -- Safety timeout in case ITEM_LOCK_CHANGED never fires
+            C_Timer.After(PULL_TIMEOUT, function()
+                if waitingForUnlock then
+                    waitingForUnlock = false
+                    listener:UnregisterEvent("ITEM_LOCK_CHANGED")
+                    listener:UnregisterEvent("UI_ERROR_MESSAGE")
+                    -- Continue anyway — items may have moved without firing the event
+                    ExecuteNextBatch()
+                end
+            end)
+        else
+            -- Nothing moved in this batch (all locked) — short delay then retry next batch
+            C_Timer.After(0.5, ExecuteNextBatch)
+        end
+    end
+
+    ns:PrintDebug("Pulling " .. totalMoves .. " item(s) from bank...")
+    ExecuteNextBatch()
+end
+
+--------------------------
+-- Warbank Gold Withdrawal
+--------------------------
+
+-- Track withdrawals per session to avoid re-withdrawing
+local sessionWithdrawnCopper = 0
+local sessionWithdrawnRealm = nil
+
+function Tracker:AutoWithdrawGold()
+    if not ns.db or not ns.db.settings.autoWithdrawGold then return end
+    if not C_Bank or not C_Bank.WithdrawMoney then return end
+
+    -- Only withdraw if this character actually has tasks on its realm
+    local charKey = ns:GetCharKey()
+    local currentRealm = charKey:match("%-(.+)$") or GetRealmName()
+    local hasTasks = false
+    if ns.TodoList then
+        local todoTasks = ns.TodoList:GetCharacterTasks(charKey)
+        for _, task in ipairs(todoTasks) do
+            if ns:RealmMatches(task.item.targetRealm or "", currentRealm) then
+                hasTasks = true
+                break
+            end
+        end
+    end
+    if not hasTasks then return end
+
+    -- Reset session tracker if realm changed
+    if sessionWithdrawnRealm ~= currentRealm then
+        sessionWithdrawnCopper = 0
+        sessionWithdrawnRealm = currentRealm
+    end
+
+    -- Calculate fees ONLY for items in GetCharacterTasks — same source as pull
+    local DURATION_MULT = {[1] = 0.15, [2] = 0.30, [3] = 0.60}
+    local DURATION_LABEL = {[1] = "12h", [2] = "24h", [3] = "48h"}
+    local goldSellQtyMode = ns.db.settings.sellQtyMode or "tsm"
+    local tsmEnabled = goldSellQtyMode == "tsm" and ns.TSM and ns.TSM:IsEnabled()
+
+    local goldTasks = ns.TodoList and ns.TodoList:GetCharacterTasks(charKey) or {}
+    local totalDepositCopper = 0
+    local itemCount = 0
+    local depositDetails = {} -- for verbose logging
+
+    for _, task in ipairs(goldTasks) do
+        if ns:RealmMatches(task.item.targetRealm or "", currentRealm) then
+            local queueItem = task.item
+            itemCount = itemCount + 1
+
+            -- Determine post quantity: respects sellQtyMode setting
+            local postQty = math.max(queueItem.quantity or 1, ns.db.settings.defaultSellQty or 1)
+            local durationMult = 0.60 -- default: assume 48h
+            local durationLabel = "48h"
+            if tsmEnabled then
+                local op = ns.TSM:GetItemAuctioningOp(queueItem.itemKey)
+                if op then
+                    if op.postCap then
+                        local tsmQty = tonumber(op.postCap)
+                        if tsmQty and tsmQty > 0 then
+                            postQty = tsmQty
+                        end
+                    end
+                    if op.duration then
+                        durationMult = DURATION_MULT[op.duration] or 0.60
+                        durationLabel = DURATION_LABEL[op.duration] or "48h"
+                    end
+                end
+            end
+
+            -- Look up vendor sell price from item ID
+            local numID = tonumber(queueItem.itemID)
+            if not numID or numID <= 0 then
+                numID = tonumber((queueItem.itemKey or ""):match("^(%d+)"))
+            end
+            local itemDeposit = 0
+            local vendorPrice = 0
+            if numID and numID > 0 then
+                -- Try to find the actual item link from bags for accurate vendor price
+                -- Task data often lacks bonus IDs, so base ID returns wrong price
+                local sellPrice = nil
+
+                -- Search bags for the actual item to get its real link
+                for _, bagIndex in ipairs(ns.INVENTORY_BAGS) do
+                    local okSlots, numSlots = pcall(C_Container.GetContainerNumSlots, bagIndex)
+                    if not okSlots or not numSlots then numSlots = 0 end
+                    for slot = 1, numSlots do
+                        local okInfo, info = pcall(C_Container.GetContainerItemInfo, bagIndex, slot)
+                        if not okInfo then info = nil end
+                        if info and info.hyperlink then
+                            local slotID = tonumber((ns:ParseItemLink(info.hyperlink)))
+                            if slotID == numID then
+                                -- Found it in bags — use the real link for vendor price
+                                local ok4, _, _, _, _, _, _, _, _, _, _, sp =
+                                    pcall(C_Item.GetItemInfo, info.hyperlink)
+                                if ok4 and sp and type(sp) == "number" and sp > 0 then
+                                    sellPrice = sp
+                                end
+                                break
+                            end
+                        end
+                    end
+                    if sellPrice then break end
+                end
+
+                -- Fallback: use base item ID (may be inaccurate for bonus ID items)
+                if not sellPrice then
+                    local ok5, _, _, _, _, _, _, _, _, _, _, sp =
+                        pcall(C_Item.GetItemInfo, numID)
+                    if ok5 and sp and type(sp) == "number" and sp > 0 then
+                        sellPrice = sp
+                    end
+                end
+
+                if sellPrice then
+                    vendorPrice = sellPrice
+                    itemDeposit = math.ceil(sellPrice * durationMult) * postQty
+                else
+                    -- No vendor price found — estimate from expected sale price (5% of market)
+                    local expectedGold = ns:ParseGoldValue(queueItem.expectedPrice or "")
+                    if expectedGold > 0 then
+                        vendorPrice = expectedGold * 100 * 0.05  -- 5% of gold as copper
+                        itemDeposit = math.ceil(vendorPrice * durationMult) * postQty
+                    else
+                        -- Absolute minimum: 1s per item
+                        vendorPrice = 100
+                        itemDeposit = math.ceil(100 * durationMult) * postQty
+                    end
+                end
+                totalDepositCopper = totalDepositCopper + itemDeposit
+            end
+
+            table.insert(depositDetails, {
+                name = queueItem.name or tostring(queueItem.itemID),
+                vendorCopper = vendorPrice,
+                duration = durationLabel,
+                mult = durationMult,
+                deposit = itemDeposit,
+                qty = postQty,
+            })
+        end
+    end
+
+    if itemCount == 0 then return end
+
+    -- Print deposit breakdown (debug only)
+    ns:PrintDebug(ns.COLORS.YELLOW .. "AH fee calc for " .. itemCount .. " task(s):|r")
+    for _, d in ipairs(depositDetails) do
+        local vendorStr = ns:FormatGold(d.vendorCopper)
+        local depositStr = ns:FormatGold(d.deposit)
+        ns:PrintDebug("  " .. d.name .. ": vendor=" .. vendorStr ..
+            " x" .. d.qty .. " @ " .. d.duration ..
+            " (" .. string.format("%.0f%%", d.mult * 100) .. ") = " .. depositStr)
+    end
+
+    -- Add a small buffer (1g minimum, 10% extra for rounding)
+    local estimatedFeesCopper = math.max(10000, math.ceil(totalDepositCopper * 1.1))
+    local estimatedFeesGold = math.ceil(estimatedFeesCopper / 10000)
+
+    ns:PrintDebug("  Total deposit: " .. ns:FormatGold(totalDepositCopper) ..
+        " + 10% buffer = " .. ns:FormatGold(estimatedFeesCopper))
+
+    -- Account for what we've already withdrawn this session
+    local playerCopper = GetMoney()
+    local effectiveCopper = playerCopper + sessionWithdrawnCopper
+
+    if effectiveCopper >= estimatedFeesCopper then return end -- already have enough (including prior withdrawals)
+
+    -- Also just check raw gold — if player has enough, skip
+    if playerCopper >= estimatedFeesCopper then return end
+
+    local shortfallCopper = estimatedFeesCopper - playerCopper
+    local shortfallGold = math.ceil(shortfallCopper / 10000)
+    local playerGold = math.floor(playerCopper / 10000)
+
+    -- Check permission
+    local ok6, canWithdraw = pcall(C_Bank.CanWithdrawMoney, Enum.BankType.Account)
+    if not ok6 or not canWithdraw then
+        ns:Print(ns.COLORS.YELLOW .. "Cannot withdraw from warbank (permission denied).|r")
+        return
+    end
+
+    -- Check warbank balance
+    local ok7, warbankCopper = pcall(C_Bank.FetchDepositedMoney, Enum.BankType.Account)
+    if not ok7 or not warbankCopper then
+        ns:Print(ns.COLORS.RED .. "Could not check warbank balance.|r")
+        return
+    end
+
+    -- Round up to whole gold
+    shortfallCopper = shortfallGold * 10000
+
+    if warbankCopper < shortfallCopper then
+        local warbankGold = math.floor(warbankCopper / 10000)
+        ns:Print(ns.COLORS.RED .. "Not enough in warbank.|r Need " .. shortfallGold ..
+            "g more, warbank has " .. warbankGold .. "g")
+        return
+    end
+
+    -- Withdraw
+    local ok8, err = pcall(C_Bank.WithdrawMoney, Enum.BankType.Account, shortfallCopper)
+    if ok8 then
+        sessionWithdrawnCopper = sessionWithdrawnCopper + shortfallCopper
+        ns:Print(ns.COLORS.GREEN .. "Withdrew " .. shortfallGold .. "g|r from warbank" ..
+            " (est. " .. estimatedFeesGold .. "g fees for " .. itemCount .. " items, had " .. playerGold .. "g)")
+    else
+        ns:Print(ns.COLORS.RED .. "Failed to withdraw: " .. tostring(err) .. "|r")
+    end
+end

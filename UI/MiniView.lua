@@ -240,10 +240,10 @@ function UI:RefreshMini()
 
             -- Show grouped summary of the to-do list (top 5 chars + up to 2 create char)
             local currentList = ns.TodoList:GetCurrentList()
-            if currentList and currentList.items then
+            if currentList and currentList.tasks then
                 local MAX_MINI_CHARS = 5
                 local sortMode = (UI.GetGenSortMode and UI:GetGenSortMode()) or "profit"
-                local displayGroups = ns.TodoList:BuildDisplayGroups(currentList.items, sortMode)
+                local displayGroups = ns.TodoList:BuildDisplayGroups(currentList.tasks, sortMode)
 
                 local assignedGroups = {}
                 local unassignedGroups = {}
@@ -268,8 +268,8 @@ function UI:RefreshMini()
                     row.tooltipExtra = #group.items .. " items, ~" .. goldStr
                     row:SetScript("OnMouseDown", nil)
 
-                    local charInv = ns.db.inventory and ns.db.inventory[group.charKey]
-                    local cc = charInv and UI._CLASS_COLORS and UI._CLASS_COLORS[charInv.class] or "888888"
+                    local charEntry = ns.db.characters and ns.db.characters[group.charKey]
+                    local cc = charEntry and UI._CLASS_COLORS and UI._CLASS_COLORS[charEntry.class] or "888888"
                     local charName = group.charName or "?"
                     local realmShort = group.realm:match("^([^,]+)") or group.realm
 
@@ -330,7 +330,7 @@ function UI:RefreshMini()
             end
         else
             titleText:SetText(ns.COLORS.YELLOW .. "FQ" .. ns.COLORS.RESET ..
-                ns.COLORS.GRAY .. " - queue empty" .. ns.COLORS.RESET)
+                ns.COLORS.GRAY .. " - nothing to do" .. ns.COLORS.RESET)
         end
     else
         titleText:SetText(ns.COLORS.YELLOW .. "FQ" .. ns.COLORS.RESET ..

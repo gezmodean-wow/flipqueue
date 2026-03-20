@@ -63,11 +63,11 @@ end
 --------------------------
 
 local function GetQueueItemNames()
-    if not ns.db then return {} end
+    if not ns.db or not ns.db.imports then return {} end
     local names = {}
     local seen = {}
-    for _, item in ipairs(ns.db.queue) do
-        if item.status == "pending" and item.name and item.name ~= "" then
+    for _, item in pairs(ns.db.imports.fpScanner or {}) do
+        if item.name and item.name ~= "" then
             local lower = item.name:lower()
             if not seen[lower] then
                 seen[lower] = true
@@ -86,9 +86,9 @@ local function GetInventoryItemNames()
     if not ns.db then return {} end
     local names = {}
     local seen = {}
-    for _, charData in pairs(ns.db.inventory) do
-        if charData.items then
-            for _, itemData in pairs(charData.items) do
+    for _, charData in pairs(ns.db.characters) do
+        if charData.inventory and charData.inventory.items then
+            for _, itemData in pairs(charData.inventory.items) do
                 if itemData.name and itemData.name ~= ""
                     and not BOUND_TYPES[itemData.bindType or 0]
                     and not itemData.isBound then

@@ -610,3 +610,156 @@ function Import:ImportFromAuctionatorList(listName)
 
     return items
 end
+
+--------------------------
+-- Import Management (replaces Queue operations)
+--------------------------
+
+-- Preview what ImportSave would do without modifying the imports.
+-- Returns items annotated with _importStatus: "new", "duplicate", "update"
+function Import:PreviewAdd(items, source)
+    if not ns.db or not ns.db.imports then return {} end
+
+    source = source or "fpScanner"
+    local srcMap = ns.db.imports[source] or {}
+
+    local results = {}
+    local batchAdded = {} -- normalized key -> true
+
+    for _, item in ipairs(items) do
+        local status = "new"
+        local dupeReason = nil
+        local key = ns:MakeImportKey(item.itemKey, item.name, item.targetRealm)
+
+        local existing = srcMap[key]
+        if existing then
+            -- Check if import would update any fields
+            local wouldUpdate = false
+            if item.expectedPrice and item.expectedPrice ~= "" then
+                if (not existing.expectedPrice or existing.expectedPrice == "") then
+                    wouldUpdate = true
+                elseif existing.expectedPrice ~= item.expectedPrice then
+                    wouldUpdate = true
+                end
+            end
+            status = wouldUpdate and "update" or "duplicate"
+            dupeReason = "same realm"
+        else
+            -- Check connected realms in existing imports
+            local itemName = (item.name or ""):lower()
+            for existKey, existItem in pairs(srcMap) do
+                local keyMatch = existItem.itemKey == item.itemKey
+                local nameMatch = itemName ~= "" and existItem.name
+                    and existItem.name:lower() == itemName
+                if (keyMatch or nameMatch) and ns:RealmsOverlap(existItem.targetRealm, item.targetRealm) then
+                    local wouldUpdate = false
+                    if item.expectedPrice and item.expectedPrice ~= "" then
+                        if (not existItem.expectedPrice or existItem.expectedPrice == "") then
+                            wouldUpdate = true
+                        elseif existItem.expectedPrice ~= item.expectedPrice then
+                            wouldUpdate = true
+                        end
+                    end
+                    status = wouldUpdate and "update" or "duplicate"
+                    dupeReason = "connected realm: " .. (existItem.targetRealm or "?")
+                    break
+                end
+            end
+        end
+
+        -- Check within this batch
+        if status == "new" then
+            if batchAdded[key] then
+                status = "duplicate"
+                dupeReason = "duplicate in paste"
+            else
+                batchAdded[key] = true
+            end
+        end
+
+        table.insert(results, {
+            item = item,
+            _importStatus = status,
+            _dupeReason = dupeReason,
+        })
+    end
+
+    return results
+end
+
+-- Save parsed items to the imports map. Returns count of new items added.
+function Import:Save(items, source)
+    if not ns.db or not ns.db.imports then return 0 end
+
+    source = source or "fpScanner"
+    ns.db.imports[source] = ns.db.imports[source] or {}
+    local srcMap = ns.db.imports[source]
+
+    local added = 0
+    local updated = 0
+
+    for _, item in ipairs(items) do
+        local key = ns:MakeImportKey(item.itemKey, item.name, item.targetRealm)
+        local existing = srcMap[key]
+
+        if existing then
+            -- Update price if import has one
+            if item.expectedPrice and item.expectedPrice ~= "" then
+                existing.expectedPrice = item.expectedPrice
+            end
+            -- Keep the longer/more descriptive realm string
+            if #(item.targetRealm or "") > #(existing.targetRealm or "") then
+                existing.targetRealm = item.targetRealm
+            end
+            updated = updated + 1
+        else
+            -- Check connected realm dedup
+            local isDuplicate = false
+            local itemName = (item.name or ""):lower()
+            for existKey, existItem in pairs(srcMap) do
+                local keyMatch = existItem.itemKey == item.itemKey
+                local nameMatch = itemName ~= "" and existItem.name
+                    and existItem.name:lower() == itemName
+                if (keyMatch or nameMatch) and ns:RealmsOverlap(existItem.targetRealm, item.targetRealm) then
+                    -- Update existing entry
+                    if item.expectedPrice and item.expectedPrice ~= "" then
+                        existItem.expectedPrice = item.expectedPrice
+                    end
+                    if #(item.targetRealm or "") > #(existItem.targetRealm or "") then
+                        existItem.targetRealm = item.targetRealm
+                    end
+                    isDuplicate = true
+                    updated = updated + 1
+                    break
+                end
+            end
+
+            if not isDuplicate then
+                srcMap[key] = {
+                    itemKey       = item.itemKey,
+                    itemID        = item.itemID or "",
+                    name          = item.name or "",
+                    quality       = item.quality or "",
+                    ilvl          = item.ilvl or 0,
+                    bonusIDs      = item.bonusIDs or "",
+                    modifiers     = item.modifiers or "",
+                    quantity      = item.quantity or 1,
+                    category      = item.category,
+                    expansion     = item.expansion,
+                    sellRate      = item.sellRate,
+                    targetRealm   = item.targetRealm,
+                    expectedPrice = item.expectedPrice,
+                    noCompetition = item.noCompetition,
+                    importedAt    = time(),
+                }
+                added = added + 1
+            end
+        end
+    end
+
+    if updated > 0 then
+        ns:Print(ns.COLORS.GRAY .. "Updated " .. updated .. " connected-realm duplicates.|r")
+    end
+
+    return added
+end

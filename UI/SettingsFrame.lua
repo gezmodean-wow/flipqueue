@@ -262,12 +262,82 @@ function UI:CreateSettingsPanel(parent)
         descText:SetJustifyH("LEFT")
         descText:SetWordWrap(true)
         descText:SetTextColor(DESC_COLOR[1], DESC_COLOR[2], DESC_COLOR[3])
-        descText:SetText("How many of each item to post by default. If TSM is enabled, its 'Post Cap' setting will override this.")
+        descText:SetText("Baseline quantity per item when posting or pulling from bank.")
 
         settingsWidgets.sellQtySlider = slider
         settingsWidgets.sellQtyLabel = valLabel
     end
     y = y - 68 - ITEM_SPACING
+
+    -- Sell quantity mode toggle
+    do
+        local row = CreateFrame("Frame", nil, content)
+        row:SetPoint("TOPLEFT", content, "TOPLEFT", LEFT_MARGIN, y)
+        row:SetPoint("RIGHT", content, "RIGHT", RIGHT_MARGIN, 0)
+        row:SetHeight(56)
+
+        local title = row:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+        title:SetPoint("TOPLEFT", row, "TOPLEFT", 0, 0)
+        title:SetText("Quantity source")
+
+        local function CreateModeBtn(label, parent)
+            local btn = CreateFrame("Button", nil, parent, "BackdropTemplate")
+            btn:SetHeight(20)
+            btn:SetBackdrop({
+                bgFile = "Interface\\Tooltips\\UI-Tooltip-Background",
+                edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
+                edgeSize = 10,
+                insets = {left = 2, right = 2, top = 2, bottom = 2},
+            })
+            btn:SetBackdropColor(0.15, 0.15, 0.2, 1)
+            btn:SetBackdropBorderColor(0.3, 0.3, 0.4, 0.8)
+            btn.text = btn:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+            btn.text:SetPoint("CENTER")
+            btn.text:SetText(label)
+            btn:SetWidth(btn.text:GetStringWidth() + 16)
+            btn:SetScript("OnEnter", function(self) self:SetBackdropColor(0.2, 0.2, 0.3, 1) end)
+            btn:SetScript("OnLeave", function(self)
+                if not self._active then self:SetBackdropColor(0.15, 0.15, 0.2, 1) end
+            end)
+            return btn
+        end
+
+        local fixedBtn = CreateModeBtn("Always fixed", row)
+        fixedBtn:SetPoint("TOPLEFT", title, "BOTTOMLEFT", 0, -4)
+
+        local tsmBtn = CreateModeBtn("TSM if available", row)
+        tsmBtn:SetPoint("LEFT", fixedBtn, "RIGHT", 4, 0)
+
+        local function UpdateSellQtyMode()
+            local mode = ns.db and ns.db.settings.sellQtyMode or "tsm"
+            fixedBtn._active = (mode == "fixed")
+            tsmBtn._active = (mode == "tsm")
+            fixedBtn:SetBackdropColor(mode == "fixed" and 0.2 or 0.15, mode == "fixed" and 0.4 or 0.15, mode == "fixed" and 0.2 or 0.2, 1)
+            tsmBtn:SetBackdropColor(mode == "tsm" and 0.2 or 0.15, mode == "tsm" and 0.4 or 0.15, mode == "tsm" and 0.2 or 0.2, 1)
+        end
+
+        fixedBtn:SetScript("OnClick", function()
+            if ns.db then ns.db.settings.sellQtyMode = "fixed" end
+            UpdateSellQtyMode()
+        end)
+        tsmBtn:SetScript("OnClick", function()
+            if ns.db then ns.db.settings.sellQtyMode = "tsm" end
+            UpdateSellQtyMode()
+        end)
+
+        local descText = row:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+        descText:SetPoint("TOPLEFT", fixedBtn, "BOTTOMLEFT", 0, -4)
+        descText:SetPoint("RIGHT", row, "RIGHT", 0, 0)
+        descText:SetJustifyH("LEFT")
+        descText:SetWordWrap(true)
+        descText:SetTextColor(DESC_COLOR[1], DESC_COLOR[2], DESC_COLOR[3])
+        descText:SetText("'Always fixed' uses the slider above. 'TSM if available' uses TSM's Post Cap when the item has an Auctioning operation, otherwise falls back to the fixed value.")
+
+        settingsWidgets.sellQtyModeFixed = fixedBtn
+        settingsWidgets.sellQtyModeTSM = tsmBtn
+        settingsWidgets.updateSellQtyMode = UpdateSellQtyMode
+    end
+    y = y - 56 - ITEM_SPACING
 
     -- Expiry alert timer slider
     do
@@ -583,7 +653,9 @@ function UI:CreateSettingsPanel(parent)
             button2 = "No",
             OnAccept = function()
                 if ns.db then
-                    wipe(ns.db.inventory)
+                    for ck, charData in pairs(ns.db.characters) do
+                        charData.inventory = nil
+                    end
                     wipe(ns.db.warbank)
                     ns:Print("All inventory data cleared.")
                     UI:Refresh()
@@ -598,14 +670,14 @@ function UI:CreateSettingsPanel(parent)
     y = y - h - ITEM_SPACING
 
     settingsWidgets.clearQueue, h = CreateSettingsButton(content, y,
-        "Clear Entire Queue", "Remove all pending items from the queue.", 180, function()
+        "Clear All Imports", "Remove all imported deals.", 180, function()
         StaticPopupDialogs["FLIPQUEUE_CLEAR_ALL_SETTINGS"] = {
-            text = "Clear ALL items from the FlipQueue?",
+            text = "Clear ALL imported deals?",
             button1 = "Yes",
             button2 = "No",
             OnAccept = function()
-                ns.Queue:Clear()
-                ns:Print("Queue cleared.")
+                ns:ImportClear("fpScanner")
+                ns:Print("Imports cleared.")
                 UI:Refresh()
             end,
             timeout = 0,
@@ -623,7 +695,7 @@ function UI:CreateSettingsPanel(parent)
             button1 = "Yes",
             button2 = "No",
             OnAccept = function()
-                ns.Queue:ClearLog()
+                ns:ClearLog()
                 ns:Print("Log cleared.")
                 UI:Refresh()
             end,
@@ -708,7 +780,7 @@ function UI:CreateSettingsPanel(parent)
             ns:Print(ns.COLORS.RED .. "No valid realm names found.|r")
             return
         end
-        table.insert(ns.db.externalAccounts, {label = label, realms = realms})
+        table.insert(ns.db.accounts.external, {label = label, realms = realms})
         ns:Print(ns.COLORS.GREEN .. "Added external account:|r " .. label .. " (" .. #realms .. " realms)")
         lblBox:SetText("")
         rlmBox:SetText("")
@@ -727,8 +799,8 @@ function UI:CreateSettingsPanel(parent)
 
     settingsWidgets.removeExtBtn, h = CreateSettingsButton(content, y,
         "Remove Last Account", "", 160, function()
-        if ns.db and #ns.db.externalAccounts > 0 then
-            local removed = table.remove(ns.db.externalAccounts)
+        if ns.db and #ns.db.accounts.external > 0 then
+            local removed = table.remove(ns.db.accounts.external)
             ns:Print("Removed external account: " .. removed.label)
             UI:RefreshSettings()
             UI:Refresh()
@@ -842,6 +914,10 @@ function UI:RefreshSettings()
             settingsWidgets.sellQtyLabel:SetText(tostring(sellQty))
         end
     end
+    -- Sell quantity mode toggle
+    if settingsWidgets.updateSellQtyMode then
+        settingsWidgets.updateSellQtyMode()
+    end
     -- Expiry alert slider
     if settingsWidgets.expiryAlertSlider then
         local mins = ns.db.settings.expiryAlertMinutes or 15
@@ -952,9 +1028,9 @@ function UI:RefreshSettings()
     end
 
     if settingsWidgets.extAccountList then
-        if ns.db.externalAccounts and #ns.db.externalAccounts > 0 then
+        if ns.db.accounts.external and #ns.db.accounts.external > 0 then
             local lines = {}
-            for i, acct in ipairs(ns.db.externalAccounts) do
+            for i, acct in ipairs(ns.db.accounts.external) do
                 table.insert(lines, i .. ". " .. acct.label .. ": " .. table.concat(acct.realms, ", "))
             end
             settingsWidgets.extAccountList:SetText(table.concat(lines, "\n"))

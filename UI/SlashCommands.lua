@@ -39,17 +39,12 @@ SlashCmdList["FLIPQUEUE"] = function(msg)
         end
 
     elseif msg == "clear" then
-        ns.Queue:Clear()
-        ns:Print("Queue cleared.")
-        UI:Refresh()
-
-    elseif msg == "clear posted" then
-        ns.Queue:Clear("posted")
-        ns:Print("Posted items cleared.")
+        ns:ImportClear("fpScanner")
+        ns:Print("Imports cleared.")
         UI:Refresh()
 
     elseif msg == "clear log" then
-        ns.Queue:ClearLog()
+        ns:ClearLog()
         ns:Print("Log cleared.")
         UI:Refresh()
 
@@ -89,7 +84,7 @@ SlashCmdList["FLIPQUEUE"] = function(msg)
             -- Resolve itemID from inventory so IsDoNotTrack(itemID) works
             local resolvedID = ns:ResolveItemID({itemID = "", name = itemName})
             local dntKey = resolvedID and tostring(resolvedID) or itemName
-            ns.Queue:AddDoNotTrack(dntKey, itemName)
+            ns:AddDoNotTrack(dntKey, itemName)
             ns:Print("Added to Do Not Track: " .. itemName .. (resolvedID and (" (ID: " .. resolvedID .. ")") or " (name only, item not in inventory)"))
             UI:Refresh()
         end
@@ -101,7 +96,7 @@ SlashCmdList["FLIPQUEUE"] = function(msg)
             for id, nameOrTrue in pairs(ns.db.doNotTrack) do
                 local name = type(nameOrTrue) == "string" and nameOrTrue or id
                 if name:lower() == itemName:lower() or id == itemName then
-                    ns.Queue:RemoveDoNotTrack(id)
+                    ns:RemoveDoNotTrack(id)
                     ns:Print("Removed from Do Not Track: " .. name)
                     UI:Refresh()
                     return
@@ -149,8 +144,7 @@ SlashCmdList["FLIPQUEUE"] = function(msg)
         print("  /fq cleanup - Clean up legacy data and normalize saved variables")
         print("  /fq export - Export page (CSV/AAA formats)")
         print("  /fq sort - Toggle sort mode (realm/name)")
-        print("  /fq clear - Clear entire queue")
-        print("  /fq clear posted - Clear posted items only")
+        print("  /fq clear - Clear all imported deals")
         print("  /fq clear log - Clear posted items log")
         print("  /fq autopull - Toggle auto-pull from bank")
         print("  /fq gold - Toggle auto-withdraw gold for AH fees")

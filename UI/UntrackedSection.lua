@@ -179,7 +179,7 @@ function UI:RefreshDNTFrame()
 
         local capturedID = data.itemID
         removeBtn:SetScript("OnClick", function()
-            ns.Queue:RemoveDoNotTrack(capturedID)
+            ns:RemoveDoNotTrack(capturedID)
             UI:RefreshDNTFrame()
             UI:Refresh()
         end)

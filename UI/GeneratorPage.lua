@@ -8,8 +8,36 @@ local UI = ns.UI
 -- allocationOrder and sortMode are saved to DB; the rest is session-only
 UI._generatorPreview = UI._generatorPreview or nil
 UI._genListCollapsed = UI._genListCollapsed or {}
+-- Filter mode/value: read from DB settings (persisted across sessions)
+-- Initialized to DB values when available, fallback to defaults
 UI._genFilterMode = UI._genFilterMode or "all"
 UI._genFilterValue = UI._genFilterValue or ""
+
+-- Sync filter state from DB settings (called after InitDB)
+function UI:InitGenFilterFromDB()
+    if ns.db and ns.db.settings then
+        UI._genFilterMode = ns.db.settings.genFilterMode or "all"
+        UI._genFilterValue = ns.db.settings.genFilterValue or ""
+    end
+end
+
+-- Save filter state to DB settings
+local function SaveGenFilter(mode, value)
+    UI._genFilterMode = mode
+    UI._genFilterValue = value or ""
+    if ns.db and ns.db.settings then
+        ns.db.settings.genFilterMode = mode
+        ns.db.settings.genFilterValue = value or ""
+    end
+end
+
+-- Auto-generate: build preview from current filter settings
+local function AutoGenerate()
+    if not ns.TodoList then return end
+    local allocationOrder = UI:GetGenAllocationOrder()
+    UI._generatorPreview = ns.TodoList:GenerateTodoList("fpScanner", allocationOrder)
+    -- Don't print on auto-generate to avoid spam
+end
 UI._genExcludedItems = UI._genExcludedItems or {}
 
 -- Accessors that read/write DB settings (with fallback defaults for before InitDB runs)
@@ -82,8 +110,8 @@ local function BuildGeneratorPreviewData(todoList)
         local charDisplay = ""
         if item.assignedChar then
             local name = item.assignedChar:match("^(.-)%-") or item.assignedChar
-            local charInv = ns.db.inventory and ns.db.inventory[item.assignedChar]
-            local classColor = charInv and (UI._CLASS_COLORS or {})[charInv.class] or "888888"
+            local charData = ns.db.characters and ns.db.characters[item.assignedChar]
+            local classColor = charData and (UI._CLASS_COLORS or {})[charData.class] or "888888"
             charDisplay = "|cff" .. classColor .. name .. "|r"
         end
 
@@ -287,23 +315,6 @@ function UI:RefreshGeneratorPage(pending)
             return btn
         end
 
-        -- Left header: Export to FP + Import from FP
-        gf.leftCol.exportBtn = CreateHeaderBtn(gf.leftCol, "Export to FP",
-            "Export filtered item pool as FP CSV",
-            function()
-                local btn = UI.mainFrame and UI.mainFrame.actionBtns and UI.mainFrame.actionBtns.exportPoolToFP
-                if btn then btn:GetScript("OnClick")() end
-            end)
-        gf.leftCol.exportBtn:SetPoint("RIGHT", gf.leftCol.headerBg, "RIGHT", -4, 0)
-
-        gf.leftCol.importBtn = CreateHeaderBtn(gf.leftCol, "Import from FP",
-            "Switch to Import page to paste FlippingPal data",
-            function()
-                UI.currentPage = "import"
-                UI:Refresh()
-            end)
-        gf.leftCol.importBtn:SetPoint("RIGHT", gf.leftCol.exportBtn, "LEFT", -4, 0)
-
         -- Filter label + description
         gf.leftCol.filterDesc = gf.leftCol:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
         gf.leftCol.filterDesc:SetPoint("TOPLEFT", gf.leftCol.headerBg, "BOTTOMLEFT", 6, -4)
@@ -321,22 +332,24 @@ function UI:RefreshGeneratorPage(pending)
         gf.leftCol.filterAll = CreateToggleBtn(gf.leftCol, "All")
         gf.leftCol.filterAll:SetPoint("LEFT", gf.leftCol.filterLabel, "RIGHT", 4, 0)
         gf.leftCol.filterAll:SetScript("OnClick", function()
-            UI._genFilterMode = "all"
-            UI._genFilterValue = ""
+            SaveGenFilter("all", "")
+            AutoGenerate()
             UI:Refresh()
         end)
 
         gf.leftCol.filterTSM = CreateToggleBtn(gf.leftCol, "TSM Group")
         gf.leftCol.filterTSM:SetPoint("LEFT", gf.leftCol.filterAll, "RIGHT", 2, 0)
         gf.leftCol.filterTSM:SetScript("OnClick", function()
-            UI._genFilterMode = "tsm"
+            SaveGenFilter("tsm", UI._genFilterValue)
+            AutoGenerate()
             UI:Refresh()
         end)
 
         gf.leftCol.filterAuct = CreateToggleBtn(gf.leftCol, "Auctionator List")
         gf.leftCol.filterAuct:SetPoint("LEFT", gf.leftCol.filterTSM, "RIGHT", 2, 0)
         gf.leftCol.filterAuct:SetScript("OnClick", function()
-            UI._genFilterMode = "auctionator"
+            SaveGenFilter("auctionator", UI._genFilterValue)
+            AutoGenerate()
             UI:Refresh()
         end)
 
@@ -362,10 +375,11 @@ function UI:RefreshGeneratorPage(pending)
         gf.leftCol.tsmClearBtn.text:SetPoint("CENTER")
         gf.leftCol.tsmClearBtn.text:SetText("[show all]")
         gf.leftCol.tsmClearBtn:SetScript("OnClick", function()
-            UI._genFilterValue = ""
+            SaveGenFilter("tsm", "")
             if gf.leftCol.groupTree then
                 gf.leftCol.groupTree._selectedPath = nil
             end
+            AutoGenerate()
             UI:Refresh()
         end)
         gf.leftCol.tsmClearBtn:SetScript("OnEnter", function(self)
@@ -465,6 +479,21 @@ function UI:RefreshGeneratorPage(pending)
             end)
         gf.rightCol.generateBtn:SetPoint("RIGHT", gf.rightCol.saveBtn, "LEFT", -4, 0)
 
+        -- Import FP Data button (opens import popup)
+        gf.rightCol.importBtn = CreateHeaderBtn(gf.rightCol, "Import FP Data",
+            "Open import popup to paste FlippingPal data",
+            function()
+                if UI.ShowImportPopup then
+                    UI:ShowImportPopup(function(added)
+                        -- After import, auto-generate and refresh
+                        AutoGenerate()
+                        UI:Refresh()
+                        if UI.RefreshMini then UI:RefreshMini() end
+                    end)
+                end
+            end)
+        gf.rightCol.importBtn:SetPoint("RIGHT", gf.rightCol.generateBtn, "LEFT", -4, 0)
+
         -- Priority section: label + description
         gf.rightCol.allocDesc = gf.rightCol:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
         gf.rightCol.allocDesc:SetTextColor(0.45, 0.45, 0.45)
@@ -535,7 +564,8 @@ function UI:RefreshGeneratorPage(pending)
         -- TSM Group Tree (if available)
         if UI.CreateGroupTree then
             gf.leftCol.groupTree = UI:CreateGroupTree(gf.leftCol.treeFrame, function(path)
-                UI._genFilterValue = path or ""
+                SaveGenFilter("tsm", path or "")
+                AutoGenerate()
                 UI:Refresh()
             end)
         end
@@ -545,6 +575,12 @@ function UI:RefreshGeneratorPage(pending)
 
     local gf = self._genFrame
     gf:Show()
+
+    -- Initialize filter from DB on first refresh
+    if not gf._filterInitialized then
+        self:InitGenFilterFromDB()
+        gf._filterInitialized = true
+    end
 
     -- ========================================
     -- TOP SECTION: To-Do List Queue
@@ -621,9 +657,10 @@ function UI:RefreshGeneratorPage(pending)
 
     -- Data freshness row
     local genCharKey = ns:GetCharKey()
-    local genCharData = ns.db.inventory and ns.db.inventory[genCharKey]
-    local bagAge = genCharData and genCharData.lastScan
-        and ns:FormatRelativeTime(genCharData.lastScan) or "never"
+    local genCharData = ns.db.characters and ns.db.characters[genCharKey]
+    local genCharInv = genCharData and genCharData.inventory
+    local bagAge = genCharInv and genCharInv.lastScan
+        and ns:FormatRelativeTime(genCharInv.lastScan) or "never"
     local wbAge = ns.db.warbank and ns.db.warbank.lastScan
         and ns:FormatRelativeTime(ns.db.warbank.lastScan) or "never"
 
@@ -697,8 +734,8 @@ function UI:RefreshGeneratorPage(pending)
                 sub.bg:SetColorTexture(0.08, 0.1, 0.08, 0.4)
                 local cName = info.charKey:match("^(.-)%-") or info.charKey
                 local cRealm = info.charKey:match("%-(.+)$") or ""
-                local cInv = ns.db.inventory and ns.db.inventory[info.charKey]
-                local cc = cInv and CLASS_COLORS[cInv.class] or "888888"
+                local cData = ns.db.characters and ns.db.characters[info.charKey]
+                local cc = cData and CLASS_COLORS[cData.class] or "888888"
                 sub.label:SetText(
                     "      |cff" .. cc .. cName .. "|r" ..
                     ns.COLORS.GRAY .. " (" .. cRealm .. ")|r  " ..
@@ -714,7 +751,7 @@ function UI:RefreshGeneratorPage(pending)
         local key = "queued_" .. qi
         local isCollapsed = UI._genListCollapsed[key] ~= false
         local qPending = 0
-        for _, item in ipairs(qList.items or {}) do
+        for _, item in ipairs(qList.tasks or {}) do
             if item.status == "pending" then qPending = qPending + 1 end
         end
 
@@ -950,7 +987,8 @@ function UI:RefreshGeneratorPage(pending)
 
                 local capturedName = listName
                 row:SetScript("OnClick", function()
-                    UI._genFilterValue = capturedName
+                    SaveGenFilter("auctionator", capturedName)
+                    AutoGenerate()
                     UI:Refresh()
                 end)
                 row:SetScript("OnEnter", function(self)
@@ -999,7 +1037,49 @@ function UI:RefreshGeneratorPage(pending)
     -- Pool scroll area (right offset -22 for scrollbar)
     gf.leftCol.poolScroll:ClearAllPoints()
     gf.leftCol.poolScroll:SetPoint("TOPLEFT", gf.leftCol, "TOPLEFT", 0, filterControlsBottom - 14)
-    gf.leftCol.poolScroll:SetPoint("BOTTOMRIGHT", gf.leftCol, "BOTTOMRIGHT", -22, 0)
+    gf.leftCol.poolScroll:SetPoint("BOTTOMRIGHT", gf.leftCol, "BOTTOMRIGHT", -22, 28)
+
+    -- Static footer: Export to FP button
+    if not gf.leftCol.footerBar then
+        local fb = CreateFrame("Frame", nil, gf.leftCol)
+        fb:SetHeight(26)
+        fb:SetPoint("BOTTOMLEFT", gf.leftCol, "BOTTOMLEFT", 0, 0)
+        fb:SetPoint("BOTTOMRIGHT", gf.leftCol, "BOTTOMRIGHT", 0, 0)
+        local fbBg = fb:CreateTexture(nil, "BACKGROUND")
+        fbBg:SetAllPoints()
+        fbBg:SetColorTexture(0.1, 0.1, 0.15, 1)
+
+        local exportBtn = CreateFrame("Button", nil, fb, "BackdropTemplate")
+        exportBtn:SetHeight(20)
+        exportBtn:SetBackdrop({
+            bgFile = "Interface\\Tooltips\\UI-Tooltip-Background",
+            edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
+            edgeSize = 10,
+            insets = {left = 2, right = 2, top = 2, bottom = 2},
+        })
+        exportBtn:SetBackdropColor(0.15, 0.15, 0.2, 1)
+        exportBtn:SetBackdropBorderColor(0.3, 0.3, 0.4, 0.8)
+        exportBtn.text = exportBtn:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+        exportBtn.text:SetPoint("CENTER")
+        exportBtn.text:SetText("Export List to FP")
+        exportBtn:SetWidth(exportBtn.text:GetStringWidth() + 20)
+        exportBtn:SetPoint("CENTER", fb, "CENTER", 0, 0)
+        exportBtn:SetScript("OnClick", function()
+            local btn = UI.mainFrame and UI.mainFrame.actionBtns and UI.mainFrame.actionBtns.exportPoolToFP
+            if btn then btn:GetScript("OnClick")() end
+        end)
+        exportBtn:SetScript("OnEnter", function(self)
+            self:SetBackdropColor(0.2, 0.2, 0.3, 1)
+            GameTooltip:SetOwner(self, "ANCHOR_TOP")
+            GameTooltip:SetText("Export filtered item pool as FP CSV", 1, 1, 1)
+            GameTooltip:Show()
+        end)
+        exportBtn:SetScript("OnLeave", function(self)
+            self:SetBackdropColor(0.15, 0.15, 0.2, 1)
+            GameTooltip:Hide()
+        end)
+        gf.leftCol.footerBar = fb
+    end
 
     local poolScrollWidth = gf.leftCol.poolScroll:GetWidth()
     gf.leftCol.poolContent:SetWidth(poolScrollWidth and poolScrollWidth > 0 and poolScrollWidth or 200)
@@ -1366,8 +1446,8 @@ function UI:RefreshGeneratorPage(pending)
     end
 
     local function AutoRegenerate()
-        if ns.TodoList and ns.Queue and ns.Queue:GetPendingCount() > 0 then
-            UI._generatorPreview = ns.TodoList:GenerateTodoList(UI:GetGenAllocationOrder())
+        if ns.TodoList and ns:ImportGetCount("fpScanner") > 0 then
+            UI._generatorPreview = ns.TodoList:GenerateTodoList("fpScanner", UI:GetGenAllocationOrder())
         end
         UI:Refresh()
     end
@@ -1408,16 +1488,18 @@ function UI:RefreshGeneratorPage(pending)
 
     -- Build grouped display data
     local previewSource = UI._generatorPreview or currentList
+    -- Preview uses .items, saved lists use .tasks
+    local previewItems = previewSource and (previewSource.items or previewSource.tasks)
     local displayGroups = {}
     local missingCount = 0
-    if previewSource and previewSource.items then
-        displayGroups, missingCount = ns.TodoList:BuildDisplayGroups(previewSource.items, UI:GetGenSortMode())
+    if previewItems then
+        displayGroups, missingCount = ns.TodoList:BuildDisplayGroups(previewItems, UI:GetGenSortMode())
     end
 
     -- Status label
     gf.rightCol.statusLabel:ClearAllPoints()
     gf.rightCol.statusLabel:SetPoint("TOPLEFT", gf.rightCol, "TOPLEFT", 6, rightY)
-    if previewSource and previewSource.items then
+    if previewItems then
         -- Count assigned items only
         local assignedCount = 0
         for _, g in ipairs(displayGroups) do
@@ -1510,8 +1592,8 @@ function UI:RefreshGeneratorPage(pending)
         else
             -- Assigned: normal header with class-colored character name
             hdr.bg:SetColorTexture(0.12, 0.15, 0.2, 0.8)
-            local charInv = ns.db.inventory and ns.db.inventory[group.charKey]
-            local cc = charInv and (UI._CLASS_COLORS or {})[charInv.class] or "888888"
+            local charData = ns.db.characters and ns.db.characters[group.charKey]
+            local cc = charData and (UI._CLASS_COLORS or {})[charData.class] or "888888"
             local charDisplay = "|cff" .. cc .. group.charName .. "|r"
             local realmDisplay = group.realm ~= "" and (ns.COLORS.GRAY .. " - " .. group.realm .. "|r") or ""
             hdr.nameText:SetText(charDisplay .. realmDisplay ..
@@ -1676,7 +1758,7 @@ function UI:RefreshGeneratorPage(pending)
 
     -- Onboarding hint: show if no characters scanned yet
     local charCount = 0
-    for _ in pairs(ns.db.inventory or {}) do charCount = charCount + 1 end
+    for _ in pairs(ns.db.characters or {}) do charCount = charCount + 1 end
     if charCount == 0 then
         table.insert(genStatusParts, ns.COLORS.YELLOW .. "Log in to each character once to enable matching|r")
     end

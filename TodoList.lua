@@ -1,751 +1,118 @@
 -- TodoList.lua
--- Phase 2-3: To-Do list generation and management
--- Replaces queue-driven model with: Inventory -> Generator -> To-Do Lists -> Log
---
--- Deals (queue items) are opportunities from FP imports.
--- The Generator matches deals against the item pool (all tradeable inventory)
--- to produce actionable, per-character To-Do lists.
+-- To-Do list management, task access, and task operations
+-- Generator/allocation functions are in TodoGenerator.lua
 local addonName, ns = ...
 
 local TodoList = {}
 ns.TodoList = TodoList
 
 --------------------------
--- Item Pool
---------------------------
-
--- Build a unified pool of all tradeable items across characters and warbank.
--- Returns: array of pool items, each with:
---   itemKey, itemID, name, icon, sources (array), totalQuantity
--- Each source: { source = charKey|"Warbank", location = bags|bank|reagent|warbank, quantity }
-function TodoList:BuildItemPool()
-    if not ns.db then return {} end
-
-    local pool = {}
-    local keyIndex = {} -- itemKey -> pool array index
-
-    local function AddToPool(itemKey, itemData, source, location, quantity)
-        if quantity <= 0 then return end
-
-        local idx = keyIndex[itemKey]
-        if not idx then
-            idx = #pool + 1
-            pool[idx] = {
-                itemKey       = itemKey,
-                itemID        = itemData.itemID or itemKey:match("^(%d+)"),
-                name          = itemData.name or "Unknown",
-                icon          = itemData.icon,
-                sources       = {},
-                totalQuantity = 0,
-            }
-            keyIndex[itemKey] = idx
-        end
-
-        table.insert(pool[idx].sources, {
-            source   = source,
-            location = location,
-            quantity = quantity,
-        })
-        pool[idx].totalQuantity = pool[idx].totalQuantity + quantity
-
-        if itemData.icon and not pool[idx].icon then
-            pool[idx].icon = itemData.icon
-        end
-        if itemData.name and pool[idx].name == "Unknown" then
-            pool[idx].name = itemData.name
-        end
-    end
-
-    -- Character inventories
-    for charKey, charData in pairs(ns.db.inventory or {}) do
-        if charData.items then
-            for itemKey, itemData in pairs(charData.items) do
-                local numID = tonumber(itemData.itemID)
-                local isDNT = numID and ns.Queue and ns.Queue:IsDoNotTrack(numID)
-                local tradeable = not itemData.isBound
-                    and (not itemData.bindType or itemData.bindType ~= 1)
-
-                if not isDNT and tradeable then
-                    if itemData.locations then
-                        for loc, qty in pairs(itemData.locations) do
-                            AddToPool(itemKey, itemData, charKey, loc, qty)
-                        end
-                    elseif (itemData.quantity or 0) > 0 then
-                        AddToPool(itemKey, itemData, charKey, "bags", itemData.quantity)
-                    end
-                end
-            end
-        end
-    end
-
-    -- Warbank
-    if ns.db.warbank and ns.db.warbank.items then
-        for itemKey, itemData in pairs(ns.db.warbank.items) do
-            local numID = tonumber(itemData.itemID)
-            local isDNT = numID and ns.Queue and ns.Queue:IsDoNotTrack(numID)
-            if not isDNT and (itemData.quantity or 0) > 0 then
-                AddToPool(itemKey, itemData, "Warbank", "warbank", itemData.quantity)
-            end
-        end
-    end
-
-    -- Guild bank(s)
-    if ns.db.guildbank then
-        for guildName, gbData in pairs(ns.db.guildbank) do
-            if gbData.items then
-                for itemKey, itemData in pairs(gbData.items) do
-                    local numID = tonumber(itemData.itemID)
-                    local isDNT = numID and ns.Queue and ns.Queue:IsDoNotTrack(numID)
-                    if not isDNT and (itemData.quantity or 0) > 0 then
-                        AddToPool(itemKey, itemData, "Guild:" .. guildName, "guildbank", itemData.quantity)
-                    end
-                end
-            end
-        end
-    end
-
-    return pool
-end
-
--- Get a filtered view of the item pool based on filter mode.
--- filterMode: "all" | "tsm" | "auctionator"
--- filterValue: TSM group path or Auctionator list name
--- excludedItems: table of itemKey -> true to exclude
--- Returns filtered pool array.
-function TodoList:GetFilteredItemPool(filterMode, filterValue, excludedItems)
-    local pool = self:BuildItemPool()
-    if not filterMode or filterMode == "all" then
-        if not excludedItems or not next(excludedItems) then
-            return pool
-        end
-        -- Just apply exclusions
-        local filtered = {}
-        for _, item in ipairs(pool) do
-            if not excludedItems[item.itemKey] then
-                table.insert(filtered, item)
-            end
-        end
-        return filtered
-    end
-
-    local filtered = {}
-
-    if filterMode == "tsm" and ns.TSM and ns.TSM:IsEnabled() then
-        local profile = ns.TSM:GetSelectedProfile()
-        if profile then
-            -- Items DB: tsmItemString -> groupPath (e.g., ["i:12345"] = "Crafts`Enchanting")
-            local itemsDB = ns.TSM:GetItemsDB(profile)
-
-            -- Build a reverse lookup: base item ID -> groupPath for fast matching
-            local itemToGroup = {}      -- full TSM string -> groupPath
-            local baseToGroup = {}      -- "i:12345" -> groupPath
-            if itemsDB then
-                for tsmStr, groupPath in pairs(itemsDB) do
-                    if type(tsmStr) == "string" and type(groupPath) == "string" then
-                        itemToGroup[tsmStr] = groupPath
-                        local base = tsmStr:match("^(i:%d+)") or tsmStr:match("^(p:%d+)")
-                        if base then
-                            baseToGroup[base] = groupPath
-                        end
-                    end
-                end
-            end
-
-            for _, item in ipairs(pool) do
-                if not (excludedItems and excludedItems[item.itemKey]) then
-                    -- Find this pool item's TSM group path
-                    local tsmStr = ns.TSM:ItemKeyToTSMString(item.itemKey)
-                    local baseID = item.itemKey and item.itemKey:match("^(%d+)")
-                    local baseStr = baseID and ("i:" .. baseID)
-
-                    local groupPath = (tsmStr and itemToGroup[tsmStr])
-                        or (baseStr and itemToGroup[baseStr])
-                        or (tsmStr and baseToGroup[tsmStr])
-                        or (baseStr and baseToGroup[baseStr])
-
-                    if groupPath then
-                        if not filterValue or filterValue == "" then
-                            -- No group selected — show all items in any TSM group
-                            table.insert(filtered, item)
-                        elseif groupPath == filterValue
-                            or groupPath:find(filterValue .. "`", 1, true) == 1 then
-                            -- Item is in the selected group or a child group
-                            table.insert(filtered, item)
-                        end
-                    end
-                end
-            end
-        end
-    elseif filterMode == "auctionator" then
-        -- Get items from Auctionator shopping list
-        local listItems = {}
-
-        -- Helper: extract item name from Auctionator search string
-        -- Format: "Name;;;...;;" or '"Quoted Name";;;...;;'
-        local function AddSearchTermName(searchTerm)
-            if not searchTerm or searchTerm == "" then return end
-            local name = searchTerm:match('^"([^"]+)"') or searchTerm:match("^([^;]+)")
-            if name and name ~= "" then
-                listItems[strtrim(name):lower()] = true
-            end
-        end
-
-        -- Method 1: Read directly from AUCTIONATOR_SHOPPING_LISTS SavedVariable
-        if type(AUCTIONATOR_SHOPPING_LISTS) == "table" then
-            for _, list in ipairs(AUCTIONATOR_SHOPPING_LISTS) do
-                if type(list) == "table" and list.name == filterValue and list.items then
-                    for _, searchTerm in ipairs(list.items) do
-                        AddSearchTermName(searchTerm)
-                    end
-                    break
-                end
-            end
-        end
-
-        -- Method 2: Auctionator API fallback
-        if not next(listItems) and type(Auctionator) == "table"
-            and Auctionator.API and Auctionator.API.v1
-            and Auctionator.API.v1.GetShoppingListItems then
-            local ok, items = pcall(Auctionator.API.v1.GetShoppingListItems, "FlipQueue", filterValue)
-            if ok and items then
-                for _, searchTerm in ipairs(items) do
-                    AddSearchTermName(searchTerm)
-                end
-            end
-        end
-
-        for _, item in ipairs(pool) do
-            if not (excludedItems and excludedItems[item.itemKey]) then
-                if listItems[item.name:lower()] then
-                    table.insert(filtered, item)
-                end
-            end
-        end
-    end
-
-    return filtered
-end
-
---------------------------
--- Generator Helpers
---------------------------
-
--- Find pool item matching a deal. Returns pool index or nil.
-local function FindPoolMatch(pool, deal, poolRemaining)
-    local resolvedID = ns:ResolveItemID(deal)
-
-    for idx, poolItem in ipairs(pool) do
-        if poolRemaining[idx] > 0 then
-            local matched = ns:ItemsMatch(
-                poolItem.itemKey, poolItem.name, deal, resolvedID or false)
-            if matched then
-                return idx
-            end
-        end
-    end
-    return nil
-end
-
--- Find best character + source to post an item on a target realm.
--- Returns { charKey, location, quantity } or nil.
-local function FindBestAssignment(poolItem, targetRealm, inventory)
-    if not targetRealm or targetRealm == "" then return nil end
-
-    local PRIORITY = { bags = 1, reagent = 2, bank = 3, warbank = 4, guildbank = 5 }
-
-    -- Characters on the target realm
-    local realmChars = {}
-    for charKey in pairs(inventory or {}) do
-        local charRealm = charKey:match("%-(.+)$")
-        if charRealm and ns:RealmMatches(targetRealm, charRealm) then
-            table.insert(realmChars, charKey)
-        end
-    end
-
-    if #realmChars == 0 then return nil end
-    table.sort(realmChars) -- deterministic ordering
-
-    -- Collect candidates
-    local candidates = {}
-    for _, src in ipairs(poolItem.sources) do
-        if src.quantity > 0 then
-            if src.source == "Warbank" then
-                table.insert(candidates, {
-                    charKey  = realmChars[1],
-                    location = "warbank",
-                    quantity = src.quantity,
-                    priority = PRIORITY.warbank,
-                })
-            elseif src.location == "guildbank" then
-                table.insert(candidates, {
-                    charKey  = realmChars[1],
-                    location = "guildbank",
-                    quantity = src.quantity,
-                    priority = PRIORITY.guildbank,
-                })
-            else
-                for _, charKey in ipairs(realmChars) do
-                    if src.source == charKey then
-                        table.insert(candidates, {
-                            charKey  = charKey,
-                            location = src.location,
-                            quantity = src.quantity,
-                            priority = PRIORITY[src.location] or 99,
-                        })
-                        break
-                    end
-                end
-            end
-        end
-    end
-
-    if #candidates == 0 then
-        -- Characters exist on realm but item not in accessible inventory
-        -- Find which characters actually hold this item (for deposit prompts)
-        local depositSources = {}
-        for _, src in ipairs(poolItem.sources) do
-            if src.quantity > 0 and src.source ~= "Warbank" then
-                table.insert(depositSources, {
-                    charKey  = src.source,
-                    location = src.location,
-                    quantity = src.quantity,
-                })
-            end
-        end
-        return { charKey = realmChars[1], location = nil, quantity = 0, depositSources = depositSources }
-    end
-
-    table.sort(candidates, function(a, b)
-        if a.priority ~= b.priority then return a.priority < b.priority end
-        return a.charKey < b.charKey
-    end)
-
-    return candidates[1]
-end
-
--- Multi-key comparator: compares two items using an ordered list of criteria.
--- Each criterion is compared; if equal, falls through to the next.
--- Returns true if a should come before b (descending for value-based, ascending for name-based).
-local function CompareByKeys(a, b, keys)
-    for _, key in ipairs(keys) do
-        if key == "gold" then
-            local ag = ns:ParseGoldValue(a.expectedPrice or "")
-            local bg = ns:ParseGoldValue(b.expectedPrice or "")
-            if ag ~= bg then return ag > bg end
-        elseif key == "noCompetition" then
-            local ac = a.noCompetition and 1 or 0
-            local bc = b.noCompetition and 1 or 0
-            if ac ~= bc then return ac > bc end
-        elseif key == "population" then
-            -- Use sellRate as proxy for realm demand (higher = better)
-            local as = tonumber(a.sellRate) or 0
-            local bs = tonumber(b.sellRate) or 0
-            if as ~= bs then return as > bs end
-        elseif key == "character" then
-            local ac = a.assignedChar or ""
-            local bc = b.assignedChar or ""
-            if ac ~= bc then return ac < bc end
-        elseif key == "tasks" then
-            -- Sort by number of tasks per character (fewest first = spread load)
-            local at = a._charTaskCount or 0
-            local bt = b._charTaskCount or 0
-            if at ~= bt then return at < bt end
-        end
-    end
-    -- Final tiebreaker: alphabetical by name
-    return (a.name or "") < (b.name or "")
-end
-
--- Sort deals for allocation priority (which deal gets inventory first when pool is limited)
-local function SortDealsForAllocation(deals, allocationOrder)
-    if not allocationOrder or #allocationOrder == 0 then
-        allocationOrder = {"gold"}
-    end
-    table.sort(deals, function(a, b)
-        return CompareByKeys(a, b, allocationOrder)
-    end)
-end
-
--- Build grouped display data from generated items.
--- Groups items by assignedChar (each char implies a realm).
--- sortMode: "profit" | "character" | "realm" | "noCompetition"
--- Returns array of groups: { charKey, realm, charName, totalGold, hasNoCompetition, items = {...} }
--- sorted by the chosen sort mode.
-function TodoList:BuildDisplayGroups(items, sortMode)
-    if not items then return {} end
-    sortMode = sortMode or "profit"
-
-    -- Group by assignedChar. Only pending/unassigned items are actionable.
-    -- Posted, skipped, and missing items are excluded from display groups.
-    local byChar = {}
-    local charOrder = {}
-    local skippedMissing = 0
-    for _, item in ipairs(items) do
-        local key
-        if item.status == "pending" and item.assignedChar then
-            key = item.assignedChar
-        elseif item.status == "unassigned" then
-            key = "_realm:" .. ns:NormalizeRealmKey(item.targetRealm or "")
-        elseif item.status == "missing" then
-            skippedMissing = skippedMissing + 1
-            key = nil
-        else
-            -- posted, skipped — done, skip entirely
-            key = nil
-        end
-
-        if key then
-            if not byChar[key] then
-                local isRealmGroup = key:find("^_realm:")
-                byChar[key] = {
-                    charKey = item.assignedChar,  -- nil for realm groups
-                    realm = item.targetRealm or "",
-                    charName = item.assignedChar and (item.assignedChar:match("^(.-)%-") or item.assignedChar) or nil,
-                    totalGold = 0,
-                    hasNoCompetition = false,
-                    items = {},
-                }
-                table.insert(charOrder, key)
-            end
-            local group = byChar[key]
-            table.insert(group.items, item)
-            group.totalGold = group.totalGold + ns:ParseGoldValue(item.expectedPrice or "")
-            if item.noCompetition then
-                group.hasNoCompetition = true
-            end
-        end
-    end
-
-    local groups = {}
-    for _, key in ipairs(charOrder) do
-        table.insert(groups, byChar[key])
-    end
-
-    -- Sort groups by the chosen mode.
-    -- Unassigned groups (no character) always sort to the bottom.
-    table.sort(groups, function(a, b)
-        -- Unassigned always last
-        local aAssigned = a.charKey and 1 or 0
-        local bAssigned = b.charKey and 1 or 0
-        if aAssigned ~= bAssigned then return aAssigned > bAssigned end
-
-        if sortMode == "profit" then
-            return a.totalGold > b.totalGold
-        elseif sortMode == "character" then
-            return (a.charName or ""):lower() < (b.charName or ""):lower()
-        elseif sortMode == "realm" then
-            local ar = ns:NormalizeRealmKey(a.realm)
-            local br = ns:NormalizeRealmKey(b.realm)
-            if ar ~= br then return ar < br end
-            return (a.charName or ""):lower() < (b.charName or ""):lower()
-        elseif sortMode == "noCompetition" then
-            local ac = a.hasNoCompetition and 1 or 0
-            local bc = b.hasNoCompetition and 1 or 0
-            if ac ~= bc then return ac > bc end
-            return a.totalGold > b.totalGold
-        end
-        return a.totalGold > b.totalGold
-    end)
-
-    -- Sort items within each group by gold desc
-    for _, group in ipairs(groups) do
-        table.sort(group.items, function(a, b)
-            return ns:ParseGoldValue(a.expectedPrice or "") > ns:ParseGoldValue(b.expectedPrice or "")
-        end)
-    end
-
-    return groups, skippedMissing
-end
-
---------------------------
--- Generator
---------------------------
-
--- Generate a to-do list by matching deals (pending queue items) against the item pool.
--- allocationOrder: ordered array of criteria for deal priority (e.g., {"gold", "noCompetition"})
--- Returns a preview list: { name, createdAt, items = { ... } }
--- Call CommitList() to save the preview.
--- Use BuildDisplayGroups() on the result for grouped display.
-function TodoList:GenerateTodoList(allocationOrder)
-    if type(allocationOrder) == "string" then
-        -- Backward compat: single string -> array
-        allocationOrder = {allocationOrder}
-    end
-    allocationOrder = allocationOrder or {"gold"}
-
-    local pool = self:BuildItemPool()
-
-    -- Collect pending deals from queue
-    local deals = {}
-    for _, qi in ipairs(ns.db.queue or {}) do
-        if qi.status == "pending" then
-            table.insert(deals, qi)
-        end
-    end
-
-    local preview = {
-        name      = "Generated " .. date("%Y-%m-%d %H:%M"),
-        createdAt = time(),
-        items     = {},
-    }
-
-    if #deals == 0 then return preview end
-
-    -- Sort deals by allocation priority so high-priority deals get inventory first
-    SortDealsForAllocation(deals, allocationOrder)
-
-    -- Track remaining pool quantities
-    local poolRemaining = {}
-    for i, p in ipairs(pool) do
-        poolRemaining[i] = p.totalQuantity
-    end
-
-    local tsmEnabled = ns.TSM and ns.TSM.IsEnabled and ns.TSM:IsEnabled()
-    local defaultQty = ns.db.settings.defaultSellQty or 1
-
-    for _, deal in ipairs(deals) do
-        local poolIdx = FindPoolMatch(pool, deal, poolRemaining)
-
-        if poolIdx then
-            local poolItem = pool[poolIdx]
-            local assignment = FindBestAssignment(
-                poolItem, deal.targetRealm, ns.db.inventory)
-
-            if assignment and assignment.location then
-                -- Post quantity: defaultSellQty as base, TSM postCap overrides
-                local qty = math.max(deal.quantity or 1, defaultQty)
-                if tsmEnabled then
-                    -- Try pool item key first, then deal key as fallback
-                    local op
-                    local ok1, res1 = pcall(function()
-                        return ns.TSM:GetItemAuctioningOp(poolItem.itemKey)
-                    end)
-                    if ok1 and res1 then
-                        op = res1
-                    elseif deal.itemKey and deal.itemKey ~= poolItem.itemKey then
-                        local ok2, res2 = pcall(function()
-                            return ns.TSM:GetItemAuctioningOp(deal.itemKey)
-                        end)
-                        if ok2 and res2 then op = res2 end
-                    end
-                    if op and op.postCap then
-                        local cap = tonumber(op.postCap)
-                        if cap and cap > 0 then qty = cap end
-                    end
-                end
-                qty = math.min(qty, poolRemaining[poolIdx])
-
-                if qty > 0 then
-                    -- Check TSM threshold — skip items TSM would reject
-                    local itemStatus = "pending"
-                    local failReason = nil
-                    if tsmEnabled then
-                        local belowThreshold, ahMin, threshold, opName = ns.TSM:IsBelowThreshold(poolItem.itemKey)
-                        if not belowThreshold and deal.itemKey ~= poolItem.itemKey then
-                            belowThreshold = ns.TSM:IsBelowThreshold(deal.itemKey)
-                        end
-                        if belowThreshold then
-                            itemStatus = "skipped"
-                            local threshStr = threshold and ns.TSM:FormatCopper(threshold) or "?"
-                            failReason = "TSM: below min price (" .. threshStr .. ")" .. (opName and (" [" .. opName .. "]") or "")
-                        end
-                    end
-
-                    table.insert(preview.items, {
-                        itemKey       = poolItem.itemKey,
-                        itemID        = poolItem.itemID,
-                        name          = poolItem.name,
-                        icon          = poolItem.icon,
-                        targetRealm   = deal.targetRealm,
-                        expectedPrice = deal.expectedPrice,
-                        quantity      = qty,
-                        assignedChar  = assignment.charKey,
-                        status        = itemStatus,
-                        failReason    = failReason,
-                        source        = assignment.location,
-                        quality       = deal.quality,
-                        sellRate      = deal.sellRate,
-                        noCompetition = deal.noCompetition,
-                        category      = deal.category,
-                        attempts      = 0,
-                    })
-                    poolRemaining[poolIdx] = poolRemaining[poolIdx] - qty
-                end
-            elseif assignment then
-                -- Character exists on realm but item not in their bags/bank/warbank
-                -- Assign to the character so it groups under "Log in", not "Create char"
-                -- Don't consume pool — item needs to be moved to warbank first
-                local depositFrom, depositLocation
-                if assignment.depositSources and #assignment.depositSources > 0 then
-                    depositFrom = assignment.depositSources[1].charKey
-                    depositLocation = assignment.depositSources[1].location
-                end
-                table.insert(preview.items, {
-                    itemKey         = poolItem.itemKey,
-                    itemID          = poolItem.itemID,
-                    name            = poolItem.name,
-                    icon            = poolItem.icon,
-                    targetRealm     = deal.targetRealm,
-                    expectedPrice   = deal.expectedPrice,
-                    quantity        = math.max(deal.quantity or 1, defaultQty),
-                    assignedChar    = assignment.charKey,
-                    status          = "pending",
-                    source          = "unavailable",
-                    depositFrom     = depositFrom,
-                    depositLocation = depositLocation,
-                    quality         = deal.quality,
-                    sellRate        = deal.sellRate,
-                    noCompetition   = deal.noCompetition,
-                    category        = deal.category,
-                    attempts        = 0,
-                })
-            else
-                -- No character on target realm at all
-                table.insert(preview.items, {
-                    itemKey       = poolItem.itemKey,
-                    itemID        = poolItem.itemID,
-                    name          = poolItem.name,
-                    icon          = poolItem.icon,
-                    targetRealm   = deal.targetRealm,
-                    expectedPrice = deal.expectedPrice,
-                    quantity      = math.max(deal.quantity or 1, defaultQty),
-                    assignedChar  = nil,
-                    status        = "unassigned",
-                    source        = nil,
-                    quality       = deal.quality,
-                    sellRate      = deal.sellRate,
-                    noCompetition = deal.noCompetition,
-                    category      = deal.category,
-                    attempts      = 0,
-                })
-            end
-        else
-            -- No pool match — item not in inventory
-            table.insert(preview.items, {
-                itemKey       = deal.itemKey,
-                itemID        = deal.itemID,
-                name          = deal.name,
-                icon          = deal.icon,
-                targetRealm   = deal.targetRealm,
-                expectedPrice = deal.expectedPrice,
-                quantity      = math.max(deal.quantity or 1, defaultQty),
-                assignedChar  = nil,
-                status        = "missing",
-                source        = nil,
-                quality       = deal.quality,
-                sellRate      = deal.sellRate,
-                noCompetition = deal.noCompetition,
-                category      = deal.category,
-                attempts      = 0,
-            })
-        end
-    end
-
-    -- Items are not pre-sorted here — the UI calls BuildDisplayGroups() for grouped display
-    return preview
-end
-
---------------------------
 -- List Management
 --------------------------
 
--- Commit a generated preview as the active or queued todo list.
--- mode: "replace" (default) | "append" | "queue"
+-- Commit a generated preview as the active or upcoming todo list.
+-- mode: "replace" (default) | "append" | "upcoming"
 function TodoList:CommitList(preview, mode)
     if not ns.db or not ns.db.todoLists or not preview then return end
 
     mode = mode or "replace"
 
+    -- Convert preview .items to .tasks for storage
+    if preview.items then
+        preview.tasks = preview.items
+        preview.items = nil
+    end
+
     if mode == "replace" then
-        ns.db.todoLists.current = preview
+        ns.db.todoLists.active = preview
     elseif mode == "append" then
-        if not ns.db.todoLists.current or not ns.db.todoLists.current.items then
-            ns.db.todoLists.current = preview
+        if not ns.db.todoLists.active or not ns.db.todoLists.active.tasks then
+            ns.db.todoLists.active = preview
         else
-            for _, item in ipairs(preview.items) do
-                table.insert(ns.db.todoLists.current.items, item)
+            for _, task in ipairs(preview.tasks) do
+                table.insert(ns.db.todoLists.active.tasks, task)
             end
         end
-    elseif mode == "queue" then
-        table.insert(ns.db.todoLists.queue, preview)
+    elseif mode == "queue" or mode == "upcoming" then
+        table.insert(ns.db.todoLists.upcoming, preview)
     end
 end
 
--- Promote next queued list to current. Returns true if promoted.
+-- Promote next upcoming list to active. Returns true if promoted.
 function TodoList:AdvanceQueue()
     if not ns.db or not ns.db.todoLists then return false end
 
-    if #ns.db.todoLists.queue > 0 then
-        ns.db.todoLists.current = table.remove(ns.db.todoLists.queue, 1)
+    if #ns.db.todoLists.upcoming > 0 then
+        ns.db.todoLists.active = table.remove(ns.db.todoLists.upcoming, 1)
         return true
     end
     return false
 end
 
--- Delete a queued list by index
+-- Delete an upcoming list by index
 function TodoList:DeleteQueuedList(index)
     if not ns.db or not ns.db.todoLists then return end
-    if ns.db.todoLists.queue[index] then
-        table.remove(ns.db.todoLists.queue, index)
+    if ns.db.todoLists.upcoming[index] then
+        table.remove(ns.db.todoLists.upcoming, index)
     end
 end
 
--- Clear the current list
+-- Clear the active list
 function TodoList:ClearCurrent()
     if not ns.db or not ns.db.todoLists then return end
-    ns.db.todoLists.current = nil
+    ns.db.todoLists.active = nil
 end
 
--- Duplicate a queued list by index. Returns new index or nil.
+-- Duplicate a list by index. Returns new index or nil.
 function TodoList:DuplicateList(idx)
     if not ns.db or not ns.db.todoLists then return nil end
 
-    local source
+    local src
     if idx == 0 then
-        source = ns.db.todoLists.current
+        src = ns.db.todoLists.active
     else
-        source = ns.db.todoLists.queue[idx]
+        src = ns.db.todoLists.upcoming[idx]
     end
-    if not source then return nil end
+    if not src then return nil end
 
-    -- Deep copy items
-    local newItems = {}
-    for _, item in ipairs(source.items or {}) do
+    -- Deep copy tasks
+    local newTasks = {}
+    for _, task in ipairs(src.tasks or {}) do
         local copy = {}
-        for k, v in pairs(item) do copy[k] = v end
+        for k, v in pairs(task) do copy[k] = v end
         copy.status = "pending"
         copy.failReason = nil
-        table.insert(newItems, copy)
+        table.insert(newTasks, copy)
     end
 
     local newList = {
-        name      = (source.name or "Copy") .. " (copy)",
+        name      = (src.name or "Copy") .. " (copy)",
         createdAt = time(),
-        items     = newItems,
+        tasks     = newTasks,
     }
-    table.insert(ns.db.todoLists.queue, newList)
-    return #ns.db.todoLists.queue
+    table.insert(ns.db.todoLists.upcoming, newList)
+    return #ns.db.todoLists.upcoming
 end
 
--- Rename a list. idx=0 for current, 1+ for queued.
+-- Rename a list. idx=0 for active, 1+ for upcoming.
 function TodoList:RenameList(idx, name)
     if not ns.db or not ns.db.todoLists or not name or name == "" then return end
 
     if idx == 0 then
-        if ns.db.todoLists.current then
-            ns.db.todoLists.current.name = name
+        if ns.db.todoLists.active then
+            ns.db.todoLists.active.name = name
         end
     else
-        if ns.db.todoLists.queue[idx] then
-            ns.db.todoLists.queue[idx].name = name
+        if ns.db.todoLists.upcoming[idx] then
+            ns.db.todoLists.upcoming[idx].name = name
         end
     end
 end
 
--- Reorder queued lists. Moves queue[from] to queue[to].
+-- Reorder upcoming lists. Moves upcoming[from] to upcoming[to].
 function TodoList:ReorderQueue(from, to)
     if not ns.db or not ns.db.todoLists then return end
-    local q = ns.db.todoLists.queue
+    local q = ns.db.todoLists.upcoming
     if not q[from] then return end
     to = math.max(1, math.min(to, #q))
     if from == to then return end
@@ -754,45 +121,45 @@ function TodoList:ReorderQueue(from, to)
     table.insert(q, to, item)
 end
 
--- Promote a queued list to be the current active list.
--- The old current list (if any) goes to the front of the queue.
+-- Promote an upcoming list to be the active list.
+-- The old active list (if any) goes to the front of upcoming.
 function TodoList:PromoteToActive(qIdx)
     if not ns.db or not ns.db.todoLists then return end
-    local q = ns.db.todoLists.queue
+    local q = ns.db.todoLists.upcoming
     if not q[qIdx] then return end
 
     local promoted = table.remove(q, qIdx)
-    if ns.db.todoLists.current then
-        table.insert(q, 1, ns.db.todoLists.current)
+    if ns.db.todoLists.active then
+        table.insert(q, 1, ns.db.todoLists.active)
     end
-    ns.db.todoLists.current = promoted
+    ns.db.todoLists.active = promoted
 end
 
 --------------------------
 -- Task Access
 --------------------------
 
--- Get the current to-do list (or nil)
+-- Get the active to-do list (or nil)
 function TodoList:GetCurrentList()
     if not ns.db or not ns.db.todoLists then return nil end
-    return ns.db.todoLists.current
+    return ns.db.todoLists.active
 end
 
--- Get queued lists array
+-- Get upcoming lists array
 function TodoList:GetQueuedLists()
     if not ns.db or not ns.db.todoLists then return {} end
-    return ns.db.todoLists.queue
+    return ns.db.todoLists.upcoming
 end
 
--- Get pending tasks for a specific character from the current list.
+-- Get pending tasks for a specific character from the active list.
 -- Returns array of { taskIndex, item }.
 function TodoList:GetCharacterTasks(charKey)
-    if not ns.db or not ns.db.todoLists or not ns.db.todoLists.current then
+    if not ns.db or not ns.db.todoLists or not ns.db.todoLists.active then
         return {}
     end
 
     local tasks = {}
-    for i, item in ipairs(ns.db.todoLists.current.items) do
+    for i, item in ipairs(ns.db.todoLists.active.tasks) do
         if item.status == "pending" and item.assignedChar == charKey then
             table.insert(tasks, {
                 taskIndex = i,
@@ -806,12 +173,12 @@ end
 -- Get summary of tasks grouped by character.
 -- Returns array of { charKey, taskCount, totalValue }, sorted by taskCount desc.
 function TodoList:GetCharacterSummary()
-    if not ns.db or not ns.db.todoLists or not ns.db.todoLists.current then
+    if not ns.db or not ns.db.todoLists or not ns.db.todoLists.active then
         return {}
     end
 
     local byChar = {}
-    for _, item in ipairs(ns.db.todoLists.current.items) do
+    for _, item in ipairs(ns.db.todoLists.active.tasks) do
         if item.status == "pending" and item.assignedChar then
             if not byChar[item.assignedChar] then
                 byChar[item.assignedChar] = {
@@ -837,12 +204,12 @@ end
 
 -- Get total pending task count
 function TodoList:GetPendingCount()
-    if not ns.db or not ns.db.todoLists or not ns.db.todoLists.current then
+    if not ns.db or not ns.db.todoLists or not ns.db.todoLists.active then
         return 0
     end
 
     local count = 0
-    for _, item in ipairs(ns.db.todoLists.current.items) do
+    for _, item in ipairs(ns.db.todoLists.active.tasks) do
         if item.status == "pending" then
             count = count + 1
         end
@@ -856,11 +223,11 @@ function TodoList:GetStatusCounts()
         pending = 0, posted = 0, skipped = 0,
         missing = 0, unassigned = 0,
     }
-    if not ns.db or not ns.db.todoLists or not ns.db.todoLists.current then
+    if not ns.db or not ns.db.todoLists or not ns.db.todoLists.active then
         return counts
     end
 
-    for _, item in ipairs(ns.db.todoLists.current.items) do
+    for _, item in ipairs(ns.db.todoLists.active.tasks) do
         local s = item.status or "pending"
         counts[s] = (counts[s] or 0) + 1
     end
@@ -876,7 +243,7 @@ end
 -- Returns true if any sources changed.
 function TodoList:RefreshLocations()
     local current = self:GetCurrentList()
-    if not current or not current.items then return false end
+    if not current or not current.tasks then return false end
 
     local charKey = ns:GetCharKey()
 
@@ -904,7 +271,7 @@ function TodoList:RefreshLocations()
     end)
 
     local changed = false
-    for _, item in ipairs(current.items) do
+    for _, item in ipairs(current.tasks) do
         if item.status == "pending" and item.assignedChar == charKey then
             local itemKey = item.itemKey or ""
             local itemNumID = tonumber(item.itemID) or tonumber(itemKey:match("^(%d+)"))
@@ -932,11 +299,11 @@ end
 
 -- Update a task's status
 function TodoList:UpdateTaskStatus(taskIndex, status, reason)
-    if not ns.db or not ns.db.todoLists or not ns.db.todoLists.current then
+    if not ns.db or not ns.db.todoLists or not ns.db.todoLists.active then
         return
     end
 
-    local item = ns.db.todoLists.current.items[taskIndex]
+    local item = ns.db.todoLists.active.tasks[taskIndex]
     if item then
         item.status = status
         if reason then item.failReason = reason end
@@ -945,11 +312,11 @@ end
 
 -- Move a completed task to the log
 function TodoList:MoveTaskToLog(taskIndex, postedPrice, expirySeconds, postedQuantity)
-    if not ns.db or not ns.db.todoLists or not ns.db.todoLists.current then
+    if not ns.db or not ns.db.todoLists or not ns.db.todoLists.active then
         return
     end
 
-    local item = ns.db.todoLists.current.items[taskIndex]
+    local item = ns.db.todoLists.active.tasks[taskIndex]
     if not item then return end
 
     local taskQty = item.quantity or 1
@@ -978,7 +345,107 @@ function TodoList:MoveTaskToLog(taskIndex, postedPrice, expirySeconds, postedQua
         item.quantity = taskQty - moveQty
     else
         item.status = "posted"
+        -- Remove from imports source
+        if item.importSource and item.importKey then
+            ns:ImportRemove(item.importSource, item.importKey)
+        end
     end
+end
+
+-- Advance a task's current step to the next one.
+-- If all steps are completed, mark the task as completed.
+-- Returns true if the task advanced (or completed).
+function TodoList:AdvanceStep(taskIndex)
+    if not ns.db or not ns.db.todoLists or not ns.db.todoLists.active then
+        return false
+    end
+
+    local task = ns.db.todoLists.active.tasks[taskIndex]
+    if not task or not task.steps or #task.steps == 0 then return false end
+
+    local step = task.steps[task.currentStep]
+    if not step then return false end
+
+    step.status = "completed"
+    task.currentStep = task.currentStep + 1
+
+    -- If past last step, task is done
+    if task.currentStep > #task.steps then
+        task.status = "completed"
+        -- Remove from imports source
+        if task.importSource and task.importKey then
+            ns:ImportRemove(task.importSource, task.importKey)
+        end
+    end
+
+    return true
+end
+
+-- Get the current step type for a task (e.g., "retrieve", "post", "collect")
+function TodoList:GetCurrentStepType(task)
+    if not task or not task.steps or not task.currentStep then return nil end
+    local step = task.steps[task.currentStep]
+    return step and step.type or nil
+end
+
+-- Refresh all pending tasks: update steps based on current game state.
+-- Called on login, bag changes, bank open, AH open, mail, TSM data.
+-- This checks whether steps have been satisfied by game events.
+function TodoList:RefreshTaskSteps()
+    local current = self:GetCurrentList()
+    if not current or not current.tasks then return false end
+
+    local charKey = ns:GetCharKey()
+    local changed = false
+
+    -- Build quick bag lookup for current character
+    local bagsItemKeys = {}
+    local bagsItemIDs = {}
+    pcall(function()
+        for _, bagIdx in ipairs(ns.INVENTORY_BAGS) do
+            local numSlots = C_Container.GetContainerNumSlots(bagIdx)
+            for slot = 1, numSlots do
+                local info = C_Container.GetContainerItemInfo(bagIdx, slot)
+                if info and info.hyperlink then
+                    local itemID, bonusIDs, modifiers = ns:ParseItemLink(info.hyperlink)
+                    if itemID then
+                        local key = ns:MakeItemKey(itemID, bonusIDs, modifiers)
+                        bagsItemKeys[key] = (bagsItemKeys[key] or 0) + (info.stackCount or 1)
+                        local numID = tonumber(itemID)
+                        if numID then
+                            bagsItemIDs[numID] = (bagsItemIDs[numID] or 0) + (info.stackCount or 1)
+                        end
+                    end
+                end
+            end
+        end
+    end)
+
+    for taskIdx, task in ipairs(current.tasks) do
+        if task.status == "pending" and task.assignedChar == charKey
+            and task.steps and task.currentStep then
+
+            local stepType = self:GetCurrentStepType(task)
+
+            if stepType == "retrieve" then
+                -- Check if item has appeared in bags (pulled from bank/warbank)
+                local itemKey = task.itemKey or ""
+                local itemNumID = tonumber(task.itemID) or tonumber(itemKey:match("^(%d+)"))
+                local inBags = (bagsItemKeys[itemKey] and bagsItemKeys[itemKey] > 0)
+                    or (itemNumID and bagsItemIDs[itemNumID] and bagsItemIDs[itemNumID] > 0)
+
+                if inBags then
+                    self:AdvanceStep(taskIdx)
+                    changed = true
+                    -- Also update source to bags
+                    task.source = "bags"
+                end
+            end
+            -- "post" and "collect" steps are advanced by Tracker (bag decrease / auction check)
+        end
+    end
+
+    return changed
 end
 
 -- Skip a task (TSM below threshold, user skip, etc.)
@@ -988,11 +455,11 @@ end
 
 -- Unskip a task back to pending
 function TodoList:UnskipTask(taskIndex)
-    if not ns.db or not ns.db.todoLists or not ns.db.todoLists.current then
+    if not ns.db or not ns.db.todoLists or not ns.db.todoLists.active then
         return
     end
 
-    local item = ns.db.todoLists.current.items[taskIndex]
+    local item = ns.db.todoLists.active.tasks[taskIndex]
     if item and item.status == "skipped" then
         item.status = "pending"
         item.failReason = nil

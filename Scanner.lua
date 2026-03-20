@@ -130,66 +130,64 @@ local function MergeItems(target, source, location)
 end
 
 --------------------------
--- Queue Enrichment
+-- Deal Enrichment
 --------------------------
 
--- When we scan physical items, backfill queue entries that have incomplete data.
+-- When we scan physical items, backfill import entries that have incomplete data.
 -- Imports from FP often arrive with bare item IDs (no bonus IDs, no icon, no quality).
 -- The scanned item has the real hyperlink data — use it to fill the gaps.
-local function EnrichQueueFromInventory(scannedItems)
-    if not ns.db or not ns.db.queue then return end
+local function EnrichDealsFromInventory(scannedItems)
+    if not ns.db or not ns.db.imports or not ns.db.imports.fpScanner then return end
 
-    for _, queueItem in ipairs(ns.db.queue) do
-        if queueItem.status == "pending" then
-            local queueNumID = tonumber(queueItem.itemID) or tonumber((queueItem.itemKey or ""):match("^(%d+)"))
-            local queueName = (queueItem.name or ""):lower()
-            local queueHasBonuses = queueItem.itemKey and queueItem.itemKey:match("^[^;]*;([^;]*)") or ""
+    for _, queueItem in pairs(ns.db.imports.fpScanner) do
+        local queueNumID = tonumber(queueItem.itemID) or tonumber((queueItem.itemKey or ""):match("^(%d+)"))
+        local queueName = (queueItem.name or ""):lower()
+        local queueHasBonuses = queueItem.itemKey and queueItem.itemKey:match("^[^;]*;([^;]*)") or ""
 
-            -- Only enrich if the queue item is missing bonus IDs
-            if queueHasBonuses == "" and queueNumID then
-                for key, itemData in pairs(scannedItems) do
-                    local scannedNumID = tonumber((key:match("^(%d+)")))
-                    local scannedBonuses = key:match("^[^;]*;([^;]*)") or ""
-                    local nameMatch = queueName ~= "" and itemData.name
-                        and itemData.name:lower() == queueName
+        -- Only enrich if the queue item is missing bonus IDs
+        if queueHasBonuses == "" and queueNumID then
+            for key, itemData in pairs(scannedItems) do
+                local scannedNumID = tonumber((key:match("^(%d+)")))
+                local scannedBonuses = key:match("^[^;]*;([^;]*)") or ""
+                local nameMatch = queueName ~= "" and itemData.name
+                    and itemData.name:lower() == queueName
 
-                    if (scannedNumID and scannedNumID == queueNumID) or nameMatch then
-                        -- Found a match with real data — enrich the queue item
-                        local enriched = false
+                if (scannedNumID and scannedNumID == queueNumID) or nameMatch then
+                    -- Found a match with real data — enrich the queue item
+                    local enriched = false
 
-                        if scannedBonuses ~= "" then
-                            queueItem.itemKey = key
-                            queueItem.bonusIDs = itemData.bonusIDs
-                            queueItem.modifiers = itemData.modifiers
-                            enriched = true
-                        end
+                    if scannedBonuses ~= "" then
+                        queueItem.itemKey = key
+                        queueItem.bonusIDs = itemData.bonusIDs
+                        queueItem.modifiers = itemData.modifiers
+                        enriched = true
+                    end
 
-                        if not queueItem.icon and itemData.icon then
-                            queueItem.icon = itemData.icon
-                            enriched = true
-                        end
+                    if not queueItem.icon and itemData.icon then
+                        queueItem.icon = itemData.icon
+                        enriched = true
+                    end
 
-                        if (not queueItem.name or queueItem.name == "") and itemData.name then
-                            queueItem.name = itemData.name
-                            enriched = true
-                        end
+                    if (not queueItem.name or queueItem.name == "") and itemData.name then
+                        queueItem.name = itemData.name
+                        enriched = true
+                    end
 
-                        -- Look up quality if missing
-                        if not queueItem.quality or queueItem.quality == "" then
-                            local numID = tonumber(itemData.itemID)
-                            if numID and numID > 0 then
-                                local ok, _, _, q = pcall(C_Item.GetItemInfo, numID)
-                                if ok and q then
-                                    local qualityNames = {[0]="Poor",[1]="Common",[2]="Uncommon",
-                                        [3]="Rare",[4]="Epic",[5]="Legendary"}
-                                    queueItem.quality = qualityNames[q] or ""
-                                    enriched = true
-                                end
+                    -- Look up quality if missing
+                    if not queueItem.quality or queueItem.quality == "" then
+                        local numID = tonumber(itemData.itemID)
+                        if numID and numID > 0 then
+                            local ok, _, _, q = pcall(C_Item.GetItemInfo, numID)
+                            if ok and q then
+                                local qualityNames = {[0]="Poor",[1]="Common",[2]="Uncommon",
+                                    [3]="Rare",[4]="Epic",[5]="Legendary"}
+                                queueItem.quality = qualityNames[q] or ""
+                                enriched = true
                             end
                         end
-
-                        break -- only match one inventory item per queue item
                     end
+
+                    break -- only match one inventory item per queue item
                 end
             end
         end
@@ -213,7 +211,10 @@ function Scanner:ScanCurrentCharacter()
     MergeItems(allItems, reagentItems, "reagent")
 
     -- Preserve bank locations from previous scan (bank can only be scanned when open)
-    local prevData = ns.db.inventory[charKey]
+    ns.db.characters[charKey] = ns.db.characters[charKey] or {}
+    local charEntry = ns.db.characters[charKey]
+    charEntry.class = select(2, UnitClass("player"))
+    local prevData = charEntry.inventory
     if prevData and prevData.items then
         for key, prevItem in pairs(prevData.items) do
             if prevItem.locations and prevItem.locations.bank and prevItem.locations.bank > 0 then
@@ -237,10 +238,9 @@ function Scanner:ScanCurrentCharacter()
     end
 
     local prevBankScan = prevData and prevData.lastBankScan or nil
-    ns.db.inventory[charKey] = {
+    charEntry.inventory = {
         lastScan     = time(),
         lastBankScan = prevBankScan,
-        class        = select(2, UnitClass("player")),
         items        = allItems,
     }
 
@@ -248,17 +248,19 @@ function Scanner:ScanCurrentCharacter()
     for _ in pairs(allItems) do count = count + 1 end
     ns:PrintDebug("Scanned " .. count .. " unique items on " .. charKey)
 
-    EnrichQueueFromInventory(allItems)
+    EnrichDealsFromInventory(allItems)
 end
 
 function Scanner:ScanBank()
     if not ns.db then return end
 
     local charKey = ns:GetCharKey()
-    local charData = ns.db.inventory[charKey]
+    local charEntry = ns.db.characters[charKey]
+    local charData = charEntry and charEntry.inventory
     if not charData then
         self:ScanCurrentCharacter()
-        charData = ns.db.inventory[charKey]
+        charEntry = ns.db.characters[charKey]
+        charData = charEntry and charEntry.inventory
     end
 
     -- Clear existing bank locations (authoritative scan replaces all bank data)
@@ -284,7 +286,7 @@ function Scanner:ScanBank()
     for _ in pairs(bankItems) do count = count + 1 end
     ns:PrintDebug("Bank scanned: " .. count .. " unique items.")
 
-    EnrichQueueFromInventory(bankItems)
+    EnrichDealsFromInventory(bankItems)
 end
 
 function Scanner:ScanWarbank()
@@ -321,7 +323,7 @@ function Scanner:ScanWarbank()
     for _ in pairs(items) do count = count + 1 end
     ns:PrintDebug("Warbank scanned: " .. count .. " unique items.")
 
-    EnrichQueueFromInventory(items)
+    EnrichDealsFromInventory(items)
 end
 
 --------------------------
@@ -376,11 +378,10 @@ local function ProcessNextGuildTab()
         guildBankScanning = false
         if not ns.db then return end
         local guildName = GetGuildInfo("player") or "Unknown Guild"
-        ns.db.guildbank = ns.db.guildbank or {}
-        ns.db.guildbank[guildName] = {
-            lastScan = time(),
-            items    = guildScanData,
-        }
+        ns.db.guilds = ns.db.guilds or {}
+        ns.db.guilds[guildName] = ns.db.guilds[guildName] or {enabled = true, members = {}}
+        ns.db.guilds[guildName].lastScan = time()
+        ns.db.guilds[guildName].items = guildScanData
         local count = 0
         for _ in pairs(guildScanData) do count = count + 1 end
         ns:Print(ns.COLORS.CYAN .. "Guild bank scanned: " .. count .. " unique items (" .. guildName .. ")|r")
@@ -461,11 +462,24 @@ local function UpdateCharacterMeta()
     if not ns.db then return end
     local charKey = ns:GetCharKey()
     ns.db.characters[charKey] = ns.db.characters[charKey] or {}
-    local meta = ns.db.characters[charKey]
-    meta.gold = GetMoney()
-    meta.lastLogin = time()
-    meta.class = select(2, UnitClass("player"))
-    meta.level = UnitLevel("player")
+    local char = ns.db.characters[charKey]
+    char.gold = GetMoney()
+    char.lastLogin = time()
+    char.class = select(2, UnitClass("player"))
+    char.level = UnitLevel("player")
+    char.guild = GetGuildInfo("player")
+    -- Update guild member list
+    if char.guild and ns.db.guilds and ns.db.guilds[char.guild] then
+        local guild = ns.db.guilds[char.guild]
+        local found = false
+        for _, ck in ipairs(guild.members or {}) do
+            if ck == charKey then found = true; break end
+        end
+        if not found then
+            guild.members = guild.members or {}
+            table.insert(guild.members, charKey)
+        end
+    end
 end
 
 --------------------------
@@ -491,57 +505,37 @@ frame:SetScript("OnEvent", function(self, event, ...)
             ns.db._cleanupSummary = nil
         end
 
-        -- Auto-unskip items that have been skipped for more than 24h
-        if ns.Queue and ns.Queue.UnskipExpired then
-            ns.Queue:UnskipExpired()
-        end
-
         -- Start periodic expiry checker
         if ns.Tracker and ns.Tracker.StartExpiryTicker then
             ns.Tracker:StartExpiryTicker()
         end
 
-        -- One-time migration: generate initial todo list from pending queue deals
-        if ns.db.todoLists and ns.db.todoLists._needsMigration then
-            ns.db.todoLists._needsMigration = nil
-            if ns.TodoList then
-                local preview = ns.TodoList:GenerateTodoList("gold")
-                if preview and preview.items and #preview.items > 0 then
-                    ns.TodoList:CommitList(preview, "replace")
-                    ns:Print(ns.COLORS.GREEN .. "Migrated " .. #preview.items
-                        .. " queue items to new To-Do system.|r")
-                end
-            end
-        end
-
         if ns.db.settings.autoScan then
             C_Timer.After(2, function()
                 -- Check if this is a new character being scanned for the first time
-                local isFirstScan = not ns.db.inventory[ns:GetCharKey()]
+                local isFirstScan = not ns.db.characters[ns:GetCharKey()] or not ns.db.characters[ns:GetCharKey()].inventory
                 Scanner:ScanCurrentCharacter()
 
                 -- First-time onboarding: if there are deals but few characters, show hint
                 if isFirstScan then
                     local charCount = 0
-                    for _ in pairs(ns.db.inventory) do charCount = charCount + 1 end
-                    local dealCount = #(ns.db.queue or {})
+                    for _ in pairs(ns.db.characters) do charCount = charCount + 1 end
+                    local dealCount = ns:ImportGetCount("fpScanner")
                     if dealCount > 0 and charCount <= 2 then
                         ns:Print(ns.COLORS.YELLOW .. "Character registered!|r Log into each of your posting characters once so FlipQueue can match deals to them.")
                     end
                 end
 
-                if ns.db.settings.showLoginMessage and ns.Queue then
+                -- Refresh task steps on login (items may have changed since last session)
+                if ns.TodoList and ns.TodoList.RefreshTaskSteps then
+                    ns.TodoList:RefreshTaskSteps()
+                end
+
+                if ns.db.settings.showLoginMessage and ns.TodoList then
                     local charKey = ns:GetCharKey()
-                    local myRealm = charKey:match("%-(.+)$") or ""
-                    local allTasks = ns.Queue:GetCharacterTasks(charKey)
-                    local realmCount = 0
-                    for _, task in ipairs(allTasks) do
-                        if ns:RealmMatches(task.queueItem.targetRealm, myRealm) then
-                            realmCount = realmCount + 1
-                        end
-                    end
-                    if realmCount > 0 then
-                        ns:Print(ns.COLORS.GREEN .. realmCount .. " items|r to post on this character! Type /fq to see details.")
+                    local todoTasks = ns.TodoList:GetCharacterTasks(charKey)
+                    if #todoTasks > 0 then
+                        ns:Print(ns.COLORS.GREEN .. #todoTasks .. " items|r to post on this character! Type /fq to see details.")
                     end
                 end
 
