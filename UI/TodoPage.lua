@@ -207,8 +207,13 @@ function UI:RefreshTodoPage()
     local charKey = ns:GetCharKey()
     local myRealm = charKey:match("%-(.+)$") or ""
 
-    mainFrame.pageTitle:SetText(ns.COLORS.GREEN .. "To-Do" .. "|r" ..
-        ns.COLORS.GRAY .. " - " .. charKey .. "|r")
+    local todoPageTitle = ns.COLORS.GREEN .. "To-Do" .. "|r" ..
+        ns.COLORS.GRAY .. " - " .. charKey .. "|r"
+    local currentTodoListForTitle = ns.TodoList and ns.TodoList:GetCurrentList()
+    if currentTodoListForTitle and currentTodoListForTitle.importType then
+        todoPageTitle = todoPageTitle .. "  " .. ns.COLORS.GRAY .. "[" .. currentTodoListForTitle.importType .. "]" .. "|r"
+    end
+    mainFrame.pageTitle:SetText(todoPageTitle)
     UI._LayoutActionBtns(mainFrame.actionBtns.clearTodoList, mainFrame.actionBtns.rescan, mainFrame.actionBtns.pullBank)
 
     -- Try TodoList first, fall back to queue-based data

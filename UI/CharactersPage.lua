@@ -11,23 +11,47 @@ local function BuildCharactersData()
 
     local charData = {}
 
-    -- First pass: count characters per realm for duplicate detection
-    local realmCharCount = {}
-    local realmAllChars = {}
-    for charKey, _ in pairs(ns.db.characters) do
+    -- Build AH cluster groups: characters whose realms overlap share an AH
+    local clusters = {}  -- array of {realms={}, chars={charKey, ...}}
+    for charKey in pairs(ns.db.characters) do
         local realm = charKey:match("%-(.+)$") or ""
         if realm ~= "" then
-            realmAllChars[realm] = realmAllChars[realm] or {}
-            table.insert(realmAllChars[realm], charKey)
-            realmCharCount[realm] = (realmCharCount[realm] or 0) + 1
+            local found = nil
+            for _, c in ipairs(clusters) do
+                for _, cr in ipairs(c.realms) do
+                    if ns:RealmsOverlap(realm, cr) then found = c; break end
+                end
+                if found then break end
+            end
+            if found then
+                table.insert(found.chars, charKey)
+                -- Add realm if not already present
+                local realmSeen = false
+                for _, cr in ipairs(found.realms) do
+                    if cr == realm then realmSeen = true; break end
+                end
+                if not realmSeen then table.insert(found.realms, realm) end
+            else
+                table.insert(clusters, {realms = {realm}, chars = {charKey}})
+            end
         end
     end
 
-    -- Identify duplicate realms (2+ characters on same realm)
-    local duplicateRealms = {}
-    for realm, count in pairs(realmCharCount) do
-        if count > 1 then
-            duplicateRealms[realm] = count
+    -- Build lookup: charKey -> cluster info (for shared AH detection)
+    local charCluster = {}  -- charKey -> {clusterIdx, otherChars}
+    for ci, c in ipairs(clusters) do
+        if #c.chars > 1 then
+            for _, ck in ipairs(c.chars) do
+                local others = {}
+                for _, ock in ipairs(c.chars) do
+                    if ock ~= ck then table.insert(others, ock) end
+                end
+                charCluster[ck] = {
+                    idx = ci,
+                    realms = c.realms,
+                    others = others,
+                }
+            end
         end
     end
 
@@ -83,8 +107,8 @@ local function BuildCharactersData()
         local statusParts = {}
         if isHidden then
             table.insert(statusParts, "|cff666666Hidden|r")
-        elseif duplicateRealms[realm] then
-            table.insert(statusParts, "|cffff8800Dupe|r")
+        elseif charCluster[charKey] then
+            table.insert(statusParts, "|cffff8800Shared AH|r")
         else
             table.insert(statusParts, "|cff00ff00Active|r")
         end
@@ -98,7 +122,7 @@ local function BuildCharactersData()
             rowColor = {0.3, 1.0, 0.3, 0.1}
         elseif auctionInfo and auctionInfo.soonest and auctionInfo.soonest < 7200 then
             rowColor = {1.0, 0.3, 0.3, 0.1}
-        elseif duplicateRealms[realm] then
+        elseif charCluster[charKey] then
             rowColor = {0.8, 0.5, 0.1, 0.1}
         end
 
@@ -133,8 +157,16 @@ local function BuildCharactersData()
                 goldStr, #tasks,
                 auctionInfo and ("\n" .. auctionInfo.active .. " active, " .. auctionInfo.done .. " done auction(s)") or "",
                 lastLoginStr,
-                isHidden and "Hidden" or "Active",
-                duplicateRealms[realm] and ("\nDuplicate realm: " .. duplicateRealms[realm] .. " chars on " .. realm) or "",
+                isHidden and "Hidden" or (charCluster[charKey] and "Shared AH" or "Active"),
+                charCluster[charKey] and ("\nAH Cluster: " .. table.concat(charCluster[charKey].realms, ", ") ..
+                    "\nShared with: " .. table.concat(
+                        (function()
+                            local names = {}
+                            for _, ock in ipairs(charCluster[charKey].others) do
+                                table.insert(names, ock:match("^(.-)%-") or ock)
+                            end
+                            return names
+                        end)(), ", ")) or "",
                 isHidden and "re-enable" or "hide"),
         })
     end
@@ -299,6 +331,152 @@ function UI:RefreshCharactersPage()
         self.charsTable.scrollFrame:SetHeight(charsHeight - 22)
     else
         if self._needCharsLabel then self._needCharsLabel:Hide() end
+    end
+
+    -- TSM Detected Characters section
+    if not self._tsmDetectedFrame then
+        local df = CreateFrame("Frame", nil, tableContainer)
+        df.rows = {}
+        df.label = tableContainer:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+        df.label:SetJustifyH("LEFT")
+        df.label:SetTextColor(0.9, 0.8, 0.3)
+        self._tsmDetectedFrame = df
+    end
+    local tdf = self._tsmDetectedFrame
+    for _, r in ipairs(tdf.rows) do r:Hide() end
+    tdf.label:Hide()
+    tdf:Hide()
+
+    local detectedChars = ns._detectedTSMChars or {}
+    if #detectedChars > 0 then
+        local CLASS_COLORS = UI._CLASS_COLORS
+        local FormatGoldValue = UI._FormatGoldValue
+        local ROW_H = 22
+        local yOff = 0
+
+        -- Calculate vertical position (below other tables)
+        local tsmSectionTop
+        if #needData > 0 then
+            local charsHeight = math.max(60, (#charData + 1) * 20 + 22)
+            if charsHeight > 250 then charsHeight = 250 end
+            local needHeight = math.max(40, (#needData + 1) * 20 + 22)
+            tsmSectionTop = -charsHeight - 10 - needHeight - 10
+        else
+            local charsHeight = math.max(60, (#charData + 1) * 20 + 22)
+            if charsHeight > 250 then charsHeight = 250 end
+            tsmSectionTop = -charsHeight - 10
+        end
+
+        tdf.label:ClearAllPoints()
+        tdf.label:SetPoint("TOPLEFT", tableContainer, "TOPLEFT", 4, tsmSectionTop)
+        tdf.label:SetText("Detected from TSM (" .. #detectedChars .. ")")
+        tdf.label:Show()
+
+        tdf:ClearAllPoints()
+        tdf:SetPoint("TOPLEFT", tableContainer, "TOPLEFT", 0, tsmSectionTop - 16)
+        tdf:SetPoint("RIGHT", tableContainer, "RIGHT", 0, 0)
+        tdf:SetHeight(#detectedChars * ROW_H + ROW_H + 10)
+        tdf:Show()
+
+        -- "Add All" row
+        local addAllRow = tdf.rows[1]
+        if not addAllRow then
+            addAllRow = CreateFrame("Button", nil, tdf)
+            addAllRow.bg = addAllRow:CreateTexture(nil, "BACKGROUND")
+            addAllRow.bg:SetAllPoints()
+            addAllRow.text = addAllRow:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+            addAllRow.text:SetPoint("LEFT", addAllRow, "LEFT", 6, 0)
+            tdf.rows[1] = addAllRow
+        end
+        addAllRow:SetHeight(ROW_H)
+        addAllRow:ClearAllPoints()
+        addAllRow:SetPoint("TOPLEFT", tdf, "TOPLEFT", 0, 0)
+        addAllRow:SetPoint("RIGHT", tdf, "RIGHT", 0, 0)
+        addAllRow.bg:SetColorTexture(0.1, 0.14, 0.1, 0.5)
+        addAllRow.text:SetText(ns.COLORS.GREEN .. "[Add All " .. #detectedChars .. " Characters]|r")
+        addAllRow:SetScript("OnClick", function()
+            for _, dc in ipairs(detectedChars) do
+                ns.db.characters[dc.charKey] = ns.db.characters[dc.charKey] or {
+                    class = dc.class,
+                    gold = dc.gold,
+                    lastLogin = 0,
+                    inventory = nil,
+                }
+            end
+            ns._detectedTSMChars = nil
+            ns:Print(ns.COLORS.GREEN .. "Added " .. #detectedChars .. " character(s) from TSM.|r")
+            UI:Refresh()
+        end)
+        addAllRow:SetScript("OnEnter", function(self) self.bg:SetColorTexture(0.12, 0.2, 0.12, 0.7) end)
+        addAllRow:SetScript("OnLeave", function(self) self.bg:SetColorTexture(0.1, 0.14, 0.1, 0.5) end)
+        addAllRow:Show()
+        yOff = yOff - ROW_H
+
+        for di, dc in ipairs(detectedChars) do
+            local rowIdx = di + 1
+            local row = tdf.rows[rowIdx]
+            if not row then
+                row = CreateFrame("Button", nil, tdf)
+                row.bg = row:CreateTexture(nil, "BACKGROUND")
+                row.bg:SetAllPoints()
+                row.nameText = row:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+                row.nameText:SetPoint("LEFT", row, "LEFT", 6, 0)
+                row.nameText:SetJustifyH("LEFT")
+                row.realmText = row:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+                row.realmText:SetPoint("LEFT", row, "LEFT", 120, 0)
+                row.goldText = row:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+                row.goldText:SetPoint("LEFT", row, "LEFT", 260, 0)
+                row.addBtn = row:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+                row.addBtn:SetPoint("RIGHT", row, "RIGHT", -60, 0)
+                row.dismissBtn = row:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+                row.dismissBtn:SetPoint("RIGHT", row, "RIGHT", -6, 0)
+                tdf.rows[rowIdx] = row
+            end
+            row:SetHeight(ROW_H)
+            row:ClearAllPoints()
+            row:SetPoint("TOPLEFT", tdf, "TOPLEFT", 0, yOff)
+            row:SetPoint("RIGHT", tdf, "RIGHT", 0, 0)
+            row.bg:SetColorTexture(di % 2 == 0 and 0.08 or 0.06, di % 2 == 0 and 0.08 or 0.06,
+                di % 2 == 0 and 0.12 or 0.1, 0.5)
+
+            local cc = dc.class and (CLASS_COLORS[dc.class] or CLASS_COLORS[dc.class:lower()]) or "888888"
+            row.nameText:SetText("|cff" .. cc .. dc.name .. "|r")
+            row.realmText:SetText(dc.realm)
+            row.goldText:SetText(dc.gold > 0 and ns:FormatGold(dc.gold) or "")
+            row.addBtn:SetText(ns.COLORS.GREEN .. "[Add]|r")
+            row.dismissBtn:SetText(ns.COLORS.RED .. "[Dismiss]|r")
+
+            local capturedDc = dc
+            local capturedDi = di
+            row:SetScript("OnClick", function(_, button)
+                if button == "LeftButton" then
+                    ns.db.characters[capturedDc.charKey] = ns.db.characters[capturedDc.charKey] or {
+                        class = capturedDc.class,
+                        gold = capturedDc.gold,
+                        lastLogin = 0,
+                        inventory = nil,
+                    }
+                    table.remove(detectedChars, capturedDi)
+                    if #detectedChars == 0 then ns._detectedTSMChars = nil end
+                    ns:Print(ns.COLORS.GREEN .. "Added:|r " .. capturedDc.charKey)
+                    UI:Refresh()
+                elseif button == "RightButton" then
+                    ns.db.settings.dismissedTSMChars[capturedDc.charKey] = true
+                    table.remove(detectedChars, capturedDi)
+                    if #detectedChars == 0 then ns._detectedTSMChars = nil end
+                    ns:Print(ns.COLORS.GRAY .. "Dismissed:|r " .. capturedDc.charKey)
+                    UI:Refresh()
+                end
+            end)
+            row:SetScript("OnEnter", function(self) self.bg:SetColorTexture(0.12, 0.12, 0.18, 0.6) end)
+            row:SetScript("OnLeave", function(self)
+                self.bg:SetColorTexture(capturedDi % 2 == 0 and 0.08 or 0.06,
+                    capturedDi % 2 == 0 and 0.08 or 0.06, capturedDi % 2 == 0 and 0.12 or 0.1, 0.5)
+            end)
+            row:RegisterForClicks("LeftButtonUp", "RightButtonUp")
+            row:Show()
+            yOff = yOff - ROW_H
+        end
     end
 
     local charCount = 0

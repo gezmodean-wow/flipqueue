@@ -325,6 +325,59 @@ function TSM:IsValidPriceSource(str)
 end
 
 --------------------------
+-- Character Detection
+--------------------------
+
+-- Detect characters from TSM's internal scope data.
+-- Returns array of {charKey, name, realm, class, gold} for chars not in ns.db.characters.
+function TSM:DetectCharacters()
+    if not type(TradeSkillMasterDB) == "table" then return {} end
+
+    local scopeKeys = TradeSkillMasterDB._scopeKeys
+    if not scopeKeys or not scopeKeys.char then return {} end
+
+    local dismissed = ns.db and ns.db.settings.dismissedTSMChars or {}
+    local results = {}
+
+    for _, charEntry in ipairs(scopeKeys.char) do
+        -- TSM format: "CharName - RealmName"
+        local tsmName, tsmRealm = charEntry:match("^(.+) %- (.+)$")
+        if tsmName and tsmRealm then
+            local charKey = tsmName .. "-" .. tsmRealm
+            -- Skip if already known or dismissed
+            if not (ns.db.characters and ns.db.characters[charKey]) and not dismissed[charKey] then
+                -- Look up class from TSM internal data
+                -- Keys: s@CharName - Faction - RealmName@internalData@classKey
+                local charClass = nil
+                local charGold = 0
+                for dbKey, val in pairs(TradeSkillMasterDB) do
+                    -- Match any faction variant for this character+realm
+                    local matchPattern = "^s@" .. tsmName:gsub("([%(%)%.%%%+%-%*%?%[%^%$])", "%%%1")
+                        .. " %- .+ %- " .. tsmRealm:gsub("([%(%)%.%%%+%-%*%?%[%^%$])", "%%%1") .. "@"
+                    if dbKey:match(matchPattern) then
+                        if dbKey:find("@internalData@classKey$") and type(val) == "string" then
+                            charClass = val:upper()
+                        elseif dbKey:find("@internalData@money$") and type(val) == "number" then
+                            charGold = val
+                        end
+                    end
+                end
+
+                table.insert(results, {
+                    charKey = charKey,
+                    name    = tsmName,
+                    realm   = tsmRealm,
+                    class   = charClass,
+                    gold    = charGold,
+                })
+            end
+        end
+    end
+
+    return results
+end
+
+--------------------------
 -- Cache Management
 --------------------------
 

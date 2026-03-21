@@ -5,6 +5,17 @@ local addonName, ns = ...
 local TodoList = ns.TodoList
 
 --------------------------
+-- Import Type Labels
+--------------------------
+
+local IMPORT_TYPE_LABELS = {
+    fpScanner    = "Inventory Scan",
+    fpCrossRealm = "Cross-Realm Flip",
+    tsm          = "TSM Import",
+    auctionator  = "Auctionator Import",
+}
+
+--------------------------
 -- Item Pool
 --------------------------
 
@@ -503,6 +514,7 @@ function TodoList:GenerateTodoList(source, allocationOrder)
         name      = "Generated " .. date("%Y-%m-%d %H:%M"),
         createdAt = time(),
         source    = source,
+        importType = IMPORT_TYPE_LABELS[source] or source,
         items     = {},
     }
 

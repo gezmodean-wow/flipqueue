@@ -279,41 +279,19 @@ end
 local sessionWithdrawnCopper = 0
 local sessionWithdrawnRealm = nil
 
-function Tracker:AutoWithdrawGold()
-    if not ns.db or not ns.db.settings.autoWithdrawGold then return end
-    if not C_Bank or not C_Bank.WithdrawMoney then return end
+local DURATION_MULT = {[1] = 0.15, [2] = 0.30, [3] = 0.60}
+local DURATION_LABEL = {[1] = "12h", [2] = "24h", [3] = "48h"}
 
-    -- Only withdraw if this character actually has tasks on its realm
-    local charKey = ns:GetCharKey()
-    local currentRealm = charKey:match("%-(.+)$") or GetRealmName()
-    local hasTasks = false
-    if ns.TodoList then
-        local todoTasks = ns.TodoList:GetCharacterTasks(charKey)
-        for _, task in ipairs(todoTasks) do
-            if ns:RealmMatches(task.item.targetRealm or "", currentRealm) then
-                hasTasks = true
-                break
-            end
-        end
-    end
-    if not hasTasks then return end
-
-    -- Reset session tracker if realm changed
-    if sessionWithdrawnRealm ~= currentRealm then
-        sessionWithdrawnCopper = 0
-        sessionWithdrawnRealm = currentRealm
-    end
-
-    -- Calculate fees ONLY for items in GetCharacterTasks — same source as pull
-    local DURATION_MULT = {[1] = 0.15, [2] = 0.30, [3] = 0.60}
-    local DURATION_LABEL = {[1] = "12h", [2] = "24h", [3] = "48h"}
+-- Calculate AH posting deposit fees for a character's tasks on a given realm.
+-- Returns: totalCopper, itemCount, details[]
+function Tracker:CalculatePostingFees(charKey, currentRealm)
     local goldSellQtyMode = ns.db.settings.sellQtyMode or "tsm"
     local tsmEnabled = goldSellQtyMode == "tsm" and ns.TSM and ns.TSM:IsEnabled()
 
     local goldTasks = ns.TodoList and ns.TodoList:GetCharacterTasks(charKey) or {}
     local totalDepositCopper = 0
     local itemCount = 0
-    local depositDetails = {} -- for verbose logging
+    local depositDetails = {}
 
     for _, task in ipairs(goldTasks) do
         if ns:RealmMatches(task.item.targetRealm or "", currentRealm) then
@@ -348,8 +326,6 @@ function Tracker:AutoWithdrawGold()
             local itemDeposit = 0
             local vendorPrice = 0
             if numID and numID > 0 then
-                -- Try to find the actual item link from bags for accurate vendor price
-                -- Task data often lacks bonus IDs, so base ID returns wrong price
                 local sellPrice = nil
 
                 -- Search bags for the actual item to get its real link
@@ -362,7 +338,6 @@ function Tracker:AutoWithdrawGold()
                         if info and info.hyperlink then
                             local slotID = tonumber((ns:ParseItemLink(info.hyperlink)))
                             if slotID == numID then
-                                -- Found it in bags — use the real link for vendor price
                                 local ok4, _, _, _, _, _, _, _, _, _, _, sp =
                                     pcall(C_Item.GetItemInfo, info.hyperlink)
                                 if ok4 and sp and type(sp) == "number" and sp > 0 then
@@ -388,13 +363,11 @@ function Tracker:AutoWithdrawGold()
                     vendorPrice = sellPrice
                     itemDeposit = math.ceil(sellPrice * durationMult) * postQty
                 else
-                    -- No vendor price found — estimate from expected sale price (5% of market)
                     local expectedGold = ns:ParseGoldValue(queueItem.expectedPrice or "")
                     if expectedGold > 0 then
-                        vendorPrice = expectedGold * 100 * 0.05  -- 5% of gold as copper
+                        vendorPrice = expectedGold * 100 * 0.05
                         itemDeposit = math.ceil(vendorPrice * durationMult) * postQty
                     else
-                        -- Absolute minimum: 1s per item
                         vendorPrice = 100
                         itemDeposit = math.ceil(100 * durationMult) * postQty
                     end
@@ -412,6 +385,57 @@ function Tracker:AutoWithdrawGold()
             })
         end
     end
+
+    return totalDepositCopper, itemCount, depositDetails
+end
+
+-- Calculate purchase costs for buy-type tasks (future #60).
+-- Returns 0 until buy tasks are implemented.
+function Tracker:CalculatePurchaseCosts(charKey, currentRealm)
+    return 0, 0, {}
+end
+
+-- Calculate total gold required: posting fees + purchase costs.
+-- Returns: totalCopper, itemCount, combinedDetails[]
+function Tracker:CalculateRequiredGold(charKey, currentRealm)
+    local postCopper, postCount, postDetails = self:CalculatePostingFees(charKey, currentRealm)
+    local buyCopper, buyCount, buyDetails = self:CalculatePurchaseCosts(charKey, currentRealm)
+
+    local totalCopper = postCopper + buyCopper
+    local totalCount = postCount + buyCount
+    local combinedDetails = {}
+    for _, d in ipairs(postDetails) do table.insert(combinedDetails, d) end
+    for _, d in ipairs(buyDetails) do table.insert(combinedDetails, d) end
+
+    return totalCopper, totalCount, combinedDetails
+end
+
+function Tracker:AutoWithdrawGold()
+    if not ns.db or not ns.db.settings.autoWithdrawGold then return end
+    if not C_Bank or not C_Bank.WithdrawMoney then return end
+
+    -- Only withdraw if this character actually has tasks on its realm
+    local charKey = ns:GetCharKey()
+    local currentRealm = charKey:match("%-(.+)$") or GetRealmName()
+    local hasTasks = false
+    if ns.TodoList then
+        local todoTasks = ns.TodoList:GetCharacterTasks(charKey)
+        for _, task in ipairs(todoTasks) do
+            if ns:RealmMatches(task.item.targetRealm or "", currentRealm) then
+                hasTasks = true
+                break
+            end
+        end
+    end
+    if not hasTasks then return end
+
+    -- Reset session tracker if realm changed
+    if sessionWithdrawnRealm ~= currentRealm then
+        sessionWithdrawnCopper = 0
+        sessionWithdrawnRealm = currentRealm
+    end
+
+    local totalDepositCopper, itemCount, depositDetails = self:CalculateRequiredGold(charKey, currentRealm)
 
     if itemCount == 0 then return end
 
@@ -436,9 +460,7 @@ function Tracker:AutoWithdrawGold()
     local playerCopper = GetMoney()
     local effectiveCopper = playerCopper + sessionWithdrawnCopper
 
-    if effectiveCopper >= estimatedFeesCopper then return end -- already have enough (including prior withdrawals)
-
-    -- Also just check raw gold — if player has enough, skip
+    if effectiveCopper >= estimatedFeesCopper then return end
     if playerCopper >= estimatedFeesCopper then return end
 
     local shortfallCopper = estimatedFeesCopper - playerCopper

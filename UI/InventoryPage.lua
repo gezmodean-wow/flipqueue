@@ -8,39 +8,53 @@ local BOUND_TYPES = {
     [1] = true, [4] = true, [7] = true, [8] = true, [9] = true,
 }
 
--- Determine item status: Queued, Posted, DNT, or Untracked
+-- Determine item status with enhanced model:
+-- Assigned (green, 1) — item has active to-do task
+-- Posted (yellow, 2) — item in log with active auction → show "AH: realm"
+-- Check AH (orange, 3) — item in log with expired auction
+-- Unknown (dim gray, 4) — default fallback
+-- Ignored (red, 5) — in DNT list
 local function GetItemStatus(key, itemData)
-    local LookupItemInfo = UI._LookupItemInfo
-
     -- Check DNT first
     if ns:IsDoNotTrack(itemData.itemID) then
-        return "DNT", ns.COLORS.RED .. "DNT" .. "|r"
+        return "Ignored", ns.COLORS.RED .. "Ignored" .. "|r", nil
     end
 
-    -- Check imports (pending items)
+    -- Check to-do list for assigned tasks (replaces imports check)
+    local currentList = ns.TodoList and ns.TodoList:GetCurrentList()
+    if currentList and currentList.tasks then
+        local itemName = (itemData.name or ""):lower()
+        for _, task in ipairs(currentList.tasks) do
+            if task.status == "pending" then
+                local item = task.item or task
+                if item.itemKey == key then
+                    return "Assigned", ns.COLORS.GREEN .. "Assigned" .. "|r", item.targetRealm
+                end
+                if itemName ~= "" and item.name and item.name:lower() == itemName then
+                    return "Assigned", ns.COLORS.GREEN .. "Assigned" .. "|r", item.targetRealm
+                end
+            end
+        end
+    end
+
+    -- Check log for posted/expired items
     local itemName = (itemData.name or ""):lower()
-    for _, qItem in pairs(ns.db.imports.fpScanner or {}) do
-        if qItem.status == "pending" then
-            if qItem.itemKey == key then
-                return "Queued", ns.COLORS.GREEN .. "Queued" .. "|r", qItem.targetRealm
-            end
-            if itemName ~= "" and qItem.name and qItem.name:lower() == itemName then
-                return "Queued", ns.COLORS.GREEN .. "Queued" .. "|r", qItem.targetRealm
-            end
-        end
-    end
-
-    -- Check log (posted items)
     for _, entry in ipairs(ns.db.log) do
-        if entry.itemKey == key then
-            return "Posted", ns.COLORS.YELLOW .. "Posted" .. "|r"
+        local matched = entry.itemKey == key
+        if not matched and itemName ~= "" and entry.name and entry.name:lower() == itemName then
+            matched = true
         end
-        if itemName ~= "" and entry.name and entry.name:lower() == itemName then
-            return "Posted", ns.COLORS.YELLOW .. "Posted" .. "|r"
+        if matched then
+            if entry.auctionStatus == "active" then
+                local ahRealm = entry.targetRealm or ""
+                return "Posted", ns.COLORS.YELLOW .. "Posted" .. "|r", ahRealm ~= "" and ("AH: " .. ahRealm) or nil
+            elseif entry.auctionStatus == "expired" then
+                return "Check AH", ns.COLORS.ORANGE .. "Check AH" .. "|r", nil
+            end
         end
     end
 
-    return "Untracked", ns.COLORS.GRAY .. "Untracked" .. "|r"
+    return "Unknown", ns.COLORS.GRAY .. "Unknown" .. "|r", nil
 end
 
 local function BuildFullInventoryData()
@@ -126,8 +140,8 @@ local function BuildFullInventoryData()
                     _itemName   = itemData.name,
                     _quantity   = itemData.quantity,
                     _statusKey  = statusKey,
-                    _sortStatus = statusKey == "Queued" and 1 or statusKey == "Posted" and 2
-                        or statusKey == "Untracked" and 3 or 4,
+                    _sortStatus = statusKey == "Assigned" and 1 or statusKey == "Posted" and 2
+                        or statusKey == "Check AH" and 3 or statusKey == "Unknown" and 4 or 5,
                     _charKey    = "Warbank",
                 })
             end
@@ -162,8 +176,8 @@ local function BuildFullInventoryData()
                         _itemName   = itemData.name,
                         _quantity   = itemData.quantity,
                         _statusKey  = statusKey,
-                        _sortStatus = statusKey == "Queued" and 1 or statusKey == "Posted" and 2
-                            or statusKey == "Untracked" and 3 or 4,
+                        _sortStatus = statusKey == "Assigned" and 1 or statusKey == "Posted" and 2
+                            or statusKey == "Check AH" and 3 or statusKey == "Unknown" and 4 or 5,
                         _charKey    = "Guild:" .. guildName,
                     })
                 end
@@ -184,7 +198,7 @@ function UI:RefreshInventoryPage()
     self.inventoryTable:SetRowClickHandler(function(rowData, button)
         if button == "RightButton" then
             local statusKey = rowData._statusKey
-            if statusKey == "Untracked" then
+            if statusKey == "Unknown" or statusKey == "Check AH" then
                 if IsShiftKeyDown() then
                     local added = ns.Import:Save({{
                         itemKey  = rowData._itemKey,
@@ -201,10 +215,10 @@ function UI:RefreshInventoryPage()
                     ns:AddDoNotTrack(rowData._itemID, rowData._itemName)
                     ns:Print("Do not track: " .. rowData.name)
                 end
-            elseif statusKey == "DNT" then
+            elseif statusKey == "Ignored" then
                 ns:RemoveDoNotTrack(tostring(rowData._itemID))
                 ns:Print("Removed from Do Not Track: " .. (rowData._itemName or rowData.name))
-            elseif statusKey == "Queued" then
+            elseif statusKey == "Assigned" then
                 if IsShiftKeyDown() then
                     for importKey, qItem in pairs(ns.db.imports.fpScanner or {}) do
                         if ns:ItemsMatch(qItem.itemKey, qItem.name, {itemKey = rowData._itemKey, itemID = tostring(rowData._itemID), name = rowData._itemName}) then
@@ -221,14 +235,15 @@ function UI:RefreshInventoryPage()
     self.inventoryTable:SetData(data)
 
     -- Count by status
-    local statusCounts = {Queued = 0, Posted = 0, Untracked = 0, DNT = 0}
+    local statusCounts = {}
     for _, row in ipairs(data) do
         statusCounts[row._statusKey] = (statusCounts[row._statusKey] or 0) + 1
     end
     local statusParts = {#data .. " tradeable items"}
-    if statusCounts.Queued > 0 then table.insert(statusParts, ns.COLORS.GREEN .. statusCounts.Queued .. " queued|r") end
-    if statusCounts.Posted > 0 then table.insert(statusParts, ns.COLORS.YELLOW .. statusCounts.Posted .. " posted|r") end
-    if statusCounts.Untracked > 0 then table.insert(statusParts, ns.COLORS.GRAY .. statusCounts.Untracked .. " untracked|r") end
-    if statusCounts.DNT > 0 then table.insert(statusParts, ns.COLORS.RED .. statusCounts.DNT .. " DNT|r") end
+    if (statusCounts.Assigned or 0) > 0 then table.insert(statusParts, ns.COLORS.GREEN .. statusCounts.Assigned .. " assigned|r") end
+    if (statusCounts.Posted or 0) > 0 then table.insert(statusParts, ns.COLORS.YELLOW .. statusCounts.Posted .. " posted|r") end
+    if (statusCounts["Check AH"] or 0) > 0 then table.insert(statusParts, ns.COLORS.ORANGE .. statusCounts["Check AH"] .. " check AH|r") end
+    if (statusCounts.Unknown or 0) > 0 then table.insert(statusParts, ns.COLORS.GRAY .. statusCounts.Unknown .. " unknown|r") end
+    if (statusCounts.Ignored or 0) > 0 then table.insert(statusParts, ns.COLORS.RED .. statusCounts.Ignored .. " ignored|r") end
     mainFrame.statusText:SetText(table.concat(statusParts, "  |  "))
 end

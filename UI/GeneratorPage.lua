@@ -680,8 +680,10 @@ function UI:RefreshGeneratorPage(pending)
         hdr.bg:SetColorTexture(0.1, 0.14, 0.1, 0.6)
         hdr.toggle:SetText(isCollapsed and "|cffffffff\226\150\182|r" or "|cffffffff\226\150\188|r")
         hdr.label:SetPoint("RIGHT", hdr, "RIGHT", -72, 0)
+        local importTypeTag = currentList.importType
+            and ("  " .. ns.COLORS.GRAY .. "[" .. currentList.importType .. "]|r") or ""
         hdr.label:SetText(
-            ns.COLORS.GREEN .. "Active:|r " .. (currentList.name or "Unnamed") ..
+            ns.COLORS.GREEN .. "Active:|r " .. (currentList.name or "Unnamed") .. importTypeTag ..
             ns.COLORS.GRAY .. "  (" .. counts.pending .. " pending" ..
             (counts.missing > 0 and (", " .. ns.COLORS.RED .. counts.missing .. " miss|r") or "") ..
             (counts.unassigned > 0 and (", " .. ns.COLORS.ORANGE .. counts.unassigned .. " no char|r") or "") ..
@@ -760,8 +762,10 @@ function UI:RefreshGeneratorPage(pending)
         hdr.bg:SetColorTexture(0.14, 0.12, 0.08, 0.6)
         hdr.toggle:SetText(isCollapsed and "|cffffffff\226\150\182|r" or "|cffffffff\226\150\188|r")
         hdr.label:SetPoint("RIGHT", hdr, "RIGHT", -108, 0)
+        local qImportTypeTag = qList.importType
+            and ("  " .. ns.COLORS.GRAY .. "[" .. qList.importType .. "]|r") or ""
         hdr.label:SetText(
-            ns.COLORS.YELLOW .. "Queued:|r " .. (qList.name or "Unnamed") ..
+            ns.COLORS.YELLOW .. "Queued:|r " .. (qList.name or "Unnamed") .. qImportTypeTag ..
             ns.COLORS.GRAY .. "  (" .. qPending .. " items)" .. "|r")
 
         -- Action buttons

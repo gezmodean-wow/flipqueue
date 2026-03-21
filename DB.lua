@@ -73,6 +73,8 @@ function ns:InitDB()
     -- Generator filter persistence
     db.settings.genFilterMode = db.settings.genFilterMode or "all"
     db.settings.genFilterValue = db.settings.genFilterValue or ""
+    -- TSM character detection dismissed list
+    db.settings.dismissedTSMChars = db.settings.dismissedTSMChars or {}
 
     ns.db = db
 

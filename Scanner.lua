@@ -66,6 +66,13 @@ local function ScanContainers(bagIndices, captureBindInfo)
             if not okInfo then info = nil end
             if info and info.hyperlink then
                 local itemID, bonusIDs, modifiers = ns:ParseItemLink(info.hyperlink)
+                -- Filter recipes/schematics/patterns/designs/plans (classID 9)
+                if itemID and not info.hyperlink:find("|Hbattlepet:") then
+                    local okCI, _, _, _, _, _, ciClassID = pcall(C_Item.GetItemInfoInstant, info.hyperlink)
+                    if okCI and ciClassID == 9 then
+                        itemID = nil  -- skip this item
+                    end
+                end
                 if itemID then
                     local key = ns:MakeItemKey(itemID, bonusIDs, modifiers)
                     if not items[key] then
@@ -541,6 +548,15 @@ frame:SetScript("OnEvent", function(self, event, ...)
                 -- Refresh task steps on login (items may have changed since last session)
                 if ns.TodoList and ns.TodoList.RefreshTaskSteps then
                     ns.TodoList:RefreshTaskSteps()
+                end
+
+                -- Detect characters from TSM data
+                if ns.TSM and ns.TSM.DetectCharacters then
+                    local detected = ns.TSM:DetectCharacters()
+                    if #detected > 0 then
+                        ns._detectedTSMChars = detected
+                        ns:Print(ns.COLORS.YELLOW .. #detected .. " character(s) detected from TSM.|r Open Characters page to add them.")
+                    end
                 end
 
                 if ns.db.settings.showLoginMessage and ns.TodoList then
