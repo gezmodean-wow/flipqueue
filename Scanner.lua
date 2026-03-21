@@ -66,13 +66,6 @@ local function ScanContainers(bagIndices, captureBindInfo)
             if not okInfo then info = nil end
             if info and info.hyperlink then
                 local itemID, bonusIDs, modifiers = ns:ParseItemLink(info.hyperlink)
-                -- Filter recipes/schematics/patterns/designs/plans (classID 9)
-                if itemID and not info.hyperlink:find("|Hbattlepet:") then
-                    local okCI, _, _, _, _, _, ciClassID = pcall(C_Item.GetItemInfoInstant, info.hyperlink)
-                    if okCI and ciClassID == 9 then
-                        itemID = nil  -- skip this item
-                    end
-                end
                 if itemID then
                     local key = ns:MakeItemKey(itemID, bonusIDs, modifiers)
                     if not items[key] then
