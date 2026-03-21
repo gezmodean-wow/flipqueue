@@ -416,11 +416,18 @@ function UI:RefreshTodoPage()
                         ns.COLORS.GRAY .. " - " .. group.realm .. "|r" ..
                         ns.COLORS.GREEN .. "  (YOU — " .. #group.items .. " items)|r")
                 else
-                    hdr.bg:SetColorTexture(0.12, 0.15, 0.2, 0.8)
                     local charInv = ns.db.characters and ns.db.characters[group.charKey]
                     local cc = charInv and CLASS_COLORS[charInv.class] or "888888"
-                    hdr.text:SetText("|cff" .. cc .. group.charName .. "|r" ..
-                        ns.COLORS.GRAY .. " - " .. group.realm .. "  (" .. #group.items .. " items)|r")
+                    if group._allDeferred then
+                        hdr.bg:SetColorTexture(0.1, 0.1, 0.1, 0.5)
+                        hdr.text:SetText("|cff" .. cc .. group.charName .. "|r" ..
+                            ns.COLORS.GRAY .. " - " .. group.realm .. "  (" .. #group.items .. " items)" ..
+                            ns.COLORS.RED .. " [no inventory]" .. "|r")
+                    else
+                        hdr.bg:SetColorTexture(0.12, 0.15, 0.2, 0.8)
+                        hdr.text:SetText("|cff" .. cc .. group.charName .. "|r" ..
+                            ns.COLORS.GRAY .. " - " .. group.realm .. "  (" .. #group.items .. " items)|r")
+                    end
                 end
 
                 local goldStr = FormatGoldValue(group.totalGold)

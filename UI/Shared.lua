@@ -206,21 +206,31 @@ local function BuildCurrentCharTasks()
         })
     end
 
-    -- Deposit to warbank: items on this character that another character needs
+    -- Transfer items: deposit to warbank or mail to characters that need them
     local todoList = ns.TodoList and ns.TodoList:GetCurrentList()
     if todoList and todoList.tasks then
-        local depositCount = 0
+        local myRealm = myCharKey:match("%-(.+)$") or ""
         for _, item in ipairs(todoList.tasks) do
             if item.source == "unavailable" and item.depositFrom == myCharKey then
-                depositCount = depositCount + 1
+                local itemName = item.name or "?"
+                local forChar = item.assignedChar and (item.assignedChar:match("^(.-)%-") or item.assignedChar) or "?"
+                local targetRealm = item.assignedChar and (item.assignedChar:match("%-(.+)$") or "") or ""
+                local sameRealm = myRealm ~= "" and targetRealm ~= "" and ns:RealmMatches(myRealm, targetRealm)
+
+                if sameRealm then
+                    table.insert(tasks, {
+                        icon   = "Interface\\Icons\\INV_Letter_15",
+                        text   = ns.COLORS.YELLOW .. "Mail:|r " .. itemName .. " -> " .. forChar,
+                        sort   = 0,
+                    })
+                else
+                    table.insert(tasks, {
+                        icon   = "Interface\\Icons\\INV_Misc_Bag_10",
+                        text   = ns.COLORS.CYAN .. "Deposit:|r " .. itemName .. " -> " .. forChar,
+                        sort   = 0,
+                    })
+                end
             end
-        end
-        if depositCount > 0 then
-            table.insert(tasks, {
-                icon   = "Interface\\Icons\\INV_Misc_Bag_10",
-                text   = ns.COLORS.CYAN .. "Deposit:|r " .. depositCount .. " item(s) to warbank for other characters",
-                sort   = 0,  -- highest priority
-            })
         end
     end
 

@@ -6,6 +6,16 @@ local addonName, ns = ...
 local Import = {}
 ns.Import = Import
 
+-- Clean up realm strings: strip trailing "..." from truncated FP website data.
+-- "Kirin Tor, ..." → "Kirin Tor", "Aegwynn, ..." → "Aegwynn"
+local function CleanRealmString(realm)
+    if not realm then return "" end
+    -- Remove trailing ", ..." or ",..." or ", …"
+    realm = realm:gsub(",?%s*%.%.%.%s*$", "")
+    realm = realm:gsub(",?%s*\226\128\166%s*$", "")  -- UTF-8 ellipsis (…)
+    return strtrim(realm)
+end
+
 --------------------------
 -- Known WoW values
 --------------------------
@@ -687,33 +697,76 @@ function Import:PreviewAdd(items, source)
     return results
 end
 
--- Save parsed items to the imports map. Returns count of new items added.
+-- Save parsed items to the imports map. Always replaces existing imports
+-- for this source — deals are ephemeral and only persist via to-do lists.
+-- Returns count of items saved.
 function Import:Save(items, source)
     if not ns.db or not ns.db.imports then return 0 end
 
     source = source or "fpScanner"
-    ns.db.imports[source] = ns.db.imports[source] or {}
+
+    -- Clean realm strings: strip "..." truncation from FP website
+    for _, item in ipairs(items) do
+        item.targetRealm = CleanRealmString(item.targetRealm or "")
+    end
+
+    -- Build cluster lookup from multi-realm strings in this batch.
+    -- If "Kirin Tor, Steamwheedle Cartel, Sentinels" appears anywhere,
+    -- then a single "Sentinels" or "Kirin Tor" entry expands to the full cluster.
+    local clusterMap = {}
+    for _, item in ipairs(items) do
+        local realm = item.targetRealm
+        if realm and realm:find(",") then
+            for name in realm:gmatch("([^,]+)") do
+                name = strtrim(name)
+                if name ~= "" and #name >= 3 then
+                    local key = name:lower()
+                    if not clusterMap[key] or #realm > #clusterMap[key] then
+                        clusterMap[key] = realm
+                    end
+                end
+            end
+        end
+    end
+
+    -- Expand single-realm entries to full cluster if the cluster is known from this batch
+    local expanded = 0
+    for _, item in ipairs(items) do
+        local realm = item.targetRealm
+        if realm and realm ~= "" and not realm:find(",") then
+            local full = clusterMap[realm:lower()]
+            if full then
+                item.targetRealm = full
+                expanded = expanded + 1
+            end
+        end
+    end
+    if expanded > 0 then
+        ns:PrintDebug("Expanded " .. expanded .. " single-realm entries to full cluster names.")
+    end
+
+    -- Clear existing imports for this source — each import is a full replacement
+    ns.db.imports[source] = {}
     local srcMap = ns.db.imports[source]
 
     local added = 0
-    local updated = 0
+    local deduped = 0
 
     for _, item in ipairs(items) do
         local key = ns:MakeImportKey(item.itemKey, item.name, item.targetRealm)
         local existing = srcMap[key]
 
         if existing then
-            -- Update price if import has one
+            -- Same key already in this batch — update price, keep longer realm
             if item.expectedPrice and item.expectedPrice ~= "" then
                 existing.expectedPrice = item.expectedPrice
             end
-            -- Keep the longer/more descriptive realm string
             if #(item.targetRealm or "") > #(existing.targetRealm or "") then
                 existing.targetRealm = item.targetRealm
             end
-            updated = updated + 1
+            deduped = deduped + 1
         else
-            -- Check connected realm dedup
+            -- Check connected realm dedup within this batch
             local isDuplicate = false
             local itemName = (item.name or ""):lower()
             for existKey, existItem in pairs(srcMap) do
@@ -721,7 +774,6 @@ function Import:Save(items, source)
                 local nameMatch = itemName ~= "" and existItem.name
                     and existItem.name:lower() == itemName
                 if (keyMatch or nameMatch) and ns:RealmsOverlap(existItem.targetRealm, item.targetRealm) then
-                    -- Update existing entry
                     if item.expectedPrice and item.expectedPrice ~= "" then
                         existItem.expectedPrice = item.expectedPrice
                     end
@@ -729,7 +781,7 @@ function Import:Save(items, source)
                         existItem.targetRealm = item.targetRealm
                     end
                     isDuplicate = true
-                    updated = updated + 1
+                    deduped = deduped + 1
                     break
                 end
             end
@@ -757,8 +809,8 @@ function Import:Save(items, source)
         end
     end
 
-    if updated > 0 then
-        ns:Print(ns.COLORS.GRAY .. "Updated " .. updated .. " connected-realm duplicates.|r")
+    if deduped > 0 then
+        ns:Print(ns.COLORS.GRAY .. "Merged " .. deduped .. " connected-realm duplicates.|r")
     end
 
     return added

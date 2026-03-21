@@ -32,6 +32,7 @@ function ns:InitDB()
     db.settings     = db.settings or {
         autoScan         = true,
         autoPullBank     = false,
+        autoDepositWarbank = false,
         showLoginMessage = true,
         autoWithdrawGold = false,
     }

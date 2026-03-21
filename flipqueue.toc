@@ -43,6 +43,7 @@ UI\MainFrame.lua
 UI\TodoPage.lua
 UI\InventoryPage.lua
 UI\CharactersPage.lua
+UI\GuildsPage.lua
 UI\LogPage.lua
 UI\ImportPage.lua
 UI\ExportPage.lua

@@ -134,8 +134,9 @@ local function BuildFullInventoryData()
         end
     end
 
-    -- Guild bank items
-    if ns.db.guilds then
+    -- Guild bank items — disabled: Blizzard API returns unreliable item data
+    -- Re-enable when API is fixed.
+    if false and ns.db.guilds then
         for guildName, gbData in pairs(ns.db.guilds) do
             if gbData.items then
                 for key, itemData in pairs(gbData.items) do

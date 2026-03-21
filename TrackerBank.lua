@@ -10,8 +10,11 @@ local Tracker = ns.Tracker
 
 local PULL_TIMEOUT = 5  -- seconds to wait for locks before giving up on a batch
 
-function Tracker:AutoPullFromBank()
-    if not ns.db or not ns.db.settings.autoPullBank then return end
+function Tracker:AutoPullFromBank(onComplete)
+    if not ns.db or not ns.db.settings.autoPullBank then
+        if onComplete then onComplete() end
+        return
+    end
 
     local charKey = ns:GetCharKey()
     local currentRealm = charKey:match("%-(.+)$") or GetRealmName()
@@ -44,13 +47,35 @@ function Tracker:AutoPullFromBank()
         end
     end
 
-    if not next(needed) then return end
+    -- Also pull items that need depositing to warbank for other characters
+    if ns.TodoList and ns.TodoList:GetCurrentList() then
+        local todoList = ns.TodoList:GetCurrentList()
+        if todoList.tasks then
+            for _, item in ipairs(todoList.tasks) do
+                if item.status == "pending" and item.depositFrom == charKey
+                    and item.assignedChar ~= charKey then
+                    local inBags = Tracker._CountInBags(item)
+                    if inBags <= 0 and not needed[item] then
+                        needed[item] = item.quantity or 1
+                    end
+                end
+            end
+        end
+    end
+
+    if not next(needed) then
+        if onComplete then onComplete() end
+        return
+    end
 
     local allBankTabs = {}
     for _, b in ipairs(ns:GetEnabledBankTabs()) do table.insert(allBankTabs, b) end
     for _, b in ipairs(ns:GetEnabledWarbankTabs()) do table.insert(allBankTabs, b) end
 
-    if not next(needed) then return end
+    if not next(needed) then
+        if onComplete then onComplete() end
+        return
+    end
 
     -- Build a list of moves to make — only pull items that match to-do task items
     local moves = {}
@@ -87,12 +112,40 @@ function Tracker:AutoPullFromBank()
         end
     end
 
-    if #moves == 0 then return end
+    if #moves == 0 then
+        if onComplete then onComplete() end
+        return
+    end
+
+    -- Check free bag space before pulling
+    local freeBagSlots = 0
+    for _, bagIndex in ipairs(ns.INVENTORY_BAGS) do
+        local ok, numSlots = pcall(C_Container.GetContainerNumSlots, bagIndex)
+        if ok and numSlots then
+            for slot = 1, numSlots do
+                local ok2, info = pcall(C_Container.GetContainerItemInfo, bagIndex, slot)
+                if ok2 and not info then
+                    freeBagSlots = freeBagSlots + 1
+                end
+            end
+        end
+    end
+
+    if freeBagSlots == 0 then
+        ns:Print(ns.COLORS.RED .. "Bags are full!|r Cannot pull " .. #moves .. " item(s) from bank.")
+        if onComplete then onComplete() end
+        return
+    end
+
+    if freeBagSlots < #moves then
+        ns:Print(ns.COLORS.YELLOW .. "Only " .. freeBagSlots .. " free bag slot(s) — pulling " ..
+            freeBagSlots .. " of " .. #moves .. " item(s) from bank.|r")
+    end
 
     -- Event-driven batch execution
     -- Pattern from Baganator: move a small batch, wait for ITEM_LOCK_CHANGED
     -- to signal the server has processed the moves, then continue
-    local totalMoves = #moves
+    local totalMoves = math.min(#moves, freeBagSlots)
     local moveIndex = 1
     local pulledNames = {}
     local pullErrors = 0
@@ -128,6 +181,7 @@ function Tracker:AutoPullFromBank()
             end
             if ns.UI and ns.UI.Refresh then ns.UI:Refresh() end
             if ns.UI and ns.UI.RefreshMini then ns.UI:RefreshMini() end
+            if onComplete then onComplete() end
         end)
     end
 
@@ -424,4 +478,151 @@ function Tracker:AutoWithdrawGold()
     else
         ns:Print(ns.COLORS.RED .. "Failed to withdraw: " .. tostring(err) .. "|r")
     end
+end
+
+--------------------------
+-- Warbank Auto-Deposit
+--------------------------
+
+function Tracker:AutoDepositToWarbank()
+    if not ns.db or not ns.db.settings.autoDepositWarbank then return end
+
+    local charKey = ns:GetCharKey()
+    local todoList = ns.TodoList and ns.TodoList:GetCurrentList()
+    if not todoList or not todoList.tasks then return end
+
+    -- Find items this character needs to deposit for other characters
+    local depositTasks = {}
+    for _, task in ipairs(todoList.tasks) do
+        if task.status == "pending" and task.depositFrom == charKey
+            and task.assignedChar ~= charKey then
+            table.insert(depositTasks, task)
+        end
+    end
+
+    if #depositTasks == 0 then return end
+
+    -- Exclude items the current character also needs for posting
+    local myPostingKeys = {}
+    local myTasks = ns.TodoList:GetCharacterTasks(charKey)
+    for _, task in ipairs(myTasks) do
+        if task.item.itemKey then
+            myPostingKeys[task.item.itemKey] = true
+        end
+    end
+
+    -- Find items in bags matching deposit tasks
+    local moves = {} -- { bag, slot, name }
+    local depositMatched = {} -- task -> true
+
+    for _, bagIndex in ipairs(ns.INVENTORY_BAGS) do
+        local ok, numSlots = pcall(C_Container.GetContainerNumSlots, bagIndex)
+        if ok and numSlots then
+            for slot = 1, numSlots do
+                local ok2, info = pcall(C_Container.GetContainerItemInfo, bagIndex, slot)
+                if ok2 and info and info.hyperlink and not info.isBound then
+                    local itemID, bonusIDs, modifiers = ns:ParseItemLink(info.hyperlink)
+                    if itemID then
+                        local key = ns:MakeItemKey(itemID, bonusIDs, modifiers)
+                        -- Skip items the current character needs for posting
+                        if not myPostingKeys[key] then
+                            local slotName
+                            for _, task in ipairs(depositTasks) do
+                                if not depositMatched[task] then
+                                    local matched = ns:ItemsMatch(key, nil, task, false, false)
+                                    if not matched then
+                                        if slotName == nil then slotName = Tracker._GetNameFromLink(info.hyperlink) or false end
+                                        if slotName then
+                                            matched = ns:ItemsMatch(key, slotName, task, false, false)
+                                        end
+                                    end
+                                    if matched then
+                                        depositMatched[task] = true
+                                        table.insert(moves, { bag = bagIndex, slot = slot, name = task.name or "?" })
+                                        break
+                                    end
+                                end
+                            end
+                        end
+                    end
+                end
+            end
+        end
+    end
+
+    if #moves == 0 then return end
+
+    -- Find empty warbank slots
+    local emptySlots = {}
+    for _, wbBag in ipairs(ns:GetEnabledWarbankTabs()) do
+        local ok, numSlots = pcall(C_Container.GetContainerNumSlots, wbBag)
+        if ok and numSlots then
+            for slot = 1, numSlots do
+                local ok2, info = pcall(C_Container.GetContainerItemInfo, wbBag, slot)
+                if ok2 and not info then
+                    table.insert(emptySlots, { bag = wbBag, slot = slot })
+                end
+            end
+        end
+    end
+
+    if #emptySlots == 0 then
+        ns:Print(ns.COLORS.RED .. "Warbank is full!|r Cannot deposit " .. #moves .. " item(s).")
+        return
+    end
+
+    if #emptySlots < #moves then
+        ns:Print(ns.COLORS.YELLOW .. "Only " .. #emptySlots .. " free warbank slot(s) — depositing " ..
+            #emptySlots .. " of " .. #moves .. " item(s).|r")
+    end
+
+    -- Execute moves: pick up from bags, place in warbank slot
+    local totalMoves = math.min(#moves, #emptySlots)
+    local depositedNames = {}
+    local moveIdx = 1
+
+    local function DepositNext()
+        if moveIdx > totalMoves then
+            if #depositedNames > 0 then
+                ns:Print(ns.COLORS.CYAN .. "Deposited " .. #depositedNames ..
+                    " item(s) to warbank:|r " .. table.concat(depositedNames, ", "))
+            end
+            -- Refresh after deposit
+            C_Timer.After(1, function()
+                if ns.Scanner then
+                    ns.Scanner:ScanCurrentCharacter()
+                    ns.Scanner:ScanBank()
+                end
+                if ns.TodoList and ns.TodoList.RefreshLocations then
+                    ns.TodoList:RefreshLocations()
+                end
+                if ns.TodoList and ns.TodoList.RefreshTaskSteps then
+                    ns.TodoList:RefreshTaskSteps()
+                end
+                if ns.UI and ns.UI.Refresh then ns.UI:Refresh() end
+                if ns.UI and ns.UI.RefreshMini then ns.UI:RefreshMini() end
+            end)
+            return
+        end
+
+        local src = moves[moveIdx]
+        local dest = emptySlots[moveIdx]
+
+        pcall(ClearCursor)
+        local ok1 = pcall(C_Container.PickupContainerItem, src.bag, src.slot)
+        if ok1 then
+            local ok2 = pcall(C_Container.PickupContainerItem, dest.bag, dest.slot)
+            if ok2 then
+                table.insert(depositedNames, src.name)
+            else
+                pcall(ClearCursor)
+            end
+        end
+
+        moveIdx = moveIdx + 1
+        C_Timer.After(0.15, DepositNext)
+    end
+
+    ns:PrintDebug("Depositing " .. totalMoves .. " item(s) to warbank...")
+    DepositNext()
 end

@@ -379,7 +379,10 @@ local function ProcessNextGuildTab()
         if not ns.db then return end
         local guildName = GetGuildInfo("player") or "Unknown Guild"
         ns.db.guilds = ns.db.guilds or {}
-        ns.db.guilds[guildName] = ns.db.guilds[guildName] or {enabled = true, members = {}}
+        if not ns.db.guilds[guildName] then
+            ns.db.guilds[guildName] = { enabled = true, members = {} }
+        end
+        ns.db.guilds[guildName].enabled = true  -- enable on first scan
         ns.db.guilds[guildName].lastScan = time()
         ns.db.guilds[guildName].items = guildScanData
         local count = 0
@@ -437,9 +440,14 @@ function Scanner:ScanGuildBank()
     guildScanData = {}
     guildScanQueue = {}
 
+    -- Check per-tab config for this guild
+    local guildName = GetGuildInfo("player")
+    local disabledTabs = guildName and ns.db.guilds and ns.db.guilds[guildName]
+        and ns.db.guilds[guildName].disabledTabs or {}
+
     for tab = 1, numTabs do
         local ok, name, icon, isViewable = pcall(GetGuildBankTabInfo, tab)
-        if ok and isViewable then
+        if ok and isViewable and not disabledTabs[tab] then
             table.insert(guildScanQueue, tab)
         end
     end
@@ -468,15 +476,19 @@ local function UpdateCharacterMeta()
     char.class = select(2, UnitClass("player"))
     char.level = UnitLevel("player")
     char.guild = GetGuildInfo("player")
-    -- Update guild member list
-    if char.guild and ns.db.guilds and ns.db.guilds[char.guild] then
+    -- Register guild even if guild bank hasn't been scanned yet
+    if char.guild then
+        ns.db.guilds = ns.db.guilds or {}
+        if not ns.db.guilds[char.guild] then
+            ns.db.guilds[char.guild] = { enabled = false, members = {} }
+        end
         local guild = ns.db.guilds[char.guild]
+        guild.members = guild.members or {}
         local found = false
-        for _, ck in ipairs(guild.members or {}) do
+        for _, ck in ipairs(guild.members) do
             if ck == charKey then found = true; break end
         end
         if not found then
-            guild.members = guild.members or {}
             table.insert(guild.members, charKey)
         end
     end
@@ -588,12 +600,8 @@ frame:SetScript("OnEvent", function(self, event, ...)
         -- GuildBanker = 10 (Enum.PlayerInteractionType.GuildBanker)
         if interactionType == 10 or (Enum.PlayerInteractionType and interactionType == Enum.PlayerInteractionType.GuildBanker) then
             guildBankOpen = true
-            -- Auto-scan after a short delay to let data load
-            C_Timer.After(1, function()
-                if guildBankOpen then
-                    Scanner:ScanGuildBank()
-                end
-            end)
+            -- Guild bank scanning disabled: Blizzard API returns unreliable item data
+            -- (stripped bonus IDs, wrong ilvl, pets as "Pet Cage"). Re-enable when fixed.
         end
 
     elseif event == "PLAYER_INTERACTION_MANAGER_FRAME_HIDE" then

@@ -23,7 +23,7 @@ SlashCmdList["FLIPQUEUE"] = function(msg)
         ns.Scanner:ScanWarbank()
 
     elseif msg == "gbank" then
-        ns.Scanner:ScanGuildBank()
+        ns:Print(ns.COLORS.YELLOW .. "Guild bank scanning is disabled.|r Blizzard's API returns unreliable item data (wrong IDs, missing ilvl, pets as Pet Cage).")
 
     elseif msg == "cleanup" then
         if ns.db then
@@ -124,6 +124,175 @@ SlashCmdList["FLIPQUEUE"] = function(msg)
             UI:Refresh()
         end
 
+    elseif msg == "state" or msg == "diag" then
+        if ns.db then
+            local lines = {}
+            local function L(s) table.insert(lines, s) end
+
+            L("=== FlipQueue State ===")
+            L("schema=" .. (ns.db.schemaVersion or "?") .. " time=" .. date("%Y-%m-%d %H:%M") .. " char=" .. ns:GetCharKey())
+
+            -- Settings (key ones)
+            local s = ns.db.settings or {}
+            L("-- Settings")
+            L("autoPull=" .. tostring(s.autoPullBank) .. " autoDeposit=" .. tostring(s.autoDepositWarbank)
+                .. " autoGold=" .. tostring(s.autoWithdrawGold) .. " autoScan=" .. tostring(s.autoScan))
+            L("sellQtyMode=" .. tostring(s.sellQtyMode or "default") .. " defaultSellQty=" .. tostring(s.defaultSellQty or 1)
+                .. " pullBatch=" .. tostring(s.pullBatchSize or 5))
+            L("tsmEnabled=" .. tostring(s.tsmEnabled) .. " tsmProfile=" .. tostring(s.tsmProfile or ""))
+
+            -- Characters
+            L("-- Characters (" .. (function() local n=0; for _ in pairs(ns.db.characters or {}) do n=n+1 end; return n end)() .. ")")
+            local charKeys = {}
+            for ck in pairs(ns.db.characters or {}) do table.insert(charKeys, ck) end
+            table.sort(charKeys)
+            for _, ck in ipairs(charKeys) do
+                local c = ns.db.characters[ck]
+                local itemCount = 0
+                local locCounts = {}
+                if c.inventory and c.inventory.items then
+                    for _, item in pairs(c.inventory.items) do
+                        itemCount = itemCount + 1
+                        if item.locations then
+                            for loc, qty in pairs(item.locations) do
+                                locCounts[loc] = (locCounts[loc] or 0) + qty
+                            end
+                        end
+                    end
+                end
+                local locParts = {}
+                for loc, qty in pairs(locCounts) do table.insert(locParts, loc .. "=" .. qty) end
+                table.sort(locParts)
+                L(ck .. " class=" .. tostring(c.class) .. " lvl=" .. tostring(c.level)
+                    .. " gold=" .. ns:FormatGold(c.gold or 0)
+                    .. " guild=" .. tostring(c.guild or "none")
+                    .. " ignored=" .. tostring(c.ignored or false)
+                    .. " login=" .. (c.lastLogin and date("%m/%d %H:%M", c.lastLogin) or "?")
+                    .. " items=" .. itemCount .. " {" .. table.concat(locParts, ",") .. "}")
+            end
+
+            -- Warbank
+            local wbCount = 0
+            local wbQty = 0
+            if ns.db.warbank and ns.db.warbank.items then
+                for _, item in pairs(ns.db.warbank.items) do
+                    wbCount = wbCount + 1
+                    wbQty = wbQty + (item.quantity or 0)
+                end
+            end
+            L("-- Warbank: " .. wbCount .. " unique, " .. wbQty .. " total qty")
+
+            -- Imports
+            L("-- Imports")
+            for src, srcMap in pairs(ns.db.imports or {}) do
+                local count = 0
+                local realms = {}
+                for _, deal in pairs(srcMap) do
+                    count = count + 1
+                    local r = deal.targetRealm or "?"
+                    realms[r] = (realms[r] or 0) + 1
+                end
+                L(src .. ": " .. count .. " deals")
+                local realmList = {}
+                for r, n in pairs(realms) do table.insert(realmList, r .. "(" .. n .. ")") end
+                table.sort(realmList)
+                for _, rs in ipairs(realmList) do L("  " .. rs) end
+            end
+
+            -- Todo Lists
+            L("-- TodoLists")
+            local active = ns.db.todoLists and ns.db.todoLists.active
+            if active and active.tasks then
+                L("active: \"" .. (active.name or "?") .. "\" tasks=" .. #active.tasks)
+                local statusCounts = {}
+                local charCounts = {}
+                local deferredCount = 0
+                for _, task in ipairs(active.tasks) do
+                    local st = task.status or "pending"
+                    statusCounts[st] = (statusCounts[st] or 0) + 1
+                    if task.assignedChar then
+                        if not charCounts[task.assignedChar] then
+                            charCounts[task.assignedChar] = { total = 0, deferred = 0, statuses = {} }
+                        end
+                        local cc = charCounts[task.assignedChar]
+                        cc.total = cc.total + 1
+                        cc.statuses[st] = (cc.statuses[st] or 0) + 1
+                        if task.deferredAt then
+                            cc.deferred = cc.deferred + 1
+                            deferredCount = deferredCount + 1
+                        end
+                    end
+                end
+                local stParts = {}
+                for st, n in pairs(statusCounts) do table.insert(stParts, st .. "=" .. n) end
+                table.sort(stParts)
+                L("  statuses: " .. table.concat(stParts, " "))
+                L("  deferred: " .. deferredCount)
+
+                -- Per-character task breakdown
+                local charList = {}
+                for ck in pairs(charCounts) do table.insert(charList, ck) end
+                table.sort(charList)
+                for _, ck in ipairs(charList) do
+                    local cc = charCounts[ck]
+                    local csParts = {}
+                    for st, n in pairs(cc.statuses) do table.insert(csParts, st .. "=" .. n) end
+                    table.sort(csParts)
+                    L("  " .. ck .. ": " .. cc.total .. " tasks (" .. table.concat(csParts, " ")
+                        .. ") deferred=" .. cc.deferred)
+                end
+
+                -- Show individual tasks with issues (deferred, unavailable, blocked)
+                local problemTasks = {}
+                for i, task in ipairs(active.tasks) do
+                    if task.status == "pending" and (task.deferredAt or task.source == "unavailable" or task.blockedBy) then
+                        table.insert(problemTasks, {
+                            idx = i,
+                            name = task.name or "?",
+                            char = task.assignedChar or "unassigned",
+                            source = task.source or "?",
+                            deferred = task.deferredAt and date("%m/%d %H:%M", task.deferredAt) or "no",
+                            blockedBy = task.blockedBy or "",
+                            step = task.currentStep or 0,
+                            stepType = task.steps and task.steps[task.currentStep] and task.steps[task.currentStep].type or "?",
+                        })
+                    end
+                end
+                if #problemTasks > 0 then
+                    L("  -- Problem tasks (" .. #problemTasks .. ")")
+                    for _, pt in ipairs(problemTasks) do
+                        L("  #" .. pt.idx .. " " .. pt.name .. " @" .. pt.char
+                            .. " src=" .. pt.source .. " step=" .. pt.stepType
+                            .. " deferred=" .. pt.deferred
+                            .. (pt.blockedBy ~= "" and (" blocked=" .. pt.blockedBy) or ""))
+                    end
+                end
+            else
+                L("active: none")
+            end
+            local upcoming = ns.db.todoLists and ns.db.todoLists.upcoming or {}
+            L("upcoming: " .. #upcoming .. " list(s)")
+
+            -- Log summary
+            local logCounts = {}
+            for _, entry in ipairs(ns.db.log or {}) do
+                local st = entry.auctionStatus or "?"
+                logCounts[st] = (logCounts[st] or 0) + 1
+            end
+            local logParts = {}
+            for st, n in pairs(logCounts) do table.insert(logParts, st .. "=" .. n) end
+            table.sort(logParts)
+            L("-- Log: " .. #(ns.db.log or {}) .. " entries (" .. table.concat(logParts, " ") .. ")")
+
+            -- DNT
+            local dntCount = 0
+            for _ in pairs(ns.db.doNotTrack or {}) do dntCount = dntCount + 1 end
+            L("-- DoNotTrack: " .. dntCount .. " items")
+
+            local output = table.concat(lines, "\n")
+            UI:ShowExportPopup(output, "Ctrl+A, Ctrl+C to copy — paste to Claude for diagnosis")
+        end
+
     elseif msg == "debug" then
         if ns.db then
             ns.db.settings.debugMessages = not ns.db.settings.debugMessages
@@ -150,6 +319,7 @@ SlashCmdList["FLIPQUEUE"] = function(msg)
         print("  /fq gold - Toggle auto-withdraw gold for AH fees")
         print("  /fq dnt - Show Do Not Track list")
         print("  /fq mini - Toggle mini overlay")
+        print("  /fq state - Export full FQ state for diagnosis")
         print("  /fq debug - Toggle debug messages")
         print("  /fq settings - Open settings panel")
         print("  /fq dnt add <name> - Add item to Do Not Track")

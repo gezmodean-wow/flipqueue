@@ -171,6 +171,12 @@ function UI:CreateSettingsPanel(parent)
         "autoPullBank")
     y = y - h - ITEM_SPACING
 
+    settingsWidgets.autoDeposit, h = CreateSettingsCheckbox(content, y,
+        "Auto-deposit items to warbank",
+        "When you open the bank, automatically deposit items to the warbank that other characters need for posting. Items needed by the current character are kept.",
+        "autoDepositWarbank")
+    y = y - h - ITEM_SPACING
+
     settingsWidgets.autoGold, h = CreateSettingsCheckbox(content, y,
         "Auto-withdraw gold for AH fees",
         "When you open the bank, withdraw enough gold from your warband bank to cover estimated AH listing fees. Assumes 60% of vendor price (48h post) with vendor at ~5% of market value.",
@@ -882,6 +888,9 @@ function UI:RefreshSettings()
     end
     if settingsWidgets.autoPull then
         settingsWidgets.autoPull:SetChecked(ns.db.settings.autoPullBank)
+    end
+    if settingsWidgets.autoDeposit then
+        settingsWidgets.autoDeposit:SetChecked(ns.db.settings.autoDepositWarbank)
     end
     if settingsWidgets.autoGold then
         settingsWidgets.autoGold:SetChecked(ns.db.settings.autoWithdrawGold)

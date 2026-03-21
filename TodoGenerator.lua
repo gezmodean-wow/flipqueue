@@ -83,20 +83,18 @@ function TodoList:BuildItemPool()
         end
     end
 
-    -- Guild bank(s)
-    if ns.db.guilds then
-        for guildName, guildData in pairs(ns.db.guilds) do
-            if guildData.enabled and guildData.items then
-                for itemKey, itemData in pairs(guildData.items) do
-                    local numID = tonumber(itemData.itemID)
-                    local isDNT = numID and ns:IsDoNotTrack(numID)
-                    if not isDNT and (itemData.quantity or 0) > 0 then
-                        AddToPool(itemKey, itemData, "Guild:" .. guildName, "guildbank", itemData.quantity)
-                    end
-                end
-            end
-        end
-    end
+    -- Guild bank(s) — disabled: Blizzard API returns unreliable item data
+    -- (stripped bonus IDs, wrong ilvl, pets show as "Pet Cage")
+    -- Re-enable when API is fixed.
+    -- if ns.db.guilds then
+    --     for guildName, guildData in pairs(ns.db.guilds) do
+    --         if guildData.enabled and guildData.items then
+    --             for itemKey, itemData in pairs(guildData.items) do
+    --                 AddToPool(itemKey, itemData, "Guild:" .. guildName, "guildbank", itemData.quantity)
+    --             end
+    --         end
+    --     end
+    -- end
 
     return pool
 end
@@ -415,13 +413,29 @@ function TodoList:BuildDisplayGroups(items, sortMode)
         table.insert(groups, byChar[key])
     end
 
+    -- Pre-compute deferred status: groups where ALL items have been deferred
+    -- (checked on login but no inventory found) sort lower
+    for _, group in ipairs(groups) do
+        local allDeferred = #group.items > 0
+        for _, item in ipairs(group.items) do
+            if not item.deferredAt then
+                allDeferred = false
+                break
+            end
+        end
+        group._allDeferred = allDeferred
+    end
+
     -- Sort groups by the chosen mode.
-    -- Unassigned groups (no character) always sort to the bottom.
+    -- Tiers: assigned+active > assigned+deferred > unassigned
     table.sort(groups, function(a, b)
         -- Unassigned always last
         local aAssigned = a.charKey and 1 or 0
         local bAssigned = b.charKey and 1 or 0
         if aAssigned ~= bAssigned then return aAssigned > bAssigned end
+
+        -- Fully deferred groups (no inventory) sort below active groups
+        if a._allDeferred ~= b._allDeferred then return not a._allDeferred end
 
         if sortMode == "profit" then
             return a.totalGold > b.totalGold
@@ -609,6 +623,7 @@ function TodoList:GenerateTodoList(source, allocationOrder)
                     source          = "unavailable",
                     depositFrom     = depositFrom,
                     depositLocation = depositLocation,
+                    blockedBy       = depositFrom,
                     quality         = deal.quality,
                     sellRate        = deal.sellRate,
                     noCompetition   = deal.noCompetition,

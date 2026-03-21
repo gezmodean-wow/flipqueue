@@ -388,15 +388,135 @@ function TodoList:GetCurrentStepType(task)
     return step and step.type or nil
 end
 
+-- Check if an item exists ANYWHERE across the account (all characters + warbank).
+-- Used to auto-skip tasks for items that are completely gone.
+local function IsItemInAccountInventory(itemKey, itemNumID)
+    for _, charData in pairs(ns.db.characters or {}) do
+        if charData.inventory and charData.inventory.items then
+            local inv = charData.inventory.items[itemKey]
+            if inv then
+                if inv.locations then
+                    for _, qty in pairs(inv.locations) do
+                        if qty > 0 then return true end
+                    end
+                elseif (inv.quantity or 0) > 0 then
+                    return true
+                end
+            end
+            if itemNumID then
+                for k, invItem in pairs(charData.inventory.items) do
+                    if k ~= itemKey then
+                        local kNumID = tonumber((k:gsub(";.*", "")))
+                        if kNumID == itemNumID then
+                            if invItem.locations then
+                                for _, qty in pairs(invItem.locations) do
+                                    if qty > 0 then return true end
+                                end
+                            elseif (invItem.quantity or 0) > 0 then
+                                return true
+                            end
+                        end
+                    end
+                end
+            end
+        end
+    end
+
+    if ns.db.warbank and ns.db.warbank.items then
+        local wbItem = ns.db.warbank.items[itemKey]
+        if wbItem and (wbItem.quantity or 0) > 0 then return true end
+        if itemNumID then
+            for k, wb in pairs(ns.db.warbank.items) do
+                if k ~= itemKey then
+                    local kNumID = tonumber((k:gsub(";.*", "")))
+                    if kNumID == itemNumID and (wb.quantity or 0) > 0 then return true end
+                end
+            end
+        end
+    end
+
+    return false
+end
+
+-- Find actual storage location of a task's item accessible to the current character.
+-- Returns "bags", "bank", "reagent", "warbank", or "guildbank" if found; nil otherwise.
+local function FindItemSource(itemKey, itemNumID, charKey, inBags)
+    if inBags then return "bags" end
+
+    -- Character's stored inventory (bags, bank, reagent from last scan)
+    local charData = ns.db.characters and ns.db.characters[charKey]
+    if charData and charData.inventory and charData.inventory.items then
+        local function CheckInv(inv)
+            if not inv then return nil end
+            if inv.locations then
+                if (inv.locations.bags or 0) > 0 then return "bags" end
+                if (inv.locations.bank or 0) > 0 then return "bank" end
+                if (inv.locations.reagent or 0) > 0 then return "reagent" end
+            elseif (inv.quantity or 0) > 0 then
+                return "bags"
+            end
+            return nil
+        end
+
+        local found = CheckInv(charData.inventory.items[itemKey])
+        if found then return found end
+
+        -- Numeric ID fallback (different bonus/modifier variants)
+        if itemNumID then
+            for k, inv in pairs(charData.inventory.items) do
+                if k ~= itemKey then
+                    local kNumID = tonumber((k:gsub(";.*", "")))
+                    if kNumID == itemNumID then
+                        found = CheckInv(inv)
+                        if found then return found end
+                    end
+                end
+            end
+        end
+    end
+
+    -- Warbank
+    if ns.db.warbank and ns.db.warbank.items then
+        local wbItem = ns.db.warbank.items[itemKey]
+        if wbItem and (wbItem.quantity or 0) > 0 then return "warbank" end
+        if itemNumID then
+            for k, wb in pairs(ns.db.warbank.items) do
+                if k ~= itemKey then
+                    local kNumID = tonumber((k:gsub(";.*", "")))
+                    if kNumID == itemNumID and (wb.quantity or 0) > 0 then return "warbank" end
+                end
+            end
+        end
+    end
+
+    -- Guild banks — disabled: Blizzard API returns unreliable item data
+    -- Re-enable when API is fixed.
+
+    return nil
+end
+
 -- Refresh all pending tasks: update steps based on current game state.
 -- Called on login, bag changes, bank open, AH open, mail, TSM data.
--- This checks whether steps have been satisfied by game events.
+-- This checks whether steps have been satisfied by game events,
+-- and defers tasks whose items can't be found anywhere accessible.
 function TodoList:RefreshTaskSteps()
     local current = self:GetCurrentList()
     if not current or not current.tasks then return false end
 
     local charKey = ns:GetCharKey()
     local changed = false
+
+    -- One-time cleanup: strip "..." from targetRealm fields (FP website truncation)
+    if not current._realmsCleaned then
+        for _, task in ipairs(current.tasks) do
+            if task.targetRealm and task.targetRealm:find("%.%.%.") then
+                task.targetRealm = task.targetRealm:gsub(",?%s*%.%.%.%s*$", "")
+                task.targetRealm = strtrim(task.targetRealm)
+                changed = true
+            end
+        end
+        current._realmsCleaned = true
+    end
 
     -- Build quick bag lookup for current character
     local bagsItemKeys = {}
@@ -426,22 +546,87 @@ function TodoList:RefreshTaskSteps()
             and task.steps and task.currentStep then
 
             local stepType = self:GetCurrentStepType(task)
+            local itemKey = task.itemKey or ""
+            local itemNumID = tonumber(task.itemID) or tonumber(itemKey:match("^(%d+)"))
+            local inBags = (bagsItemKeys[itemKey] and bagsItemKeys[itemKey] > 0)
+                or (itemNumID and bagsItemIDs[itemNumID] and bagsItemIDs[itemNumID] > 0)
 
+            local justAdvanced = false
             if stepType == "retrieve" then
                 -- Check if item has appeared in bags (pulled from bank/warbank)
-                local itemKey = task.itemKey or ""
-                local itemNumID = tonumber(task.itemID) or tonumber(itemKey:match("^(%d+)"))
-                local inBags = (bagsItemKeys[itemKey] and bagsItemKeys[itemKey] > 0)
-                    or (itemNumID and bagsItemIDs[itemNumID] and bagsItemIDs[itemNumID] > 0)
-
                 if inBags then
                     self:AdvanceStep(taskIdx)
                     changed = true
-                    -- Also update source to bags
                     task.source = "bags"
+                    justAdvanced = true
                 end
             end
             -- "post" and "collect" steps are advanced by Tracker (bag decrease / auction check)
+
+            -- Check item availability for deferral (skip tasks just advanced)
+            if task.status == "pending" and not justAdvanced then
+                local actualSource = FindItemSource(itemKey, itemNumID, charKey, inBags)
+
+                if not actualSource then
+                    -- Item not found for this character — check account-wide
+                    if not IsItemInAccountInventory(itemKey, itemNumID) then
+                        -- Item gone from entire account — auto-skip
+                        task.status = "skipped"
+                        task.failReason = "Item no longer in any inventory"
+                        task.deferredAt = nil
+                        changed = true
+                    elseif not task.deferredAt then
+                        task.deferredAt = time()
+                        changed = true
+                    end
+                else
+                    -- Item found — clear deferral and update source
+                    if task.deferredAt then
+                        task.deferredAt = nil
+                        changed = true
+                    end
+                    if task.source == "unavailable" or task.source ~= actualSource then
+                        task.source = actualSource
+                        changed = true
+                    end
+                end
+            end
+        end
+    end
+
+    -- Also check availability for OTHER characters' tasks using stored DB data.
+    -- Can't advance steps or scan live bags for them, but can set/clear deferral
+    -- so their groups sort correctly without needing to log into each character.
+    for taskIdx, task in ipairs(current.tasks) do
+        if task.status == "pending" and task.assignedChar
+            and task.assignedChar ~= charKey
+            and task.steps and task.currentStep then
+
+            local itemKey = task.itemKey or ""
+            local itemNumID = tonumber(task.itemID) or tonumber(itemKey:match("^(%d+)"))
+            local actualSource = FindItemSource(itemKey, itemNumID, task.assignedChar, false)
+
+            if not actualSource then
+                -- Item not found for assigned character — check account-wide
+                if not IsItemInAccountInventory(itemKey, itemNumID) then
+                    task.status = "skipped"
+                    task.failReason = "Item no longer in any inventory"
+                    task.deferredAt = nil
+                    changed = true
+                elseif not task.deferredAt then
+                    task.deferredAt = time()
+                    changed = true
+                end
+            else
+                if task.deferredAt then
+                    task.deferredAt = nil
+                    changed = true
+                end
+                if task.source ~= actualSource then
+                    task.source = actualSource
+                    changed = true
+                end
+            end
         end
     end
 

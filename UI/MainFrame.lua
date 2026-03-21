@@ -189,6 +189,8 @@ local NAV_ITEMS = {
     {key = "section", label = "DATA"},
     {key = "inventory",  label = "Inventory",      icon = "Interface\\Icons\\INV_Misc_Bag_07"},
     {key = "characters", label = "Characters",     icon = "Interface\\Icons\\Achievement_GuildPerk_EverybodysFriend"},
+    -- Guild bank page disabled: Blizzard API returns unreliable item data
+    -- {key = "guilds",     label = "Guilds",          icon = "Interface\\Icons\\INV_Misc_Tabard_ClutchofTheConclave"},
     {key = "section", label = "FLIPPINGPAL"},
     {key = "export",     label = "Export",         icon = "Interface\\Icons\\INV_Scroll_11"},
     {key = "import",     label = "Import",         icon = "Interface\\Icons\\Ability_Creature_Cursed_04"},
@@ -723,6 +725,17 @@ UI.needCharsTable = UI:CreateScrollTable(tableContainer, {
 })
 UI.needCharsTable:SetSort("itemCount", false)
 
+-- Guilds table
+UI.guildsTable = UI:CreateScrollTable(tableContainer, {
+    {key = "toggle",   label = "",           width = 28,  align = "CENTER", sortable = false},
+    {key = "name",     label = "Guild",      width = 160, sortable = true},
+    {key = "members",  label = "Members",    width = 140, sortable = false},
+    {key = "items",    label = "Items",      width = 50,  align = "CENTER", sortable = true},
+    {key = "lastScan", label = "Last Scan",  width = 100, sortable = true},
+    {key = "status",   label = "Status",     width = 80,  sortable = true},
+})
+UI.guildsTable:SetSort("name", true)
+
 -- Next Steps table (shown on Post Now page)
 UI.nextStepsTable = UI:CreateScrollTable(tableContainer, {
     {key = "action",    label = "Action",     width = 85,  sortable = true},
@@ -765,6 +778,7 @@ RegisterTable(UI.logTable)
 RegisterTable(UI.inventoryTable)
 RegisterTable(UI.charsTable)
 RegisterTable(UI.needCharsTable)
+RegisterTable(UI.guildsTable)
 RegisterTable(UI.nextStepsTable)
 RegisterTable(UI.generatorPreviewTable)
 
@@ -907,6 +921,9 @@ function UI:Refresh()
 
     elseif self.currentPage == "characters" then
         self:RefreshCharactersPage()
+
+    elseif self.currentPage == "guilds" then
+        self:RefreshGuildsPage()
 
     elseif self.currentPage == "import" then
         self:RefreshImportPage()
