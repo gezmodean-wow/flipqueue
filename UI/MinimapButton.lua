@@ -18,7 +18,9 @@ local dataObject = {
     icon = ICON_TEXTURE,
 
     OnClick = function(self, button)
-        if button == "RightButton" then
+        if button == "MiddleButton" then
+            UI:ToggleMini()
+        elseif button == "RightButton" then
             UI.currentPage = "settings"
             UI.mainFrame:Show()
             UI:Refresh()
@@ -44,6 +46,7 @@ local dataObject = {
         end
         tooltip:AddLine(" ")
         tooltip:AddLine("Left-click: Toggle window", 0.7, 0.7, 0.7)
+        tooltip:AddLine("Middle-click: Toggle mini view", 0.7, 0.7, 0.7)
         tooltip:AddLine("Right-click: Settings", 0.7, 0.7, 0.7)
         tooltip:AddLine("Drag: Move icon", 0.7, 0.7, 0.7)
     end,

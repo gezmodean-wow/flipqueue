@@ -53,6 +53,10 @@ function ScrollTableMixin:CreateHeader(parent)
         btn:SetHeight(HEADER_HEIGHT)
         btn:SetWidth(col.width)
         btn:SetPoint("LEFT", self.headerFrame, "LEFT", xOffset, 0)
+        -- Last column stretches to fill remaining space
+        if i == #self.columns then
+            btn:SetPoint("RIGHT", self.headerFrame, "RIGHT", 0, 0)
+        end
 
         btn.label = btn:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
         btn.label:SetPoint("LEFT", btn, "LEFT", COL_PADDING, 0)
@@ -138,9 +142,14 @@ function ScrollTableMixin:CreateHeader(parent)
                     -- Update header button widths and positions
                     local x = 0
                     for j, col in ipairs(tbl.columns) do
-                        tbl.headerButtons[j]:SetWidth(col.width)
                         tbl.headerButtons[j]:ClearAllPoints()
                         tbl.headerButtons[j]:SetPoint("LEFT", tbl.headerFrame, "LEFT", x, 0)
+                        if j == #tbl.columns then
+                            -- Last column: anchor to right edge, don't set fixed width
+                            tbl.headerButtons[j]:SetPoint("RIGHT", tbl.headerFrame, "RIGHT", 0, 0)
+                        else
+                            tbl.headerButtons[j]:SetWidth(col.width)
+                        end
                         x = x + col.width
                     end
                     -- Update resize handle positions
@@ -270,12 +279,16 @@ function ScrollTableMixin:GetOrCreateRow(index)
         clip:SetHeight(ROW_HEIGHT)
         clip:SetWidth(col.width)
         clip:SetPoint("LEFT", row, "LEFT", xOffset, 0)
+        -- Last column stretches to fill remaining space
+        if i == #self.columns then
+            clip:SetPoint("RIGHT", row, "RIGHT", 0, 0)
+        end
         clip:SetClipsChildren(true)
 
         local cell = clip:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
         cell:SetHeight(ROW_HEIGHT)
-        cell:SetWidth(col.width - COL_PADDING * 2)
         cell:SetPoint("LEFT", clip, "LEFT", COL_PADDING, 0)
+        cell:SetPoint("RIGHT", clip, "RIGHT", -COL_PADDING, 0)
         cell:SetJustifyH(col.align or "LEFT")
         cell:SetWordWrap(false)
         row.cells[i] = cell
@@ -356,6 +369,9 @@ function ScrollTableMixin:Render()
                 row._cellClips[j]:SetWidth(col.width)
                 row._cellClips[j]:ClearAllPoints()
                 row._cellClips[j]:SetPoint("LEFT", row, "LEFT", cx, 0)
+                if j == #self.columns then
+                    row._cellClips[j]:SetPoint("RIGHT", row, "RIGHT", 0, 0)
+                end
                 row.cells[j]:SetWidth(col.width - COL_PADDING * 2)
             end
             cx = cx + col.width

@@ -44,6 +44,7 @@ function ns:InitDB()
         db.settings.expiryAlertHours = nil
     end
     db.settings.expiryAlertMinutes = db.settings.expiryAlertMinutes or 15
+    if db.settings.showMini == nil then db.settings.showMini = true end
     if db.settings.hideMiniInCombat == nil then db.settings.hideMiniInCombat = true end
     db.settings.pullBatchSize = db.settings.pullBatchSize or 5
     -- TSM integration defaults
