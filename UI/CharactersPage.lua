@@ -140,19 +140,58 @@ local function BuildCharactersData()
     end
 
     -- Build "realms needing characters" from to-do list unassigned groups
+    -- Merge groups for overlapping connected realm clusters
     local needData = {}
     local charTodoList = ns.TodoList and ns.TodoList:GetCurrentList()
     if charTodoList and charTodoList.tasks then
         local displayGroups = ns.TodoList:BuildDisplayGroups(charTodoList.tasks, "profit")
+        local rawNeed = {}
         for _, group in ipairs(displayGroups) do
             if not group.charKey then
-                table.insert(needData, {
-                    realm      = group.realm ~= "" and group.realm or "unknown",
-                    itemCount  = #group.items,
-                    totalValue = FormatGoldValue(group.totalGold),
-                    note       = "Create character (flex slot)",
+                table.insert(rawNeed, {
+                    realm     = group.realm ~= "" and group.realm or "unknown",
+                    items     = #group.items,
+                    gold      = group.totalGold,
                 })
             end
+        end
+
+        -- Merge overlapping realm clusters (multi-pass for transitive overlaps)
+        -- e.g., "Kirin Tor" + "Sentinels" + "Kirin Tor, Steamwheedle Cartel, Sentinels"
+        -- all collapse into one entry regardless of processing order
+        local merged = {}
+        for _, entry in ipairs(rawNeed) do
+            table.insert(merged, { realm = entry.realm, items = entry.items, gold = entry.gold })
+        end
+
+        local didMerge = true
+        while didMerge do
+            didMerge = false
+            for i = #merged, 2, -1 do
+                for j = 1, i - 1 do
+                    if ns:RealmsOverlap(merged[j].realm, merged[i].realm) then
+                        if #merged[i].realm > #merged[j].realm then
+                            merged[j].realm = merged[i].realm
+                        end
+                        merged[j].items = merged[j].items + merged[i].items
+                        merged[j].gold = merged[j].gold + merged[i].gold
+                        table.remove(merged, i)
+                        didMerge = true
+                        break
+                    end
+                end
+            end
+        end
+
+        for _, entry in ipairs(merged) do
+            table.insert(needData, {
+                realm      = entry.realm,
+                itemCount  = entry.items,
+                totalValue = FormatGoldValue(entry.gold),
+                note       = "Create character (flex slot)",
+                _sortItems = entry.items,
+                _sortValue = entry.gold,
+            })
         end
     end
 
@@ -244,6 +283,8 @@ function UI:RefreshCharactersPage()
         end
         self._needCharsLabel:ClearAllPoints()
         self._needCharsLabel:SetPoint("TOPLEFT", tableContainer, "TOPLEFT", 4, -charsHeight - 2)
+        self._needCharsLabel:SetPoint("RIGHT", tableContainer, "RIGHT", -4, 0)
+        self._needCharsLabel:SetJustifyH("LEFT")
         self._needCharsLabel:SetTextColor(1, 0.4, 0.4)
         self._needCharsLabel:SetText("Realms Needing a Character (" .. #needData .. ")")
         self._needCharsLabel:Show()
