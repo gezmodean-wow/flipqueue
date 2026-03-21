@@ -61,9 +61,9 @@ function TodoList:BuildItemPool()
         end
     end
 
-    -- Character inventories
+    -- Character inventories (skip hidden/ignored characters)
     for charKey, charData in pairs(ns.db.characters or {}) do
-        if charData.inventory and charData.inventory.items then
+        if not charData.ignored and charData.inventory and charData.inventory.items then
             for itemKey, itemData in pairs(charData.inventory.items) do
                 local numID = tonumber(itemData.itemID)
                 local isDNT = numID and ns:IsDoNotTrack(numID)
@@ -256,11 +256,12 @@ local function FindBestAssignment(poolItem, targetRealm, inventory)
 
     local PRIORITY = { bags = 1, reagent = 2, bank = 3, warbank = 4, guildbank = 5 }
 
-    -- Characters on the target realm
+    -- Characters on the target realm (skip hidden/ignored)
     local realmChars = {}
-    for charKey in pairs(inventory or {}) do
+    for charKey, charData in pairs(inventory or {}) do
         local charRealm = charKey:match("%-(.+)$")
-        if charRealm and ns:RealmMatches(targetRealm, charRealm) then
+        if charRealm and ns:RealmMatches(targetRealm, charRealm)
+            and not (type(charData) == "table" and charData.ignored) then
             table.insert(realmChars, charKey)
         end
     end

@@ -84,6 +84,7 @@ local function CreateDropdown(parent, yOffset, title, width, onSelect)
     menu:SetBackdropBorderColor(0.3, 0.3, 0.4, 0.8)
     menu:SetFrameStrata("DIALOG")
     menu:Hide()
+    btn._menu = menu  -- store reference for explicit hide on page switch
     menu.items = {}
 
     btn:SetScript("OnClick", function()
@@ -446,6 +447,10 @@ end
 function UI:HideTSMPage()
     if tsmPanel then
         tsmPanel:Hide()
+    end
+    -- Close dropdown menu if open (DIALOG strata can persist after parent hide)
+    if tsmWidgets.profileDropdown and tsmWidgets.profileDropdown._menu then
+        tsmWidgets.profileDropdown._menu:Hide()
     end
 end
 

@@ -333,18 +333,44 @@ function UI:RefreshCharactersPage()
         if self._needCharsLabel then self._needCharsLabel:Hide() end
     end
 
-    -- TSM Detected Characters section
+    -- TSM Detected Characters section (scrollable)
     if not self._tsmDetectedFrame then
         local df = CreateFrame("Frame", nil, tableContainer)
         df.rows = {}
-        df.label = tableContainer:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-        df.label:SetJustifyH("LEFT")
-        df.label:SetTextColor(0.9, 0.8, 0.3)
         self._tsmDetectedFrame = df
     end
+    if not self._tsmDetectedLabel then
+        self._tsmDetectedLabel = tableContainer:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+        self._tsmDetectedLabel:SetJustifyH("LEFT")
+        self._tsmDetectedLabel:SetTextColor(0.9, 0.8, 0.3)
+        UI._tsmDetectedLabel = self._tsmDetectedLabel
+    end
+    if not self._tsmDetectedScroll then
+        local sf = CreateFrame("ScrollFrame", nil, tableContainer, "UIPanelScrollFrameTemplate")
+        local sc = CreateFrame("Frame", nil, sf)
+        sc:SetWidth(1)
+        sc:SetHeight(1)
+        sf:SetScrollChild(sc)
+        sf:SetScript("OnSizeChanged", function(self, w) sc:SetWidth(w) end)
+        sf:EnableMouseWheel(true)
+        sf:SetScript("OnMouseWheel", function(self, delta)
+            local current = self:GetVerticalScroll()
+            local maxScroll = self:GetVerticalScrollRange()
+            local step = 40
+            local newScroll = math.max(0, math.min(current - (delta * step), maxScroll))
+            self:SetVerticalScroll(newScroll)
+        end)
+        self._tsmDetectedScroll = sf
+        self._tsmDetectedContent = sc
+        UI._tsmDetectedScroll = sf
+    end
     local tdf = self._tsmDetectedFrame
+    local tdfLabel = self._tsmDetectedLabel
+    local tdfScroll = self._tsmDetectedScroll
+    local tdfContent = self._tsmDetectedContent
     for _, r in ipairs(tdf.rows) do r:Hide() end
-    tdf.label:Hide()
+    tdfLabel:Hide()
+    tdfScroll:Hide()
     tdf:Hide()
 
     local detectedChars = ns._detectedTSMChars or {}
@@ -352,6 +378,7 @@ function UI:RefreshCharactersPage()
         local CLASS_COLORS = UI._CLASS_COLORS
         local FormatGoldValue = UI._FormatGoldValue
         local ROW_H = 22
+        local MAX_VISIBLE_ROWS = 8
         local yOff = 0
 
         -- Calculate vertical position (below other tables)
@@ -367,31 +394,34 @@ function UI:RefreshCharactersPage()
             tsmSectionTop = -charsHeight - 10
         end
 
-        tdf.label:ClearAllPoints()
-        tdf.label:SetPoint("TOPLEFT", tableContainer, "TOPLEFT", 4, tsmSectionTop)
-        tdf.label:SetText("Detected from TSM (" .. #detectedChars .. ")")
-        tdf.label:Show()
+        tdfLabel:ClearAllPoints()
+        tdfLabel:SetPoint("TOPLEFT", tableContainer, "TOPLEFT", 4, tsmSectionTop)
+        tdfLabel:SetText("Detected from TSM (" .. #detectedChars .. ")")
+        tdfLabel:Show()
 
-        tdf:ClearAllPoints()
-        tdf:SetPoint("TOPLEFT", tableContainer, "TOPLEFT", 0, tsmSectionTop - 16)
-        tdf:SetPoint("RIGHT", tableContainer, "RIGHT", 0, 0)
-        tdf:SetHeight(#detectedChars * ROW_H + ROW_H + 10)
-        tdf:Show()
+        -- Scroll frame fills remaining space, capped to MAX_VISIBLE_ROWS
+        local totalContentH = (#detectedChars + 1) * ROW_H + 10
+        tdfScroll:ClearAllPoints()
+        tdfScroll:SetPoint("TOPLEFT", tableContainer, "TOPLEFT", 0, tsmSectionTop - 16)
+        tdfScroll:SetPoint("BOTTOMRIGHT", tableContainer, "BOTTOMRIGHT", -22, 0)
+        tdfScroll:Show()
+        tdfContent:SetWidth(tdfScroll:GetWidth() or 500)
 
         -- "Add All" row
         local addAllRow = tdf.rows[1]
         if not addAllRow then
-            addAllRow = CreateFrame("Button", nil, tdf)
+            addAllRow = CreateFrame("Button", nil, tdfContent)
             addAllRow.bg = addAllRow:CreateTexture(nil, "BACKGROUND")
             addAllRow.bg:SetAllPoints()
             addAllRow.text = addAllRow:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
             addAllRow.text:SetPoint("LEFT", addAllRow, "LEFT", 6, 0)
             tdf.rows[1] = addAllRow
         end
+        addAllRow:SetParent(tdfContent)
         addAllRow:SetHeight(ROW_H)
         addAllRow:ClearAllPoints()
-        addAllRow:SetPoint("TOPLEFT", tdf, "TOPLEFT", 0, 0)
-        addAllRow:SetPoint("RIGHT", tdf, "RIGHT", 0, 0)
+        addAllRow:SetPoint("TOPLEFT", tdfContent, "TOPLEFT", 0, 0)
+        addAllRow:SetPoint("RIGHT", tdfContent, "RIGHT", 0, 0)
         addAllRow.bg:SetColorTexture(0.1, 0.14, 0.1, 0.5)
         addAllRow.text:SetText(ns.COLORS.GREEN .. "[Add All " .. #detectedChars .. " Characters]|r")
         addAllRow:SetScript("OnClick", function()
@@ -416,7 +446,7 @@ function UI:RefreshCharactersPage()
             local rowIdx = di + 1
             local row = tdf.rows[rowIdx]
             if not row then
-                row = CreateFrame("Button", nil, tdf)
+                row = CreateFrame("Button", nil, tdfContent)
                 row.bg = row:CreateTexture(nil, "BACKGROUND")
                 row.bg:SetAllPoints()
                 row.nameText = row:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
@@ -432,10 +462,11 @@ function UI:RefreshCharactersPage()
                 row.dismissBtn:SetPoint("RIGHT", row, "RIGHT", -6, 0)
                 tdf.rows[rowIdx] = row
             end
+            row:SetParent(tdfContent)
             row:SetHeight(ROW_H)
             row:ClearAllPoints()
-            row:SetPoint("TOPLEFT", tdf, "TOPLEFT", 0, yOff)
-            row:SetPoint("RIGHT", tdf, "RIGHT", 0, 0)
+            row:SetPoint("TOPLEFT", tdfContent, "TOPLEFT", 0, yOff)
+            row:SetPoint("RIGHT", tdfContent, "RIGHT", 0, 0)
             row.bg:SetColorTexture(di % 2 == 0 and 0.08 or 0.06, di % 2 == 0 and 0.08 or 0.06,
                 di % 2 == 0 and 0.12 or 0.1, 0.5)
 
@@ -477,6 +508,8 @@ function UI:RefreshCharactersPage()
             row:Show()
             yOff = yOff - ROW_H
         end
+
+        tdfContent:SetHeight(math.max(1, math.abs(yOff) + 10))
     end
 
     local charCount = 0

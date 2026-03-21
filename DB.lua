@@ -62,8 +62,9 @@ function ns:InitDB()
     -- Generator settings (persisted across sessions)
     db.settings.genAllocationOrder = db.settings.genAllocationOrder or {"gold", "noCompetition", "population"}
     db.settings.genSortMode = db.settings.genSortMode or "profit"
-    -- Import auto-generate (off by default)
+    -- Import auto-generate and auto-import (off by default)
     if db.settings.importAutoGenerate == nil then db.settings.importAutoGenerate = false end
+    if db.settings.importAutoImport == nil then db.settings.importAutoImport = false end
     -- Debug messages (off by default)
     if db.settings.debugMessages == nil then db.settings.debugMessages = false end
     -- Bank tab selection

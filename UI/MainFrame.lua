@@ -799,6 +799,9 @@ local function HideAllTables()
     if UI._nextStepsLabel then UI._nextStepsLabel:Hide() end
     if UI._needCharsLabel then UI._needCharsLabel:Hide() end
     if UI._postSummaryFrame then UI._postSummaryFrame:Hide() end
+    if UI._tsmDetectedFrame then UI._tsmDetectedFrame:Hide() end
+    if UI._tsmDetectedLabel then UI._tsmDetectedLabel:Hide() end
+    if UI._tsmDetectedScroll then UI._tsmDetectedScroll:Hide() end
 end
 
 local function ShowTable(tbl)

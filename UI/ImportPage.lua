@@ -93,7 +93,7 @@ importAutoGenCheck:SetScript("OnClick", function(self)
     if ns.db then ns.db.settings.importAutoGenerate = self:GetChecked() end
 end)
 
--- Skip-preview checkbox
+-- Skip-preview checkbox (persisted)
 local importSkipCheck = CreateFrame("CheckButton", "FlipQueueImportSkipCheck", importPage, "UICheckButtonTemplate")
 importSkipCheck:SetSize(22, 22)
 importSkipCheck:SetPoint("RIGHT", importAutoGenLabel, "LEFT", -12, 0)
@@ -101,6 +101,9 @@ local importSkipLabel = importPage:CreateFontString(nil, "OVERLAY", "GameFontNor
 importSkipLabel:SetPoint("RIGHT", importSkipCheck, "LEFT", -2, 0)
 importSkipLabel:SetText("Auto-import")
 importSkipLabel:SetTextColor(0.5, 0.5, 0.5)
+importSkipCheck:SetScript("OnClick", function(self)
+    if ns.db then ns.db.settings.importAutoImport = self:GetChecked() end
+end)
 
 -- Auto-generate To-Do list after import
 local function TryAutoGenerateTodo()
@@ -274,6 +277,7 @@ function UI:RefreshImportPage()
     importPage:Show()
     -- Restore checkbox states from settings
     importAutoGenCheck:SetChecked(ns.db.settings.importAutoGenerate or false)
+    importSkipCheck:SetChecked(ns.db.settings.importAutoImport or false)
     -- Show preview table if we have data
     if UI._importPreviewData() then
         UI.importPreviewTable.headerFrame:Show()

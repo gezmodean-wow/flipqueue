@@ -1,5 +1,15 @@
 # Changelog
 
+## v0.6.2-alpha.4
+
+### Bug Fixes
+- **TSM detected characters overflow**: section now scrollable with max height — no longer spills below the window (#66)
+- **TSM detected characters persist between tabs**: properly hidden on tab switch; TSM profile dropdown menu also cleaned up (#66)
+- **Hidden characters still get to-do tasks**: Generator now skips ignored characters in both item pool building and task assignment (#67)
+- **Auto-pull fails for shared AH realm-mate**: tasks route to the visible character instead of the hidden one, so auto-pull works correctly (#67)
+- **Auto-import checkbox resets after logout**: setting now persisted to SavedVariables like Auto-generate (#68)
+- **To-Do overview cannot scroll**: added explicit mouse wheel handling for TWW compatibility (#69)
+
 ## v0.6.1
 
 ### To-Do System (replaces Queue)

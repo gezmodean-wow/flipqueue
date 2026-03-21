@@ -341,6 +341,15 @@ function UI:RefreshTodoPage()
                 c:SetHeight(1)
                 s:SetScrollChild(c)
                 s:SetScript("OnSizeChanged", function(sf, w) c:SetWidth(w) end)
+                -- Explicit mouse wheel handling (belt-and-suspenders for TWW template compat)
+                s:EnableMouseWheel(true)
+                s:SetScript("OnMouseWheel", function(self, delta)
+                    local current = self:GetVerticalScroll()
+                    local maxScroll = self:GetVerticalScrollRange()
+                    local step = 40
+                    local newScroll = math.max(0, math.min(current - (delta * step), maxScroll))
+                    self:SetVerticalScroll(newScroll)
+                end)
                 self._todoOverviewScroll = s
                 self._todoOverviewContent = c
                 self._todoOverviewRows = {}
