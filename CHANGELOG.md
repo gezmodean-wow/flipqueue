@@ -12,12 +12,8 @@
 - **Auto-deposit to warbank**: new setting (off by default) — when opening bank, automatically deposits items to warbank that other characters need for posting; items needed by current character are kept
 - **Bag/warbank space checks**: auto-pull and auto-deposit check free slots before moving items; alerts when bags or warbank are full or partially full
 - **Deposit task detail**: mini view shows individual deposit/mail line items ("Deposit: ItemName -> CharName" or "Mail: ItemName -> CharName") with distinct icons, instead of a generic count
-- **Guilds page**: new sidebar page under DATA for managing guild banks — enable/disable, per-tab config, member list, scan info, remove (currently disabled due to Blizzard API data quality issues)
-- **Guild auto-detection**: guilds are registered on character login even before guild bank is scanned, so they're visible for management
-- **Guild bank disabled**: guild bank scanning, item pool inclusion, and inventory display disabled — Blizzard API returns unreliable item data (stripped bonus IDs, wrong ilvl, pets as "Pet Cage"); code preserved for re-enabling when API is fixed
 - **Diagnostic export**: `/fq state` command dumps full addon state (settings, characters, imports, tasks, log) in a compact format for pasting into support conversations
 - Auto-deposit setting added to Settings > Scanning & Automation
-- Guild Banks section removed from Settings (moved to dedicated page)
 
 ## v0.6.1-alpha.2
 - **Live inventory tracking**: inventory DB updates on every item movement via BAG_UPDATE_DELAYED (#53, #55)
