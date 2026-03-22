@@ -1,5 +1,17 @@
 # Changelog
 
+## v0.6.2
+
+### TSM Rejection Handling (#38)
+- **Auto-skip below threshold**: When opening the AH, items below TSM's min price are automatically detected and handled
+- **Realm-mate reassignment**: Below-threshold items are reassigned to another character on the same realm when available, based on priority settings
+- **Skip + log**: When no alternate character exists, items are skipped with full TSM reason (price, threshold, operation name) and logged
+- **Log entries for rejections**: Skipped items appear in the Log page with "Skipped" status and TSM reason in tooltip
+- **Setting**: "Auto-handle TSM rejections" checkbox in Settings (on by default)
+
+### Bug Fixes
+- **Multi-post quantity inflation**: Fixed CheckForPosts logging inflated posted quantities when multiple to-do tasks share the same item type (#54)
+
 ## v0.6.2-alpha.4
 
 ### Bug Fixes

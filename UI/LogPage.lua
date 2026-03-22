@@ -33,6 +33,8 @@ local function BuildLogData()
             statusStr = ns.COLORS.RED .. "Expired" .. "|r"
         elseif aStatus == "collected" then
             statusStr = ns.COLORS.GRAY .. "Done" .. "|r"
+        elseif aStatus == "skipped" then
+            statusStr = ns.COLORS.ORANGE .. "Skipped" .. "|r"
         else
             statusStr = ns.COLORS.YELLOW .. "Active" .. "|r"
         end
@@ -64,6 +66,8 @@ local function BuildLogData()
             end
         elseif aStatus == "expired" then
             tooltipExtra = tooltipExtra .. "\n" .. ns.COLORS.RED .. "Auction expired|r"
+        elseif aStatus == "skipped" and entry.failReason then
+            tooltipExtra = tooltipExtra .. "\n" .. ns.COLORS.ORANGE .. entry.failReason .. "|r"
         end
 
         table.insert(data, {
@@ -104,11 +108,12 @@ function UI:RefreshLogPage()
     self.logTable:SetData(data)
 
     local logCount = #ns.db.log
-    local soldCount, activeCount, expiredCount = 0, 0, 0
+    local soldCount, activeCount, expiredCount, skippedCount = 0, 0, 0, 0
     for _, entry in ipairs(ns.db.log) do
         if entry.auctionStatus == "sold" then soldCount = soldCount + 1
         elseif entry.auctionStatus == "expired" then expiredCount = expiredCount + 1
         elseif entry.auctionStatus == "active" then activeCount = activeCount + 1
+        elseif entry.auctionStatus == "skipped" then skippedCount = skippedCount + 1
         end
     end
     local logStatus = logCount .. " logged"
@@ -116,6 +121,7 @@ function UI:RefreshLogPage()
     if soldCount > 0 then table.insert(parts, ns.COLORS.GREEN .. soldCount .. " sold|r") end
     if activeCount > 0 then table.insert(parts, ns.COLORS.YELLOW .. activeCount .. " active|r") end
     if expiredCount > 0 then table.insert(parts, ns.COLORS.RED .. expiredCount .. " expired|r") end
+    if skippedCount > 0 then table.insert(parts, ns.COLORS.ORANGE .. skippedCount .. " skipped|r") end
     if #parts > 0 then logStatus = logStatus .. " (" .. table.concat(parts, ", ") .. ")" end
     logStatus = logStatus .. "  |  Shift+Right-click to remove"
     mainFrame.statusText:SetText(logStatus)

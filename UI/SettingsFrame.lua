@@ -183,6 +183,12 @@ function UI:CreateSettingsPanel(parent)
         "autoWithdrawGold")
     y = y - h - ITEM_SPACING
 
+    settingsWidgets.tsmAutoSkip, h = CreateSettingsCheckbox(content, y,
+        "Auto-handle TSM rejections",
+        "When you open the AH, automatically skip or reassign to-do items that TSM would reject (below min price). Reassigns to another character on the same realm if available, otherwise skips with reason.",
+        "tsmAutoSkipRejected")
+    y = y - h - ITEM_SPACING
+
     -- Pull batch size slider
     do
         local row = CreateFrame("Frame", nil, content)
@@ -894,6 +900,9 @@ function UI:RefreshSettings()
     end
     if settingsWidgets.autoGold then
         settingsWidgets.autoGold:SetChecked(ns.db.settings.autoWithdrawGold)
+    end
+    if settingsWidgets.tsmAutoSkip then
+        settingsWidgets.tsmAutoSkip:SetChecked(ns.db.settings.tsmAutoSkipRejected)
     end
     if settingsWidgets.loginMsg then
         settingsWidgets.loginMsg:SetChecked(ns.db.settings.showLoginMessage)

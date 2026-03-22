@@ -182,9 +182,15 @@ local function CreateToggleBtn(parent, label)
     btn.text:SetPoint("CENTER")
     btn.text:SetText(label)
     btn:SetWidth(btn.text:GetStringWidth() + 14)
-    btn:SetScript("OnEnter", function(self) self:SetBackdropColor(0.2, 0.2, 0.3, 1) end)
+    btn:SetScript("OnEnter", function(self)
+        if not self._active then self:SetBackdropColor(0.2, 0.2, 0.3, 1) end
+    end)
     btn:SetScript("OnLeave", function(self)
-        if not self._active then self:SetBackdropColor(0.15, 0.15, 0.2, 1) end
+        if self._active then
+            self:SetBackdropColor(0.2, 0.4, 0.2, 1)
+        else
+            self:SetBackdropColor(0.15, 0.15, 0.2, 1)
+        end
     end)
     return btn
 end
@@ -1229,7 +1235,7 @@ function UI:RefreshGeneratorPage(pending)
         gf._dragState.ghost = ghost
 
         -- Drop indicator line
-        local dropLine = UIParent:CreateTexture(nil, "TOOLTIP")
+        local dropLine = UIParent:CreateTexture(nil, "OVERLAY")
         dropLine:SetHeight(2)
         dropLine:SetColorTexture(1, 0.82, 0, 0.9)
         dropLine:Hide()
@@ -1742,7 +1748,8 @@ function UI:RefreshGeneratorPage(pending)
     for _ in pairs(UI._genExcludedItems) do excludeCount = excludeCount + 1 end
 
     if UI._generatorPreview then
-        table.insert(genStatusParts, #genData .. " tasks")
+        local previewItems = UI._generatorPreview.items or UI._generatorPreview.tasks or {}
+        table.insert(genStatusParts, #previewItems .. " tasks")
         table.insert(genStatusParts, "Replace/Append/Queue to commit")
     elseif currentList then
         local counts = ns.TodoList:GetStatusCounts()

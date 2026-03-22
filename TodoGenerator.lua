@@ -617,42 +617,48 @@ function TodoList:GenerateTodoList(source, allocationOrder)
             elseif assignment then
                 -- Character exists on realm but item not in their bags/bank/warbank
                 -- Assign to the character so it groups under "Log in", not "Create char"
-                -- Don't consume pool — item needs to be moved to warbank first
+                -- Still consume pool to prevent multiple tasks claiming the same item
                 local depositFrom, depositLocation
                 if assignment.depositSources and #assignment.depositSources > 0 then
                     depositFrom = assignment.depositSources[1].charKey
                     depositLocation = assignment.depositSources[1].location
                 end
-                table.insert(preview.items, {
-                    itemKey         = poolItem.itemKey,
-                    itemID          = poolItem.itemID,
-                    name            = poolItem.name,
-                    icon            = poolItem.icon,
-                    targetRealm     = deal.targetRealm,
-                    expectedPrice   = deal.expectedPrice,
-                    quantity        = math.max(deal.quantity or 1, defaultQty),
-                    assignedChar    = assignment.charKey,
-                    status          = "pending",
-                    source          = "unavailable",
-                    depositFrom     = depositFrom,
-                    depositLocation = depositLocation,
-                    blockedBy       = depositFrom,
-                    quality         = deal.quality,
-                    sellRate        = deal.sellRate,
-                    noCompetition   = deal.noCompetition,
-                    category        = deal.category,
-                    attempts        = 0,
-                    importSource    = source,
-                    importKey       = deal._importKey,
-                    steps = (function()
-                        local s = {}
-                        table.insert(s, { type = "retrieve", from = "warbank", status = "pending" })
-                        table.insert(s, { type = "post", status = "pending" })
-                        table.insert(s, { type = "collect", status = "pending" })
-                        return s
-                    end)(),
-                    currentStep = 1,
-                })
+                local depositQty = math.min(
+                    math.max(deal.quantity or 1, defaultQty),
+                    poolRemaining[poolIdx])
+                if depositQty > 0 then
+                    table.insert(preview.items, {
+                        itemKey         = poolItem.itemKey,
+                        itemID          = poolItem.itemID,
+                        name            = poolItem.name,
+                        icon            = poolItem.icon,
+                        targetRealm     = deal.targetRealm,
+                        expectedPrice   = deal.expectedPrice,
+                        quantity        = depositQty,
+                        assignedChar    = assignment.charKey,
+                        status          = "pending",
+                        source          = "unavailable",
+                        depositFrom     = depositFrom,
+                        depositLocation = depositLocation,
+                        blockedBy       = depositFrom,
+                        quality         = deal.quality,
+                        sellRate        = deal.sellRate,
+                        noCompetition   = deal.noCompetition,
+                        category        = deal.category,
+                        attempts        = 0,
+                        importSource    = source,
+                        importKey       = deal._importKey,
+                        steps = (function()
+                            local s = {}
+                            table.insert(s, { type = "retrieve", from = "warbank", status = "pending" })
+                            table.insert(s, { type = "post", status = "pending" })
+                            table.insert(s, { type = "collect", status = "pending" })
+                            return s
+                        end)(),
+                        currentStep = 1,
+                    })
+                    poolRemaining[poolIdx] = poolRemaining[poolIdx] - depositQty
+                end
             else
                 -- No character on target realm at all
                 table.insert(preview.items, {

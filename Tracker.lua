@@ -95,7 +95,9 @@ local function CheckForPosts()
         if snap.todoItem.status == "pending" then
             local curQty = CountInBags(snap.todoItem)
             if curQty < snap.qty then
-                local count = snap.qty - curQty
+                -- Cap count at task's own quantity to prevent inflation
+                -- when multiple tasks share the same item type
+                local count = math.min(snap.qty - curQty, snap.todoItem.quantity or 1)
                 table.insert(todoPosted, {taskIdx = taskIdx, item = snap.todoItem, count = count})
             end
         end
@@ -152,17 +154,22 @@ frame:SetScript("OnEvent", function(self, event)
             end
         end
 
+        -- Refresh task steps (items pulled from bank may now be ready to post)
+        if ns.TodoList and ns.TodoList.RefreshTaskSteps then
+            ns.TodoList:RefreshTaskSteps()
+        end
+
+        -- TSM threshold check: skip/reassign items that can't be posted
+        if ns.TodoList and ns.TodoList.HandleTSMRejections then
+            ns.TodoList:HandleTSMRejections()
+        end
+
         if ns.TodoList then
             local charKey = ns:GetCharKey()
             local todoTasks = ns.TodoList:GetCharacterTasks(charKey)
             if #todoTasks > 0 then
                 ns:Print(ns.COLORS.GREEN .. #todoTasks .. " items|r ready to post!")
             end
-        end
-
-        -- Refresh task steps (items pulled from bank may now be ready to post)
-        if ns.TodoList and ns.TodoList.RefreshTaskSteps then
-            ns.TodoList:RefreshTaskSteps()
         end
 
         -- Request owned auctions to check for already-listed items

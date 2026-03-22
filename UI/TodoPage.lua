@@ -538,6 +538,11 @@ function UI:RefreshTodoPage()
                             sourceTag = ns.COLORS.RED .. " [unavail]" .. "|r"
                         end
                     end
+                    -- TSM rejection reassignment indicator
+                    if item.tsmRejectedFrom then
+                        local fromName = item.tsmRejectedFrom:match("^(.-)%-") or item.tsmRejectedFrom
+                        sourceTag = sourceTag .. ns.COLORS.ORANGE .. " [TSM skip " .. fromName .. "]" .. "|r"
+                    end
                     row.rightText:SetText(priceStr .. sourceTag)
 
                     y = y + ITEM_H

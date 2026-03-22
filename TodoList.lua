@@ -638,6 +638,120 @@ function TodoList:SkipTask(taskIndex, reason)
     self:UpdateTaskStatus(taskIndex, "skipped", reason)
 end
 
+--------------------------
+-- TSM Rejection Handling
+--------------------------
+
+-- Find an alternate non-ignored character on the same realm for a task.
+-- Excludes the given character and any ignored characters.
+-- Returns charKey or nil.
+function TodoList:FindAlternateCharacter(task, excludeChar)
+    if not ns.db or not ns.db.characters then return nil end
+    local targetRealm = task.targetRealm
+    if not targetRealm or targetRealm == "" then return nil end
+
+    local candidates = {}
+    for charKey, charData in pairs(ns.db.characters) do
+        if charKey ~= excludeChar and not charData.ignored then
+            local charRealm = charKey:match("%-(.+)$")
+            if charRealm and ns:RealmMatches(targetRealm, charRealm) then
+                table.insert(candidates, charKey)
+            end
+        end
+    end
+
+    if #candidates == 0 then return nil end
+    table.sort(candidates) -- deterministic
+    return candidates[1]
+end
+
+-- Check TSM thresholds for all pending tasks on the current character.
+-- Below-threshold items are either reassigned to a realm-mate or skipped.
+-- Returns: { reassigned = count, skipped = count }
+function TodoList:HandleTSMRejections()
+    if not ns.db or not ns.db.settings.tsmAutoSkipRejected then
+        return { reassigned = 0, skipped = 0 }
+    end
+    if not ns.TSM or not ns.TSM:IsEnabled() then
+        return { reassigned = 0, skipped = 0 }
+    end
+
+    local current = self:GetCurrentList()
+    if not current or not current.tasks then
+        return { reassigned = 0, skipped = 0 }
+    end
+
+    local charKey = ns:GetCharKey()
+    local currentRealm = charKey:match("%-(.+)$") or ""
+    local results = { reassigned = 0, skipped = 0 }
+    local messages = {}
+
+    for taskIdx, task in ipairs(current.tasks) do
+        if task.status == "pending" and task.assignedChar == charKey
+            and ns:RealmMatches(task.targetRealm or "", currentRealm) then
+
+            local belowThreshold, ahMin, threshold, opName = ns.TSM:IsBelowThreshold(task.itemKey)
+
+            if belowThreshold then
+                local threshStr = threshold and ns.TSM:FormatCopper(threshold) or "?"
+                local ahMinStr = ahMin and ns.TSM:FormatCopper(ahMin) or "?"
+                local opStr = opName and (" [" .. opName .. "]") or ""
+                local reason = "TSM: AH price " .. ahMinStr .. " below min " .. threshStr .. opStr
+
+                -- Try to reassign to another character on the same realm
+                local altChar = self:FindAlternateCharacter(task, charKey)
+                if altChar then
+                    task.assignedChar = altChar
+                    task.tsmRejectedFrom = charKey
+                    task.tsmRejectedReason = reason
+                    results.reassigned = results.reassigned + 1
+                    local altName = altChar:match("^(.-)%-") or altChar
+                    table.insert(messages, ns.COLORS.CYAN .. "Reassigned:|r " ..
+                        (task.name or "?") .. " -> " .. altName .. " (" .. reason .. ")")
+                else
+                    -- No alternate character — skip with reason
+                    task.status = "skipped"
+                    task.failReason = reason
+                    results.skipped = results.skipped + 1
+                    table.insert(messages, ns.COLORS.ORANGE .. "Skipped:|r " ..
+                        (task.name or "?") .. " (" .. reason .. ")")
+
+                    -- Log the rejection
+                    table.insert(ns.db.log, {
+                        itemKey        = task.itemKey,
+                        itemID         = task.itemID,
+                        name           = task.name,
+                        quality        = task.quality,
+                        icon           = task.icon,
+                        targetRealm    = task.targetRealm,
+                        expectedPrice  = task.expectedPrice,
+                        postedPrice    = nil,
+                        postedAt       = time(),
+                        charKey        = charKey,
+                        expiresAt      = nil,
+                        auctionStatus  = "skipped",
+                        soldAt         = nil,
+                        soldPrice      = nil,
+                        postedQuantity = task.quantity or 1,
+                        failReason     = reason,
+                    })
+                end
+            end
+        end
+    end
+
+    -- Print summary messages
+    for _, msg in ipairs(messages) do
+        ns:Print(msg)
+    end
+    if results.reassigned + results.skipped > 0 then
+        ns:Print(ns.COLORS.YELLOW .. "TSM threshold check:|r " ..
+            results.reassigned .. " reassigned, " .. results.skipped .. " skipped")
+    end
+
+    return results
+end
+
 -- Unskip a task back to pending
 function TodoList:UnskipTask(taskIndex)
     if not ns.db or not ns.db.todoLists or not ns.db.todoLists.active then

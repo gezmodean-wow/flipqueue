@@ -34,9 +34,15 @@ local function CreateExportToggle(label, parent)
     btn.text:SetPoint("CENTER")
     btn.text:SetText(label)
     btn:SetWidth(btn.text:GetStringWidth() + 16)
-    btn:SetScript("OnEnter", function(self) self:SetBackdropColor(0.2, 0.2, 0.3, 1) end)
+    btn:SetScript("OnEnter", function(self)
+        if not self._active then self:SetBackdropColor(0.2, 0.2, 0.3, 1) end
+    end)
     btn:SetScript("OnLeave", function(self)
-        if not self._active then self:SetBackdropColor(0.15, 0.15, 0.2, 1) end
+        if self._active then
+            self:SetBackdropColor(0.2, 0.4, 0.2, 1)
+        else
+            self:SetBackdropColor(0.15, 0.15, 0.2, 1)
+        end
     end)
     return btn
 end

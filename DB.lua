@@ -65,6 +65,8 @@ function ns:InitDB()
     -- Import auto-generate and auto-import (off by default)
     if db.settings.importAutoGenerate == nil then db.settings.importAutoGenerate = false end
     if db.settings.importAutoImport == nil then db.settings.importAutoImport = false end
+    -- TSM rejection handling (on by default when TSM is enabled)
+    if db.settings.tsmAutoSkipRejected == nil then db.settings.tsmAutoSkipRejected = true end
     -- Debug messages (off by default)
     if db.settings.debugMessages == nil then db.settings.debugMessages = false end
     -- Bank tab selection

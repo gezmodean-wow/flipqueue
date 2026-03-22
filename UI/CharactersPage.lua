@@ -381,6 +381,18 @@ function UI:RefreshCharactersPage()
         local MAX_VISIBLE_ROWS = 8
         local yOff = 0
 
+        -- Helper: propagate mouse wheel from child frames to scroll parent
+        local function PropagateScroll(frame)
+            frame:EnableMouseWheel(true)
+            frame:SetScript("OnMouseWheel", function(_, delta)
+                local current = tdfScroll:GetVerticalScroll()
+                local maxScroll = tdfScroll:GetVerticalScrollRange()
+                local step = 40
+                local newScroll = math.max(0, math.min(current - (delta * step), maxScroll))
+                tdfScroll:SetVerticalScroll(newScroll)
+            end)
+        end
+
         -- Calculate vertical position (below other tables)
         local tsmSectionTop
         if #needData > 0 then
@@ -439,6 +451,7 @@ function UI:RefreshCharactersPage()
         end)
         addAllRow:SetScript("OnEnter", function(self) self.bg:SetColorTexture(0.12, 0.2, 0.12, 0.7) end)
         addAllRow:SetScript("OnLeave", function(self) self.bg:SetColorTexture(0.1, 0.14, 0.1, 0.5) end)
+        PropagateScroll(addAllRow)
         addAllRow:Show()
         yOff = yOff - ROW_H
 
@@ -446,7 +459,7 @@ function UI:RefreshCharactersPage()
             local rowIdx = di + 1
             local row = tdf.rows[rowIdx]
             if not row then
-                row = CreateFrame("Button", nil, tdfContent)
+                row = CreateFrame("Frame", nil, tdfContent)
                 row.bg = row:CreateTexture(nil, "BACKGROUND")
                 row.bg:SetAllPoints()
                 row.nameText = row:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
@@ -456,10 +469,18 @@ function UI:RefreshCharactersPage()
                 row.realmText:SetPoint("LEFT", row, "LEFT", 120, 0)
                 row.goldText = row:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
                 row.goldText:SetPoint("LEFT", row, "LEFT", 260, 0)
-                row.addBtn = row:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-                row.addBtn:SetPoint("RIGHT", row, "RIGHT", -60, 0)
-                row.dismissBtn = row:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-                row.dismissBtn:SetPoint("RIGHT", row, "RIGHT", -6, 0)
+                row.addBtn = CreateFrame("Button", nil, row)
+                row.addBtn:SetSize(36, 18)
+                row.addBtn:SetPoint("RIGHT", row, "RIGHT", -56, 0)
+                row.addBtn.text = row.addBtn:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+                row.addBtn.text:SetAllPoints()
+                row.addBtn.text:SetJustifyH("CENTER")
+                row.dismissBtn = CreateFrame("Button", nil, row)
+                row.dismissBtn:SetSize(52, 18)
+                row.dismissBtn:SetPoint("RIGHT", row, "RIGHT", -2, 0)
+                row.dismissBtn.text = row.dismissBtn:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+                row.dismissBtn.text:SetAllPoints()
+                row.dismissBtn.text:SetJustifyH("CENTER")
                 tdf.rows[rowIdx] = row
             end
             row:SetParent(tdfContent)
@@ -474,37 +495,33 @@ function UI:RefreshCharactersPage()
             row.nameText:SetText("|cff" .. cc .. dc.name .. "|r")
             row.realmText:SetText(dc.realm)
             row.goldText:SetText(dc.gold > 0 and ns:FormatGold(dc.gold) or "")
-            row.addBtn:SetText(ns.COLORS.GREEN .. "[Add]|r")
-            row.dismissBtn:SetText(ns.COLORS.RED .. "[Dismiss]|r")
+            row.addBtn.text:SetText(ns.COLORS.GREEN .. "[Add]|r")
+            row.dismissBtn.text:SetText(ns.COLORS.RED .. "[Dismiss]|r")
 
             local capturedDc = dc
             local capturedDi = di
-            row:SetScript("OnClick", function(_, button)
-                if button == "LeftButton" then
-                    ns.db.characters[capturedDc.charKey] = ns.db.characters[capturedDc.charKey] or {
-                        class = capturedDc.class,
-                        gold = capturedDc.gold,
-                        lastLogin = 0,
-                        inventory = nil,
-                    }
-                    table.remove(detectedChars, capturedDi)
-                    if #detectedChars == 0 then ns._detectedTSMChars = nil end
-                    ns:Print(ns.COLORS.GREEN .. "Added:|r " .. capturedDc.charKey)
-                    UI:Refresh()
-                elseif button == "RightButton" then
-                    ns.db.settings.dismissedTSMChars[capturedDc.charKey] = true
-                    table.remove(detectedChars, capturedDi)
-                    if #detectedChars == 0 then ns._detectedTSMChars = nil end
-                    ns:Print(ns.COLORS.GRAY .. "Dismissed:|r " .. capturedDc.charKey)
-                    UI:Refresh()
-                end
+            row.addBtn:SetScript("OnClick", function()
+                ns.db.characters[capturedDc.charKey] = ns.db.characters[capturedDc.charKey] or {
+                    class = capturedDc.class,
+                    gold = capturedDc.gold,
+                    lastLogin = 0,
+                    inventory = nil,
+                }
+                table.remove(detectedChars, capturedDi)
+                if #detectedChars == 0 then ns._detectedTSMChars = nil end
+                ns:Print(ns.COLORS.GREEN .. "Added:|r " .. capturedDc.charKey)
+                UI:Refresh()
             end)
-            row:SetScript("OnEnter", function(self) self.bg:SetColorTexture(0.12, 0.12, 0.18, 0.6) end)
-            row:SetScript("OnLeave", function(self)
-                self.bg:SetColorTexture(capturedDi % 2 == 0 and 0.08 or 0.06,
-                    capturedDi % 2 == 0 and 0.08 or 0.06, capturedDi % 2 == 0 and 0.12 or 0.1, 0.5)
+            row.dismissBtn:SetScript("OnClick", function()
+                ns.db.settings.dismissedTSMChars[capturedDc.charKey] = true
+                table.remove(detectedChars, capturedDi)
+                if #detectedChars == 0 then ns._detectedTSMChars = nil end
+                ns:Print(ns.COLORS.GRAY .. "Dismissed:|r " .. capturedDc.charKey)
+                UI:Refresh()
             end)
-            row:RegisterForClicks("LeftButtonUp", "RightButtonUp")
+            PropagateScroll(row)
+            PropagateScroll(row.addBtn)
+            PropagateScroll(row.dismissBtn)
             row:Show()
             yOff = yOff - ROW_H
         end
