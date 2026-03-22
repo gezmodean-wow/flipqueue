@@ -560,16 +560,24 @@ frame:SetScript("OnEvent", function(self, event, ...)
                     end
                 end
 
-                -- Expired auctions on this character (need collecting)
+                -- Sold/expired auctions on this character (need mail collection)
                 local currentCharKey = ns:GetCharKey()
+                local soldCount = 0
                 local expiredCount = 0
                 for _, entry in ipairs(ns.db.log) do
-                    if entry.auctionStatus == "expired" and entry.charKey == currentCharKey then
-                        expiredCount = expiredCount + 1
+                    if entry.charKey == currentCharKey then
+                        if entry.auctionStatus == "sold" and not entry.collectedAt then
+                            soldCount = soldCount + 1
+                        elseif entry.auctionStatus == "expired" then
+                            expiredCount = expiredCount + 1
+                        end
                     end
                 end
+                if soldCount > 0 then
+                    ns:Print(ns.COLORS.GREEN .. soldCount .. " auction(s) sold — check mail to collect gold!|r")
+                end
                 if expiredCount > 0 then
-                    ns:Print(ns.COLORS.ORANGE .. expiredCount .. " expired auction(s) to collect — check the AH!|r")
+                    ns:Print(ns.COLORS.ORANGE .. expiredCount .. " expired auction(s) to collect — check mail!|r")
                 end
 
                 -- Expiring auction alerts (across all characters)

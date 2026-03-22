@@ -167,18 +167,30 @@ local function BuildCurrentCharTasks()
         })
     end
 
-    -- Check Mail: expired items waiting to be collected
+    -- Check Mail: distinguish sold (collect gold) vs expired (collect items)
+    local soldInMail = 0
     local expiredInMail = 0
     for _, entry in ipairs(ns.db.log) do
-        if entry.charKey == myCharKey and entry.auctionStatus == "expired" then
-            expiredInMail = expiredInMail + 1
+        if entry.charKey == myCharKey then
+            if entry.auctionStatus == "sold" and not entry.collectedAt then
+                soldInMail = soldInMail + 1
+            elseif entry.auctionStatus == "expired" then
+                expiredInMail = expiredInMail + 1
+            end
         end
+    end
+    if soldInMail > 0 then
+        table.insert(tasks, {
+            icon   = "Interface\\Icons\\INV_Misc_Coin_01",
+            text   = ns.COLORS.GREEN .. "Check Mail:|r " .. soldInMail .. " auction(s) sold — collect gold",
+            sort   = 2,
+        })
     end
     if expiredInMail > 0 then
         table.insert(tasks, {
             icon   = "Interface\\Icons\\INV_Letter_15",
-            text   = ns.COLORS.YELLOW .. "Check Mail:|r " .. expiredInMail .. " expired auction(s) to collect",
-            sort   = 2,
+            text   = ns.COLORS.YELLOW .. "Check Mail:|r " .. expiredInMail .. " expired auction(s) — collect items",
+            sort   = 3,
         })
     end
 
@@ -192,7 +204,7 @@ local function BuildCurrentCharTasks()
             table.insert(tasks, {
                 icon   = "Interface\\Icons\\Spell_Holy_BorrowedTime",
                 text   = ns.COLORS.ORANGE .. "Expiring:|r " .. myAuctions.active .. " auction(s) — soonest in " .. countdown,
-                sort   = 3,
+                sort   = 4,
             })
         end
     end
