@@ -23,6 +23,7 @@ TSM.lua
 Scanner.lua
 Import.lua
 Export.lua
+Transformer.lua
 TodoList.lua
 TodoGenerator.lua
 Tracker.lua
@@ -47,5 +48,6 @@ UI\GuildsPage.lua
 UI\LogPage.lua
 UI\ImportPage.lua
 UI\ExportPage.lua
+UI\TransformPage.lua
 UI\GeneratorPage.lua
 UI\SlashCommands.lua
