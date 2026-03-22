@@ -194,6 +194,7 @@ local NAV_ITEMS = {
     {key = "section", label = "FLIPPINGPAL"},
     {key = "export",     label = "Export",         icon = "Interface\\Icons\\INV_Scroll_11"},
     {key = "import",     label = "Import",         icon = "Interface\\Icons\\Ability_Creature_Cursed_04"},
+    {key = "transform", label = "Transform",     icon = "Interface\\Icons\\INV_Gizmo_GoldenBolt"},
     {key = "section", label = "INTEGRATIONS"},
     {key = "tsm",        label = "TSM",            icon = "Interface\\Icons\\INV_Misc_Coin_17"},
     {key = "auctionator", label = "Auctionator",   icon = "Interface\\Icons\\INV_Misc_Note_01"},
@@ -792,6 +793,7 @@ local function HideAllTables()
     if UI.HideAuctionatorPage then UI:HideAuctionatorPage() end
     if UI._importPage then UI._importPage:Hide() end
     if UI._exportPage then UI._exportPage:Hide() end
+    if UI._transformPage then UI._transformPage:Hide() end
     if UI._genInfoFrame then UI._genInfoFrame:Hide() end
     if UI._genFrame then UI._genFrame:Hide() end
     if UI._todoOverviewScroll then UI._todoOverviewScroll:Hide() end
@@ -933,6 +935,9 @@ function UI:Refresh()
 
     elseif self.currentPage == "export" then
         self:RefreshExportPage()
+
+    elseif self.currentPage == "transform" then
+        self:RefreshTransformPage()
 
     elseif self.currentPage == "tsm" then
         mainFrame.pageTitle:SetText("TSM Integration")
