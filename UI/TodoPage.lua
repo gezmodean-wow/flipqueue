@@ -117,7 +117,11 @@ local function BuildTodoData()
 
     for _, task in ipairs(tasks) do
         local item = task.item
-        if ns:RealmMatches(item.targetRealm or "", myRealm) then
+        local isBuyTask = item.action == "buy"
+
+        -- Buy tasks match on buyRealm, sell tasks match on targetRealm
+        local realmToMatch = isBuyTask and item.buyRealm or item.targetRealm
+        if ns:RealmMatches(realmToMatch or "", myRealm) then
             local displayName = item.name or "?"
 
             local lookupIcon, quality, resolvedID
@@ -132,7 +136,17 @@ local function BuildTodoData()
             end
 
             local sourceStr = item.source or ""
-            if sourceStr == "warbank" then
+            if isBuyTask then
+                -- Buy task: show step-based status
+                local stepType = ns.TodoList:GetCurrentStepType(item) or "browse"
+                if stepType == "browse" then
+                    sourceStr = ns.COLORS.CYAN .. "browse AH" .. "|r"
+                elseif stepType == "buy" then
+                    sourceStr = ns.COLORS.CYAN .. "buy item" .. "|r"
+                elseif stepType == "deposit" then
+                    sourceStr = ns.COLORS.YELLOW .. "deposit to wb" .. "|r"
+                end
+            elseif sourceStr == "warbank" then
                 sourceStr = ns.COLORS.YELLOW .. "warbank" .. "|r"
             elseif sourceStr == "bags" then
                 sourceStr = ns.COLORS.GREEN .. "in bags" .. "|r"
@@ -149,23 +163,41 @@ local function BuildTodoData()
                 sourceStr = ns.COLORS.RED .. "unavailable" .. "|r"
             end
 
+            -- Price display: buy tasks show buy price
+            local priceDisplay = isBuyTask and item.buyPrice or item.expectedPrice or ""
+
+            -- Tooltip
+            local tooltipExtra
+            if isBuyTask then
+                tooltipExtra = "BUY on: " .. (item.buyRealm or "?") .. "  @  " .. (item.buyPrice or "?")
+                    .. "\nSell on: " .. (item.targetRealm or "?") .. "  @  " .. (item.expectedPrice or "?")
+                    .. (item.profitAmount and ("\nProfit: " .. item.profitAmount) or "")
+                    .. (item.profitPct and (" (" .. item.profitPct .. "%)") or "")
+            else
+                tooltipExtra = (item.targetRealm and item.targetRealm ~= ""
+                    and ("Sell on: " .. item.targetRealm .. "  @  " .. (item.expectedPrice or "?")) or nil)
+            end
+
             local row = {
-                name     = displayName,
+                name     = isBuyTask and (ns.COLORS.CYAN .. "[BUY] " .. "|r" .. displayName) or displayName,
                 qty      = item.quantity or 1,
-                price    = item.expectedPrice or "",
-                realm    = item.targetRealm or "",
+                price    = priceDisplay,
+                realm    = isBuyTask and (item.buyRealm or "") or (item.targetRealm or ""),
                 location = sourceStr,
                 _icon    = item.icon or lookupIcon,
                 _tooltipItemID = resolvedID or tonumber(item.itemID),
                 _tooltipText   = item.name or "?",
-                _tooltipExtra  = (item.targetRealm and item.targetRealm ~= ""
-                    and ("Sell on: " .. item.targetRealm .. "  @  " .. (item.expectedPrice or "?")) or nil),
+                _tooltipExtra  = tooltipExtra,
                 _taskIndex = task.taskIndex,
                 _todoItem  = item,
             }
 
+            if isBuyTask then
+                row._rowColor = {0.1, 0.3, 0.5, 0.10}
+            end
+
             -- TSM price data
-            if ns.TSM:IsEnabled() then
+            if ns.TSM:IsEnabled() and not isBuyTask then
                 local priceSource = ns.db.settings.tsmPriceSource or "DBMinBuyout"
                 local copper = ns.TSM:GetPrice(item.itemKey, priceSource)
                 if copper then
@@ -454,6 +486,7 @@ function UI:RefreshTodoPage()
             for gi, group in ipairs(displayGroups) do
                 local isUnassigned = not group.charKey
                 local isCurrentChar = group.charKey == charKey
+                local hasBuys = group.hasBuyTasks
 
                 -- Group header
                 local hdr = GetRow(HDR_H)
@@ -463,23 +496,25 @@ function UI:RefreshTodoPage()
                     hdr.text:SetText(ns.COLORS.RED .. "Create character on " .. realmName .. "|r" ..
                         ns.COLORS.GRAY .. "  (" .. #group.items .. " items)|r")
                 elseif isCurrentChar then
-                    hdr.bg:SetColorTexture(0.1, 0.2, 0.1, 0.8)
+                    local buyTag = hasBuys and (ns.COLORS.CYAN .. " [BUY]" .. "|r") or ""
+                    hdr.bg:SetColorTexture(hasBuys and 0.08 or 0.1, hasBuys and 0.15 or 0.2, hasBuys and 0.2 or 0.1, 0.8)
                     local cc = CLASS_COLORS[ns.db.characters[group.charKey] and ns.db.characters[group.charKey].class] or "888888"
                     hdr.text:SetText("|cff" .. cc .. group.charName .. "|r" ..
                         ns.COLORS.GRAY .. " - " .. group.realm .. "|r" ..
-                        ns.COLORS.GREEN .. "  (YOU — " .. #group.items .. " items)|r")
+                        ns.COLORS.GREEN .. "  (YOU — " .. #group.items .. " items)|r" .. buyTag)
                 else
                     local charInv = ns.db.characters and ns.db.characters[group.charKey]
                     local cc = charInv and CLASS_COLORS[charInv.class] or "888888"
+                    local buyTag = hasBuys and (ns.COLORS.CYAN .. " [BUY]" .. "|r") or ""
                     if group._allDeferred then
                         hdr.bg:SetColorTexture(0.1, 0.1, 0.1, 0.5)
                         hdr.text:SetText("|cff" .. cc .. group.charName .. "|r" ..
                             ns.COLORS.GRAY .. " - " .. group.realm .. "  (" .. #group.items .. " items)" ..
-                            ns.COLORS.RED .. " [no inventory]" .. "|r")
+                            ns.COLORS.RED .. " [no inventory]" .. "|r" .. buyTag)
                     else
-                        hdr.bg:SetColorTexture(0.12, 0.15, 0.2, 0.8)
+                        hdr.bg:SetColorTexture(hasBuys and 0.08 or 0.12, hasBuys and 0.12 or 0.15, hasBuys and 0.18 or 0.2, 0.8)
                         hdr.text:SetText("|cff" .. cc .. group.charName .. "|r" ..
-                            ns.COLORS.GRAY .. " - " .. group.realm .. "  (" .. #group.items .. " items)|r")
+                            ns.COLORS.GRAY .. " - " .. group.realm .. "  (" .. #group.items .. " items)|r" .. buyTag)
                     end
                 end
 
@@ -490,9 +525,12 @@ function UI:RefreshTodoPage()
 
                 -- Item rows
                 for ii, item in ipairs(group.items) do
+                    local isBuyItem = item.action == "buy"
                     local row = GetRow(ITEM_H)
                     if isUnassigned then
                         row.bg:SetColorTexture(0.1, 0.06, 0.06, 0.4)
+                    elseif isBuyItem then
+                        row.bg:SetColorTexture(0.06, 0.1, 0.15, 0.5)
                     else
                         row.bg:SetColorTexture(ii % 2 == 0 and 0.08 or 0.06, ii % 2 == 0 and 0.08 or 0.06, ii % 2 == 0 and 0.12 or 0.1, 0.5)
                     end
@@ -526,61 +564,83 @@ function UI:RefreshTodoPage()
                     elseif item.quality and item.quality ~= "" then
                         displayName = QualityColorName(displayName, item.quality)
                     end
+                    -- Prefix buy tasks with [BUY] tag
+                    if isBuyItem then
+                        displayName = ns.COLORS.CYAN .. "[BUY] " .. "|r" .. displayName
+                    end
                     local qtyStr = (item.quantity or 1) > 1 and (" x" .. (item.quantity or 1)) or ""
                     row.text:SetText(displayName .. qtyStr)
 
                     -- Right side: price + source status
-                    local priceStr = item.expectedPrice or ""
+                    local priceStr
                     local sourceTag = ""
-                    if isUnassigned then
-                        priceStr = ns.COLORS.GRAY .. priceStr .. "|r"
-                    elseif isCurrentChar then
-                        local inBags = false
-                        pcall(function()
-                            for _, bagIdx in ipairs(ns.INVENTORY_BAGS) do
-                                local numSlots = C_Container.GetContainerNumSlots(bagIdx)
-                                for slot = 1, numSlots do
-                                    local info = C_Container.GetContainerItemInfo(bagIdx, slot)
-                                    if info and info.hyperlink then
-                                        local slotID = tonumber((ns:ParseItemLink(info.hyperlink)))
-                                        local itemNumID = tonumber(item.itemID) or tonumber(item.itemKey and item.itemKey:match("^(%d+)"))
-                                        if slotID and itemNumID and slotID == itemNumID then
-                                            inBags = true
-                                            return
+                    if isBuyItem then
+                        -- Buy tasks show buy price and step-based status
+                        priceStr = item.buyPrice or ""
+                        local stepType = ns.TodoList:GetCurrentStepType(item) or "browse"
+                        if stepType == "browse" then
+                            sourceTag = ns.COLORS.CYAN .. " [browse]" .. "|r"
+                        elseif stepType == "buy" then
+                            sourceTag = ns.COLORS.CYAN .. " [buy]" .. "|r"
+                        elseif stepType == "deposit" then
+                            sourceTag = ns.COLORS.YELLOW .. " [deposit]" .. "|r"
+                        end
+                        -- Show profit if available
+                        if item.profitAmount then
+                            sourceTag = sourceTag .. ns.COLORS.GREEN .. " +" .. item.profitAmount .. "|r"
+                        end
+                    else
+                        priceStr = item.expectedPrice or ""
+                        if isUnassigned then
+                            priceStr = ns.COLORS.GRAY .. priceStr .. "|r"
+                        elseif isCurrentChar then
+                            local inBags = false
+                            pcall(function()
+                                for _, bagIdx in ipairs(ns.INVENTORY_BAGS) do
+                                    local numSlots = C_Container.GetContainerNumSlots(bagIdx)
+                                    for slot = 1, numSlots do
+                                        local info = C_Container.GetContainerItemInfo(bagIdx, slot)
+                                        if info and info.hyperlink then
+                                            local slotID = tonumber((ns:ParseItemLink(info.hyperlink)))
+                                            local itemNumID = tonumber(item.itemID) or tonumber(item.itemKey and item.itemKey:match("^(%d+)"))
+                                            if slotID and itemNumID and slotID == itemNumID then
+                                                inBags = true
+                                                return
+                                            end
                                         end
                                     end
                                 end
+                            end)
+                            if inBags then
+                                sourceTag = ns.COLORS.GREEN .. " [in bags]" .. "|r"
+                            elseif item.source == "warbank" then
+                                sourceTag = ns.COLORS.YELLOW .. " [warbank]" .. "|r"
+                            elseif item.source == "bank" then
+                                sourceTag = ns.COLORS.BLUE .. " [bank]" .. "|r"
+                            else
+                                sourceTag = ns.COLORS.RED .. " [not found]" .. "|r"
                             end
-                        end)
-                        if inBags then
-                            sourceTag = ns.COLORS.GREEN .. " [in bags]" .. "|r"
-                        elseif item.source == "warbank" then
-                            sourceTag = ns.COLORS.YELLOW .. " [warbank]" .. "|r"
-                        elseif item.source == "bank" then
-                            sourceTag = ns.COLORS.BLUE .. " [bank]" .. "|r"
                         else
-                            sourceTag = ns.COLORS.RED .. " [not found]" .. "|r"
+                            if item.source == "bags" then
+                                sourceTag = ns.COLORS.GREEN .. " [bags]" .. "|r"
+                            elseif item.source == "warbank" then
+                                sourceTag = ns.COLORS.YELLOW .. " [wb]" .. "|r"
+                            elseif item.source == "bank" then
+                                sourceTag = ns.COLORS.BLUE .. " [bank]" .. "|r"
+                            elseif item.source == "guildbank" then
+                                sourceTag = ns.COLORS.ORANGE .. " [guild]" .. "|r"
+                            elseif item.source == "unavailable" and item.depositFrom then
+                                local depName = item.depositFrom:match("^(.-)%-") or item.depositFrom
+                                sourceTag = ns.COLORS.CYAN .. " [via " .. depName .. "]" .. "|r"
+                            elseif item.source == "unavailable" then
+                                sourceTag = ns.COLORS.RED .. " [unavail]" .. "|r"
+                            end
                         end
-                    else
-                        if item.source == "bags" then
-                            sourceTag = ns.COLORS.GREEN .. " [bags]" .. "|r"
-                        elseif item.source == "warbank" then
-                            sourceTag = ns.COLORS.YELLOW .. " [wb]" .. "|r"
-                        elseif item.source == "bank" then
-                            sourceTag = ns.COLORS.BLUE .. " [bank]" .. "|r"
-                        elseif item.source == "guildbank" then
-                            sourceTag = ns.COLORS.ORANGE .. " [guild]" .. "|r"
-                        elseif item.source == "unavailable" and item.depositFrom then
-                            local depName = item.depositFrom:match("^(.-)%-") or item.depositFrom
-                            sourceTag = ns.COLORS.CYAN .. " [via " .. depName .. "]" .. "|r"
-                        elseif item.source == "unavailable" then
-                            sourceTag = ns.COLORS.RED .. " [unavail]" .. "|r"
+                        -- TSM rejection reassignment indicator
+                        if item.tsmRejectedFrom then
+                            local fromName = item.tsmRejectedFrom:match("^(.-)%-") or item.tsmRejectedFrom
+                            sourceTag = sourceTag .. ns.COLORS.ORANGE .. " [TSM skip " .. fromName .. "]" .. "|r"
                         end
-                    end
-                    -- TSM rejection reassignment indicator
-                    if item.tsmRejectedFrom then
-                        local fromName = item.tsmRejectedFrom:match("^(.-)%-") or item.tsmRejectedFrom
-                        sourceTag = sourceTag .. ns.COLORS.ORANGE .. " [TSM skip " .. fromName .. "]" .. "|r"
                     end
                     row.rightText:SetText(priceStr .. sourceTag)
 

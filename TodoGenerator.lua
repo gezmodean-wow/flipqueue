@@ -401,9 +401,11 @@ function TodoList:BuildDisplayGroups(items, sortMode)
         if key then
             if not byChar[key] then
                 local isRealmGroup = key:find("^_realm:")
+                -- For buy tasks, the relevant realm is buyRealm (where player goes to buy)
+                local groupRealm = (item.action == "buy" and item.buyRealm) or item.targetRealm or ""
                 byChar[key] = {
                     charKey = item.assignedChar,  -- nil for realm groups
-                    realm = item.targetRealm or "",
+                    realm = groupRealm,
                     charName = item.assignedChar and (item.assignedChar:match("^(.-)%-") or item.assignedChar) or nil,
                     totalGold = 0,
                     hasNoCompetition = false,
@@ -416,6 +418,9 @@ function TodoList:BuildDisplayGroups(items, sortMode)
             group.totalGold = group.totalGold + ns:ParseGoldValue(item.expectedPrice or "")
             if item.noCompetition then
                 group.hasNoCompetition = true
+            end
+            if item.action == "buy" then
+                group.hasBuyTasks = true
             end
         end
     end
@@ -535,6 +540,23 @@ function TodoList:GenerateTodoList(source, allocationOrder)
     local defaultQty = ns.db.settings.defaultSellQty or 1
 
     for _, deal in ipairs(deals) do
+        local isCrossRealmFlip = (deal.dealType == "flip" or deal.dealType == "buy")
+            and deal.buyRealm and deal.buyRealm ~= ""
+
+        -- Cross-realm flip fields to carry forward to tasks
+        local crossRealmFields = {}
+        if isCrossRealmFlip then
+            crossRealmFields = {
+                action       = nil, -- set below: "sell" or "buy"
+                dealType     = deal.dealType,
+                buyRealm     = deal.buyRealm,
+                buyPrice     = deal.buyPrice,
+                profitAmount = deal.profitAmount,
+                profitPct    = deal.profitPct,
+                saleAvg      = deal.saleAvg,
+            }
+        end
+
         local poolIdx = FindPoolMatch(pool, deal, poolRemaining)
 
         if poolIdx then
@@ -582,6 +604,13 @@ function TodoList:GenerateTodoList(source, allocationOrder)
                         end
                     end
 
+                    -- Cross-realm flip: item IS in inventory → generate "sell" task
+                    local taskCrossFields = {}
+                    if isCrossRealmFlip then
+                        taskCrossFields = crossRealmFields
+                        taskCrossFields.action = "sell"
+                    end
+
                     table.insert(preview.items, {
                         itemKey       = poolItem.itemKey,
                         itemID        = poolItem.itemID,
@@ -601,6 +630,14 @@ function TodoList:GenerateTodoList(source, allocationOrder)
                         attempts      = 0,
                         importSource  = source,
                         importKey     = deal._importKey,
+                        -- Cross-realm flip fields
+                        action       = taskCrossFields.action,
+                        dealType     = taskCrossFields.dealType,
+                        buyRealm     = taskCrossFields.buyRealm,
+                        buyPrice     = taskCrossFields.buyPrice,
+                        profitAmount = taskCrossFields.profitAmount,
+                        profitPct    = taskCrossFields.profitPct,
+                        saleAvg      = taskCrossFields.saleAvg,
                         steps = (function()
                             local s = {}
                             if assignment.location == "bank" or assignment.location == "warbank" or assignment.location == "guildbank" then
@@ -627,6 +664,13 @@ function TodoList:GenerateTodoList(source, allocationOrder)
                     math.max(deal.quantity or 1, defaultQty),
                     poolRemaining[poolIdx])
                 if depositQty > 0 then
+                    -- Cross-realm: item in inventory but not on sell realm
+                    local taskCrossFields = {}
+                    if isCrossRealmFlip then
+                        taskCrossFields = crossRealmFields
+                        taskCrossFields.action = "sell"
+                    end
+
                     table.insert(preview.items, {
                         itemKey         = poolItem.itemKey,
                         itemID          = poolItem.itemID,
@@ -648,6 +692,14 @@ function TodoList:GenerateTodoList(source, allocationOrder)
                         attempts        = 0,
                         importSource    = source,
                         importKey       = deal._importKey,
+                        -- Cross-realm flip fields
+                        action       = taskCrossFields.action,
+                        dealType     = taskCrossFields.dealType,
+                        buyRealm     = taskCrossFields.buyRealm,
+                        buyPrice     = taskCrossFields.buyPrice,
+                        profitAmount = taskCrossFields.profitAmount,
+                        profitPct    = taskCrossFields.profitPct,
+                        saleAvg      = taskCrossFields.saleAvg,
                         steps = (function()
                             local s = {}
                             table.insert(s, { type = "retrieve", from = "warbank", status = "pending" })
@@ -661,6 +713,13 @@ function TodoList:GenerateTodoList(source, allocationOrder)
                 end
             else
                 -- No character on target realm at all
+                -- Cross-realm: item in inventory but no char on sell realm
+                local taskCrossFields = {}
+                if isCrossRealmFlip then
+                    taskCrossFields = crossRealmFields
+                    taskCrossFields.action = "sell"
+                end
+
                 table.insert(preview.items, {
                     itemKey       = poolItem.itemKey,
                     itemID        = poolItem.itemID,
@@ -679,33 +738,90 @@ function TodoList:GenerateTodoList(source, allocationOrder)
                     attempts      = 0,
                     importSource  = source,
                     importKey     = deal._importKey,
+                    -- Cross-realm flip fields
+                    action       = taskCrossFields.action,
+                    dealType     = taskCrossFields.dealType,
+                    buyRealm     = taskCrossFields.buyRealm,
+                    buyPrice     = taskCrossFields.buyPrice,
+                    profitAmount = taskCrossFields.profitAmount,
+                    profitPct    = taskCrossFields.profitPct,
+                    saleAvg      = taskCrossFields.saleAvg,
                     steps         = {},
                     currentStep   = 1,
                 })
             end
         else
             -- No pool match — item not in inventory
-            table.insert(preview.items, {
-                itemKey       = deal.itemKey,
-                itemID        = deal.itemID,
-                name          = deal.name,
-                icon          = deal.icon,
-                targetRealm   = deal.targetRealm,
-                expectedPrice = deal.expectedPrice,
-                quantity      = math.max(deal.quantity or 1, defaultQty),
-                assignedChar  = nil,
-                status        = "missing",
-                source        = nil,
-                quality       = deal.quality,
-                sellRate      = deal.sellRate,
-                noCompetition = deal.noCompetition,
-                category      = deal.category,
-                attempts      = 0,
-                importSource  = source,
-                importKey     = deal._importKey,
-                steps         = {},
-                currentStep   = 1,
-            })
+            if isCrossRealmFlip then
+                -- Cross-realm flip: item NOT in inventory → generate "buy" task
+                -- Assign to a character on the buy realm
+                local buyAssignment = nil
+                for charKey, charData in pairs(ns.db.characters or {}) do
+                    local charRealm = charKey:match("%-(.+)$")
+                    if charRealm and ns:RealmMatches(deal.buyRealm, charRealm)
+                        and not (type(charData) == "table" and charData.ignored) then
+                        buyAssignment = charKey
+                        break
+                    end
+                end
+
+                table.insert(preview.items, {
+                    itemKey       = deal.itemKey,
+                    itemID        = deal.itemID,
+                    name          = deal.name,
+                    icon          = deal.icon,
+                    targetRealm   = deal.targetRealm,
+                    expectedPrice = deal.expectedPrice,
+                    quantity      = math.max(deal.quantity or 1, defaultQty),
+                    assignedChar  = buyAssignment,
+                    status        = buyAssignment and "pending" or "unassigned",
+                    source        = nil,
+                    quality       = deal.quality,
+                    sellRate      = deal.sellRate,
+                    noCompetition = deal.noCompetition,
+                    category      = deal.category,
+                    attempts      = 0,
+                    importSource  = source,
+                    importKey     = deal._importKey,
+                    -- Cross-realm: buy task
+                    action       = "buy",
+                    dealType     = deal.dealType,
+                    buyRealm     = deal.buyRealm,
+                    buyPrice     = deal.buyPrice,
+                    profitAmount = deal.profitAmount,
+                    profitPct    = deal.profitPct,
+                    saleAvg      = deal.saleAvg,
+                    steps = {
+                        { type = "browse", status = "pending" },
+                        { type = "buy",    status = "pending" },
+                        { type = "deposit", to = "warbank", status = "pending" },
+                    },
+                    currentStep = 1,
+                })
+            else
+                -- Standard same-realm: item not in inventory
+                table.insert(preview.items, {
+                    itemKey       = deal.itemKey,
+                    itemID        = deal.itemID,
+                    name          = deal.name,
+                    icon          = deal.icon,
+                    targetRealm   = deal.targetRealm,
+                    expectedPrice = deal.expectedPrice,
+                    quantity      = math.max(deal.quantity or 1, defaultQty),
+                    assignedChar  = nil,
+                    status        = "missing",
+                    source        = nil,
+                    quality       = deal.quality,
+                    sellRate      = deal.sellRate,
+                    noCompetition = deal.noCompetition,
+                    category      = deal.category,
+                    attempts      = 0,
+                    importSource  = source,
+                    importKey     = deal._importKey,
+                    steps         = {},
+                    currentStep   = 1,
+                })
+            end
         end
     end
 

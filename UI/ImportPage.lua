@@ -208,6 +208,12 @@ function UI:RefreshImportPreview()
             displayName = "|cff" .. qColor .. displayName .. "|r"
         end
 
+        -- Cross-realm flip indicator in name
+        local isCrossRealm = item.dealType == "flip" or item.dealType == "buy"
+        if isCrossRealm then
+            displayName = ns.COLORS.CYAN .. "[XR] " .. "|r" .. displayName
+        end
+
         local reasonStr = ""
         if dupeReason then
             if st == "duplicate" then
@@ -217,19 +223,49 @@ function UI:RefreshImportPreview()
             end
         end
 
+        -- Show buy realm as reason context for cross-realm flips
+        if isCrossRealm and item.buyRealm and reasonStr == "" then
+            reasonStr = ns.COLORS.CYAN .. "buy@" .. item.buyRealm .. "|r"
+        end
+
+        -- Price display: show buy price for cross-realm flips
+        local priceDisplay = item.expectedPrice or ""
+        if isCrossRealm and item.buyPrice then
+            priceDisplay = item.buyPrice
+        end
+
+        -- Realm display
+        local realmDisplay = item.targetRealm or ""
+
+        -- Build tooltip
+        local tooltipExtra = ""
+        if isCrossRealm then
+            tooltipExtra = "Cross-realm flip"
+                .. "\nBuy on: " .. (item.buyRealm or "?") .. "  @  " .. (item.buyPrice or "?")
+                .. "\nSell on: " .. (item.targetRealm or "?") .. "  @  " .. (item.expectedPrice or "?")
+                .. (item.profitAmount and ("\nProfit: " .. item.profitAmount) or "")
+                .. (item.profitPct and (" (" .. item.profitPct .. "%)") or "")
+        else
+            tooltipExtra = (item.targetRealm and item.targetRealm ~= "" and ("Sell on: " .. item.targetRealm) or "")
+                .. (item.expectedPrice and item.expectedPrice ~= "" and ("\nPrice: " .. item.expectedPrice) or "")
+        end
+        if st == "duplicate" then
+            tooltipExtra = tooltipExtra .. "\n" .. ns.COLORS.GRAY .. "Already in queue (" .. (dupeReason or "exact match") .. ") — will be skipped|r"
+        elseif st == "update" then
+            tooltipExtra = tooltipExtra .. "\n" .. ns.COLORS.YELLOW .. "Will update existing entry (" .. (dupeReason or "match") .. ")|r"
+        end
+
         table.insert(data, {
             status   = statusStr,
             name     = displayName,
-            realm    = item.targetRealm or "",
-            price    = item.expectedPrice or "",
+            realm    = realmDisplay,
+            price    = priceDisplay,
             qty      = item.quantity or 1,
             reason   = reasonStr,
             _sortStatus = statusSort,
             _tooltipText = item.name,
-            _tooltipExtra = (item.targetRealm and item.targetRealm ~= "" and ("Sell on: " .. item.targetRealm) or "")
-                .. (item.expectedPrice and item.expectedPrice ~= "" and ("\nPrice: " .. item.expectedPrice) or "")
-                .. (st == "duplicate" and "\n" .. ns.COLORS.GRAY .. "Already in queue (" .. (dupeReason or "exact match") .. ") — will be skipped|r" or "")
-                .. (st == "update" and "\n" .. ns.COLORS.YELLOW .. "Will update existing entry (" .. (dupeReason or "match") .. ")|r" or ""),
+            _tooltipExtra = tooltipExtra,
+            _rowColor = isCrossRealm and {0.1, 0.3, 0.5, 0.08} or nil,
         })
     end
 

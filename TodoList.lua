@@ -598,20 +598,47 @@ function TodoList:RefreshTaskSteps()
             local inBags = (bagsItemKeys[itemKey] and bagsItemKeys[itemKey] > 0)
                 or (itemNumID and bagsItemIDs[itemNumID] and bagsItemIDs[itemNumID] > 0)
 
+            -- Buy tasks have different step logic
+            local isBuyTask = task.action == "buy"
+
             local justAdvanced = false
-            if stepType == "retrieve" then
-                -- Check if item has appeared in bags (pulled from bank/warbank)
-                if inBags then
-                    self:AdvanceStep(taskIdx)
-                    changed = true
-                    task.source = "bags"
-                    justAdvanced = true
+            if isBuyTask then
+                -- Buy task steps: browse → buy → deposit
+                if stepType == "browse" then
+                    -- "browse" is user-initiated at AH — no auto-advance
+                elseif stepType == "buy" then
+                    -- If item now in bags, the buy step is complete
+                    if inBags then
+                        self:AdvanceStep(taskIdx)
+                        changed = true
+                        task.source = "bags"
+                        justAdvanced = true
+                    end
+                elseif stepType == "deposit" then
+                    -- If item left bags (deposited to warbank), deposit step is complete
+                    if not inBags and task.source == "bags" then
+                        self:AdvanceStep(taskIdx)
+                        changed = true
+                        justAdvanced = true
+                    end
                 end
+            else
+                -- Standard sell task steps
+                if stepType == "retrieve" then
+                    -- Check if item has appeared in bags (pulled from bank/warbank)
+                    if inBags then
+                        self:AdvanceStep(taskIdx)
+                        changed = true
+                        task.source = "bags"
+                        justAdvanced = true
+                    end
+                end
+                -- "post" and "collect" steps are advanced by Tracker (bag decrease / auction check)
             end
-            -- "post" and "collect" steps are advanced by Tracker (bag decrease / auction check)
 
             -- Check item availability for deferral (skip tasks just advanced)
-            if task.status == "pending" and not justAdvanced then
+            -- Buy tasks don't need item availability — they need to buy the item
+            if task.status == "pending" and not justAdvanced and not isBuyTask then
                 local actualSource = FindItemSource(itemKey, itemNumID, charKey, inBags)
 
                 if not actualSource then
@@ -644,10 +671,12 @@ function TodoList:RefreshTaskSteps()
     -- Also check availability for OTHER characters' tasks using stored DB data.
     -- Can't advance steps or scan live bags for them, but can set/clear deferral
     -- so their groups sort correctly without needing to log into each character.
+    -- Buy tasks are excluded — they don't need existing inventory.
     for taskIdx, task in ipairs(current.tasks) do
         if task.status == "pending" and task.assignedChar
             and task.assignedChar ~= charKey
-            and task.steps and task.currentStep then
+            and task.steps and task.currentStep
+            and task.action ~= "buy" then
 
             local itemKey = task.itemKey or ""
             local itemNumID = tonumber(task.itemID) or tonumber(itemKey:match("^(%d+)"))

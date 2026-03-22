@@ -86,8 +86,13 @@ local function BuildGeneratorPreviewData(todoList)
             displayName = QualityColorName(displayName, item.quality)
         end
 
+        local isBuyTask = item.action == "buy"
+
         local statusStr, sortStatus
-        if item.status == "pending" then
+        if isBuyTask and item.status == "pending" then
+            statusStr = ns.COLORS.CYAN .. "Buy" .. "|r"
+            sortStatus = 1
+        elseif item.status == "pending" then
             statusStr = ns.COLORS.GREEN .. "Ready" .. "|r"
             sortStatus = 1
         elseif item.status == "unassigned" then
@@ -116,7 +121,9 @@ local function BuildGeneratorPreviewData(todoList)
         end
 
         local sourceStr = item.source or ""
-        if sourceStr == "warbank" then
+        if isBuyTask then
+            sourceStr = ns.COLORS.CYAN .. "buy@" .. (item.buyRealm or "?") .. "|r"
+        elseif sourceStr == "warbank" then
             sourceStr = ns.COLORS.YELLOW .. "warbank" .. "|r"
         elseif sourceStr == "bags" then
             sourceStr = ns.COLORS.GREEN .. "bags" .. "|r"
@@ -131,32 +138,59 @@ local function BuildGeneratorPreviewData(todoList)
             sourceStr = ns.COLORS.RED .. "unavail" .. "|r"
         end
 
+        -- Display price: buy tasks show buy price, sell tasks show expected price
+        local priceDisplay = isBuyTask and item.buyPrice or item.expectedPrice or ""
+        -- Realm display: buy tasks show buyRealm as primary context
+        local realmDisplay = item.targetRealm or ""
+        if isBuyTask and item.buyRealm then
+            realmDisplay = ns.COLORS.CYAN .. item.buyRealm .. "|r"
+        end
+
         local rowColor = nil
         if item.status == "missing" then
             rowColor = {0.8, 0.2, 0.2, 0.08}
         elseif item.status == "unassigned" then
             rowColor = {0.8, 0.5, 0.1, 0.08}
+        elseif isBuyTask then
+            rowColor = {0.1, 0.4, 0.6, 0.08}
+        end
+
+        -- Build tooltip
+        local tooltipExtra = ""
+        if isBuyTask then
+            tooltipExtra = "Buy on: " .. (item.buyRealm or "?")
+                .. "\nBuy price: " .. (item.buyPrice or "?")
+                .. "\nSell on: " .. (item.targetRealm or "?")
+                .. "\nSell price: " .. (item.expectedPrice or "?")
+                .. (item.profitAmount and ("\nProfit: " .. item.profitAmount) or "")
+                .. (item.profitPct and (" (" .. item.profitPct .. "%)") or "")
+        else
+            tooltipExtra = (item.targetRealm and item.targetRealm ~= ""
+                    and ("Realm: " .. item.targetRealm) or "")
+                .. (item.assignedChar and ("\nCharacter: " .. item.assignedChar) or "")
+                .. (item.source and ("\nSource: " .. item.source) or "")
+                .. (item.expectedPrice and ("\nPrice: " .. item.expectedPrice) or "")
+                .. (item.buyRealm and item.buyRealm ~= ""
+                    and ("\nCross-realm: buy on " .. item.buyRealm .. " @ " .. (item.buyPrice or "?")) or "")
+        end
+        if item.failReason then
+            tooltipExtra = tooltipExtra .. "\n" .. ns.COLORS.RED .. item.failReason .. "|r"
         end
 
         table.insert(data, {
             name      = displayName,
             qty       = item.quantity or 1,
-            realm     = item.targetRealm or "",
+            realm     = realmDisplay,
             character = charDisplay,
             source    = sourceStr,
-            price     = item.expectedPrice or "",
+            price     = priceDisplay,
             status    = statusStr,
             _icon     = item.icon or lookupIcon,
             _sortStatus = sortStatus,
             _rowColor = rowColor,
             _tooltipItemID = resolvedID or tonumber(item.itemID),
             _tooltipText = item.name or "?",
-            _tooltipExtra = (item.targetRealm and item.targetRealm ~= ""
-                    and ("Realm: " .. item.targetRealm) or "")
-                .. (item.assignedChar and ("\nCharacter: " .. item.assignedChar) or "")
-                .. (item.source and ("\nSource: " .. item.source) or "")
-                .. (item.expectedPrice and ("\nPrice: " .. item.expectedPrice) or "")
-                .. (item.failReason and ("\n" .. ns.COLORS.RED .. item.failReason .. "|r") or ""),
+            _tooltipExtra = tooltipExtra,
         })
     end
 
