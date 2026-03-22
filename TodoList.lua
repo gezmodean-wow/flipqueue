@@ -322,6 +322,46 @@ function TodoList:MoveTaskToLog(taskIndex, postedPrice, expirySeconds, postedQua
     local taskQty = item.quantity or 1
     local moveQty = postedQuantity or taskQty
 
+    -- Look for the most recent prior failed-sale history for this item on this character
+    -- so we can carry over postAttempts/totalFeesSpent/postHistory (#71)
+    local charKey = item.assignedChar or ns:GetCharKey()
+    local priorAttempts = 0
+    local priorFees = 0
+    local priorHistory = nil
+    local itemName = (item.name or ""):lower()
+    if itemName ~= "" then
+        local latestTime = 0
+        for _, entry in ipairs(ns.db.log) do
+            if entry.charKey == charKey
+                and entry.saleOutcome == "expired"
+                and (entry.name or ""):lower() == itemName
+                and (entry.postedAt or 0) > latestTime then
+                latestTime = entry.postedAt or 0
+                priorAttempts = entry.postAttempts or 0
+                priorFees = entry.totalFeesSpent or 0
+                priorHistory = entry.postHistory
+            end
+        end
+    end
+
+    -- Estimate AH fee: ~5% deposit (Blizzard standard for 48h auctions)
+    -- ParseGoldValue returns gold, multiply by 10000 for copper, then 5%
+    local ahFeeEstimate = 0
+    local priceGold = ns:ParseGoldValue(postedPrice or item.expectedPrice or "")
+    if priceGold and priceGold > 0 then
+        ahFeeEstimate = math.floor(priceGold * 10000 * 0.05) -- 5% deposit in copper
+    end
+
+    -- Capture TSM price data at time of posting
+    local tsmPriceAtPost = nil
+    local tsmRegionAvgAtPost = nil
+    if ns.TSM and ns.TSM:IsEnabled() and item.itemKey then
+        local dbMinBuyout = ns.TSM:GetPrice(item.itemKey, "DBMinBuyout")
+        local dbRegionSaleAvg = ns.TSM:GetPrice(item.itemKey, "DBRegionSaleAvg")
+        if dbMinBuyout then tsmPriceAtPost = dbMinBuyout end
+        if dbRegionSaleAvg then tsmRegionAvgAtPost = dbRegionSaleAvg end
+    end
+
     table.insert(ns.db.log, {
         itemKey        = item.itemKey,
         itemID         = item.itemID,
@@ -332,12 +372,19 @@ function TodoList:MoveTaskToLog(taskIndex, postedPrice, expirySeconds, postedQua
         expectedPrice  = item.expectedPrice,
         postedPrice    = postedPrice or item.expectedPrice,
         postedAt       = time(),
-        charKey        = item.assignedChar or ns:GetCharKey(),
+        charKey        = charKey,
         expiresAt      = expirySeconds and (time() + expirySeconds) or nil,
         auctionStatus  = "active",
         soldAt         = nil,
         soldPrice      = nil,
         postedQuantity = moveQty,
+        ahFee          = ahFeeEstimate,
+        tsmPriceAtPost = tsmPriceAtPost,
+        tsmRegionAvgAtPost = tsmRegionAvgAtPost,
+        -- Carry over failed sale tracking from prior listings (#71)
+        postAttempts   = priorAttempts,
+        totalFeesSpent = priorFees,
+        postHistory    = priorHistory,
     })
 
     -- Partial post: reduce quantity; full post: mark completed

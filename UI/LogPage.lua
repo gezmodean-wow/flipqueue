@@ -32,16 +32,28 @@ local function BuildLogData()
         elseif aStatus == "expired" then
             statusStr = ns.COLORS.RED .. "Expired" .. "|r"
         elseif aStatus == "collected" then
-            statusStr = ns.COLORS.GRAY .. "Done" .. "|r"
+            -- Distinguish collected-after-sale vs collected-after-expiry
+            if entry.saleOutcome == "sold" then
+                statusStr = ns.COLORS.GREEN .. "Sold" .. "|r"
+            elseif entry.saleOutcome == "expired" then
+                statusStr = ns.COLORS.ORANGE .. "Unsold" .. "|r"
+            else
+                statusStr = ns.COLORS.GRAY .. "Done" .. "|r"
+            end
         elseif aStatus == "skipped" then
             statusStr = ns.COLORS.ORANGE .. "Skipped" .. "|r"
         else
             statusStr = ns.COLORS.YELLOW .. "Active" .. "|r"
         end
 
+        -- Show post attempt count for items with failed sale history
+        if (entry.postAttempts or 0) > 0 then
+            statusStr = statusStr .. ns.COLORS.RED .. " (" .. entry.postAttempts .. "x)" .. "|r"
+        end
+
         -- Price display: show sold price if sold, posted price otherwise
         local priceStr
-        if aStatus == "sold" and entry.soldPrice and entry.soldPrice > 0 then
+        if (aStatus == "sold" or entry.saleOutcome == "sold") and entry.soldPrice and entry.soldPrice > 0 then
             priceStr = ns.COLORS.GREEN .. ns:FormatGold(entry.soldPrice) .. "|r"
         else
             priceStr = entry.postedPrice or "?"
@@ -58,16 +70,50 @@ local function BuildLogData()
         if entry.isRecovered then
             tooltipExtra = tooltipExtra .. "\n" .. ns.COLORS.YELLOW .. "Recovered from AH (approx. post time)|r"
         end
-        if aStatus == "sold" then
+        if aStatus == "sold" or entry.saleOutcome == "sold" then
             tooltipExtra = tooltipExtra .. "\n" .. ns.COLORS.GREEN .. "Sold for: " ..
                 (entry.soldPrice and entry.soldPrice > 0 and ns:FormatGold(entry.soldPrice) or "unknown") .. "|r"
             if entry.soldAt then
                 tooltipExtra = tooltipExtra .. "\nSold: " .. date("%m/%d %H:%M", entry.soldAt)
             end
-        elseif aStatus == "expired" then
-            tooltipExtra = tooltipExtra .. "\n" .. ns.COLORS.RED .. "Auction expired|r"
+        elseif aStatus == "expired" or entry.saleOutcome == "expired" then
+            tooltipExtra = tooltipExtra .. "\n" .. ns.COLORS.RED .. "Auction expired (unsold)|r"
         elseif aStatus == "skipped" and entry.failReason then
             tooltipExtra = tooltipExtra .. "\n" .. ns.COLORS.ORANGE .. entry.failReason .. "|r"
+        end
+
+        -- Failed sale tracking details (#71)
+        if (entry.postAttempts or 0) > 0 then
+            tooltipExtra = tooltipExtra .. "\n\n" .. ns.COLORS.RED ..
+                "Failed sale attempts: " .. entry.postAttempts .. "|r"
+            if (entry.totalFeesSpent or 0) > 0 then
+                tooltipExtra = tooltipExtra .. "\n" .. ns.COLORS.RED ..
+                    "Total AH fees lost: " .. ns:FormatGold(entry.totalFeesSpent) .. "|r"
+            end
+            -- Show post history details
+            if entry.postHistory and #entry.postHistory > 0 then
+                tooltipExtra = tooltipExtra .. "\n" .. ns.COLORS.GRAY .. "Post history:|r"
+                for hi, attempt in ipairs(entry.postHistory) do
+                    local attemptDate = attempt.postedAt and date("%m/%d %H:%M", attempt.postedAt) or "?"
+                    local attemptStr = "  #" .. hi .. ": " .. attemptDate ..
+                        " @ " .. (attempt.postedPrice or "?")
+                    if attempt.fee and attempt.fee > 0 then
+                        attemptStr = attemptStr .. " (fee: " .. ns:FormatGold(attempt.fee) .. ")"
+                    end
+                    tooltipExtra = tooltipExtra .. "\n" .. ns.COLORS.GRAY .. attemptStr .. "|r"
+                    -- TSM price data at time of posting
+                    if attempt.tsmMinBuyout or attempt.tsmRegionSaleAvg then
+                        local tsmStr = "    TSM:"
+                        if attempt.tsmMinBuyout then
+                            tsmStr = tsmStr .. " AH min " .. ns:FormatGold(attempt.tsmMinBuyout)
+                        end
+                        if attempt.tsmRegionSaleAvg then
+                            tsmStr = tsmStr .. " | Region avg " .. ns:FormatGold(attempt.tsmRegionSaleAvg)
+                        end
+                        tooltipExtra = tooltipExtra .. "\n" .. ns.COLORS.GRAY .. tsmStr .. "|r"
+                    end
+                end
+            end
         end
 
         table.insert(data, {
@@ -108,12 +154,25 @@ function UI:RefreshLogPage()
     self.logTable:SetData(data)
 
     local logCount = #ns.db.log
-    local soldCount, activeCount, expiredCount, skippedCount = 0, 0, 0, 0
+    local soldCount, activeCount, expiredCount, skippedCount, unsoldCount = 0, 0, 0, 0, 0
+    local totalFeesLost = 0
     for _, entry in ipairs(ns.db.log) do
-        if entry.auctionStatus == "sold" then soldCount = soldCount + 1
-        elseif entry.auctionStatus == "expired" then expiredCount = expiredCount + 1
-        elseif entry.auctionStatus == "active" then activeCount = activeCount + 1
-        elseif entry.auctionStatus == "skipped" then skippedCount = skippedCount + 1
+        if entry.auctionStatus == "sold" then
+            soldCount = soldCount + 1
+        elseif entry.auctionStatus == "expired" then
+            expiredCount = expiredCount + 1
+        elseif entry.auctionStatus == "active" then
+            activeCount = activeCount + 1
+        elseif entry.auctionStatus == "skipped" then
+            skippedCount = skippedCount + 1
+        elseif entry.auctionStatus == "collected" and entry.saleOutcome == "sold" then
+            soldCount = soldCount + 1
+        elseif entry.auctionStatus == "collected" and entry.saleOutcome == "expired" then
+            unsoldCount = unsoldCount + 1
+        end
+        -- Accumulate total fees lost on failed sales
+        if (entry.totalFeesSpent or 0) > 0 then
+            totalFeesLost = totalFeesLost + entry.totalFeesSpent
         end
     end
     local logStatus = logCount .. " logged"
@@ -121,8 +180,12 @@ function UI:RefreshLogPage()
     if soldCount > 0 then table.insert(parts, ns.COLORS.GREEN .. soldCount .. " sold|r") end
     if activeCount > 0 then table.insert(parts, ns.COLORS.YELLOW .. activeCount .. " active|r") end
     if expiredCount > 0 then table.insert(parts, ns.COLORS.RED .. expiredCount .. " expired|r") end
+    if unsoldCount > 0 then table.insert(parts, ns.COLORS.ORANGE .. unsoldCount .. " unsold|r") end
     if skippedCount > 0 then table.insert(parts, ns.COLORS.ORANGE .. skippedCount .. " skipped|r") end
     if #parts > 0 then logStatus = logStatus .. " (" .. table.concat(parts, ", ") .. ")" end
+    if totalFeesLost > 0 then
+        logStatus = logStatus .. "  |  " .. ns.COLORS.RED .. "Fees lost: " .. ns:FormatGold(totalFeesLost) .. "|r"
+    end
     logStatus = logStatus .. "  |  Shift+Right-click to remove"
     mainFrame.statusText:SetText(logStatus)
 end

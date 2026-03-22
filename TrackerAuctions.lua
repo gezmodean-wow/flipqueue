@@ -274,6 +274,7 @@ function Tracker:UpdateLogExpiry()
             -- Check if expired based on stored expiresAt
             if logEntry.expiresAt and logEntry.expiresAt <= now then
                 logEntry.auctionStatus = "expired"
+                logEntry.saleOutcome = "expired"  -- timer ran out = unsold
             else
                 -- Try to match against owned auctions to update/confirm expiry
                 for aIdx, auction in ipairs(owned) do
@@ -305,6 +306,7 @@ function Tracker:CheckExpiringAuctions()
         if entry.auctionStatus == "active" and entry.expiresAt then
             if entry.expiresAt <= now then
                 entry.auctionStatus = "expired"
+                entry.saleOutcome = "expired"  -- timer ran out = unsold
             elseif entry.expiresAt - now < threshold then
                 table.insert(expiring, entry)
             end
@@ -325,6 +327,7 @@ function Tracker:GetExpiringByCharacter()
         if entry.auctionStatus == "active" and entry.expiresAt and entry.charKey then
             if entry.expiresAt <= now then
                 entry.auctionStatus = "expired"
+                entry.saleOutcome = "expired"  -- timer ran out = unsold
             else
                 local remaining = entry.expiresAt - now
                 if not byChar[entry.charKey] then
@@ -353,6 +356,7 @@ function Tracker:GetAuctionSummaryByCharacter()
             -- Auto-expire active auctions past their time
             if entry.auctionStatus == "active" and entry.expiresAt and entry.expiresAt <= now then
                 entry.auctionStatus = "expired"
+                entry.saleOutcome = "expired"  -- timer ran out = unsold
             end
 
             if not byChar[entry.charKey] then
@@ -394,6 +398,7 @@ function Tracker:StartExpiryTicker()
         for _, entry in ipairs(ns.db.log) do
             if entry.auctionStatus == "active" and entry.expiresAt and entry.expiresAt <= now then
                 entry.auctionStatus = "expired"
+                entry.saleOutcome = "expired"  -- timer ran out = unsold
                 local ck = entry.charKey or "Unknown"
                 newlyExpired[ck] = (newlyExpired[ck] or 0) + 1
             end

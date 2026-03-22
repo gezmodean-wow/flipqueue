@@ -51,7 +51,7 @@ function Tracker:ScanMailForSales()
         if okH then
             if money and money > 0 then
                 -- Mail with gold: potential AH sale
-                local ok, invoiceType, itemName, _, _, buyout = pcall(GetInboxInvoiceInfo, mailIndex)
+                local ok, invoiceType, itemName, _, _, buyout, _, ahCut = pcall(GetInboxInvoiceInfo, mailIndex)
                 if ok and invoiceType == "seller" and itemName then
                     local nameKey = itemName:lower()
                     local candidates = activeByName[nameKey]
@@ -61,8 +61,10 @@ function Tracker:ScanMailForSales()
                                 consumed[logIndex] = true
                                 local entry = ns.db.log[logIndex]
                                 entry.auctionStatus = "sold"
+                                entry.saleOutcome = "sold"
                                 entry.soldAt = time()
                                 entry.soldPrice = buyout or money or 0
+                                entry.ahFee = ahCut or 0
                                 soldCount = soldCount + 1
                                 break
                             end
@@ -90,6 +92,36 @@ function Tracker:ScanMailForSales()
                                     consumed[logIndex] = true
                                     local entry = ns.db.log[logIndex]
                                     entry.auctionStatus = "collected"
+                                    entry.saleOutcome = "expired"
+                                    entry.collectedAt = time()
+
+                                    -- Track repeated failed sales (#71)
+                                    entry.postAttempts = (entry.postAttempts or 0) + 1
+                                    if not entry.postHistory then
+                                        entry.postHistory = {}
+                                    end
+                                    -- Record this failed posting attempt
+                                    local attemptRecord = {
+                                        postedAt = entry.postedAt,
+                                        expiredAt = entry.expiresAt or time(),
+                                        postedPrice = entry.postedPrice,
+                                        fee = entry.ahFee or 0,
+                                    }
+                                    -- Capture TSM price data at time of expiry
+                                    if ns.TSM and ns.TSM:IsEnabled() and entry.itemKey then
+                                        local dbMinBuyout = ns.TSM:GetPrice(entry.itemKey, "DBMinBuyout")
+                                        local dbRegionSaleAvg = ns.TSM:GetPrice(entry.itemKey, "DBRegionSaleAvg")
+                                        if dbMinBuyout then
+                                            attemptRecord.tsmMinBuyout = dbMinBuyout
+                                        end
+                                        if dbRegionSaleAvg then
+                                            attemptRecord.tsmRegionSaleAvg = dbRegionSaleAvg
+                                        end
+                                    end
+                                    table.insert(entry.postHistory, attemptRecord)
+                                    -- Accumulate total fees spent on failed listings
+                                    entry.totalFeesSpent = (entry.totalFeesSpent or 0) + (entry.ahFee or 0)
+
                                     collectedCount = collectedCount + 1
                                     break
                                 end
