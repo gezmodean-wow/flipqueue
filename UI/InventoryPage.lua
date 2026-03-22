@@ -12,12 +12,14 @@ local BOUND_TYPES = {
 -- Assigned (green, 1) — item has active to-do task
 -- Posted (yellow, 2) — item in log with active auction → show "AH: realm"
 -- Check AH (orange, 3) — item in log with expired auction
--- Unknown (dim gray, 4) — default fallback
--- Ignored (red, 5) — in DNT list
-local function GetItemStatus(key, itemData)
+-- Unassigned (dim white, 4) — tracked item with known location but no task
+-- Unknown (dim gray, 5) — location cannot be determined
+-- Ignored (red, 6) — in DNT list
+-- Returns: statusKey, statusStr, targetRealm, postedCharKey
+local function GetItemStatus(key, itemData, hasKnownLocation)
     -- Check DNT first
     if ns:IsDoNotTrack(itemData.itemID) then
-        return "Ignored", ns.COLORS.RED .. "Ignored" .. "|r", nil
+        return "Ignored", ns.COLORS.RED .. "Ignored" .. "|r", nil, nil
     end
 
     -- Check to-do list for assigned tasks (replaces imports check)
@@ -28,10 +30,10 @@ local function GetItemStatus(key, itemData)
             if task.status == "pending" then
                 local item = task.item or task
                 if item.itemKey == key then
-                    return "Assigned", ns.COLORS.GREEN .. "Assigned" .. "|r", item.targetRealm
+                    return "Assigned", ns.COLORS.GREEN .. "Assigned" .. "|r", item.targetRealm, nil
                 end
                 if itemName ~= "" and item.name and item.name:lower() == itemName then
-                    return "Assigned", ns.COLORS.GREEN .. "Assigned" .. "|r", item.targetRealm
+                    return "Assigned", ns.COLORS.GREEN .. "Assigned" .. "|r", item.targetRealm, nil
                 end
             end
         end
@@ -47,14 +49,20 @@ local function GetItemStatus(key, itemData)
         if matched then
             if entry.auctionStatus == "active" then
                 local ahRealm = entry.targetRealm or ""
-                return "Posted", ns.COLORS.YELLOW .. "Posted" .. "|r", ahRealm ~= "" and ("AH: " .. ahRealm) or nil
+                return "Posted", ns.COLORS.YELLOW .. "Posted" .. "|r",
+                    ahRealm ~= "" and ("AH: " .. ahRealm) or nil, entry.charKey
             elseif entry.auctionStatus == "expired" then
-                return "Check AH", ns.COLORS.ORANGE .. "Check AH" .. "|r", nil
+                return "Check AH", ns.COLORS.ORANGE .. "Check AH" .. "|r", nil, nil
             end
         end
     end
 
-    return "Unknown", ns.COLORS.GRAY .. "Unknown" .. "|r", nil
+    -- Tracked with known location but no task = Unassigned
+    if hasKnownLocation then
+        return "Unassigned", "|cffbbbbbb" .. "Unassigned" .. "|r", nil, nil
+    end
+
+    return "Unknown", ns.COLORS.GRAY .. "Unknown" .. "|r", nil, nil
 end
 
 local function BuildFullInventoryData()
@@ -81,8 +89,6 @@ local function BuildFullInventoryData()
                         invDisplayName = QualityColorName(invDisplayName, invQuality)
                     end
 
-                    local statusKey, statusStr, targetRealm = GetItemStatus(key, itemData)
-
                     -- Build location string
                     local locParts = {}
                     if itemData.locations then
@@ -90,12 +96,26 @@ local function BuildFullInventoryData()
                             table.insert(locParts, loc)
                         end
                     end
+                    local hasKnownLocation = #locParts > 0
+
+                    local statusKey, statusStr, targetRealm, postedCharKey = GetItemStatus(key, itemData, hasKnownLocation)
+
+                    -- For posted items, override owner and location from the log entry
+                    local displayOwner = coloredOwner
+                    local displayLocation = table.concat(locParts, ", ")
+                    if statusKey == "Posted" and postedCharKey then
+                        local postedName = postedCharKey:match("^(.-)%-") or postedCharKey
+                        local postedCharData = ns.db.characters[postedCharKey]
+                        local postedClassColor = postedCharData and CLASS_COLORS[postedCharData.class] or "888888"
+                        displayOwner = "|cff" .. postedClassColor .. postedName .. "|r"
+                        displayLocation = "Auction House"
+                    end
 
                     table.insert(data, {
                         name        = invDisplayName,
                         qty         = itemData.quantity,
-                        owner       = coloredOwner,
-                        location    = table.concat(locParts, ", "),
+                        owner       = displayOwner,
+                        location    = displayLocation,
                         status      = statusStr,
                         targetRealm = targetRealm or "",
                         _icon       = itemData.icon,
@@ -105,8 +125,9 @@ local function BuildFullInventoryData()
                         _itemName   = itemData.name,
                         _quantity   = itemData.quantity,
                         _statusKey  = statusKey,
-                        _sortStatus = statusKey == "Queued" and 1 or statusKey == "Posted" and 2
-                            or statusKey == "Untracked" and 3 or 4,
+                        _sortStatus = statusKey == "Assigned" and 1 or statusKey == "Posted" and 2
+                            or statusKey == "Check AH" and 3 or statusKey == "Unassigned" and 4
+                            or statusKey == "Unknown" and 5 or 6,
                         _charKey    = charKey,
                     })
                 end
@@ -124,13 +145,25 @@ local function BuildFullInventoryData()
                     wbDisplayName = QualityColorName(wbDisplayName, wbQuality)
                 end
 
-                local statusKey, statusStr, targetRealm = GetItemStatus(key, itemData)
+                -- Warbank always has a known location
+                local statusKey, statusStr, targetRealm, postedCharKey = GetItemStatus(key, itemData, true)
+
+                -- For posted items, override owner and location from the log entry
+                local displayOwner = ns.COLORS.YELLOW .. "Warbank" .. "|r"
+                local displayLocation = "warbank"
+                if statusKey == "Posted" and postedCharKey then
+                    local postedName = postedCharKey:match("^(.-)%-") or postedCharKey
+                    local postedCharData = ns.db.characters[postedCharKey]
+                    local postedClassColor = postedCharData and CLASS_COLORS[postedCharData.class] or "888888"
+                    displayOwner = "|cff" .. postedClassColor .. postedName .. "|r"
+                    displayLocation = "Auction House"
+                end
 
                 table.insert(data, {
                     name        = wbDisplayName,
                     qty         = itemData.quantity,
-                    owner       = ns.COLORS.YELLOW .. "Warbank" .. "|r",
-                    location    = "warbank",
+                    owner       = displayOwner,
+                    location    = displayLocation,
                     status      = statusStr,
                     targetRealm = targetRealm or "",
                     _icon       = itemData.icon,
@@ -141,7 +174,8 @@ local function BuildFullInventoryData()
                     _quantity   = itemData.quantity,
                     _statusKey  = statusKey,
                     _sortStatus = statusKey == "Assigned" and 1 or statusKey == "Posted" and 2
-                        or statusKey == "Check AH" and 3 or statusKey == "Unknown" and 4 or 5,
+                        or statusKey == "Check AH" and 3 or statusKey == "Unassigned" and 4
+                        or statusKey == "Unknown" and 5 or 6,
                     _charKey    = "Warbank",
                 })
             end
@@ -160,13 +194,24 @@ local function BuildFullInventoryData()
                         gbDisplayName = QualityColorName(gbDisplayName, gbQuality)
                     end
 
-                    local statusKey, statusStr, targetRealm = GetItemStatus(key, itemData)
+                    local statusKey, statusStr, targetRealm, postedCharKey = GetItemStatus(key, itemData, true)
+
+                    -- For posted items, override owner and location from the log entry
+                    local displayOwner = ns.COLORS.ORANGE .. guildName .. "|r"
+                    local displayLocation = "guild bank"
+                    if statusKey == "Posted" and postedCharKey then
+                        local postedName = postedCharKey:match("^(.-)%-") or postedCharKey
+                        local postedCharData = ns.db.characters[postedCharKey]
+                        local postedClassColor = postedCharData and CLASS_COLORS[postedCharData.class] or "888888"
+                        displayOwner = "|cff" .. postedClassColor .. postedName .. "|r"
+                        displayLocation = "Auction House"
+                    end
 
                     table.insert(data, {
                         name        = gbDisplayName,
                         qty         = itemData.quantity,
-                        owner       = ns.COLORS.ORANGE .. guildName .. "|r",
-                        location    = "guild bank",
+                        owner       = displayOwner,
+                        location    = displayLocation,
                         status      = statusStr,
                         targetRealm = targetRealm or "",
                         _icon       = itemData.icon,
@@ -177,7 +222,8 @@ local function BuildFullInventoryData()
                         _quantity   = itemData.quantity,
                         _statusKey  = statusKey,
                         _sortStatus = statusKey == "Assigned" and 1 or statusKey == "Posted" and 2
-                            or statusKey == "Check AH" and 3 or statusKey == "Unknown" and 4 or 5,
+                            or statusKey == "Check AH" and 3 or statusKey == "Unassigned" and 4
+                            or statusKey == "Unknown" and 5 or 6,
                         _charKey    = "Guild:" .. guildName,
                     })
                 end
@@ -198,7 +244,7 @@ function UI:RefreshInventoryPage()
     self.inventoryTable:SetRowClickHandler(function(rowData, button)
         if button == "RightButton" then
             local statusKey = rowData._statusKey
-            if statusKey == "Unknown" or statusKey == "Check AH" then
+            if statusKey == "Unknown" or statusKey == "Unassigned" or statusKey == "Check AH" then
                 if IsShiftKeyDown() then
                     local added = ns.Import:Save({{
                         itemKey  = rowData._itemKey,
@@ -243,6 +289,7 @@ function UI:RefreshInventoryPage()
     if (statusCounts.Assigned or 0) > 0 then table.insert(statusParts, ns.COLORS.GREEN .. statusCounts.Assigned .. " assigned|r") end
     if (statusCounts.Posted or 0) > 0 then table.insert(statusParts, ns.COLORS.YELLOW .. statusCounts.Posted .. " posted|r") end
     if (statusCounts["Check AH"] or 0) > 0 then table.insert(statusParts, ns.COLORS.ORANGE .. statusCounts["Check AH"] .. " check AH|r") end
+    if (statusCounts.Unassigned or 0) > 0 then table.insert(statusParts, "|cffbbbbbb" .. statusCounts.Unassigned .. " unassigned|r") end
     if (statusCounts.Unknown or 0) > 0 then table.insert(statusParts, ns.COLORS.GRAY .. statusCounts.Unknown .. " unknown|r") end
     if (statusCounts.Ignored or 0) > 0 then table.insert(statusParts, ns.COLORS.RED .. statusCounts.Ignored .. " ignored|r") end
     mainFrame.statusText:SetText(table.concat(statusParts, "  |  "))

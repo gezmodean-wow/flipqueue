@@ -302,24 +302,25 @@ function UI:RefreshCharactersPage()
         local charsHeight = math.max(60, (#charData + 1) * 20 + 22)
         if charsHeight > 250 then charsHeight = 250 end
 
-        self.needCharsTable.headerFrame:ClearAllPoints()
-        self.needCharsTable.headerFrame:SetPoint("TOPLEFT", tableContainer, "TOPLEFT", 0, -charsHeight - 10)
-        self.needCharsTable.headerFrame:SetPoint("TOPRIGHT", tableContainer, "TOPRIGHT", 0, -charsHeight - 10)
-
-        self.needCharsTable.scrollFrame:ClearAllPoints()
-        self.needCharsTable.scrollFrame:SetPoint("TOPLEFT", self.needCharsTable.headerFrame, "BOTTOMLEFT", 0, 0)
-        self.needCharsTable.scrollFrame:SetPoint("BOTTOMRIGHT", tableContainer, "BOTTOMRIGHT", -22, 0)
-
+        -- Section heading: same style as "Next Steps" on To-Do page
         if not self._needCharsLabel then
             self._needCharsLabel = tableContainer:CreateFontString(nil, "OVERLAY", "GameFontNormal")
         end
         self._needCharsLabel:ClearAllPoints()
-        self._needCharsLabel:SetPoint("TOPLEFT", tableContainer, "TOPLEFT", 4, -charsHeight - 2)
+        self._needCharsLabel:SetPoint("TOPLEFT", tableContainer, "TOPLEFT", 4, -charsHeight - 6)
         self._needCharsLabel:SetPoint("RIGHT", tableContainer, "RIGHT", -4, 0)
         self._needCharsLabel:SetJustifyH("LEFT")
         self._needCharsLabel:SetTextColor(1, 0.4, 0.4)
         self._needCharsLabel:SetText("Realms Needing a Character (" .. #needData .. ")")
         self._needCharsLabel:Show()
+
+        self.needCharsTable.headerFrame:ClearAllPoints()
+        self.needCharsTable.headerFrame:SetPoint("TOPLEFT", tableContainer, "TOPLEFT", 0, -charsHeight - 18)
+        self.needCharsTable.headerFrame:SetPoint("TOPRIGHT", tableContainer, "TOPRIGHT", 0, -charsHeight - 18)
+
+        self.needCharsTable.scrollFrame:ClearAllPoints()
+        self.needCharsTable.scrollFrame:SetPoint("TOPLEFT", self.needCharsTable.headerFrame, "BOTTOMLEFT", 0, 0)
+        self.needCharsTable.scrollFrame:SetPoint("BOTTOMRIGHT", tableContainer, "BOTTOMRIGHT", -22, 0)
 
         UI._ShowTable(self.needCharsTable)
         self.needCharsTable:SetData(needData)
@@ -331,6 +332,10 @@ function UI:RefreshCharactersPage()
         self.charsTable.scrollFrame:SetHeight(charsHeight - 22)
     else
         if self._needCharsLabel then self._needCharsLabel:Hide() end
+        -- No "need characters" section: expand chars table to fill available space
+        self.charsTable.scrollFrame:ClearAllPoints()
+        self.charsTable.scrollFrame:SetPoint("TOPLEFT", self.charsTable.headerFrame, "BOTTOMLEFT", 0, 0)
+        self.charsTable.scrollFrame:SetPoint("BOTTOMRIGHT", tableContainer, "BOTTOMRIGHT", -22, 0)
     end
 
     -- TSM Detected Characters section (scrollable)
