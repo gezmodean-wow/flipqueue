@@ -188,10 +188,196 @@ function ScrollTableMixin:CreateScrollArea(parent)
     self.content:SetHeight(1)
     self.scrollFrame:SetScrollChild(self.content)
 
+    -- Grab the scroll bar created by UIPanelScrollFrameTemplate
+    self.scrollBar = self.scrollFrame.ScrollBar
+    if not self.scrollBar then
+        -- Fallback: find scroll bar among children
+        for _, child in ipairs({self.scrollFrame:GetChildren()}) do
+            if child and child.GetObjectType and child:GetObjectType() == "Slider" then
+                self.scrollBar = child
+                break
+            end
+        end
+    end
+
+    -- Horizontal scroll state
+    self._hScroll = 0
+
+    -- Horizontal scroll bar track (thin bar at bottom of parent)
+    local hTrack = CreateFrame("Frame", nil, parent)
+    hTrack:SetHeight(8)
+    hTrack:SetPoint("BOTTOMLEFT", parent, "BOTTOMLEFT", 0, 0)
+    hTrack:SetPoint("BOTTOMRIGHT", parent, "BOTTOMRIGHT", 0, 0)
+    local hTrackBg = hTrack:CreateTexture(nil, "BACKGROUND")
+    hTrackBg:SetAllPoints()
+    hTrackBg:SetColorTexture(0.1, 0.1, 0.15, 0.8)
+    hTrack:Hide()
+    self._hScrollTrack = hTrack
+
+    -- Horizontal scroll thumb
+    local hThumb = CreateFrame("Button", nil, hTrack)
+    hThumb:SetHeight(6)
+    hThumb:SetPoint("TOP", hTrack, "TOP", 0, -1)
+    local hThumbTex = hThumb:CreateTexture(nil, "ARTWORK")
+    hThumbTex:SetAllPoints()
+    hThumbTex:SetColorTexture(0.5, 0.5, 0.6, 0.7)
+    hThumb:EnableMouse(true)
+
+    -- Thumb drag for horizontal scroll
+    local tblSelf = self
+    hThumb:SetScript("OnMouseDown", function(self, button)
+        if button ~= "LeftButton" then return end
+        self._dragging = true
+        self._startX = GetCursorPosition() / UIParent:GetEffectiveScale()
+        self._startScroll = tblSelf._hScroll or 0
+    end)
+    hThumb:SetScript("OnMouseUp", function(self)
+        self._dragging = false
+        self:SetScript("OnUpdate", nil)
+    end)
+    hThumb:SetScript("OnEnter", function(self)
+        hThumbTex:SetColorTexture(0.7, 0.7, 0.8, 0.9)
+    end)
+    hThumb:SetScript("OnLeave", function(self)
+        if not self._dragging then
+            hThumbTex:SetColorTexture(0.5, 0.5, 0.6, 0.7)
+        end
+    end)
+    self._hScrollThumb = hThumb
+
+    -- Shift+MouseWheel for horizontal scrolling
+    self.scrollFrame:HookScript("OnMouseWheel", function(sf, delta)
+        if IsShiftKeyDown() then
+            local totalColW = 0
+            for _, col in ipairs(self.columns) do totalColW = totalColW + col.width end
+            local visibleW = sf:GetWidth()
+            local maxHScroll = math.max(0, totalColW - visibleW)
+            if maxHScroll > 0 then
+                self._hScroll = math.max(0, math.min(maxHScroll, (self._hScroll or 0) - delta * 40))
+                self:ApplyHorizontalScroll()
+            end
+        end
+    end)
+
     -- Update content width when scroll area resizes
     self.scrollFrame:SetScript("OnSizeChanged", function(sf, w)
         self.content:SetWidth(w)
+        self:UpdateScrollBarVisibility()
     end)
+
+    -- Also check after vertical scroll changes
+    self.scrollFrame:HookScript("OnScrollRangeChanged", function()
+        self:UpdateScrollBarVisibility()
+    end)
+end
+
+function ScrollTableMixin:ApplyHorizontalScroll()
+    local offset = -(self._hScroll or 0)
+
+    -- Shift header buttons
+    local x = 0
+    for i, col in ipairs(self.columns) do
+        if self.headerButtons[i] then
+            self.headerButtons[i]:ClearAllPoints()
+            self.headerButtons[i]:SetPoint("LEFT", self.headerFrame, "LEFT", x + offset, 0)
+            self.headerButtons[i]:SetWidth(col.width)
+        end
+        x = x + col.width
+    end
+
+    -- Shift row clip frames
+    for _, row in ipairs(self.rows) do
+        if row._cellClips then
+            local cx = 0
+            for j, col in ipairs(self.columns) do
+                if row._cellClips[j] then
+                    row._cellClips[j]:ClearAllPoints()
+                    row._cellClips[j]:SetPoint("LEFT", row, "LEFT", cx + offset, 0)
+                    row._cellClips[j]:SetWidth(col.width)
+                end
+                cx = cx + col.width
+            end
+        end
+    end
+
+    -- Update horizontal thumb position
+    self:UpdateHScrollThumb()
+end
+
+function ScrollTableMixin:UpdateHScrollThumb()
+    local hTrack = self._hScrollTrack
+    local hThumb = self._hScrollThumb
+    if not hTrack or not hThumb then return end
+
+    local totalColW = 0
+    for _, col in ipairs(self.columns) do totalColW = totalColW + col.width end
+    local visibleW = self.scrollFrame:GetWidth()
+    local maxHScroll = math.max(0, totalColW - visibleW)
+
+    if maxHScroll <= 0 then
+        hTrack:Hide()
+        return
+    end
+
+    hTrack:Show()
+    local trackW = hTrack:GetWidth()
+    if trackW <= 0 then return end
+    local thumbRatio = math.min(1, visibleW / totalColW)
+    local thumbW = math.max(20, trackW * thumbRatio)
+    hThumb:SetWidth(thumbW)
+
+    local scrollRatio = (self._hScroll or 0) / maxHScroll
+    local thumbOffset = scrollRatio * (trackW - thumbW)
+    hThumb:ClearAllPoints()
+    hThumb:SetPoint("LEFT", hTrack, "LEFT", thumbOffset, 0)
+    hThumb:SetPoint("TOP", hTrack, "TOP", 0, -1)
+
+    -- Wire up thumb drag
+    local tbl = self
+    hThumb:SetScript("OnUpdate", function(self)
+        if not self._dragging then return end
+        local curX = GetCursorPosition() / UIParent:GetEffectiveScale()
+        local delta = curX - self._startX
+        local dragRatio = delta / (trackW - thumbW)
+        local newScroll = math.max(0, math.min(maxHScroll, self._startScroll + dragRatio * maxHScroll))
+        tbl._hScroll = newScroll
+        tbl:ApplyHorizontalScroll()
+    end)
+end
+
+function ScrollTableMixin:UpdateScrollBarVisibility()
+    local scrollBar = self.scrollBar
+    if not scrollBar then return end
+
+    local range = self.scrollFrame:GetVerticalScrollRange()
+
+    -- Determine if horizontal scroll is needed
+    local totalColW = 0
+    for _, col in ipairs(self.columns) do totalColW = totalColW + col.width end
+    local visibleW = self.scrollFrame:GetWidth()
+    local hasHScroll = totalColW > visibleW + 1
+
+    if range and range <= 0.5 then
+        -- Nothing to scroll vertically: hide scroll bar (thumb + track)
+        scrollBar:SetAlpha(0)
+        scrollBar:EnableMouse(false)
+    else
+        -- Content overflows: show scroll bar
+        scrollBar:SetAlpha(1)
+        scrollBar:EnableMouse(true)
+    end
+
+    -- Update horizontal scroll bar visibility
+    if hasHScroll then
+        self:UpdateHScrollThumb()
+    elseif self._hScrollTrack then
+        self._hScrollTrack:Hide()
+        -- Reset horizontal scroll position
+        if (self._hScroll or 0) > 0 then
+            self._hScroll = 0
+            self:ApplyHorizontalScroll()
+        end
+    end
 end
 
 function ScrollTableMixin:UpdateHeaderArrows()
@@ -418,6 +604,7 @@ function ScrollTableMixin:Render()
     end
 
     self.content:SetHeight(math.max(1, #self.data * ROW_HEIGHT))
+    self:UpdateScrollBarVisibility()
 end
 
 function ScrollTableMixin:SetRowClickHandler(fn)
@@ -452,6 +639,7 @@ function ScrollTableMixin:SetColumns(newColumns)
     -- Update columns and rebuild header
     self.columns = newColumns
     self.data = {}
+    self._hScroll = 0
 
     -- Validate sort key still exists in new columns
     if self.sortKey then

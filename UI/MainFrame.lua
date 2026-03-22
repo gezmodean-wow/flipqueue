@@ -10,7 +10,7 @@ UI.currentPage = "todo"
 -- MAIN FRAME (dark, clean styling)
 -- ==========================================
 
-local SIDEBAR_WIDTH = 110
+local SIDEBAR_WIDTH = 130
 local FRAME_WIDTH = 750
 local FRAME_HEIGHT = 550
 
