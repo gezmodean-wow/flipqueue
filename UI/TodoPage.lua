@@ -304,6 +304,17 @@ function UI:RefreshTodoPage()
         sf.sub:SetWidth(sf:GetWidth() - 40)
         sf.sub:SetJustifyH("CENTER")
 
+        -- "Open Generator" button for empty states
+        local genBtn = CreateFrame("Button", nil, sf, "UIPanelButtonTemplate")
+        genBtn:SetSize(160, 28)
+        genBtn:SetPoint("TOP", sf.sub, "BOTTOM", 0, -10)
+        genBtn:SetText("Open To-Do Generator")
+        genBtn:SetScript("OnClick", function()
+            UI.currentPage = "generator"
+            UI:Refresh()
+        end)
+        sf.genBtn = genBtn
+
         sf:SetScript("OnSizeChanged", function(self, w)
             sf.sub:SetWidth(w - 40)
         end)
@@ -312,6 +323,7 @@ function UI:RefreshTodoPage()
     if #data == 0 then
         -- Nothing to post on this character
         self._postSummaryFrame:Hide()
+        self._postSummaryFrame.genBtn:Hide()
 
         if totalTodoTasks == 0 and #nextData == 0 and #myTasks == 0 and ns:ImportGetCount("fpScanner") == 0 then
             -- Everything is done!
@@ -327,9 +339,10 @@ function UI:RefreshTodoPage()
             }
             local msg = doneMessages[math.random(#doneMessages)]
             self._postSummaryFrame.title:ClearAllPoints()
-            self._postSummaryFrame.title:SetPoint("CENTER", self._postSummaryFrame, "CENTER", 0, 10)
+            self._postSummaryFrame.title:SetPoint("CENTER", self._postSummaryFrame, "CENTER", 0, 20)
             self._postSummaryFrame.title:SetText(ns.COLORS.GREEN .. msg.title .. "|r")
             self._postSummaryFrame.sub:SetText(ns.COLORS.GRAY .. msg.sub .. "|r")
+            self._postSummaryFrame.genBtn:Show()
             mainFrame.statusText:SetText("Queue empty  |  Import items from FlippingPal to get started")
 
         elseif totalTodoTasks > 0 and currentTodoList then
@@ -350,6 +363,32 @@ function UI:RefreshTodoPage()
                     local newScroll = math.max(0, math.min(current - (delta * step), maxScroll))
                     self:SetVerticalScroll(newScroll)
                 end)
+
+                -- Find and stash scroll bar for auto-hide
+                local sBar = s.ScrollBar
+                if not sBar then
+                    for _, child in ipairs({s:GetChildren()}) do
+                        if child and child.GetObjectType and child:GetObjectType() == "Slider" then
+                            sBar = child; break
+                        end
+                    end
+                end
+                s._scrollBar = sBar
+
+                -- Auto-hide scroll bar when nothing to scroll
+                s:HookScript("OnScrollRangeChanged", function(sf)
+                    local bar = sf._scrollBar
+                    if not bar then return end
+                    local range = sf:GetVerticalScrollRange()
+                    if range and range <= 0.5 then
+                        bar:SetAlpha(0)
+                        bar:EnableMouse(false)
+                    else
+                        bar:SetAlpha(1)
+                        bar:EnableMouse(true)
+                    end
+                end)
+
                 self._todoOverviewScroll = s
                 self._todoOverviewContent = c
                 self._todoOverviewRows = {}
@@ -564,7 +603,7 @@ function UI:RefreshTodoPage()
         else
             -- No to-do list, but there are next steps or queue items
             self._postSummaryFrame:Show()
-            local bannerHeight = 50
+            local bannerHeight = 80
             self._postSummaryFrame:ClearAllPoints()
             self._postSummaryFrame:SetPoint("TOPLEFT", tableContainer, "TOPLEFT", 0, contentOffset)
             self._postSummaryFrame:SetPoint("TOPRIGHT", tableContainer, "TOPRIGHT", 0, contentOffset)
@@ -574,6 +613,7 @@ function UI:RefreshTodoPage()
             self._postSummaryFrame.title:SetText(ns.COLORS.GREEN .. "No to-do list generated yet|r")
             self._postSummaryFrame.sub:SetText(
                 ns.COLORS.GRAY .. "Go to the To-Do Generator to build your task list.|r")
+            self._postSummaryFrame.genBtn:Show()
 
             local belowBanner = contentOffset - bannerHeight
             if #nextData > 0 then
@@ -601,6 +641,7 @@ function UI:RefreshTodoPage()
     else
         -- Has items to post
         self._postSummaryFrame:Hide()
+        self._postSummaryFrame.genBtn:Hide()
 
         self.postNowTable.headerFrame:ClearAllPoints()
         self.postNowTable.headerFrame:SetPoint("TOPLEFT", tableContainer, "TOPLEFT", 0, contentOffset)

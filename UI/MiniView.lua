@@ -463,6 +463,21 @@ function UI:RefreshMini()
         row.tooltipExtra = nil
         row:SetScript("OnMouseDown", nil)
         row:Show()
+
+        -- "Open Generator" clickable row
+        rowIndex = rowIndex + 1
+        local genRow = GetOrCreateMiniRow(rowIndex)
+        genRow.icon:SetTexture("Interface\\Icons\\INV_Scroll_03")
+        genRow.text:SetText(ns.COLORS.YELLOW .. "Open To-Do Generator" .. ns.COLORS.RESET)
+        genRow.tooltipItemID = nil
+        genRow.tooltipItemName = "Open Generator"
+        genRow.tooltipExtra = "Click to open the main window on the To-Do Generator page"
+        genRow:SetScript("OnMouseDown", function()
+            UI.currentPage = "generator"
+            UI.mainFrame:Show()
+            UI:Refresh()
+        end)
+        genRow:Show()
     end
 
     -- Resize frame to fit content
