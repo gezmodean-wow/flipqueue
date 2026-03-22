@@ -113,7 +113,34 @@ local function ParseDataFields(dataLine)
 end
 
 -- Extract sell realm from a REALM line
+-- Also detects cross-realm flip data: SellRealm\tBuyPrice\tBuyRealm
+-- Returns: sellRealm, buyPrice (or nil), buyRealm (or nil)
 local function ParseRealmLine(realmLine)
+    -- Try tab-separated cross-realm format first: "SellRealm\tBuyPrice\tBuyRealm"
+    local tabParts = {strsplit("\t", realmLine)}
+    if #tabParts >= 3 then
+        local sellPart = strtrim(tabParts[1])
+        local buyPricePart = strtrim(tabParts[2])
+        local buyRealmPart = strtrim(tabParts[3])
+
+        -- sellPart might contain gold+source: "Aegwynn, ...    0g    Player Inventor..."
+        -- Clean it: take text before first gold value
+        local sellRealm = sellPart:match("^(.-)%s%s+[%d,]+g")
+            or sellPart:match("^(.-)%s+[%d,]+g")
+            or sellPart
+        sellRealm = CleanRealmString(strtrim(sellRealm))
+
+        -- buyRealmPart might also have trailing source info
+        local buyRealm = buyRealmPart:match("^(.-)%s%s+") or buyRealmPart
+        buyRealm = CleanRealmString(strtrim(buyRealm))
+
+        -- Check if buyPrice looks like a gold value and buyRealm is non-empty
+        if buyPricePart:match("[%d,]+g") and buyRealm ~= "" then
+            return sellRealm, buyPricePart, buyRealm
+        end
+    end
+
+    -- Fallback: standard single-realm format
     -- Remove the gold value and source parts, keep the realm name
     -- Format: "Aegwynn, ..." or "Aegwynn, ...    0g    Player Inventor..."
     -- The realm is the text before the first gold value
@@ -124,7 +151,7 @@ local function ParseRealmLine(realmLine)
     realm = strtrim(realm)
     -- Strip FP website ", ..." suffix (means "and connected realms" — not a real name)
     realm = realm:gsub(",%s*%.%.%.$", "")
-    return strtrim(realm)
+    return strtrim(realm), nil, nil
 end
 
 --------------------------
@@ -206,6 +233,8 @@ function Import:ParseFPWebsite(text)
         -- Collect gold values, nocomp, and realm from the block
         local goldValues = {}
         local sellRealm = ""
+        local buyPrice = nil
+        local buyRealm = nil
         local noCompetition = false
 
         for j = block.dataIdx + 1, blockEnd do
@@ -215,13 +244,35 @@ function Import:ParseFPWebsite(text)
             elseif lineType == "NOCOMP" then
                 noCompetition = true
             elseif lineType == "REALM" then
-                sellRealm = ParseRealmLine(allLines[j])
+                local sr, bp, br = ParseRealmLine(allLines[j])
+                sellRealm = sr
+                if bp then
+                    buyPrice = bp
+                    buyRealm = br
+                end
             end
             -- PCT, EMPTY, NAME (stray), STATS → skip
         end
 
         -- Gold values order: [1] Sale Avg, [2] Sale Avg vs Buy, [3] Net revenue, [4] Listing price
         local sellPrice = goldValues[4] or goldValues[3] or goldValues[1] or "0g"
+        local saleAvg = goldValues[1] or ""
+
+        -- Determine deal type and profit
+        local dealType = "sell"
+        local profitAmount = nil
+        local profitPct = nil
+        if buyRealm and buyRealm ~= "" and buyPrice and buyPrice ~= "" then
+            dealType = "flip"
+            -- Net revenue is goldValues[3], buy price is buyPrice
+            -- Profit = net revenue - buy price (approximate)
+            local sellGold = ns:ParseGoldValue(goldValues[3] or sellPrice)
+            local buyGold = ns:ParseGoldValue(buyPrice)
+            if sellGold > 0 and buyGold > 0 then
+                profitAmount = tostring(sellGold - buyGold) .. "g"
+                profitPct = math.floor((sellGold - buyGold) / buyGold * 100)
+            end
+        end
 
         table.insert(items, {
             itemKey       = fullName,
@@ -238,6 +289,12 @@ function Import:ParseFPWebsite(text)
             targetRealm   = sellRealm,
             expectedPrice = sellPrice,
             noCompetition = noCompetition,
+            dealType      = dealType,
+            buyRealm      = buyRealm,
+            buyPrice      = buyPrice,
+            profitAmount  = profitAmount,
+            profitPct     = profitPct,
+            saleAvg       = saleAvg,
         })
     end
 
@@ -477,6 +534,9 @@ function Import:ParseFPCommaCSV(text)
 
     if not colMap.name then return items end
 
+    -- Detect cross-realm columns
+    local hasCrossRealm = colMap.buyPrice and colMap.buyRealm
+
     for i = 2, #lines do
         local fields = ParseCSVLine(lines[i])
         if #fields >= 2 then
@@ -491,9 +551,27 @@ function Import:ParseFPCommaCSV(text)
             local sellRealm = colMap.sellRealm and strtrim(fields[colMap.sellRealm] or "") or ""
             local saleAvg   = colMap.saleAvg and strtrim(fields[colMap.saleAvg] or "") or ""
 
+            -- Cross-realm fields
+            local buyPriceVal = hasCrossRealm and strtrim(fields[colMap.buyPrice] or "") or ""
+            local buyRealmVal = hasCrossRealm and strtrim(fields[colMap.buyRealm] or "") or ""
+
             if name ~= "" then
                 -- Use itemID for key if available, fall back to name
                 local key = itemID ~= "" and ns:MakeItemKey(itemID, "", "") or name
+
+                -- Determine deal type and profit
+                local dealType = "sell"
+                local profitAmount = nil
+                local profitPct = nil
+                if buyRealmVal ~= "" and buyPriceVal ~= "" then
+                    dealType = "flip"
+                    local sellGold = ns:ParseGoldValue(sellPrice ~= "" and sellPrice or saleAvg)
+                    local buyGold = ns:ParseGoldValue(buyPriceVal)
+                    if sellGold > 0 and buyGold > 0 then
+                        profitAmount = tostring(sellGold - buyGold) .. "g"
+                        profitPct = math.floor((sellGold - buyGold) / buyGold * 100)
+                    end
+                end
 
                 table.insert(items, {
                     itemKey       = key,
@@ -510,6 +588,12 @@ function Import:ParseFPCommaCSV(text)
                     targetRealm   = sellRealm,
                     expectedPrice = sellPrice ~= "" and sellPrice or saleAvg,
                     noCompetition = false,
+                    dealType      = dealType,
+                    buyRealm      = buyRealmVal ~= "" and buyRealmVal or nil,
+                    buyPrice      = buyPriceVal ~= "" and buyPriceVal or nil,
+                    profitAmount  = profitAmount,
+                    profitPct     = profitPct,
+                    saleAvg       = saleAvg,
                 })
             end
         end
@@ -601,19 +685,36 @@ function Import:ImportFromAuctionatorList(listName)
         return {}
     end
 
+    -- Detect "FP Buy - RealmName" pattern for buy to-dos
+    local buyRealm = listName:match("^FP Buy %- (.+)$")
+
     local items = {}
     for _, searchStr in ipairs(searchStrings) do
         local itemName = searchStr:match('^"([^"]+)"') or searchStr:match("^([^;]+)")
         if itemName then
+            -- Extract price from Auctionator search string if present
+            -- Format: "Name";;;maxPrice;...
+            local price = nil
+            local pricePart = searchStr:match('^"[^"]+";[^;]*;[^;]*;([^;]+)')
+                or searchStr:match("^[^;]+;[^;]*;[^;]*;([^;]+)")
+            if pricePart and tonumber(pricePart) then
+                -- Auctionator prices are in copper
+                price = ns:FormatGold(tonumber(pricePart))
+            end
+
             table.insert(items, {
-                itemKey   = itemName,
-                itemID    = "",
-                name      = itemName,
-                quality   = "",
-                ilvl      = 0,
-                bonusIDs  = "",
-                modifiers = "",
-                quantity  = 1,
+                itemKey       = itemName,
+                itemID        = "",
+                name          = itemName,
+                quality       = "",
+                ilvl          = 0,
+                bonusIDs      = "",
+                modifiers     = "",
+                quantity      = 1,
+                dealType      = buyRealm and "buy" or nil,
+                buyRealm      = buyRealm,
+                buyPrice      = price,
+                targetRealm   = buyRealm or "",
             })
         end
     end
@@ -803,6 +904,13 @@ function Import:Save(items, source)
                     expectedPrice = item.expectedPrice,
                     noCompetition = item.noCompetition,
                     importedAt    = time(),
+                    -- Cross-realm flip fields
+                    dealType      = item.dealType,
+                    buyRealm      = item.buyRealm,
+                    buyPrice      = item.buyPrice,
+                    profitAmount  = item.profitAmount,
+                    profitPct     = item.profitPct,
+                    saleAvg       = item.saleAvg,
                 }
                 added = added + 1
             end
