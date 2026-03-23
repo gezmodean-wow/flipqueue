@@ -787,10 +787,15 @@ function UI:RefreshGeneratorPage(pending)
         s2.instrLabel:SetText("Paste FlippingPal scan results below:")
         s2.instrLabel:SetTextColor(0.7, 0.7, 0.7)
 
+        s2.premiumNote = s2:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+        s2.premiumNote:SetPoint("TOPLEFT", s2.instrLabel, "BOTTOMLEFT", 0, -2)
+        s2.premiumNote:SetText("Requires FlippingPal Premium")
+        s2.premiumNote:SetTextColor(0.5, 0.5, 0.5)
+
         -- Edit box area
         s2.editBg = CreateFrame("Frame", nil, s2, "BackdropTemplate")
-        s2.editBg:SetPoint("TOPLEFT", s2, "TOPLEFT", 4, -26)
-        s2.editBg:SetPoint("TOPRIGHT", s2, "TOPRIGHT", -4, -26)
+        s2.editBg:SetPoint("TOPLEFT", s2, "TOPLEFT", 4, -36)
+        s2.editBg:SetPoint("TOPRIGHT", s2, "TOPRIGHT", -4, -36)
         s2.editBg:SetHeight(80)
         s2.editBg:SetBackdrop({
             bgFile = "Interface\\Tooltips\\UI-Tooltip-Background",
@@ -1090,9 +1095,14 @@ function UI:RefreshGeneratorPage(pending)
         cr1.instrLabel:SetText("Paste cross-realm flip data from FlippingPal:")
         cr1.instrLabel:SetTextColor(0.4, 0.8, 0.9)
 
+        cr1.premiumNote = cr1:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+        cr1.premiumNote:SetPoint("TOPLEFT", cr1.instrLabel, "BOTTOMLEFT", 0, -2)
+        cr1.premiumNote:SetText("Requires FlippingPal Premium")
+        cr1.premiumNote:SetTextColor(0.5, 0.5, 0.5)
+
         cr1.editBg = CreateFrame("Frame", nil, cr1, "BackdropTemplate")
-        cr1.editBg:SetPoint("TOPLEFT", cr1, "TOPLEFT", 4, -26)
-        cr1.editBg:SetPoint("TOPRIGHT", cr1, "TOPRIGHT", -4, -26)
+        cr1.editBg:SetPoint("TOPLEFT", cr1, "TOPLEFT", 4, -36)
+        cr1.editBg:SetPoint("TOPRIGHT", cr1, "TOPRIGHT", -4, -36)
         cr1.editBg:SetHeight(80)
         cr1.editBg:SetBackdrop({
             bgFile = "Interface\\Tooltips\\UI-Tooltip-Background",
