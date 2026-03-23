@@ -843,6 +843,8 @@ function UI:RefreshGeneratorPage(pending)
         s2.editScroll:SetScript("OnSizeChanged", function(sf, w)
             s2.editBox:SetWidth(w)
         end)
+        -- Click anywhere on the background to focus the EditBox
+        s2.editBg:SetScript("OnMouseDown", function() s2.editBox:SetFocus() end)
 
         -- Preview table
         s2.previewTable = UI:CreateScrollTable(s2, {
@@ -1143,6 +1145,8 @@ function UI:RefreshGeneratorPage(pending)
         cr1.editScroll:SetScript("OnSizeChanged", function(sf, w)
             cr1.editBox:SetWidth(w)
         end)
+        -- Click anywhere on the background to focus the EditBox
+        cr1.editBg:SetScript("OnMouseDown", function() cr1.editBox:SetFocus() end)
 
         cr1.previewTable = UI:CreateScrollTable(cr1, {
             {key = "status",    label = "Status",    width = 52,  align = "CENTER", sortable = true},

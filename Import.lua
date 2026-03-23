@@ -132,7 +132,20 @@ end
 -- Returns: sellRealm, buyPrice (or nil), buyRealm (or nil)
 local function ParseRealmLine(realmLine)
     -- Try tab-separated cross-realm format first: "SellRealm\tBuyPrice\tBuyRealm"
+    -- Also try multi-space separated (browser copy-paste uses spaces, not tabs)
     local tabParts = {strsplit("\t", realmLine)}
+    if #tabParts < 3 then
+        -- Fallback: split by 2+ consecutive whitespace (browser copy-paste)
+        local spaceParts = {}
+        for part in realmLine:gmatch("([^%s]+[^%s]-)%s%s+") do
+            table.insert(spaceParts, part)
+        end
+        -- Capture trailing part after last multi-space gap
+        local trailing = realmLine:match(".*%s%s+(.+)$")
+        if trailing then table.insert(spaceParts, trailing) end
+        if #spaceParts >= 3 then tabParts = spaceParts end
+    end
+
     if #tabParts >= 3 then
         local sellPart = strtrim(tabParts[1])
         local buyPricePart = strtrim(tabParts[2])
@@ -728,6 +741,71 @@ function Import:ParseAuctionatorText(text)
 end
 
 --------------------------
+-- Auctionator Inline Format (from FP copy-paste)
+--------------------------
+-- Format: "FP Buy - RealmName^"Item1";;ilvlMin;ilvlMax;;;;;;price;quality;#;;^"Item2";;..."
+-- Each line is a different realm. Items separated by ^ within the line.
+
+function Import:ParseAuctionatorInline(text)
+    text = text:gsub("\r\n", "\n"):gsub("\r", "\n")
+
+    local items = {}
+
+    for line in (text .. "\n"):gmatch("(.-)\n") do
+        local trimmed = strtrim(line)
+        if trimmed == "" then
+            -- skip
+        else
+            -- Split by ^ to get header + items
+            local parts = {strsplit("^", trimmed)}
+            if #parts >= 1 then
+                -- First part is the header: "FP Buy - RealmName"
+                local header = strtrim(parts[1])
+                local buyRealm = header:match("^FP Buy %- (.+)$")
+
+                -- Remaining parts are item search strings: "ItemName";;ilvl;ilvl;;;;;;price;quality;#;;
+                for pi = 2, #parts do
+                    local itemStr = strtrim(parts[pi])
+                    if itemStr ~= "" then
+                        local itemName = itemStr:match('^"([^"]+)"') or itemStr:match("^([^;]+)")
+                        if itemName and strtrim(itemName) ~= "" then
+                            itemName = strtrim(itemName)
+
+                            -- Extract price (field index 10 in Auctionator format: after 9 semicolons)
+                            local fields = {strsplit(";", itemStr)}
+                            local price = nil
+                            if fields[10] and tonumber(strtrim(fields[10])) then
+                                local copper = tonumber(strtrim(fields[10]))
+                                if copper > 0 then
+                                    price = ns:FormatGold(copper)
+                                end
+                            end
+
+                            table.insert(items, {
+                                itemKey       = itemName,
+                                itemID        = "",
+                                name          = itemName,
+                                quality       = "",
+                                ilvl          = 0,
+                                bonusIDs      = "",
+                                modifiers     = "",
+                                quantity      = 1,
+                                dealType      = buyRealm and "buy" or nil,
+                                buyRealm      = buyRealm,
+                                buyPrice      = price,
+                                targetRealm   = buyRealm or "",
+                            })
+                        end
+                    end
+                end
+            end
+        end
+    end
+
+    return items
+end
+
+--------------------------
 -- Auto-Detect Format and Parse
 --------------------------
 
@@ -758,6 +836,12 @@ function Import:Parse(text)
     -- FlippingPal comma CSV: header starts with "Item Name," or "Item ID,"
     if firstLine and (firstLine:find("^Item Name,") or firstLine:find("^Item ID,")) then
         return self:ParseFPCommaCSV(text)
+    end
+
+    -- Auctionator shopping list internal format: "FP Buy - Realm^"Item";;...^"Item";;..."
+    -- Multiple lines, each starting with "FP Buy - RealmName^" followed by ^-separated items
+    if firstLine and firstLine:find("^FP Buy %-") and firstLine:find("%^") then
+        return self:ParseAuctionatorInline(text)
     end
 
     -- Semicolon-delimited → FlippingPal CSV format (from extractor addon)
