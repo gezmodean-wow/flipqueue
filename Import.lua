@@ -16,6 +16,20 @@ local function CleanRealmString(realm)
     return strtrim(realm)
 end
 
+-- Known FP source strings that appear in the realm line but are NOT realm names.
+-- Used to prevent ParseRealmLine from misidentifying "Player Inventory" as a buyRealm.
+local FP_SOURCE_STRINGS = {
+    ["player inventory"] = true,
+    ["player inventor"]  = true,   -- truncated by FP website
+    ["auction house"]    = true,
+    ["mail"]             = true,
+    ["vendor"]           = true,
+}
+
+local function IsFPSourceString(str)
+    return FP_SOURCE_STRINGS[str:lower()] or false
+end
+
 --------------------------
 -- Known WoW values
 --------------------------
@@ -134,8 +148,8 @@ local function ParseRealmLine(realmLine)
         local buyRealm = buyRealmPart:match("^(.-)%s%s+") or buyRealmPart
         buyRealm = CleanRealmString(strtrim(buyRealm))
 
-        -- Check if buyPrice looks like a gold value and buyRealm is non-empty
-        if buyPricePart:match("[%d,]+g") and buyRealm ~= "" then
+        -- Check if buyPrice looks like a gold value and buyRealm is a real realm (not a source string)
+        if buyPricePart:match("[%d,]+g") and buyRealm ~= "" and not IsFPSourceString(buyRealm) then
             return sellRealm, buyPricePart, buyRealm
         end
     end

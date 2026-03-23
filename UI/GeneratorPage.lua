@@ -938,7 +938,8 @@ function UI:RefreshGeneratorPage(pending)
                                 displayName = "|cff" .. qColor .. displayName .. "|r"
                             end
 
-                            local isCrossRealm = item.dealType == "flip" or item.dealType == "buy"
+                            local isCrossRealm = (item.dealType == "flip" or item.dealType == "buy")
+                                and item.buyRealm and item.buyRealm ~= ""
                             if isCrossRealm then
                                 displayName = ns.COLORS.CYAN .. "[XR] " .. "|r" .. displayName
                             end

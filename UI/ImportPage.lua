@@ -208,8 +208,9 @@ function UI:RefreshImportPreview()
             displayName = "|cff" .. qColor .. displayName .. "|r"
         end
 
-        -- Cross-realm flip indicator in name
-        local isCrossRealm = item.dealType == "flip" or item.dealType == "buy"
+        -- Cross-realm flip indicator in name (must also have a buyRealm)
+        local isCrossRealm = (item.dealType == "flip" or item.dealType == "buy")
+            and item.buyRealm and item.buyRealm ~= ""
         if isCrossRealm then
             displayName = ns.COLORS.CYAN .. "[XR] " .. "|r" .. displayName
         end
