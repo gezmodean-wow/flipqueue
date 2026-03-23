@@ -1073,6 +1073,468 @@ function UI:RefreshGeneratorPage(pending)
         end)
         s3.genRows = {}
 
+        -- ===== CROSS-REALM STEP CONTAINERS =====
+        gf.crStepContainers = {}
+        for i = 1, 3 do
+            local sc = CreateFrame("Frame", nil, gf)
+            sc:Hide()
+            gf.crStepContainers[i] = sc
+        end
+
+        -- ===== CR STEP 1: Import Deals =====
+        local cr1 = gf.crStepContainers[1]
+
+        cr1.instrLabel = cr1:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+        cr1.instrLabel:SetPoint("TOPLEFT", cr1, "TOPLEFT", 8, -8)
+        cr1.instrLabel:SetText("Paste cross-realm flip data from FlippingPal:")
+        cr1.instrLabel:SetTextColor(0.4, 0.8, 0.9)
+
+        cr1.editBg = CreateFrame("Frame", nil, cr1, "BackdropTemplate")
+        cr1.editBg:SetPoint("TOPLEFT", cr1, "TOPLEFT", 4, -26)
+        cr1.editBg:SetPoint("TOPRIGHT", cr1, "TOPRIGHT", -4, -26)
+        cr1.editBg:SetHeight(80)
+        cr1.editBg:SetBackdrop({
+            bgFile = "Interface\\Tooltips\\UI-Tooltip-Background",
+            edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
+            edgeSize = 10,
+            insets = {left = 2, right = 2, top = 2, bottom = 2},
+        })
+        cr1.editBg:SetBackdropColor(0.05, 0.05, 0.08, 1)
+        cr1.editBg:SetBackdropBorderColor(0.15, 0.3, 0.35, 0.8)
+
+        cr1.editScroll = CreateFrame("ScrollFrame", "FlipQueueCRImportScroll", cr1.editBg, "UIPanelScrollFrameTemplate")
+        cr1.editScroll:SetPoint("TOPLEFT", cr1.editBg, "TOPLEFT", 6, -4)
+        cr1.editScroll:SetPoint("BOTTOMRIGHT", cr1.editBg, "BOTTOMRIGHT", -22, 4)
+
+        cr1.editBox = CreateFrame("EditBox", "FlipQueueCRImportEdit", cr1.editScroll)
+        cr1.editBox:SetMultiLine(true)
+        cr1.editBox:SetAutoFocus(false)
+        cr1.editBox:SetMaxLetters(0)
+        cr1.editBox:SetFontObject("ChatFontNormal")
+        cr1.editBox:SetWidth(cr1.editScroll:GetWidth() or 500)
+        cr1.editScroll:SetScrollChild(cr1.editBox)
+        cr1.editScroll:SetScript("OnSizeChanged", function(sf, w)
+            cr1.editBox:SetWidth(w)
+        end)
+
+        cr1.previewTable = UI:CreateScrollTable(cr1, {
+            {key = "status",    label = "Status",    width = 52,  align = "CENTER", sortable = true},
+            {key = "name",      label = "Item",      width = 140, sortable = true},
+            {key = "sellRealm", label = "Sell Realm", width = 90,  sortable = true},
+            {key = "buyRealm",  label = "Buy Realm",  width = 90,  sortable = true},
+            {key = "buyPrice",  label = "Buy Price",  width = 70,  sortable = true},
+            {key = "profit",    label = "Profit",     width = 60,  sortable = true},
+            {key = "qty",       label = "Qty",        width = 30,  align = "CENTER", sortable = true},
+        })
+        cr1.previewTable:SetSort("status", true)
+        if UI._RegisterTable then UI._RegisterTable(cr1.previewTable) end
+
+        cr1.previewTable.headerFrame:SetParent(cr1)
+        cr1.previewTable.headerFrame:ClearAllPoints()
+        cr1.previewTable.headerFrame:SetPoint("TOPLEFT", cr1.editBg, "BOTTOMLEFT", 0, -4)
+        cr1.previewTable.headerFrame:SetPoint("TOPRIGHT", cr1.editBg, "BOTTOMRIGHT", 0, -4)
+
+        cr1.previewTable.scrollFrame:SetParent(cr1)
+        cr1.previewTable.scrollFrame:ClearAllPoints()
+        cr1.previewTable.scrollFrame:SetPoint("TOPLEFT", cr1.previewTable.headerFrame, "BOTTOMLEFT", 0, 0)
+        cr1.previewTable.scrollFrame:SetPoint("BOTTOMRIGHT", cr1, "BOTTOMRIGHT", -22, 40)
+
+        cr1.statusLabel = cr1:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+        cr1.statusLabel:SetPoint("LEFT", cr1, "BOTTOMLEFT", 8, 22)
+        cr1.statusLabel:SetTextColor(0.5, 0.5, 0.5)
+        cr1.statusLabel:SetText("")
+
+        cr1.importBtn = CreateHeaderBtn(cr1, "Import", "Import pasted cross-realm data", function()
+            if cr1._previewData and #cr1._previewData > 0 then
+                local added = ns.Import:Save(cr1._previewData, "fpCrossRealm")
+                ns:Print("Imported " .. added .. " cross-realm deals (" .. #cr1._previewData .. " parsed).")
+                cr1.editBox:SetText("")
+                cr1._previewData = nil
+                cr1._previewResults = nil
+                cr1._lastLen = 0
+                cr1.previewTable:SetData({})
+                cr1.statusLabel:SetText(ns.COLORS.CYAN .. added .. " cross-realm deals imported!|r")
+                UI:Refresh()
+                if UI.RefreshMini then UI:RefreshMini() end
+            end
+        end)
+        cr1.importBtn:SetPoint("LEFT", cr1.statusLabel, "RIGHT", 10, 0)
+
+        cr1._lastLen = 0
+        cr1._previewData = nil
+        cr1._previewResults = nil
+
+        local CR_QUALITY_COLORS = {
+            Poor = "9d9d9d", Common = "ffffff", Uncommon = "1eff00",
+            Rare = "0070dd", Epic = "a335ee", Legendary = "ff8000",
+            Artifact = "e6cc80", Heirloom = "00ccff",
+        }
+
+        cr1.editBox:SetScript("OnTextChanged", function(self, userInput)
+            if not userInput then return end
+            local text = self:GetText()
+            local newLen = #text
+            if cr1._lastLen < 10 and newLen > 50 and text:find("\n") then
+                local items = ns.Import:Parse(text)
+                if #items > 0 then
+                    -- Filter to cross-realm deals only
+                    local crossItems = {}
+                    for _, item in ipairs(items) do
+                        if (item.dealType == "flip" or item.dealType == "buy")
+                            and item.buyRealm and item.buyRealm ~= "" then
+                            table.insert(crossItems, item)
+                        else
+                            table.insert(crossItems, item) -- include all for visibility
+                        end
+                    end
+
+                    cr1._previewData = crossItems
+                    cr1._previewResults = ns.Import:PreviewAdd(crossItems, "fpCrossRealm")
+
+                    local data = {}
+                    local newCount, dupCount, updateCount = 0, 0, 0
+                    for _, result in ipairs(cr1._previewResults) do
+                        local item = result.item
+                        local st = result._importStatus
+                        local statusStr, statusSort
+                        if st == "new" then
+                            statusStr = ns.COLORS.GREEN .. "New" .. "|r"
+                            statusSort = "1new"
+                            newCount = newCount + 1
+                        elseif st == "update" then
+                            statusStr = ns.COLORS.YELLOW .. "Update" .. "|r"
+                            statusSort = "2update"
+                            updateCount = updateCount + 1
+                        elseif st == "duplicate" then
+                            statusStr = ns.COLORS.GRAY .. "Dupe" .. "|r"
+                            statusSort = "3dupe"
+                            dupCount = dupCount + 1
+                        else
+                            statusStr = st or "?"
+                            statusSort = "4" .. (st or "")
+                        end
+
+                        local displayName = item.name or "?"
+                        local qColor = item.quality and CR_QUALITY_COLORS[item.quality]
+                        if qColor then
+                            displayName = "|cff" .. qColor .. displayName .. "|r"
+                        end
+
+                        local isCrossRealm = (item.dealType == "flip" or item.dealType == "buy")
+                            and item.buyRealm and item.buyRealm ~= ""
+                        if isCrossRealm then
+                            displayName = ns.COLORS.CYAN .. "[XR] " .. "|r" .. displayName
+                        end
+
+                        table.insert(data, {
+                            status    = statusStr,
+                            name      = displayName,
+                            sellRealm = item.targetRealm or "",
+                            buyRealm  = item.buyRealm or "",
+                            buyPrice  = item.buyPrice or "",
+                            profit    = item.profitAmount or "",
+                            qty       = item.quantity or 1,
+                            _sortStatus = statusSort,
+                            _tooltipText = item.name,
+                            _rowColor = isCrossRealm and {0.1, 0.3, 0.5, 0.08} or nil,
+                        })
+                    end
+
+                    cr1.previewTable:SetData(data)
+                    cr1.previewTable.headerFrame:Show()
+                    cr1.previewTable.scrollFrame:Show()
+
+                    local parts = {}
+                    if newCount > 0 then table.insert(parts, ns.COLORS.GREEN .. newCount .. " new|r") end
+                    if updateCount > 0 then table.insert(parts, ns.COLORS.YELLOW .. updateCount .. " updates|r") end
+                    if dupCount > 0 then table.insert(parts, ns.COLORS.GRAY .. dupCount .. " dupes|r") end
+                    cr1.statusLabel:SetText(table.concat(parts, "  ") .. "  -- click Import to confirm")
+                else
+                    cr1.statusLabel:SetText(ns.COLORS.RED .. "No items found in pasted data.|r")
+                end
+            end
+            cr1._lastLen = newLen
+        end)
+        cr1.editBox:SetScript("OnEscapePressed", function() cr1.editBox:ClearFocus() end)
+
+        -- ===== CR STEP 2: Filter Deals =====
+        local cr2 = gf.crStepContainers[2]
+
+        cr2.filterDesc = cr2:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+        cr2.filterDesc:SetPoint("TOPLEFT", cr2, "TOPLEFT", 6, -4)
+        cr2.filterDesc:SetPoint("RIGHT", cr2, "RIGHT", -6, 0)
+        cr2.filterDesc:SetJustifyH("LEFT")
+        cr2.filterDesc:SetWordWrap(true)
+        cr2.filterDesc:SetTextColor(0.45, 0.45, 0.45)
+        cr2.filterDesc:SetText("Narrow which cross-realm deals to include in your to-do list.")
+
+        -- Section A: TSM Group Filter
+        cr2.tsmHeader = CreateFrame("Button", nil, cr2, "BackdropTemplate")
+        cr2.tsmHeader:SetHeight(20)
+        cr2.tsmHeader:SetBackdrop({
+            bgFile = "Interface\\Tooltips\\UI-Tooltip-Background",
+            edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
+            edgeSize = 10,
+            insets = {left = 2, right = 2, top = 2, bottom = 2},
+        })
+        cr2.tsmHeader:SetBackdropColor(0.1, 0.1, 0.15, 1)
+        cr2.tsmHeader:SetBackdropBorderColor(0.25, 0.25, 0.35, 0.8)
+        cr2.tsmHeader.text = cr2.tsmHeader:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+        cr2.tsmHeader.text:SetPoint("LEFT", cr2.tsmHeader, "LEFT", 6, 0)
+        cr2.tsmHeader.toggle = cr2.tsmHeader:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+        cr2.tsmHeader.toggle:SetPoint("RIGHT", cr2.tsmHeader, "RIGHT", -6, 0)
+
+        cr2.tsmCheck = CreateFrame("CheckButton", "FlipQueueCRTSMCheck", cr2, "UICheckButtonTemplate")
+        cr2.tsmCheck:SetSize(20, 20)
+        cr2.tsmCheckLabel = cr2:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+        cr2.tsmCheckLabel:SetText("Filter by TSM Group")
+        cr2.tsmCheckLabel:SetTextColor(0.7, 0.7, 0.7)
+
+        cr2.tsmBody = CreateFrame("Frame", nil, cr2)
+        cr2.tsmBody:SetHeight(120)
+        cr2.tsmBody:Hide()
+
+        cr2.tsmTreeFrame = CreateFrame("Frame", nil, cr2.tsmBody)
+        cr2.tsmTreeFrame:SetHeight(100)
+
+        cr2.tsmUnavail = cr2.tsmBody:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+        cr2.tsmUnavail:SetTextColor(0.5, 0.5, 0.5)
+        cr2.tsmUnavail:SetText("TSM not detected")
+        cr2.tsmUnavail:Hide()
+
+        if UI.CreateGroupTree then
+            cr2.tsmGroupTree = UI:CreateGroupTree(cr2.tsmTreeFrame, function(path)
+                UI._crTSMGroupPath = path or ""
+                UI:Refresh()
+            end)
+        end
+
+        cr2._tsmExpanded = false
+        cr2.tsmHeader:SetScript("OnClick", function()
+            cr2._tsmExpanded = not cr2._tsmExpanded
+            UI:Refresh()
+        end)
+        cr2.tsmHeader:SetScript("OnEnter", function(self)
+            self:SetBackdropColor(0.15, 0.15, 0.2, 1)
+        end)
+        cr2.tsmHeader:SetScript("OnLeave", function(self)
+            self:SetBackdropColor(0.1, 0.1, 0.15, 1)
+        end)
+
+        -- Section B: Auctionator List Filter
+        cr2.auctHeader = CreateFrame("Button", nil, cr2, "BackdropTemplate")
+        cr2.auctHeader:SetHeight(20)
+        cr2.auctHeader:SetBackdrop({
+            bgFile = "Interface\\Tooltips\\UI-Tooltip-Background",
+            edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
+            edgeSize = 10,
+            insets = {left = 2, right = 2, top = 2, bottom = 2},
+        })
+        cr2.auctHeader:SetBackdropColor(0.1, 0.1, 0.15, 1)
+        cr2.auctHeader:SetBackdropBorderColor(0.25, 0.25, 0.35, 0.8)
+        cr2.auctHeader.text = cr2.auctHeader:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+        cr2.auctHeader.text:SetPoint("LEFT", cr2.auctHeader, "LEFT", 6, 0)
+        cr2.auctHeader.toggle = cr2.auctHeader:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+        cr2.auctHeader.toggle:SetPoint("RIGHT", cr2.auctHeader, "RIGHT", -6, 0)
+
+        cr2.auctCheck = CreateFrame("CheckButton", "FlipQueueCRAuctCheck", cr2, "UICheckButtonTemplate")
+        cr2.auctCheck:SetSize(20, 20)
+        cr2.auctCheckLabel = cr2:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+        cr2.auctCheckLabel:SetText("Filter by Auctionator List")
+        cr2.auctCheckLabel:SetTextColor(0.7, 0.7, 0.7)
+
+        cr2.auctBody = CreateFrame("Frame", nil, cr2)
+        cr2.auctBody:SetHeight(80)
+        cr2.auctBody:Hide()
+
+        cr2.auctScroll = CreateFrame("ScrollFrame", nil, cr2.auctBody, "UIPanelScrollFrameTemplate")
+        cr2.auctContent = CreateFrame("Frame", nil, cr2.auctScroll)
+        cr2.auctContent:SetWidth(1)
+        cr2.auctContent:SetHeight(1)
+        cr2.auctScroll:SetScrollChild(cr2.auctContent)
+        cr2.auctScroll:SetScript("OnSizeChanged", function(sf, w)
+            cr2.auctContent:SetWidth(w)
+        end)
+        cr2.auctRows = {}
+
+        cr2.auctUnavail = cr2.auctBody:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+        cr2.auctUnavail:SetTextColor(0.5, 0.5, 0.5)
+        cr2.auctUnavail:SetText("Auctionator not detected")
+        cr2.auctUnavail:Hide()
+
+        cr2._auctExpanded = false
+        cr2.auctHeader:SetScript("OnClick", function()
+            cr2._auctExpanded = not cr2._auctExpanded
+            UI:Refresh()
+        end)
+        cr2.auctHeader:SetScript("OnEnter", function(self)
+            self:SetBackdropColor(0.15, 0.15, 0.2, 1)
+        end)
+        cr2.auctHeader:SetScript("OnLeave", function(self)
+            self:SetBackdropColor(0.1, 0.1, 0.15, 1)
+        end)
+
+        -- Section C: Realm Filter
+        cr2.realmHeader = CreateFrame("Button", nil, cr2, "BackdropTemplate")
+        cr2.realmHeader:SetHeight(20)
+        cr2.realmHeader:SetBackdrop({
+            bgFile = "Interface\\Tooltips\\UI-Tooltip-Background",
+            edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
+            edgeSize = 10,
+            insets = {left = 2, right = 2, top = 2, bottom = 2},
+        })
+        cr2.realmHeader:SetBackdropColor(0.1, 0.1, 0.15, 1)
+        cr2.realmHeader:SetBackdropBorderColor(0.25, 0.25, 0.35, 0.8)
+        cr2.realmHeader.text = cr2.realmHeader:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+        cr2.realmHeader.text:SetPoint("LEFT", cr2.realmHeader, "LEFT", 6, 0)
+        cr2.realmHeader.toggle = cr2.realmHeader:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+        cr2.realmHeader.toggle:SetPoint("RIGHT", cr2.realmHeader, "RIGHT", -6, 0)
+
+        cr2.realmCheck = CreateFrame("CheckButton", "FlipQueueCRRealmCheck", cr2, "UICheckButtonTemplate")
+        cr2.realmCheck:SetSize(20, 20)
+        cr2.realmCheckLabel = cr2:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+        cr2.realmCheckLabel:SetText("Only show realms with characters")
+        cr2.realmCheckLabel:SetTextColor(0.7, 0.7, 0.7)
+
+        cr2.realmBody = CreateFrame("Frame", nil, cr2)
+        cr2.realmBody:SetHeight(80)
+        cr2.realmBody:Hide()
+
+        cr2.realmScroll = CreateFrame("ScrollFrame", nil, cr2.realmBody, "UIPanelScrollFrameTemplate")
+        cr2.realmContent = CreateFrame("Frame", nil, cr2.realmScroll)
+        cr2.realmContent:SetWidth(1)
+        cr2.realmContent:SetHeight(1)
+        cr2.realmScroll:SetScrollChild(cr2.realmContent)
+        cr2.realmScroll:SetScript("OnSizeChanged", function(sf, w)
+            cr2.realmContent:SetWidth(w)
+        end)
+        cr2.realmRows = {}
+
+        cr2.realmSelectAll = CreateHeaderBtn(cr2.realmBody, "Select All", nil, function()
+            if UI._crRealmFilter then
+                for realm in pairs(UI._crRealmFilter) do
+                    UI._crRealmFilter[realm] = true
+                end
+            end
+            UI:Refresh()
+        end)
+        cr2.realmDeselectAll = CreateHeaderBtn(cr2.realmBody, "Deselect All", nil, function()
+            if UI._crRealmFilter then
+                for realm in pairs(UI._crRealmFilter) do
+                    UI._crRealmFilter[realm] = false
+                end
+            end
+            UI:Refresh()
+        end)
+
+        cr2._realmExpanded = false
+        cr2.realmHeader:SetScript("OnClick", function()
+            cr2._realmExpanded = not cr2._realmExpanded
+            UI:Refresh()
+        end)
+        cr2.realmHeader:SetScript("OnEnter", function(self)
+            self:SetBackdropColor(0.15, 0.15, 0.2, 1)
+        end)
+        cr2.realmHeader:SetScript("OnLeave", function(self)
+            self:SetBackdropColor(0.1, 0.1, 0.15, 1)
+        end)
+
+        -- Count label at bottom
+        cr2.countLabel = cr2:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+        cr2.countLabel:SetTextColor(0.6, 0.6, 0.6)
+
+        -- ===== CR STEP 3: Configure & Generate =====
+        local cr3 = gf.crStepContainers[3]
+
+        cr3.buyAllocDesc = cr3:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+        cr3.buyAllocDesc:SetTextColor(0.45, 0.45, 0.45)
+        cr3.buyAllocDesc:SetJustifyH("LEFT")
+        cr3.buyAllocDesc:SetWordWrap(true)
+        cr3.buyAllocDesc:SetText("When two buy deals compete, which deal wins?")
+
+        cr3.buyAllocLabel = cr3:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+        cr3.buyAllocLabel:SetText("Buy Priorities:")
+        cr3.buyAllocLabel:SetTextColor(0.4, 0.8, 0.9)
+
+        cr3.buyAllocRows = {}
+
+        cr3.sellAllocDesc = cr3:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+        cr3.sellAllocDesc:SetTextColor(0.45, 0.45, 0.45)
+        cr3.sellAllocDesc:SetJustifyH("LEFT")
+        cr3.sellAllocDesc:SetWordWrap(true)
+        cr3.sellAllocDesc:SetText("When two sell deals need the same item, which deal wins?")
+
+        cr3.sellAllocLabel = cr3:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+        cr3.sellAllocLabel:SetText("Sell Priorities:")
+        cr3.sellAllocLabel:SetTextColor(0.9, 0.8, 0.3)
+
+        cr3.sellAllocRows = {}
+
+        -- List mode toggle
+        cr3.listModeLabel = cr3:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+        cr3.listModeLabel:SetText("List Mode:")
+        cr3.listModeLabel:SetTextColor(0.7, 0.7, 0.7)
+
+        cr3.separateBtn = CreateToggleBtn(cr3, "Separate Lists")
+        cr3.integratedBtn = CreateToggleBtn(cr3, "Integrated List")
+
+        cr3.separateBtn:SetScript("OnClick", function()
+            if ns.db then ns.db.settings.genCrossRealmListMode = "separate" end
+            UI:Refresh()
+        end)
+        cr3.integratedBtn:SetScript("OnClick", function()
+            if ns.db then ns.db.settings.genCrossRealmListMode = "integrated" end
+            UI:Refresh()
+        end)
+
+        -- Integrated sort mode
+        cr3.intSortLabel = cr3:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+        cr3.intSortLabel:SetText("Sort by:")
+        cr3.intSortLabel:SetTextColor(0.7, 0.7, 0.7)
+
+        cr3.intSortProfitBtn = CreateToggleBtn(cr3, "Most Profitable")
+        cr3.intSortDealBtn = CreateToggleBtn(cr3, "Best Deal")
+        cr3.intSortBuysBtn = CreateToggleBtn(cr3, "Prioritize Buys")
+
+        cr3.intSortProfitBtn:SetScript("OnClick", function()
+            if ns.db then ns.db.settings.genIntegratedSortMode = "mostProfitable" end
+            UI:Refresh()
+        end)
+        cr3.intSortDealBtn:SetScript("OnClick", function()
+            if ns.db then ns.db.settings.genIntegratedSortMode = "bestDeal" end
+            UI:Refresh()
+        end)
+        cr3.intSortBuysBtn:SetScript("OnClick", function()
+            if ns.db then ns.db.settings.genIntegratedSortMode = "prioritizeBuys" end
+            UI:Refresh()
+        end)
+
+        -- Generate button
+        cr3.generateBtn = CreateHeaderBtn(cr3, "Generate",
+            "Match cross-realm deals against inventory (preview)",
+            function()
+                -- Actual generation happens in the refresh logic below
+                UI._crGenRequested = true
+                UI:Refresh()
+            end)
+
+        -- Status label
+        cr3.statusLabel = cr3:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+
+        -- Divider
+        cr3.listDivider = cr3:CreateTexture(nil, "ARTWORK")
+        cr3.listDivider:SetHeight(1)
+        cr3.listDivider:SetColorTexture(0.3, 0.3, 0.4, 0.5)
+
+        -- Generated items scroll area
+        cr3.genScroll = CreateFrame("ScrollFrame", nil, cr3, "UIPanelScrollFrameTemplate")
+        cr3.genContent = CreateFrame("Frame", nil, cr3.genScroll)
+        cr3.genScroll:SetScrollChild(cr3.genContent)
+        cr3.genScroll:SetScript("OnSizeChanged", function(sf, w)
+            cr3.genContent:SetWidth(w)
+        end)
+        cr3.genRows = {}
+
         -- Drag state (shared across rows, persists in the frame)
         if not gf._dragState then
             gf._dragState = {}
@@ -1202,11 +1664,13 @@ function UI:RefreshGeneratorPage(pending)
     local wbAge = ns.db.warbank and ns.db.warbank.lastScan
         and ns:FormatRelativeTime(ns.db.warbank.lastScan) or "never"
 
+    local crPending = ns:ImportGetCount("fpCrossRealm")
     local freshRow = TopRow()
     freshRow.label:SetText(
         ns.COLORS.GRAY .. "Bags:|r " .. bagAge ..
         ns.COLORS.GRAY .. "   Warbank:|r " .. wbAge ..
-        ns.COLORS.GRAY .. "   Deals:|r " .. pending)
+        ns.COLORS.GRAY .. "   Deals:|r " .. pending ..
+        (crPending > 0 and (ns.COLORS.GRAY .. "   XR:|r " .. ns.COLORS.CYAN .. crPending .. "|r") or ""))
 
     -- Current list
     if currentList then
@@ -1390,6 +1854,7 @@ function UI:RefreshGeneratorPage(pending)
     gf.saveBtn:Hide()
     for i = 1, 3 do
         gf.stepContainers[i]:Hide()
+        gf.crStepContainers[i]:Hide()
     end
 
     -- Content area starts below topSection
@@ -1442,15 +1907,19 @@ function UI:RefreshGeneratorPage(pending)
         if wizStep < 3 then
             SaveWizardState(wizTrack, wizStep + 1)
             UI:Refresh()
+        elseif wizTrack == "crossrealm" then
+            -- Cross-realm generate
+            UI._crGenRequested = true
+            UI:Refresh()
         else
-            -- Generate
+            -- Inventory generate
             local btn = UI.mainFrame and UI.mainFrame.actionBtns and UI.mainFrame.actionBtns.generate
             if btn then btn:GetScript("OnClick")() end
         end
     end)
 
-    -- Save button (only on step 3 with preview)
-    if wizStep == 3 and UI._generatorPreview then
+    -- Save button (only on step 3 with preview, inventory track only -- cross-realm sets its own)
+    if wizStep == 3 and wizTrack ~= "crossrealm" and UI._generatorPreview then
         gf.saveBtn:Show()
         gf.saveBtn:SetScript("OnClick", function()
             local btn = UI.mainFrame and UI.mainFrame.actionBtns and UI.mainFrame.actionBtns.commitSave
@@ -1459,7 +1928,8 @@ function UI:RefreshGeneratorPage(pending)
     end
 
     -- Position step container for the current step
-    local sc = gf.stepContainers[wizStep]
+    local stepPool = wizTrack == "crossrealm" and gf.crStepContainers or gf.stepContainers
+    local sc = stepPool[wizStep]
     if sc then
         sc:ClearAllPoints()
         sc:SetPoint("TOPLEFT", gf, "TOPLEFT", 0, stepContentTop)
@@ -2279,21 +2749,1087 @@ function UI:RefreshGeneratorPage(pending)
     -- CROSS-REALM TRACK: STEPS 1-3
     -- ========================================
 
+    -- ========================================
+    -- CROSS-REALM TRACK: STEP 1 -- Import Deals
+    -- ========================================
+
     if wizTrack == "crossrealm" and wizStep == 1 then
-        -- TODO: Cross-realm track step 1 -- Import Deals
-        mainFrame.statusText:SetText("Cross-realm Step 1: Import Deals (coming soon)")
+        local cr1 = gf.crStepContainers[1]
+
+        -- Show preview table if we have data
+        if cr1._previewData then
+            cr1.previewTable.headerFrame:Show()
+            cr1.previewTable.scrollFrame:Show()
+        end
+
+        cr1.editBox:SetFocus(true)
+
+        local crCount = ns:ImportGetCount("fpCrossRealm")
+        mainFrame.statusText:SetText("Step 1 of 3: Paste cross-realm flip data  |  " .. crCount .. " cross-realm deals imported")
         return
     end
+
+    -- ========================================
+    -- CROSS-REALM TRACK: STEP 2 -- Filter Deals
+    -- ========================================
 
     if wizTrack == "crossrealm" and wizStep == 2 then
-        -- TODO: Cross-realm track step 2 -- Filter Deals
-        mainFrame.statusText:SetText("Cross-realm Step 2: Filter Deals (coming soon)")
+        local cr2 = gf.crStepContainers[2]
+
+        -- Initialize session filter state
+        if not UI._crTSMEnabled then UI._crTSMEnabled = false end
+        if not UI._crTSMGroupPath then UI._crTSMGroupPath = "" end
+        if not UI._crAuctEnabled then UI._crAuctEnabled = false end
+        if not UI._crAuctListName then UI._crAuctListName = "" end
+        if not UI._crRealmEnabled then
+            -- Restore from DB settings
+            UI._crRealmEnabled = ns.db.settings.genCrossRealmRealmFilter and true or false
+        end
+        if not UI._crRealmFilter then
+            -- Initialize realm filter from saved settings or build fresh
+            UI._crRealmFilter = {}
+            local saved = ns.db.settings.genCrossRealmRealmFilter
+            local knownRealms = ns.TodoList and ns.TodoList:GetKnownRealms() or {}
+            for _, realm in ipairs(knownRealms) do
+                if saved and saved[realm] ~= nil then
+                    UI._crRealmFilter[realm] = saved[realm]
+                else
+                    UI._crRealmFilter[realm] = true
+                end
+            end
+        end
+
+        -- Collect all cross-realm deals
+        local allDeals = {}
+        for _, deal in pairs(ns.db.imports.fpCrossRealm or {}) do
+            table.insert(allDeals, deal)
+        end
+        local totalDeals = #allDeals
+
+        -- Build filter function
+        local function DealPassesFilter(deal)
+            -- TSM Group Filter
+            if cr2.tsmCheck:GetChecked() and UI._crTSMGroupPath ~= "" then
+                local matched = false
+                if ns.TSM and ns.TSM:IsEnabled() then
+                    local profile = ns.TSM:GetSelectedProfile()
+                    if profile then
+                        local itemsDB = ns.TSM:GetItemsDB(profile)
+                        if itemsDB then
+                            local tsmStr = ns.TSM:ItemKeyToTSMString(deal.itemKey)
+                            local baseID = deal.itemKey and deal.itemKey:match("^(%d+)")
+                            local baseStr = baseID and ("i:" .. baseID)
+                            local groupPath = (tsmStr and itemsDB[tsmStr])
+                                or (baseStr and itemsDB[baseStr])
+                            if groupPath then
+                                if groupPath == UI._crTSMGroupPath
+                                    or groupPath:find(UI._crTSMGroupPath .. "`", 1, true) == 1 then
+                                    matched = true
+                                end
+                            end
+                        end
+                    end
+                end
+                if not matched then return false end
+            end
+
+            -- Auctionator List Filter
+            if cr2.auctCheck:GetChecked() and UI._crAuctListName ~= "" then
+                local matched = false
+                local listItems = {}
+
+                if type(AUCTIONATOR_SHOPPING_LISTS) == "table" then
+                    for _, list in ipairs(AUCTIONATOR_SHOPPING_LISTS) do
+                        if type(list) == "table" and list.name == UI._crAuctListName and list.items then
+                            for _, searchTerm in ipairs(list.items) do
+                                local name = searchTerm:match('^"([^"]+)"') or searchTerm:match("^([^;]+)")
+                                if name then listItems[strtrim(name):lower()] = true end
+                            end
+                            break
+                        end
+                    end
+                end
+
+                if not next(listItems) and type(Auctionator) == "table"
+                    and Auctionator.API and Auctionator.API.v1
+                    and Auctionator.API.v1.GetShoppingListItems then
+                    local ok, items = pcall(Auctionator.API.v1.GetShoppingListItems, "FlipQueue", UI._crAuctListName)
+                    if ok and items then
+                        for _, searchTerm in ipairs(items) do
+                            local name = searchTerm:match('^"([^"]+)"') or searchTerm:match("^([^;]+)")
+                            if name then listItems[strtrim(name):lower()] = true end
+                        end
+                    end
+                end
+
+                if next(listItems) then
+                    local dealName = (deal.name or ""):lower()
+                    if not listItems[dealName] then return false end
+                end
+            end
+
+            -- Realm Filter
+            if cr2.realmCheck:GetChecked() and UI._crRealmFilter and next(UI._crRealmFilter) then
+                local matched = false
+                for realm, enabled in pairs(UI._crRealmFilter) do
+                    if enabled then
+                        if ns:RealmMatches(deal.targetRealm, realm)
+                            or (deal.buyRealm and ns:RealmMatches(deal.buyRealm, realm)) then
+                            matched = true
+                            break
+                        end
+                    end
+                end
+                if not matched then return false end
+            end
+
+            return true
+        end
+
+        local matchCount = 0
+        for _, deal in ipairs(allDeals) do
+            if DealPassesFilter(deal) then
+                matchCount = matchCount + 1
+            end
+        end
+
+        -- Store filter function for step 3
+        UI._crDealFilter = DealPassesFilter
+
+        -- Layout filter sections
+        local filterY = -18
+
+        -- Section A: TSM Group Filter
+        cr2.tsmHeader:ClearAllPoints()
+        cr2.tsmHeader:SetPoint("TOPLEFT", cr2, "TOPLEFT", 4, filterY)
+        cr2.tsmHeader:SetPoint("RIGHT", cr2, "RIGHT", -4, 0)
+        cr2.tsmHeader.text:SetText("TSM Group Filter")
+        cr2.tsmHeader.toggle:SetText(cr2._tsmExpanded and "|cffffffff\226\150\188|r" or "|cffffffff\226\150\182|r")
+        filterY = filterY - 22
+
+        if cr2._tsmExpanded then
+            cr2.tsmCheck:ClearAllPoints()
+            cr2.tsmCheck:SetPoint("TOPLEFT", cr2, "TOPLEFT", 8, filterY)
+            cr2.tsmCheck:Show()
+            cr2.tsmCheckLabel:ClearAllPoints()
+            cr2.tsmCheckLabel:SetPoint("LEFT", cr2.tsmCheck, "RIGHT", 2, 0)
+            cr2.tsmCheckLabel:Show()
+            filterY = filterY - 22
+
+            if cr2.tsmCheck:GetChecked() then
+                local tsmAvail = ns.TSM and ns.TSM:IsEnabled()
+                if tsmAvail and cr2.tsmGroupTree then
+                    cr2.tsmBody:ClearAllPoints()
+                    cr2.tsmBody:SetPoint("TOPLEFT", cr2, "TOPLEFT", 4, filterY)
+                    cr2.tsmBody:SetPoint("RIGHT", cr2, "RIGHT", -4, 0)
+                    cr2.tsmBody:SetHeight(100)
+                    cr2.tsmBody:Show()
+
+                    cr2.tsmTreeFrame:ClearAllPoints()
+                    cr2.tsmTreeFrame:SetPoint("TOPLEFT", cr2.tsmBody, "TOPLEFT", 0, 0)
+                    cr2.tsmTreeFrame:SetPoint("RIGHT", cr2.tsmBody, "RIGHT", 0, 0)
+                    cr2.tsmTreeFrame:SetHeight(100)
+                    cr2.tsmTreeFrame:Show()
+
+                    local profile = ns.TSM:GetSelectedProfile()
+                    if profile and cr2.tsmGroupTree._profile ~= profile then
+                        cr2.tsmGroupTree:SetProfile(profile)
+                    end
+
+                    cr2.tsmUnavail:Hide()
+                    filterY = filterY - 104
+                else
+                    cr2.tsmBody:ClearAllPoints()
+                    cr2.tsmBody:SetPoint("TOPLEFT", cr2, "TOPLEFT", 8, filterY)
+                    cr2.tsmBody:SetPoint("RIGHT", cr2, "RIGHT", -8, 0)
+                    cr2.tsmBody:SetHeight(18)
+                    cr2.tsmBody:Show()
+
+                    cr2.tsmTreeFrame:Hide()
+                    cr2.tsmUnavail:ClearAllPoints()
+                    cr2.tsmUnavail:SetPoint("TOPLEFT", cr2.tsmBody, "TOPLEFT", 0, 0)
+                    cr2.tsmUnavail:Show()
+                    filterY = filterY - 22
+                end
+            else
+                cr2.tsmBody:Hide()
+                cr2.tsmCheck:Show()
+                cr2.tsmCheckLabel:Show()
+            end
+        else
+            cr2.tsmCheck:Hide()
+            cr2.tsmCheckLabel:Hide()
+            cr2.tsmBody:Hide()
+        end
+
+        filterY = filterY - 4
+
+        -- Section B: Auctionator List Filter
+        cr2.auctHeader:ClearAllPoints()
+        cr2.auctHeader:SetPoint("TOPLEFT", cr2, "TOPLEFT", 4, filterY)
+        cr2.auctHeader:SetPoint("RIGHT", cr2, "RIGHT", -4, 0)
+        cr2.auctHeader.text:SetText("Auctionator List Filter")
+        cr2.auctHeader.toggle:SetText(cr2._auctExpanded and "|cffffffff\226\150\188|r" or "|cffffffff\226\150\182|r")
+        filterY = filterY - 22
+
+        if cr2._auctExpanded then
+            cr2.auctCheck:ClearAllPoints()
+            cr2.auctCheck:SetPoint("TOPLEFT", cr2, "TOPLEFT", 8, filterY)
+            cr2.auctCheck:Show()
+            cr2.auctCheckLabel:ClearAllPoints()
+            cr2.auctCheckLabel:SetPoint("LEFT", cr2.auctCheck, "RIGHT", 2, 0)
+            cr2.auctCheckLabel:Show()
+            filterY = filterY - 22
+
+            if cr2.auctCheck:GetChecked() then
+                local listNames = ns:GetAuctionatorListNames()
+                local auctAvailable = #listNames > 0 or type(AUCTIONATOR_SHOPPING_LISTS) == "table"
+
+                if auctAvailable and #listNames > 0 then
+                    cr2.auctBody:ClearAllPoints()
+                    cr2.auctBody:SetPoint("TOPLEFT", cr2, "TOPLEFT", 4, filterY)
+                    cr2.auctBody:SetPoint("RIGHT", cr2, "RIGHT", -4, 0)
+                    local listHeight = math.min(80, math.max(20, #listNames * 18 + 4))
+                    cr2.auctBody:SetHeight(listHeight)
+                    cr2.auctBody:Show()
+
+                    cr2.auctScroll:ClearAllPoints()
+                    cr2.auctScroll:SetPoint("TOPLEFT", cr2.auctBody, "TOPLEFT", 0, 0)
+                    cr2.auctScroll:SetPoint("BOTTOMRIGHT", cr2.auctBody, "BOTTOMRIGHT", -16, 0)
+                    cr2.auctContent:SetWidth(cr2.auctScroll:GetWidth() or 150)
+
+                    for _, row in ipairs(cr2.auctRows) do row:Hide() end
+
+                    local auctY = 0
+                    for idx, listName in ipairs(listNames) do
+                        local row = cr2.auctRows[idx]
+                        if not row then
+                            row = CreateFrame("Button", nil, cr2.auctContent)
+                            row:SetHeight(18)
+                            row.bg = row:CreateTexture(nil, "BACKGROUND")
+                            row.bg:SetAllPoints()
+                            row.label = row:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+                            row.label:SetPoint("LEFT", row, "LEFT", 6, 0)
+                            row.label:SetPoint("RIGHT", row, "RIGHT", -6, 0)
+                            row.label:SetJustifyH("LEFT")
+                            row:EnableMouse(true)
+                            cr2.auctRows[idx] = row
+                        end
+                        row:ClearAllPoints()
+                        row:SetPoint("TOPLEFT", cr2.auctContent, "TOPLEFT", 0, -auctY)
+                        row:SetPoint("RIGHT", cr2.auctContent, "RIGHT", 0, 0)
+
+                        local isSelected = (UI._crAuctListName == listName)
+                        if isSelected then
+                            row.bg:SetColorTexture(0.2, 0.35, 0.5, 0.6)
+                            row.label:SetText("|cffffffff" .. listName .. "|r")
+                        else
+                            row.bg:SetColorTexture(0, 0, 0, 0)
+                            row.label:SetText(listName)
+                            row.label:SetTextColor(0.8, 0.8, 0.8)
+                        end
+
+                        local capturedName = listName
+                        row:SetScript("OnClick", function()
+                            UI._crAuctListName = capturedName
+                            UI:Refresh()
+                        end)
+                        row:SetScript("OnEnter", function(self)
+                            if not isSelected then self.bg:SetColorTexture(1, 1, 1, 0.05) end
+                        end)
+                        row:SetScript("OnLeave", function(self)
+                            if not (UI._crAuctListName == capturedName) then self.bg:SetColorTexture(0, 0, 0, 0) end
+                        end)
+
+                        row:Show()
+                        auctY = auctY + 18
+                    end
+                    cr2.auctContent:SetHeight(math.max(1, auctY))
+                    cr2.auctUnavail:Hide()
+                    filterY = filterY - listHeight - 4
+                else
+                    cr2.auctBody:ClearAllPoints()
+                    cr2.auctBody:SetPoint("TOPLEFT", cr2, "TOPLEFT", 8, filterY)
+                    cr2.auctBody:SetPoint("RIGHT", cr2, "RIGHT", -8, 0)
+                    cr2.auctBody:SetHeight(18)
+                    cr2.auctBody:Show()
+                    cr2.auctScroll:Hide()
+                    cr2.auctUnavail:ClearAllPoints()
+                    cr2.auctUnavail:SetPoint("TOPLEFT", cr2.auctBody, "TOPLEFT", 0, 0)
+                    cr2.auctUnavail:Show()
+                    filterY = filterY - 22
+                end
+            else
+                cr2.auctBody:Hide()
+            end
+        else
+            cr2.auctCheck:Hide()
+            cr2.auctCheckLabel:Hide()
+            cr2.auctBody:Hide()
+        end
+
+        filterY = filterY - 4
+
+        -- Section C: Realm Filter
+        cr2.realmHeader:ClearAllPoints()
+        cr2.realmHeader:SetPoint("TOPLEFT", cr2, "TOPLEFT", 4, filterY)
+        cr2.realmHeader:SetPoint("RIGHT", cr2, "RIGHT", -4, 0)
+        cr2.realmHeader.text:SetText("Realm Filter")
+        cr2.realmHeader.toggle:SetText(cr2._realmExpanded and "|cffffffff\226\150\188|r" or "|cffffffff\226\150\182|r")
+        filterY = filterY - 22
+
+        if cr2._realmExpanded then
+            cr2.realmCheck:ClearAllPoints()
+            cr2.realmCheck:SetPoint("TOPLEFT", cr2, "TOPLEFT", 8, filterY)
+            cr2.realmCheck:Show()
+            cr2.realmCheckLabel:ClearAllPoints()
+            cr2.realmCheckLabel:SetPoint("LEFT", cr2.realmCheck, "RIGHT", 2, 0)
+            cr2.realmCheckLabel:Show()
+            filterY = filterY - 22
+
+            if cr2.realmCheck:GetChecked() then
+                local knownRealms = ns.TodoList and ns.TodoList:GetKnownRealms() or {}
+
+                -- Ensure all known realms are in the filter map
+                for _, realm in ipairs(knownRealms) do
+                    if UI._crRealmFilter[realm] == nil then
+                        UI._crRealmFilter[realm] = true
+                    end
+                end
+
+                cr2.realmBody:ClearAllPoints()
+                cr2.realmBody:SetPoint("TOPLEFT", cr2, "TOPLEFT", 4, filterY)
+                cr2.realmBody:SetPoint("RIGHT", cr2, "RIGHT", -4, 0)
+
+                -- Buttons row
+                cr2.realmSelectAll:ClearAllPoints()
+                cr2.realmSelectAll:SetPoint("TOPLEFT", cr2.realmBody, "TOPLEFT", 4, 0)
+                cr2.realmSelectAll:Show()
+                cr2.realmDeselectAll:ClearAllPoints()
+                cr2.realmDeselectAll:SetPoint("LEFT", cr2.realmSelectAll, "RIGHT", 4, 0)
+                cr2.realmDeselectAll:Show()
+
+                cr2.realmScroll:ClearAllPoints()
+                cr2.realmScroll:SetPoint("TOPLEFT", cr2.realmBody, "TOPLEFT", 0, -22)
+                cr2.realmScroll:SetPoint("BOTTOMRIGHT", cr2.realmBody, "BOTTOMRIGHT", -16, 0)
+                cr2.realmContent:SetWidth(cr2.realmScroll:GetWidth() or 150)
+
+                for _, row in ipairs(cr2.realmRows) do row:Hide() end
+
+                local realmY = 0
+                for idx, realm in ipairs(knownRealms) do
+                    local row = cr2.realmRows[idx]
+                    if not row then
+                        row = CreateFrame("Button", nil, cr2.realmContent)
+                        row:SetHeight(18)
+                        row.check = row:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+                        row.check:SetPoint("LEFT", row, "LEFT", 4, 0)
+                        row.check:SetWidth(16)
+                        row.label = row:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+                        row.label:SetPoint("LEFT", row.check, "RIGHT", 2, 0)
+                        row.label:SetPoint("RIGHT", row, "RIGHT", -6, 0)
+                        row.label:SetJustifyH("LEFT")
+                        row.bg = row:CreateTexture(nil, "BACKGROUND")
+                        row.bg:SetAllPoints()
+                        row:EnableMouse(true)
+                        cr2.realmRows[idx] = row
+                    end
+                    row:ClearAllPoints()
+                    row:SetPoint("TOPLEFT", cr2.realmContent, "TOPLEFT", 0, -realmY)
+                    row:SetPoint("RIGHT", cr2.realmContent, "RIGHT", 0, 0)
+
+                    local enabled = UI._crRealmFilter[realm] ~= false
+                    row.check:SetText(enabled and "|cff00ff00\226\156\147|r" or "|cffff0000\226\156\151|r")
+                    row.label:SetText(realm)
+                    row.label:SetTextColor(enabled and 0.9 or 0.4, enabled and 0.9 or 0.4, enabled and 0.9 or 0.4)
+                    row.bg:SetColorTexture(0, 0, 0, 0)
+
+                    local capturedRealm = realm
+                    row:SetScript("OnClick", function()
+                        UI._crRealmFilter[capturedRealm] = not (UI._crRealmFilter[capturedRealm] ~= false)
+                        -- Persist to DB
+                        if ns.db then
+                            ns.db.settings.genCrossRealmRealmFilter = UI._crRealmFilter
+                        end
+                        UI:Refresh()
+                    end)
+                    row:SetScript("OnEnter", function(self) self.bg:SetColorTexture(1, 1, 1, 0.05) end)
+                    row:SetScript("OnLeave", function(self) self.bg:SetColorTexture(0, 0, 0, 0) end)
+
+                    row:Show()
+                    realmY = realmY + 18
+                end
+                cr2.realmContent:SetHeight(math.max(1, realmY))
+
+                local realmListH = math.min(100, math.max(20, #knownRealms * 18 + 4))
+                cr2.realmBody:SetHeight(realmListH + 24)
+                cr2.realmBody:Show()
+                filterY = filterY - realmListH - 28
+            else
+                cr2.realmBody:Hide()
+            end
+        else
+            cr2.realmCheck:Hide()
+            cr2.realmCheckLabel:Hide()
+            cr2.realmBody:Hide()
+        end
+
+        -- Count label
+        cr2.countLabel:ClearAllPoints()
+        cr2.countLabel:SetPoint("BOTTOMLEFT", cr2, "BOTTOMLEFT", 8, 4)
+        cr2.countLabel:SetText(ns.COLORS.CYAN .. matchCount .. " deals match filters|r" ..
+            ns.COLORS.GRAY .. " (of " .. totalDeals .. " total)|r")
+
+        mainFrame.statusText:SetText("Step 2 of 3: Filter cross-realm deals  |  " ..
+            matchCount .. " of " .. totalDeals .. " deals match")
         return
     end
 
+    -- ========================================
+    -- CROSS-REALM TRACK: STEP 3 -- Configure & Generate
+    -- ========================================
+
     if wizTrack == "crossrealm" and wizStep == 3 then
-        -- TODO: Cross-realm track step 3 -- Configure & Generate
-        mainFrame.statusText:SetText("Cross-realm Step 3: Configure & Generate (coming soon)")
+        local cr3 = gf.crStepContainers[3]
+
+        local BUY_ALLOC_META = {
+            profit        = {label = "Profit",         icon = "Interface\\Icons\\INV_Misc_Coin_17",                      color = {1, 0.82, 0}},
+            population    = {label = "Population",     icon = "Interface\\Icons\\Achievement_GuildPerk_EverybodysFriend", color = {0.4, 0.7, 1}},
+            lowInventory  = {label = "Low Inventory",  icon = "Interface\\Icons\\INV_Misc_Bag_07",                        color = {0.2, 0.8, 0.6}},
+            highInventory = {label = "High Inventory", icon = "Interface\\Icons\\INV_Misc_Bag_10_Red",                    color = {0.9, 0.6, 0.2}},
+            discount      = {label = "Discount",       icon = "Interface\\Icons\\Ability_Rogue_CheapShot",                color = {0.7, 0.4, 1.0}},
+        }
+
+        local SELL_ALLOC_META = {
+            gold           = {label = "Profit",        icon = "Interface\\Icons\\INV_Misc_Coin_17",                 color = {1, 0.82, 0}},
+            noCompetition  = {label = "No Competition", icon = "Interface\\Icons\\Achievement_PVP_H_01",            color = {0.3, 1, 0.3}},
+            population     = {label = "Population",     icon = "Interface\\Icons\\Achievement_GuildPerk_EverybodysFriend", color = {0.4, 0.7, 1}},
+        }
+
+        local LIST_ROW_H = 28
+
+        -- Reuse the same RenderAllocList helper (defined in inventory step 3, but we define a local version here)
+        local function RenderAllocListCR(orderTable, allocMeta, rowPool, parent, yStart, onChanged)
+            for _, row in ipairs(rowPool) do row:Hide() end
+            local y = yStart
+            local ds = gf._dragState
+
+            for idx, key in ipairs(orderTable) do
+                local meta = allocMeta[key] or {label = key, color = {0.7, 0.7, 0.7}}
+                local row = rowPool[idx]
+                if not row then
+                    row = CreateFrame("Button", nil, parent, "BackdropTemplate")
+                    row:SetHeight(LIST_ROW_H)
+                    row:SetBackdrop({
+                        bgFile = "Interface\\Tooltips\\UI-Tooltip-Background",
+                        edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
+                        edgeSize = 10,
+                        insets = {left = 2, right = 2, top = 2, bottom = 2},
+                    })
+
+                    row.grip = row:CreateTexture(nil, "ARTWORK")
+                    row.grip:SetSize(8, 14)
+                    row.grip:SetPoint("LEFT", row, "LEFT", 6, 0)
+                    row.grip:SetColorTexture(0.4, 0.4, 0.5, 0.5)
+
+                    row.rankBg = row:CreateTexture(nil, "ARTWORK")
+                    row.rankBg:SetSize(18, 18)
+                    row.rankBg:SetPoint("LEFT", row.grip, "RIGHT", 4, 0)
+                    row.rankBg:SetColorTexture(0.2, 0.2, 0.3, 0.8)
+
+                    row.rankNum = row:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+                    row.rankNum:SetPoint("CENTER", row.rankBg, "CENTER", 0, 0)
+
+                    row.icon = row:CreateTexture(nil, "ARTWORK")
+                    row.icon:SetSize(16, 16)
+                    row.icon:SetPoint("LEFT", row.rankBg, "RIGHT", 6, 0)
+
+                    row.nameLabel = row:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+                    row.nameLabel:SetPoint("LEFT", row.icon, "RIGHT", 6, 0)
+                    row.nameLabel:SetPoint("RIGHT", row, "RIGHT", -6, 0)
+                    row.nameLabel:SetJustifyH("LEFT")
+
+                    row:EnableMouse(true)
+                    rowPool[idx] = row
+                end
+
+                row:ClearAllPoints()
+                row:SetPoint("TOPLEFT", parent, "TOPLEFT", 4, y)
+                row:SetPoint("RIGHT", parent, "RIGHT", -4, 0)
+
+                local brightness = 1 - (idx - 1) * 0.15
+                local c = meta.color
+                row:SetBackdropColor(c[1] * 0.12 * brightness, c[2] * 0.12 * brightness, c[3] * 0.15 * brightness, 0.9)
+                row:SetBackdropBorderColor(c[1] * 0.4, c[2] * 0.4, c[3] * 0.4, 0.6)
+
+                row.rankNum:SetText(idx)
+                row.rankNum:SetTextColor(c[1], c[2], c[3])
+
+                if meta.icon then
+                    row.icon:SetTexture(meta.icon)
+                    row.icon:Show()
+                else
+                    row.icon:Hide()
+                end
+
+                row.nameLabel:SetText(meta.label)
+                row.nameLabel:SetTextColor(c[1] * 0.8 + 0.2, c[2] * 0.8 + 0.2, c[3] * 0.8 + 0.2)
+
+                row.grip:SetColorTexture(c[1] * 0.3, c[2] * 0.3, c[3] * 0.3, 0.6)
+
+                local capturedIdx = idx
+                local capturedKey = key
+
+                row:SetScript("OnEnter", function(self)
+                    if not ds.dragging then
+                        self:SetBackdropBorderColor(c[1] * 0.7, c[2] * 0.7, c[3] * 0.7, 1)
+                        self.grip:SetColorTexture(c[1] * 0.6, c[2] * 0.6, c[3] * 0.6, 1)
+                        GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+                        GameTooltip:SetText(meta.label, c[1], c[2], c[3])
+                        GameTooltip:AddLine("Drag to reorder, or click to move", 0.5, 0.5, 0.5)
+                        GameTooltip:Show()
+                    end
+                end)
+                row:SetScript("OnLeave", function(self)
+                    if not ds.dragging then
+                        self:SetBackdropBorderColor(c[1] * 0.4, c[2] * 0.4, c[3] * 0.4, 0.6)
+                        self.grip:SetColorTexture(c[1] * 0.3, c[2] * 0.3, c[3] * 0.3, 0.6)
+                        GameTooltip:Hide()
+                    end
+                end)
+
+                row:SetScript("OnMouseDown", function(self, button)
+                    if button ~= "LeftButton" or ds.dragging then return end
+                    local cx, cy = GetCursorPosition()
+                    ds._pendingRow = self
+                    ds._pendingIdx = capturedIdx
+                    ds._pendingMeta = meta
+                    ds._pendingColor = c
+                    ds._startCX = cx
+                    ds._startCY = cy
+                    ds._dragStarted = false
+
+                    ds.ghost:SetScript("OnUpdate", function(g)
+                        if ds._dragStarted then
+                            local gcx, gcy = GetCursorPosition()
+                            local scale = UIParent:GetEffectiveScale()
+                            g:ClearAllPoints()
+                            g:SetPoint("CENTER", UIParent, "BOTTOMLEFT", gcx / scale, gcy / scale)
+
+                            local parentTop = parent:GetTop()
+                            if not parentTop then return end
+                            local cursorY = gcy / scale
+                            local listTop = parentTop + yStart
+                            local relY = listTop - cursorY
+                            local dropIdx = math.floor(relY / LIST_ROW_H) + 1
+                            dropIdx = math.max(1, math.min(dropIdx, #orderTable))
+                            ds.dropIdx = dropIdx
+
+                            local line = ds.dropLine
+                            local lineY = yStart - (dropIdx - 1) * LIST_ROW_H
+                            if dropIdx > ds.dragIdx then
+                                lineY = yStart - dropIdx * LIST_ROW_H
+                            end
+                            line:ClearAllPoints()
+                            line:SetPoint("TOPLEFT", parent, "TOPLEFT", 4, lineY + 1)
+                            line:SetPoint("RIGHT", parent, "RIGHT", -4, 0)
+                            line:Show()
+                        else
+                            local ncx, ncy = GetCursorPosition()
+                            if not ds._startCX then
+                                g:SetScript("OnUpdate", nil)
+                                return
+                            end
+                            local dx = math.abs(ncx - ds._startCX)
+                            local dy = math.abs(ncy - ds._startCY)
+                            if dx + dy > 6 then
+                                ds._dragStarted = true
+                                ds.dragging = true
+                                ds.dragIdx = ds._pendingIdx
+                                local m = ds._pendingMeta
+                                local pc = ds._pendingColor
+                                g.icon:SetTexture(m.icon or "")
+                                g.label:SetText(m.label)
+                                g.label:SetTextColor(pc[1], pc[2], pc[3])
+                                g.bg:SetColorTexture(pc[1] * 0.2, pc[2] * 0.2, pc[3] * 0.25, 0.95)
+                                g.border:SetColorTexture(pc[1] * 0.6, pc[2] * 0.6, pc[3] * 0.8, 0.8)
+                                g:Show()
+                                if ds._pendingRow then ds._pendingRow:SetAlpha(0.3) end
+                                GameTooltip:Hide()
+                            end
+                        end
+                    end)
+                end)
+
+                row:SetScript("OnMouseUp", function(self, button)
+                    if button ~= "LeftButton" then return end
+
+                    if ds.dragging and ds._dragStarted then
+                        ds.dragging = false
+                        ds._dragStarted = false
+                        if ds._pendingRow then ds._pendingRow:SetAlpha(1) end
+                        ds.ghost:Hide()
+                        ds.ghost:SetScript("OnUpdate", nil)
+                        ds.dropLine:Hide()
+
+                        local from = ds.dragIdx
+                        local to = ds.dropIdx or from
+                        if from ~= to then
+                            local moved = table.remove(orderTable, from)
+                            table.insert(orderTable, to, moved)
+                            onChanged()
+                        end
+                    else
+                        ds.ghost:SetScript("OnUpdate", nil)
+                        ds.ghost:Hide()
+                        ds.dragging = false
+                        ds._dragStarted = false
+                        ds._startCX = nil
+                        if capturedIdx > 1 then
+                            orderTable[capturedIdx], orderTable[capturedIdx - 1] = orderTable[capturedIdx - 1], orderTable[capturedIdx]
+                        else
+                            local moved = table.remove(orderTable, 1)
+                            table.insert(orderTable, moved)
+                        end
+                        onChanged()
+                    end
+                end)
+
+                row:Show()
+                y = y - LIST_ROW_H
+            end
+            return y
+        end
+
+        -- Initialize settings
+        if not ns.db.settings.genBuyAllocationOrder then
+            ns.db.settings.genBuyAllocationOrder = {"profit", "discount", "lowInventory"}
+        end
+        local listMode = ns.db.settings.genCrossRealmListMode or "separate"
+        local intSortMode = ns.db.settings.genIntegratedSortMode or "mostProfitable"
+
+        local function CRAutoRegenerate()
+            UI._crGenRequested = true
+            UI:Refresh()
+        end
+
+        -- Layout
+        local rightY = -4
+
+        -- Buy Priorities
+        cr3.buyAllocDesc:ClearAllPoints()
+        cr3.buyAllocDesc:SetPoint("TOPLEFT", cr3, "TOPLEFT", 6, rightY)
+        cr3.buyAllocDesc:SetPoint("RIGHT", cr3, "RIGHT", -6, 0)
+        rightY = rightY - 14
+        cr3.buyAllocLabel:ClearAllPoints()
+        cr3.buyAllocLabel:SetPoint("TOPLEFT", cr3, "TOPLEFT", 6, rightY)
+        rightY = rightY - 14
+        rightY = RenderAllocListCR(ns.db.settings.genBuyAllocationOrder, BUY_ALLOC_META,
+            cr3.buyAllocRows, cr3, rightY, CRAutoRegenerate)
+        rightY = rightY - 8
+
+        -- Sell Priorities
+        cr3.sellAllocDesc:ClearAllPoints()
+        cr3.sellAllocDesc:SetPoint("TOPLEFT", cr3, "TOPLEFT", 6, rightY)
+        cr3.sellAllocDesc:SetPoint("RIGHT", cr3, "RIGHT", -6, 0)
+        rightY = rightY - 14
+        cr3.sellAllocLabel:ClearAllPoints()
+        cr3.sellAllocLabel:SetPoint("TOPLEFT", cr3, "TOPLEFT", 6, rightY)
+        rightY = rightY - 14
+        rightY = RenderAllocListCR(UI:GetGenAllocationOrder(), SELL_ALLOC_META,
+            cr3.sellAllocRows, cr3, rightY, CRAutoRegenerate)
+        rightY = rightY - 8
+
+        -- List Mode Toggle
+        cr3.listModeLabel:ClearAllPoints()
+        cr3.listModeLabel:SetPoint("TOPLEFT", cr3, "TOPLEFT", 6, rightY)
+        rightY = rightY - 16
+
+        cr3.separateBtn:ClearAllPoints()
+        cr3.separateBtn:SetPoint("TOPLEFT", cr3, "TOPLEFT", 4, rightY)
+        SetToggleActive(cr3.separateBtn, listMode == "separate")
+        cr3.separateBtn:Show()
+
+        cr3.integratedBtn:ClearAllPoints()
+        cr3.integratedBtn:SetPoint("LEFT", cr3.separateBtn, "RIGHT", 4, 0)
+        SetToggleActive(cr3.integratedBtn, listMode == "integrated")
+        cr3.integratedBtn:Show()
+
+        rightY = rightY - 22
+
+        -- Integrated Sort Mode (only when integrated)
+        if listMode == "integrated" then
+            cr3.intSortLabel:ClearAllPoints()
+            cr3.intSortLabel:SetPoint("TOPLEFT", cr3, "TOPLEFT", 6, rightY)
+            cr3.intSortLabel:Show()
+            rightY = rightY - 16
+
+            cr3.intSortProfitBtn:ClearAllPoints()
+            cr3.intSortProfitBtn:SetPoint("TOPLEFT", cr3, "TOPLEFT", 4, rightY)
+            SetToggleActive(cr3.intSortProfitBtn, intSortMode == "mostProfitable")
+            cr3.intSortProfitBtn:Show()
+
+            cr3.intSortDealBtn:ClearAllPoints()
+            cr3.intSortDealBtn:SetPoint("LEFT", cr3.intSortProfitBtn, "RIGHT", 4, 0)
+            SetToggleActive(cr3.intSortDealBtn, intSortMode == "bestDeal")
+            cr3.intSortDealBtn:Show()
+
+            cr3.intSortBuysBtn:ClearAllPoints()
+            cr3.intSortBuysBtn:SetPoint("LEFT", cr3.intSortDealBtn, "RIGHT", 4, 0)
+            SetToggleActive(cr3.intSortBuysBtn, intSortMode == "prioritizeBuys")
+            cr3.intSortBuysBtn:Show()
+
+            rightY = rightY - 22
+        else
+            cr3.intSortLabel:Hide()
+            cr3.intSortProfitBtn:Hide()
+            cr3.intSortDealBtn:Hide()
+            cr3.intSortBuysBtn:Hide()
+        end
+
+        -- Generate button
+        cr3.generateBtn:ClearAllPoints()
+        cr3.generateBtn:SetPoint("TOPLEFT", cr3, "TOPLEFT", 6, rightY)
+        cr3.generateBtn:Show()
+        rightY = rightY - 22
+
+        -- Run generation if requested
+        if UI._crGenRequested then
+            UI._crGenRequested = false
+
+            local sellAllocOrder = UI:GetGenAllocationOrder()
+            local buyAllocOrder = ns.db.settings.genBuyAllocationOrder or {"profit", "discount", "lowInventory"}
+
+            -- Build filter function from step 2 state
+            local dealFilter = UI._crDealFilter
+            if not dealFilter then
+                dealFilter = function() return true end
+            end
+
+            local opts = {
+                buyAllocationOrder = buyAllocOrder,
+                listMode = listMode,
+                integratedSortMode = intSortMode,
+                dealFilter = dealFilter,
+            }
+
+            UI._generatorPreview = ns.TodoList:GenerateTodoList("fpCrossRealm", sellAllocOrder, opts)
+        end
+
+        -- Status label
+        cr3.statusLabel:ClearAllPoints()
+        cr3.statusLabel:SetPoint("TOPLEFT", cr3, "TOPLEFT", 6, rightY)
+
+        local previewSource = UI._generatorPreview
+        local isSeparate = listMode == "separate" and previewSource and previewSource.buy
+
+        if isSeparate then
+            local buyItems = previewSource.buy and previewSource.buy.items or {}
+            local sellItems = previewSource.sell and previewSource.sell.items or {}
+            cr3.statusLabel:SetText(
+                ns.COLORS.CYAN .. #buyItems .. " buy tasks|r" ..
+                ns.COLORS.GRAY .. "  +  " .. "|r" ..
+                ns.COLORS.YELLOW .. #sellItems .. " sell tasks|r")
+        elseif previewSource and previewSource.items then
+            local taskCount = #previewSource.items
+            cr3.statusLabel:SetText(ns.COLORS.GRAY .. taskCount .. " tasks generated|r")
+        else
+            cr3.statusLabel:SetText(ns.COLORS.GRAY .. "Click Generate to build list|r")
+        end
+        rightY = rightY - 14
+
+        -- Divider
+        cr3.listDivider:ClearAllPoints()
+        cr3.listDivider:SetPoint("TOPLEFT", cr3, "TOPLEFT", 6, rightY + 2)
+        cr3.listDivider:SetPoint("RIGHT", cr3, "RIGHT", -6, 0)
+        rightY = rightY - 4
+
+        -- Generated items scroll area
+        cr3.genScroll:ClearAllPoints()
+        cr3.genScroll:SetPoint("TOPLEFT", cr3, "TOPLEFT", 0, rightY)
+        cr3.genScroll:SetPoint("BOTTOMRIGHT", cr3, "BOTTOMRIGHT", -22, 0)
+
+        local genScrollWidth = cr3.genScroll:GetWidth()
+        cr3.genContent:SetWidth(genScrollWidth and genScrollWidth > 0 and genScrollWidth or 200)
+
+        -- Render preview groups
+        for _, row in ipairs(cr3.genRows) do row:Hide() end
+
+        local LookupItemInfo = UI._LookupItemInfo
+        local QualityColorName = UI._QualityColorName
+        local GEN_ROW_H = 18
+        local HDR_ROW_H = 22
+        local genY = 0
+        local genRowIdx = 0
+
+        local function GetOrCreateCRGenRow(height)
+            genRowIdx = genRowIdx + 1
+            local row = cr3.genRows[genRowIdx]
+            if not row then
+                row = CreateFrame("Button", nil, cr3.genContent)
+                row.bg = row:CreateTexture(nil, "BACKGROUND")
+                row.bg:SetAllPoints()
+                row.icon = row:CreateTexture(nil, "ARTWORK")
+                row.icon:SetSize(14, 14)
+                row.icon:SetPoint("LEFT", row, "LEFT", 2, 0)
+                row.nameText = row:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+                row.nameText:SetPoint("LEFT", row.icon, "RIGHT", 3, 0)
+                row.nameText:SetJustifyH("LEFT")
+                row.rightText = row:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+                row.rightText:SetPoint("RIGHT", row, "RIGHT", -4, 0)
+                row.rightText:SetJustifyH("RIGHT")
+                row.nameText:SetPoint("RIGHT", row.rightText, "LEFT", -4, 0)
+                row:EnableMouse(true)
+                cr3.genRows[genRowIdx] = row
+            end
+            row:SetHeight(height)
+            row:ClearAllPoints()
+            row:SetPoint("TOPLEFT", cr3.genContent, "TOPLEFT", 0, -genY)
+            row:SetPoint("RIGHT", cr3.genContent, "RIGHT", 0, 0)
+            row.icon:Hide()
+            row.nameText:SetText("")
+            row.rightText:SetText("")
+            row:SetScript("OnClick", nil)
+            row:SetScript("OnEnter", nil)
+            row:SetScript("OnLeave", nil)
+            row:Show()
+            return row
+        end
+
+        local function RenderGroupedPreview(items, sortMode, sectionLabel)
+            if not items or #items == 0 then return end
+
+            local displayGroups, missingCount = ns.TodoList:BuildDisplayGroups(items, sortMode or "profit")
+
+            -- Section header
+            if sectionLabel then
+                local shdr = GetOrCreateCRGenRow(HDR_ROW_H)
+                shdr.bg:SetColorTexture(0.08, 0.12, 0.18, 0.9)
+                shdr.nameText:ClearAllPoints()
+                shdr.nameText:SetPoint("LEFT", shdr, "LEFT", 6, 0)
+                shdr.nameText:SetPoint("RIGHT", shdr.rightText, "LEFT", -4, 0)
+                shdr.nameText:SetText(sectionLabel)
+                genY = genY + HDR_ROW_H
+            end
+
+            for gi, group in ipairs(displayGroups) do
+                local isUnassigned = not group.charKey
+
+                local hdr = GetOrCreateCRGenRow(HDR_ROW_H)
+
+                if isUnassigned then
+                    hdr.bg:SetColorTexture(0.15, 0.08, 0.08, 0.7)
+                    local realmName = group.realm ~= "" and group.realm or "unknown realm"
+                    hdr.nameText:SetText(
+                        ns.COLORS.RED .. "Create character on " .. realmName .. "|r" ..
+                        ns.COLORS.GRAY .. "  (" .. #group.items .. " items)|r")
+                else
+                    hdr.bg:SetColorTexture(0.12, 0.15, 0.2, 0.8)
+                    local charData = ns.db.characters and ns.db.characters[group.charKey]
+                    local cc = charData and (UI._CLASS_COLORS or {})[charData.class] or "888888"
+                    local charDisplay = "|cff" .. cc .. group.charName .. "|r"
+                    local realmDisplay = group.realm ~= "" and (ns.COLORS.GRAY .. " - " .. group.realm .. "|r") or ""
+                    local buyTag = group.hasBuyTasks and (ns.COLORS.CYAN .. " [Buy]|r") or ""
+                    hdr.nameText:SetText(charDisplay .. realmDisplay .. buyTag ..
+                        ns.COLORS.GRAY .. "  (" .. #group.items .. " items)|r")
+                end
+
+                hdr.nameText:ClearAllPoints()
+                hdr.nameText:SetPoint("LEFT", hdr, "LEFT", 6, 0)
+                hdr.nameText:SetPoint("RIGHT", hdr.rightText, "LEFT", -4, 0)
+
+                local goldStr = UI._FormatGoldValue and UI._FormatGoldValue(group.totalGold) or ""
+                if goldStr ~= "" then
+                    local goldColor = isUnassigned and ns.COLORS.GRAY or ns.COLORS.YELLOW
+                    hdr.rightText:SetText(goldColor .. "~" .. goldStr .. "|r")
+                end
+
+                genY = genY + HDR_ROW_H
+
+                -- Item rows
+                for ii, item in ipairs(group.items) do
+                    local row = GetOrCreateCRGenRow(GEN_ROW_H)
+                    if isUnassigned then
+                        row.bg:SetColorTexture(0.1, 0.06, 0.06, 0.4)
+                    elseif item.action == "buy" then
+                        row.bg:SetColorTexture(0.06, 0.1, 0.14, 0.6)
+                    else
+                        row.bg:SetColorTexture(ii % 2 == 0 and 0.08 or 0.06, ii % 2 == 0 and 0.08 or 0.06, ii % 2 == 0 and 0.12 or 0.1, 0.6)
+                    end
+
+                    local lookupIcon, quality, resolvedID
+                    pcall(function()
+                        lookupIcon, quality, resolvedID = LookupItemInfo(item.itemID, item.itemKey, item.name)
+                    end)
+                    local itemIcon = item.icon or lookupIcon
+                    if itemIcon then
+                        row.icon:SetTexture(itemIcon)
+                        row.icon:ClearAllPoints()
+                        row.icon:SetPoint("LEFT", row, "LEFT", 14, 0)
+                        row.icon:Show()
+                        row.nameText:ClearAllPoints()
+                        row.nameText:SetPoint("LEFT", row.icon, "RIGHT", 3, 0)
+                        row.nameText:SetPoint("RIGHT", row.rightText, "LEFT", -4, 0)
+                    else
+                        row.nameText:ClearAllPoints()
+                        row.nameText:SetPoint("LEFT", row, "LEFT", 16, 0)
+                        row.nameText:SetPoint("RIGHT", row.rightText, "LEFT", -4, 0)
+                    end
+
+                    local displayName = item.name or "?"
+                    if isUnassigned then
+                        displayName = ns.COLORS.GRAY .. displayName .. "|r"
+                    elseif quality and QualityColorName then
+                        displayName = QualityColorName(displayName, quality)
+                    elseif item.quality and item.quality ~= "" and QualityColorName then
+                        displayName = QualityColorName(displayName, item.quality)
+                    end
+
+                    local actionTag = ""
+                    if item.action == "buy" then
+                        actionTag = ns.COLORS.CYAN .. "[B] " .. "|r"
+                    end
+                    local qtyStr = (item.quantity or 1) > 1 and (" x" .. (item.quantity or 1)) or ""
+                    row.nameText:SetText(actionTag .. displayName .. qtyStr)
+
+                    if itemIcon and isUnassigned then
+                        row.icon:SetDesaturated(true)
+                        row.icon:SetAlpha(0.5)
+                    elseif itemIcon then
+                        row.icon:SetDesaturated(false)
+                        row.icon:SetAlpha(1)
+                    end
+
+                    local priceStr = item.expectedPrice or ""
+                    if item.action == "buy" and item.buyPrice then
+                        priceStr = ns.COLORS.CYAN .. item.buyPrice .. "|r"
+                    elseif isUnassigned then
+                        priceStr = ns.COLORS.GRAY .. priceStr .. "|r"
+                    end
+                    row.rightText:SetText(priceStr)
+
+                    local restoreBg
+                    if isUnassigned then
+                        restoreBg = {0.1, 0.06, 0.06, 0.4}
+                    elseif item.action == "buy" then
+                        restoreBg = {0.06, 0.1, 0.14, 0.6}
+                    else
+                        restoreBg = {ii % 2 == 0 and 0.08 or 0.06, ii % 2 == 0 and 0.08 or 0.06, ii % 2 == 0 and 0.12 or 0.1, 0.6}
+                    end
+
+                    local capturedItem = item
+                    local capturedID = resolvedID or tonumber(item.itemID)
+                    row:SetScript("OnEnter", function(self)
+                        self.bg:SetColorTexture(1, 1, 1, 0.08)
+                        GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+                        if capturedID and capturedID > 0 then
+                            GameTooltip:SetItemByID(capturedID)
+                        else
+                            GameTooltip:SetText(capturedItem.name or "?", 1, 1, 1)
+                        end
+                        if capturedItem.action == "buy" then
+                            GameTooltip:AddLine("Buy on: " .. (capturedItem.buyRealm or "?"), 0.4, 0.8, 0.9)
+                            GameTooltip:AddLine("Buy price: " .. (capturedItem.buyPrice or "?"), 0.4, 0.8, 0.9)
+                            GameTooltip:AddLine("Sell on: " .. (capturedItem.targetRealm or "?"), 0.7, 0.7, 0.7)
+                        else
+                            if capturedItem.targetRealm and capturedItem.targetRealm ~= "" then
+                                GameTooltip:AddLine("Sell on: " .. capturedItem.targetRealm, 0.7, 0.7, 0.7)
+                            end
+                        end
+                        if capturedItem.expectedPrice then
+                            GameTooltip:AddLine("Sell price: " .. capturedItem.expectedPrice, 0.7, 0.7, 0.7)
+                        end
+                        if capturedItem.profitAmount then
+                            GameTooltip:AddLine("Profit: " .. capturedItem.profitAmount ..
+                                (capturedItem.profitPct and (" (" .. capturedItem.profitPct .. "%)") or ""), 0.3, 1, 0.3)
+                        end
+                        GameTooltip:Show()
+                    end)
+                    row:SetScript("OnLeave", function(self)
+                        self.bg:SetColorTexture(unpack(restoreBg))
+                        GameTooltip:Hide()
+                    end)
+
+                    genY = genY + GEN_ROW_H
+                end
+
+                genY = genY + 2
+            end
+        end
+
+        -- Render based on mode
+        if isSeparate then
+            local buyItems = previewSource.buy and previewSource.buy.items or {}
+            local sellItems = previewSource.sell and previewSource.sell.items or {}
+            RenderGroupedPreview(buyItems, "profit", ns.COLORS.CYAN .. "BUY LIST|r" ..
+                ns.COLORS.GRAY .. "  (" .. #buyItems .. " tasks)|r")
+            RenderGroupedPreview(sellItems, UI:GetGenSortMode(), ns.COLORS.YELLOW .. "SELL LIST|r" ..
+                ns.COLORS.GRAY .. "  (" .. #sellItems .. " tasks)|r")
+        elseif previewSource and previewSource.items then
+            local sortMode = intSortMode or "profit"
+            -- Map integrated sort modes to BuildDisplayGroups sort modes
+            local displaySortMode = sortMode
+            RenderGroupedPreview(previewSource.items, displaySortMode, nil)
+        end
+
+        cr3.genContent:SetHeight(math.max(1, genY))
+
+        -- Save button logic
+        if UI._generatorPreview then
+            gf.saveBtn:Show()
+            gf.saveBtn:SetScript("OnClick", function()
+                if isSeparate and previewSource.buy and previewSource.sell then
+                    -- Save two separate lists
+                    local currentList2 = ns.TodoList:GetCurrentList()
+                    local buyCount = previewSource.buy.items and #previewSource.buy.items or 0
+                    local sellCount = previewSource.sell.items and #previewSource.sell.items or 0
+
+                    if buyCount > 0 then
+                        ns.TodoList:CommitList(previewSource.buy, currentList2 and "upcoming" or "replace")
+                    end
+                    if sellCount > 0 then
+                        ns.TodoList:CommitList(previewSource.sell, "upcoming")
+                    end
+
+                    ns:Print(ns.COLORS.GREEN .. "Saved cross-realm lists: " ..
+                        buyCount .. " buy + " .. sellCount .. " sell tasks.|r")
+                elseif previewSource and previewSource.items then
+                    local count = #previewSource.items
+                    local currentList2 = ns.TodoList:GetCurrentList()
+                    if currentList2 then
+                        ns.TodoList:CommitList(previewSource, "upcoming")
+                        ns:Print(ns.COLORS.GREEN .. "Queued cross-realm list with " .. count .. " tasks.|r")
+                    else
+                        ns.TodoList:CommitList(previewSource, "replace")
+                        ns:Print(ns.COLORS.GREEN .. "Saved cross-realm list with " .. count .. " tasks.|r")
+                    end
+                end
+
+                UI._generatorPreview = nil
+                UI:Refresh()
+                if UI.RefreshMini then UI:RefreshMini() end
+            end)
+        end
+
+        -- Status bar
+        local genStatusParts = {}
+        if UI._generatorPreview then
+            if isSeparate then
+                local buyCount = previewSource.buy and previewSource.buy.items and #previewSource.buy.items or 0
+                local sellCount = previewSource.sell and previewSource.sell.items and #previewSource.sell.items or 0
+                table.insert(genStatusParts, buyCount .. " buy + " .. sellCount .. " sell tasks")
+            else
+                local pvItems = UI._generatorPreview.items or {}
+                table.insert(genStatusParts, #pvItems .. " tasks")
+            end
+            table.insert(genStatusParts, "Click Save to commit")
+        else
+            local crCount = ns:ImportGetCount("fpCrossRealm")
+            table.insert(genStatusParts, crCount .. " cross-realm deals")
+            table.insert(genStatusParts, "Click Generate to preview")
+        end
+
+        mainFrame.statusText:SetText("Step 3 of 3  |  " .. table.concat(genStatusParts, "  |  "))
         return
     end
 
