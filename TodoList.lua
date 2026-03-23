@@ -57,10 +57,18 @@ function TodoList:DeleteQueuedList(index)
     end
 end
 
--- Clear the active list
+-- Clear the active list and auto-promote the next queued list
 function TodoList:ClearCurrent()
     if not ns.db or not ns.db.todoLists then return end
     ns.db.todoLists.active = nil
+    -- Auto-promote next queued list if available
+    if self:AdvanceQueue() then
+        local promoted = ns.db.todoLists.active
+        local name = promoted and promoted.name or "Unnamed"
+        if ns.Print then
+            ns:Print(ns.COLORS.GREEN .. "Promoted queued list: " .. name .. "|r")
+        end
+    end
 end
 
 -- Duplicate a list by index. Returns new index or nil.
