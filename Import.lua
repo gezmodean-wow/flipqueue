@@ -456,10 +456,13 @@ function Import:ParseTabFormat(text)
                 local key = ns:MakeItemKey(itemID ~= "" and itemID or name, bonusIDs, modifiers)
 
                 -- Determine deal type and profit
+                -- Filter out FP source strings (Player Inventory, Auction House, etc.)
+                local isCrossRealm = buyRealmVal ~= "" and buyPriceVal ~= ""
+                    and not IsFPSourceString(buyRealmVal)
                 local dealType = nil
                 local profitAmount = nil
                 local profitPct = nil
-                if buyRealmVal ~= "" and buyPriceVal ~= "" then
+                if isCrossRealm then
                     dealType = "flip"
                     local sellGold = ns:ParseGoldValue(sellPrice or "")
                     local buyGold = ns:ParseGoldValue(buyPriceVal)
@@ -481,8 +484,8 @@ function Import:ParseTabFormat(text)
                     expectedPrice = sellPrice,
                     targetRealm   = sellRealm,
                     dealType      = dealType,
-                    buyRealm      = buyRealmVal ~= "" and buyRealmVal or nil,
-                    buyPrice      = buyPriceVal ~= "" and buyPriceVal or nil,
+                    buyRealm      = isCrossRealm and buyRealmVal or nil,
+                    buyPrice      = isCrossRealm and buyPriceVal or nil,
                     profitAmount  = profitAmount,
                     profitPct     = profitPct,
                 })
@@ -633,11 +636,13 @@ function Import:ParseFPCommaCSV(text)
                 local key = itemID ~= "" and ns:MakeItemKey(itemID, "", "") or name
 
                 -- Determine deal type and profit
-                local dealType = "sell"
+                -- Filter out FP source strings (Player Inventory, Auction House, etc.)
+                local isCrossRealm = buyRealmVal ~= "" and buyPriceVal ~= ""
+                    and not IsFPSourceString(buyRealmVal)
+                local dealType = isCrossRealm and "flip" or "sell"
                 local profitAmount = nil
                 local profitPct = nil
-                if buyRealmVal ~= "" and buyPriceVal ~= "" then
-                    dealType = "flip"
+                if isCrossRealm then
                     local sellGold = ns:ParseGoldValue(sellPrice ~= "" and sellPrice or saleAvg)
                     local buyGold = ns:ParseGoldValue(buyPriceVal)
                     if sellGold > 0 and buyGold > 0 then
@@ -662,8 +667,8 @@ function Import:ParseFPCommaCSV(text)
                     expectedPrice = sellPrice ~= "" and sellPrice or saleAvg,
                     noCompetition = false,
                     dealType      = dealType,
-                    buyRealm      = buyRealmVal ~= "" and buyRealmVal or nil,
-                    buyPrice      = buyPriceVal ~= "" and buyPriceVal or nil,
+                    buyRealm      = isCrossRealm and buyRealmVal or nil,
+                    buyPrice      = isCrossRealm and buyPriceVal or nil,
                     profitAmount  = profitAmount,
                     profitPct     = profitPct,
                     saleAvg       = saleAvg,
