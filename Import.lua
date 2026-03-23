@@ -1,6 +1,7 @@
 -- Import.lua
 -- Parse pasted data from FlippingPal website results
--- Supports: FP website copy-paste, FP comma CSV, semicolon CSV (FP extractor), tab-delimited (Excel), plain item names
+-- Supports: FP website copy-paste, FP comma CSV, semicolon CSV (FP extractor),
+--           tab-delimited (Excel/HTML table), Auctionator shopping list text, plain item names
 local addonName, ns = ...
 
 local Import = {}
@@ -385,10 +386,20 @@ function Import:ParseTabFormat(text)
             colMap.modifiers = i
         elseif col:find("qty") or col:find("quant") then
             colMap.quantity = i
-        elseif col:find("price") or col:find("sale") then
-            colMap.price = i
         elseif col:find("sell") and col:find("rate") then
             colMap.sellRate = i
+        -- Cross-realm columns: match specific "buy/sell realm/price" before generic
+        elseif col:find("buy") and col:find("realm") then
+            colMap.buyRealm = i
+        elseif col:find("buy") and col:find("price") then
+            colMap.buyPrice = i
+        elseif col:find("sell") and col:find("realm") then
+            colMap.sellRealm = i
+        elseif col:find("sell") and col:find("price") then
+            colMap.sellPrice = i
+        -- Generic fallbacks for single-realm formats
+        elseif col:find("price") or col:find("sale") then
+            colMap.price = i
         elseif col:find("server") or col:find("realm") then
             colMap.realm = i
         end
@@ -397,6 +408,9 @@ function Import:ParseTabFormat(text)
     if not colMap.itemID and not colMap.name then
         colMap.name = 1
     end
+
+    -- Detect cross-realm columns
+    local hasCrossRealm = colMap.buyPrice and colMap.buyRealm
 
     for i = 2, #lines do
         local line = strtrim(lines[i])
@@ -410,11 +424,38 @@ function Import:ParseTabFormat(text)
             local bonusIDs  = colMap.bonusIDs and strtrim(parts[colMap.bonusIDs] or "") or ""
             local modifiers = colMap.modifiers and strtrim(parts[colMap.modifiers] or "") or ""
             local quantity  = colMap.quantity and tonumber(strtrim(parts[colMap.quantity] or "")) or 1
-            local price     = colMap.price and strtrim(parts[colMap.price] or "") or nil
-            local realm     = colMap.realm and strtrim(parts[colMap.realm] or "") or nil
+
+            -- Resolve sell realm: prefer explicit "Sell Realm" column, fall back to generic "Realm"
+            local sellRealm = colMap.sellRealm and strtrim(parts[colMap.sellRealm] or "")
+                or colMap.realm and strtrim(parts[colMap.realm] or "")
+                or nil
+
+            -- Resolve sell price: prefer explicit "Sell Price", fall back to generic "Price"
+            local sellPrice = colMap.sellPrice and strtrim(parts[colMap.sellPrice] or "")
+                or colMap.price and strtrim(parts[colMap.price] or "")
+                or nil
+
+            -- Cross-realm fields
+            local buyPriceVal = hasCrossRealm and strtrim(parts[colMap.buyPrice] or "") or ""
+            local buyRealmVal = hasCrossRealm and strtrim(parts[colMap.buyRealm] or "") or ""
 
             if itemID ~= "" or name ~= "" then
                 local key = ns:MakeItemKey(itemID ~= "" and itemID or name, bonusIDs, modifiers)
+
+                -- Determine deal type and profit
+                local dealType = nil
+                local profitAmount = nil
+                local profitPct = nil
+                if buyRealmVal ~= "" and buyPriceVal ~= "" then
+                    dealType = "flip"
+                    local sellGold = ns:ParseGoldValue(sellPrice or "")
+                    local buyGold = ns:ParseGoldValue(buyPriceVal)
+                    if sellGold > 0 and buyGold > 0 then
+                        profitAmount = tostring(sellGold - buyGold) .. "g"
+                        profitPct = math.floor((sellGold - buyGold) / buyGold * 100)
+                    end
+                end
+
                 table.insert(items, {
                     itemKey       = key,
                     itemID        = itemID,
@@ -424,8 +465,13 @@ function Import:ParseTabFormat(text)
                     bonusIDs      = bonusIDs,
                     modifiers     = modifiers,
                     quantity      = quantity or 1,
-                    expectedPrice = price,
-                    targetRealm   = realm,
+                    expectedPrice = sellPrice,
+                    targetRealm   = sellRealm,
+                    dealType      = dealType,
+                    buyRealm      = buyRealmVal ~= "" and buyRealmVal or nil,
+                    buyPrice      = buyPriceVal ~= "" and buyPriceVal or nil,
+                    profitAmount  = profitAmount,
+                    profitPct     = profitPct,
                 })
             end
         end
@@ -617,6 +663,71 @@ function Import:ParseFPCommaCSV(text)
 end
 
 --------------------------
+-- Auctionator Shopping List Text Parser (pasted export)
+--------------------------
+-- Format:
+--   --- List Name ---
+--   "Item Name 1"
+--   "Item Name 2";;;maxPrice
+-- Detects "FP Buy - RealmName" in list name for cross-realm buy deals.
+
+function Import:ParseAuctionatorText(text)
+    text = text:gsub("\r\n", "\n"):gsub("\r", "\n")
+
+    local items = {}
+    local listName = nil
+
+    for line in (text .. "\n"):gmatch("(.-)\n") do
+        local trimmed = strtrim(line)
+        if trimmed == "" then
+            -- skip
+        elseif not listName then
+            -- First non-empty line should be the header: "--- List Name ---"
+            listName = trimmed:match("^%-+%s*(.-)%s*%-+$")
+            if not listName or listName == "" then
+                -- Not a valid header; treat the line itself as the list name
+                listName = trimmed
+            end
+        else
+            -- Parse Auctionator search string: "Name";;;maxPrice or Name;;;maxPrice
+            local itemName = trimmed:match('^"([^"]+)"') or trimmed:match("^([^;]+)")
+            if itemName and strtrim(itemName) ~= "" then
+                itemName = strtrim(itemName)
+
+                -- Extract price from search string if present
+                local price = nil
+                local pricePart = trimmed:match('^"[^"]+";[^;]*;[^;]*;([^;]+)')
+                    or trimmed:match("^[^;]+;[^;]*;[^;]*;([^;]+)")
+                if pricePart and tonumber(pricePart) then
+                    -- Auctionator prices are in copper
+                    price = ns:FormatGold(tonumber(pricePart))
+                end
+
+                -- Detect "FP Buy - RealmName" pattern for cross-realm buys
+                local buyRealm = listName and listName:match("^FP Buy %- (.+)$")
+
+                table.insert(items, {
+                    itemKey       = itemName,
+                    itemID        = "",
+                    name          = itemName,
+                    quality       = "",
+                    ilvl          = 0,
+                    bonusIDs      = "",
+                    modifiers     = "",
+                    quantity      = 1,
+                    dealType      = buyRealm and "buy" or nil,
+                    buyRealm      = buyRealm,
+                    buyPrice      = price,
+                    targetRealm   = buyRealm or "",
+                })
+            end
+        end
+    end
+
+    return items
+end
+
+--------------------------
 -- Auto-Detect Format and Parse
 --------------------------
 
@@ -636,7 +747,13 @@ function Import:Parse(text)
         return self:ParseFPWebsite(text)
     end
 
-    local firstLine = text:match("^([^\n]+)")
+    -- Get first non-empty line for format detection
+    local firstLine = text:match("^%s*([^\n]+)")
+
+    -- Auctionator shopping list text export: starts with "--- List Name ---"
+    if firstLine and strtrim(firstLine):match("^%-%-%-.*%-%-%-$") then
+        return self:ParseAuctionatorText(text)
+    end
 
     -- FlippingPal comma CSV: header starts with "Item Name," or "Item ID,"
     if firstLine and (firstLine:find("^Item Name,") or firstLine:find("^Item ID,")) then
