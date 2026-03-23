@@ -594,11 +594,34 @@ function UI:RefreshGeneratorPage(pending)
         gf.nextBtn:Hide()
 
         gf.saveBtn = CreateNavButton(gf, "Save")
-        gf.saveBtn:SetPoint("RIGHT", gf.nextBtn, "LEFT", -4, 0)
+        gf.saveBtn:SetPoint("BOTTOMRIGHT", gf, "BOTTOMRIGHT", -8, 6)
         gf.saveBtn:Hide()
         gf.saveBtn:SetBackdropColor(0.15, 0.25, 0.15, 1)
         gf.saveBtn:SetBackdropBorderColor(0.3, 0.6, 0.3, 0.8)
         gf.saveBtn.text:SetTextColor(0.3, 1, 0.3)
+
+        -- ---- LIST NAME FIELD (inline, near Save button) ----
+        gf.nameLabel = gf:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+        gf.nameLabel:SetText("List name:")
+        gf.nameLabel:SetTextColor(0.6, 0.6, 0.6)
+        gf.nameLabel:SetPoint("RIGHT", gf.saveBtn, "LEFT", -6, 0)
+        gf.nameLabel:Hide()
+
+        gf.nameBox = CreateFrame("EditBox", nil, gf, "InputBoxTemplate")
+        gf.nameBox:SetSize(180, 20)
+        gf.nameBox:SetAutoFocus(false)
+        gf.nameBox:SetMaxLetters(60)
+        gf.nameBox:SetPoint("RIGHT", gf.nameLabel, "LEFT", -4, 0)
+        gf.nameBox:SetFontObject("GameFontHighlightSmall")
+        gf.nameBox:Hide()
+        gf.nameBox:SetScript("OnEscapePressed", function(self) self:ClearFocus() end)
+        gf.nameBox:SetScript("OnEnterPressed", function(self)
+            self:ClearFocus()
+            -- Trigger save via the save button click handler
+            if gf.saveBtn:IsShown() then
+                gf.saveBtn:GetScript("OnClick")(gf.saveBtn)
+            end
+        end)
 
         -- ---- STEP CONTAINERS ----
         gf.stepContainers = {}
@@ -1036,18 +1059,11 @@ function UI:RefreshGeneratorPage(pending)
             btn._key = mode.key
             btn:SetScript("OnClick", function()
                 UI:SetGenSortMode(mode.key)
+                AutoGenerate()
                 UI:Refresh()
             end)
             s3.sortBtns[mode.key] = btn
         end
-
-        -- Generate button (inline, in the step 3 area)
-        s3.generateBtn = CreateHeaderBtn(s3, "Generate",
-            "Match deals against inventory (preview -- click Save to commit)",
-            function()
-                local btn = UI.mainFrame and UI.mainFrame.actionBtns and UI.mainFrame.actionBtns.generate
-                if btn then btn:GetScript("OnClick")() end
-            end)
 
         -- Import FP Data button (opens import popup)
         s3.importBtn = CreateHeaderBtn(s3, "Import FP Data",
@@ -1908,34 +1924,32 @@ function UI:RefreshGeneratorPage(pending)
         UI:Refresh()
     end)
 
-    gf.nextBtn:Show()
-    if wizStep >= 3 then
-        gf.nextBtn.text:SetText("Generate")
-    else
+    if wizStep < 3 then
+        gf.nextBtn:Show()
         gf.nextBtn.text:SetText("Next")
-    end
-    gf.nextBtn:SetScript("OnClick", function()
-        if wizStep < 3 then
+        gf.nextBtn:SetScript("OnClick", function()
             SaveWizardState(wizTrack, wizStep + 1)
+            -- Auto-generate on entering step 3 (inventory track)
+            -- Cross-realm auto-generates on every step 3 render
+            if wizStep + 1 == 3 and wizTrack ~= "crossrealm" then
+                AutoGenerate()
+            end
             UI:Refresh()
-        elseif wizTrack == "crossrealm" then
-            -- Cross-realm generate
-            UI._crGenRequested = true
-            UI:Refresh()
-        else
-            -- Inventory generate
-            local btn = UI.mainFrame and UI.mainFrame.actionBtns and UI.mainFrame.actionBtns.generate
-            if btn then btn:GetScript("OnClick")() end
-        end
-    end)
-
-    -- Save button (only on step 3 with preview, inventory track only -- cross-realm sets its own)
-    if wizStep == 3 and wizTrack ~= "crossrealm" and UI._generatorPreview then
-        gf.saveBtn:Show()
-        gf.saveBtn:SetScript("OnClick", function()
-            local btn = UI.mainFrame and UI.mainFrame.actionBtns and UI.mainFrame.actionBtns.commitSave
-            if btn then btn:GetScript("OnClick")() end
         end)
+    end
+
+    -- Save button + name field (step 3 only, shown by track-specific logic below)
+    gf.nameLabel:Hide()
+    gf.nameBox:Hide()
+    gf.saveBtn:Hide()
+
+    if wizStep == 3 then
+        -- Default list name: "Generated YYYY-MM-DD HH:MM"
+        local defaultName = "Generated " .. date("%Y-%m-%d %H:%M")
+        if not gf.nameBox._initialized or gf.nameBox:GetText() == "" then
+            gf.nameBox:SetText(defaultName)
+            gf.nameBox._initialized = true
+        end
     end
 
     -- Position step container for the current step
@@ -2485,14 +2499,15 @@ function UI:RefreshGeneratorPage(pending)
         end
         rightY = rightY - 22
 
-        -- Generate + Import buttons
-        s3.generateBtn:ClearAllPoints()
-        s3.generateBtn:SetPoint("TOPLEFT", s3, "TOPLEFT", sortBtnX + 10, rightY + 22)
-        s3.generateBtn:Show()
-
+        -- Import FP Data button
         s3.importBtn:ClearAllPoints()
-        s3.importBtn:SetPoint("LEFT", s3.generateBtn, "RIGHT", 4, 0)
+        s3.importBtn:SetPoint("TOPLEFT", s3, "TOPLEFT", sortBtnX + 10, rightY + 22)
         s3.importBtn:Show()
+
+        -- Auto-generate on step 3 entry (always keep preview up-to-date)
+        if not UI._generatorPreview and ns:ImportGetCount("fpScanner") > 0 then
+            AutoGenerate()
+        end
 
         -- Build grouped display data
         local previewSource = UI._generatorPreview or currentList
@@ -2519,7 +2534,7 @@ function UI:RefreshGeneratorPage(pending)
             s3.statusLabel:SetText(statusText)
         else
             s3.statusLabel:SetText(
-                ns.COLORS.GRAY .. "Click Generate to build list|r")
+                ns.COLORS.GRAY .. "Import deals to generate a preview|r")
         end
         rightY = rightY - 14
 
@@ -2722,6 +2737,34 @@ function UI:RefreshGeneratorPage(pending)
         end
         s3.genContent:SetHeight(math.max(1, genY))
 
+        -- Save button with name field (inventory track)
+        if UI._generatorPreview then
+            gf.nameLabel:Show()
+            gf.nameBox:Show()
+            gf.saveBtn:Show()
+            gf.saveBtn:SetScript("OnClick", function()
+                local listName = gf.nameBox:GetText():match("^%s*(.-)%s*$")
+                if not listName or listName == "" then
+                    listName = "Generated " .. date("%Y-%m-%d %H:%M")
+                end
+                UI._generatorPreview.name = listName
+                local currentList2 = ns.TodoList:GetCurrentList()
+                local count = UI._generatorPreview.items and #UI._generatorPreview.items or 0
+                if currentList2 then
+                    ns.TodoList:CommitList(UI._generatorPreview, "upcoming")
+                    ns:Print(ns.COLORS.GREEN .. "Queued \"" .. listName .. "\" with " .. count .. " tasks.|r")
+                else
+                    ns.TodoList:CommitList(UI._generatorPreview, "replace")
+                    ns:Print(ns.COLORS.GREEN .. "Saved \"" .. listName .. "\" with " .. count .. " tasks.|r")
+                end
+                UI._generatorPreview = nil
+                gf.nameBox._initialized = false
+                SaveWizardState(UI._wizardTrack, 1)
+                UI:Refresh()
+                if UI.RefreshMini then UI:RefreshMini() end
+            end)
+        end
+
         -- Status bar
         local genStatusParts = {}
         local excludeCount = 0
@@ -2730,17 +2773,17 @@ function UI:RefreshGeneratorPage(pending)
         if UI._generatorPreview then
             local pvItems = UI._generatorPreview.items or UI._generatorPreview.tasks or {}
             table.insert(genStatusParts, #pvItems .. " tasks")
-            table.insert(genStatusParts, "Replace/Append/Queue to commit")
+            table.insert(genStatusParts, "Enter a name and click Save")
         elseif currentList then
             local counts = ns.TodoList:GetStatusCounts()
             table.insert(genStatusParts, counts.pending .. " active")
             if counts.unassigned and counts.unassigned > 0 then
                 table.insert(genStatusParts, ns.COLORS.ORANGE .. counts.unassigned .. " need chars|r")
             end
-            table.insert(genStatusParts, "Generate to rebuild")
+            table.insert(genStatusParts, "Import deals to rebuild")
         else
             table.insert(genStatusParts, pending .. " deals")
-            table.insert(genStatusParts, "Generate to match inventory")
+            table.insert(genStatusParts, "Import deals to auto-generate")
         end
         if excludeCount > 0 then
             table.insert(genStatusParts, excludeCount .. " excluded")
@@ -3420,7 +3463,6 @@ function UI:RefreshGeneratorPage(pending)
         local intSortMode = ns.db.settings.genIntegratedSortMode or "mostProfitable"
 
         local function CRAutoRegenerate()
-            UI._crGenRequested = true
             UI:Refresh()
         end
 
@@ -3498,15 +3540,10 @@ function UI:RefreshGeneratorPage(pending)
             cr3.intSortBuysBtn:Hide()
         end
 
-        -- Generate button
-        cr3.generateBtn:ClearAllPoints()
-        cr3.generateBtn:SetPoint("TOPLEFT", cr3, "TOPLEFT", 6, rightY)
-        cr3.generateBtn:Show()
-        rightY = rightY - 22
+        cr3.generateBtn:Hide()
 
-        -- Run generation if requested
-        if UI._crGenRequested then
-            UI._crGenRequested = false
+        -- Auto-generate on every config change (always keep preview up-to-date)
+        do
 
             local sellAllocOrder = UI:GetGenAllocationOrder()
             local buyAllocOrder = ns.db.settings.genBuyAllocationOrder or {"profit", "discount", "lowInventory"}
@@ -3545,7 +3582,7 @@ function UI:RefreshGeneratorPage(pending)
             local taskCount = #previewSource.items
             cr3.statusLabel:SetText(ns.COLORS.GRAY .. taskCount .. " tasks generated|r")
         else
-            cr3.statusLabel:SetText(ns.COLORS.GRAY .. "Click Generate to build list|r")
+            cr3.statusLabel:SetText(ns.COLORS.GRAY .. "Import deals to generate a preview|r")
         end
         rightY = rightY - 14
 
@@ -3785,10 +3822,17 @@ function UI:RefreshGeneratorPage(pending)
 
         cr3.genContent:SetHeight(math.max(1, genY))
 
-        -- Save button logic
+        -- Save button logic (cross-realm track)
         if UI._generatorPreview then
+            gf.nameLabel:Show()
+            gf.nameBox:Show()
             gf.saveBtn:Show()
             gf.saveBtn:SetScript("OnClick", function()
+                local listName = gf.nameBox:GetText():match("^%s*(.-)%s*$")
+                if not listName or listName == "" then
+                    listName = "Generated " .. date("%Y-%m-%d %H:%M")
+                end
+
                 if isSeparate and previewSource.buy and previewSource.sell then
                     -- Save two separate lists
                     local currentList2 = ns.TodoList:GetCurrentList()
@@ -3796,27 +3840,32 @@ function UI:RefreshGeneratorPage(pending)
                     local sellCount = previewSource.sell.items and #previewSource.sell.items or 0
 
                     if buyCount > 0 then
+                        previewSource.buy.name = listName .. " (Buy)"
                         ns.TodoList:CommitList(previewSource.buy, currentList2 and "upcoming" or "replace")
                     end
                     if sellCount > 0 then
+                        previewSource.sell.name = listName .. " (Sell)"
                         ns.TodoList:CommitList(previewSource.sell, "upcoming")
                     end
 
-                    ns:Print(ns.COLORS.GREEN .. "Saved cross-realm lists: " ..
+                    ns:Print(ns.COLORS.GREEN .. "Saved \"" .. listName .. "\": " ..
                         buyCount .. " buy + " .. sellCount .. " sell tasks.|r")
                 elseif previewSource and previewSource.items then
                     local count = #previewSource.items
+                    previewSource.name = listName
                     local currentList2 = ns.TodoList:GetCurrentList()
                     if currentList2 then
                         ns.TodoList:CommitList(previewSource, "upcoming")
-                        ns:Print(ns.COLORS.GREEN .. "Queued cross-realm list with " .. count .. " tasks.|r")
+                        ns:Print(ns.COLORS.GREEN .. "Queued \"" .. listName .. "\" with " .. count .. " tasks.|r")
                     else
                         ns.TodoList:CommitList(previewSource, "replace")
-                        ns:Print(ns.COLORS.GREEN .. "Saved cross-realm list with " .. count .. " tasks.|r")
+                        ns:Print(ns.COLORS.GREEN .. "Saved \"" .. listName .. "\" with " .. count .. " tasks.|r")
                     end
                 end
 
                 UI._generatorPreview = nil
+                gf.nameBox._initialized = false
+                SaveWizardState(UI._wizardTrack, 1)
                 UI:Refresh()
                 if UI.RefreshMini then UI:RefreshMini() end
             end)
@@ -3833,11 +3882,11 @@ function UI:RefreshGeneratorPage(pending)
                 local pvItems = UI._generatorPreview.items or {}
                 table.insert(genStatusParts, #pvItems .. " tasks")
             end
-            table.insert(genStatusParts, "Click Save to commit")
+            table.insert(genStatusParts, "Enter a name and click Save")
         else
             local crCount = ns:ImportGetCount("fpCrossRealm")
             table.insert(genStatusParts, crCount .. " cross-realm deals")
-            table.insert(genStatusParts, "Click Generate to preview")
+            table.insert(genStatusParts, "Adjusting settings will auto-generate")
         end
 
         mainFrame.statusText:SetText("Step 3 of 3  |  " .. table.concat(genStatusParts, "  |  "))
