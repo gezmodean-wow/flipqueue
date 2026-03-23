@@ -598,53 +598,133 @@ function Tracker:AutoDepositToWarbank()
             #emptySlots .. " of " .. #moves .. " item(s).|r")
     end
 
-    -- Execute moves: pick up from bags, place in warbank slot
+    -- Event-driven batch execution (same pattern as AutoPullFromBank)
     local totalMoves = math.min(#moves, #emptySlots)
     local depositedNames = {}
-    local moveIdx = 1
+    local depositErrors = 0
+    local moveIndex = 1
+    local aborted = false
 
-    local function DepositNext()
-        if moveIdx > totalMoves then
-            if #depositedNames > 0 then
+    local listener = CreateFrame("Frame")
+
+    local function Cleanup()
+        listener:UnregisterAllEvents()
+        listener:SetScript("OnEvent", nil)
+    end
+
+    local function FinishDeposit()
+        Cleanup()
+        if #depositedNames > 0 then
+            if #depositedNames == totalMoves then
                 ns:Print(ns.COLORS.CYAN .. "Deposited " .. #depositedNames ..
                     " item(s) to warbank:|r " .. table.concat(depositedNames, ", "))
+            else
+                ns:Print(ns.COLORS.CYAN .. "Deposited " .. #depositedNames ..
+                    " of " .. totalMoves .. " item(s) to warbank:|r " .. table.concat(depositedNames, ", "))
             end
-            -- Refresh after deposit
-            C_Timer.After(1, function()
-                if ns.Scanner then
-                    ns.Scanner:ScanCurrentCharacter()
-                    ns.Scanner:ScanBank()
-                end
-                if ns.TodoList and ns.TodoList.RefreshLocations then
-                    ns.TodoList:RefreshLocations()
-                end
-                if ns.TodoList and ns.TodoList.RefreshTaskSteps then
-                    ns.TodoList:RefreshTaskSteps()
-                end
-                if ns.UI and ns.UI.Refresh then ns.UI:Refresh() end
-                if ns.UI and ns.UI.RefreshMini then ns.UI:RefreshMini() end
-            end)
+        end
+        if depositErrors > 0 then
+            ns:Print(ns.COLORS.YELLOW .. depositErrors .. " item(s) failed to deposit. Try opening your bank again.|r")
+        end
+        C_Timer.After(1, function()
+            if ns.Scanner then
+                ns.Scanner:ScanCurrentCharacter()
+                ns.Scanner:ScanBank()
+            end
+            if ns.TodoList and ns.TodoList.RefreshLocations then
+                ns.TodoList:RefreshLocations()
+            end
+            if ns.TodoList and ns.TodoList.RefreshTaskSteps then
+                ns.TodoList:RefreshTaskSteps()
+            end
+            if ns.UI and ns.UI.Refresh then ns.UI:Refresh() end
+            if ns.UI and ns.UI.RefreshMini then ns.UI:RefreshMini() end
+        end)
+    end
+
+    local function ExecuteNextBatch()
+        if aborted or moveIndex > totalMoves then
+            FinishDeposit()
             return
         end
 
-        local src = moves[moveIdx]
-        local dest = emptySlots[moveIdx]
+        local batchSize = ns.db and ns.db.settings.pullBatchSize or 5
+        local batchEnd = math.min(moveIndex + batchSize - 1, totalMoves)
+        local batchMoved = 0
 
-        pcall(ClearCursor)
-        local ok1 = pcall(C_Container.PickupContainerItem, src.bag, src.slot)
-        if ok1 then
-            local ok2 = pcall(C_Container.PickupContainerItem, dest.bag, dest.slot)
-            if ok2 then
-                table.insert(depositedNames, src.name)
+        for i = moveIndex, batchEnd do
+            local src = moves[i]
+            local dest = emptySlots[i]
+
+            -- Check if source slot is locked before attempting
+            local okLock, srcInfo = pcall(C_Container.GetContainerItemInfo, src.bag, src.slot)
+            if okLock and srcInfo and srcInfo.isLocked then
+                depositErrors = depositErrors + 1
             else
                 pcall(ClearCursor)
+                local ok1 = pcall(C_Container.PickupContainerItem, src.bag, src.slot)
+                if ok1 then
+                    local ok2 = pcall(C_Container.PickupContainerItem, dest.bag, dest.slot)
+                    if ok2 then
+                        table.insert(depositedNames, src.name)
+                        batchMoved = batchMoved + 1
+                    else
+                        pcall(ClearCursor)
+                        depositErrors = depositErrors + 1
+                    end
+                else
+                    depositErrors = depositErrors + 1
+                end
             end
         end
 
-        moveIdx = moveIdx + 1
-        C_Timer.After(0.15, DepositNext)
+        moveIndex = batchEnd + 1
+
+        if moveIndex > totalMoves then
+            C_Timer.After(0.3, FinishDeposit)
+        elseif batchMoved > 0 then
+            local waitingForUnlock = true
+            listener:RegisterEvent("ITEM_LOCK_CHANGED")
+            listener:RegisterEvent("UI_ERROR_MESSAGE")
+            listener:SetScript("OnEvent", function(_, event, errorType, message)
+                if event == "UI_ERROR_MESSAGE" then
+                    if message == ERR_INTERNAL_BAG_ERROR
+                        or (message and message:find("Internal Bag Error")) then
+                        aborted = true
+                        depositErrors = depositErrors + 1
+                        listener:UnregisterEvent("ITEM_LOCK_CHANGED")
+                        listener:UnregisterEvent("UI_ERROR_MESSAGE")
+                        FinishDeposit()
+                        return
+                    elseif message == ERR_INV_FULL
+                        or (message and message:find("Inventory is full")) then
+                        aborted = true
+                        listener:UnregisterEvent("ITEM_LOCK_CHANGED")
+                        listener:UnregisterEvent("UI_ERROR_MESSAGE")
+                        FinishDeposit()
+                        return
+                    end
+                elseif event == "ITEM_LOCK_CHANGED" and waitingForUnlock then
+                    waitingForUnlock = false
+                    listener:UnregisterEvent("ITEM_LOCK_CHANGED")
+                    listener:UnregisterEvent("UI_ERROR_MESSAGE")
+                    C_Timer.After(0.1, ExecuteNextBatch)
+                end
+            end)
+
+            C_Timer.After(PULL_TIMEOUT, function()
+                if waitingForUnlock then
+                    waitingForUnlock = false
+                    listener:UnregisterEvent("ITEM_LOCK_CHANGED")
+                    listener:UnregisterEvent("UI_ERROR_MESSAGE")
+                    ExecuteNextBatch()
+                end
+            end)
+        else
+            C_Timer.After(0.5, ExecuteNextBatch)
+        end
     end
 
     ns:PrintDebug("Depositing " .. totalMoves .. " item(s) to warbank...")
-    DepositNext()
+    ExecuteNextBatch()
 end

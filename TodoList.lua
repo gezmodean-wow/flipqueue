@@ -840,3 +840,58 @@ function TodoList:UnskipTask(taskIndex)
         item.failReason = nil
     end
 end
+
+-- Re-check unassigned tasks and assign them if a matching character now exists.
+-- Called on login after character registration, and after TSM character adds.
+function TodoList:ReassignUnassignedTasks()
+    local current = self:GetCurrentList()
+    if not current or not current.tasks then return 0 end
+
+    local charKey = ns:GetCharKey()
+    local reassigned = 0
+
+    for _, task in ipairs(current.tasks) do
+        if task.status == "unassigned" and not task.assignedChar then
+            local realm = task.targetRealm
+            -- For buy tasks, match against buyRealm instead
+            if task.action == "buy" and task.buyRealm then
+                realm = task.buyRealm
+            end
+
+            if realm and realm ~= "" then
+                -- Find a non-ignored character on this realm
+                for ck, charData in pairs(ns.db.characters or {}) do
+                    local charRealm = ck:match("%-(.+)$")
+                    if charRealm and ns:RealmMatches(realm, charRealm)
+                        and not (type(charData) == "table" and charData.ignored) then
+                        task.assignedChar = ck
+                        task.status = "pending"
+
+                        -- Set up default steps if empty
+                        if not task.steps or #task.steps == 0 then
+                            if task.action == "buy" then
+                                task.steps = {
+                                    { type = "browse", status = "pending" },
+                                    { type = "buy",    status = "pending" },
+                                    { type = "deposit", to = "warbank", status = "pending" },
+                                }
+                            else
+                                task.steps = {
+                                    { type = "retrieve", from = "warbank", status = "pending" },
+                                    { type = "post", status = "pending" },
+                                    { type = "collect", status = "pending" },
+                                }
+                            end
+                            task.currentStep = 1
+                        end
+
+                        reassigned = reassigned + 1
+                        break
+                    end
+                end
+            end
+        end
+    end
+
+    return reassigned
+end

@@ -452,6 +452,12 @@ function UI:RefreshCharactersPage()
             end
             ns._detectedTSMChars = nil
             ns:Print(ns.COLORS.GREEN .. "Added " .. #detectedChars .. " character(s) from TSM.|r")
+            if ns.TodoList and ns.TodoList.ReassignUnassignedTasks then
+                local reassigned = ns.TodoList:ReassignUnassignedTasks()
+                if reassigned > 0 then
+                    ns:Print(ns.COLORS.GREEN .. reassigned .. " task(s)|r auto-assigned to new characters.")
+                end
+            end
             UI:Refresh()
         end)
         addAllRow:SetScript("OnEnter", function(self) self.bg:SetColorTexture(0.12, 0.2, 0.12, 0.7) end)
@@ -515,6 +521,12 @@ function UI:RefreshCharactersPage()
                 table.remove(detectedChars, capturedDi)
                 if #detectedChars == 0 then ns._detectedTSMChars = nil end
                 ns:Print(ns.COLORS.GREEN .. "Added:|r " .. capturedDc.charKey)
+                if ns.TodoList and ns.TodoList.ReassignUnassignedTasks then
+                    local reassigned = ns.TodoList:ReassignUnassignedTasks()
+                    if reassigned > 0 then
+                        ns:Print(ns.COLORS.GREEN .. reassigned .. " task(s)|r auto-assigned to " .. capturedDc.charKey)
+                    end
+                end
                 UI:Refresh()
             end)
             row.dismissBtn:SetScript("OnClick", function()

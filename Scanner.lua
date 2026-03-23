@@ -543,6 +543,14 @@ frame:SetScript("OnEvent", function(self, event, ...)
                     ns.TodoList:RefreshTaskSteps()
                 end
 
+                -- Re-assign any unassigned tasks now that this character is registered
+                if ns.TodoList and ns.TodoList.ReassignUnassignedTasks then
+                    local reassigned = ns.TodoList:ReassignUnassignedTasks()
+                    if reassigned > 0 then
+                        ns:Print(ns.COLORS.GREEN .. reassigned .. " task(s)|r assigned to characters on this realm.")
+                    end
+                end
+
                 -- Detect characters from TSM data
                 if ns.TSM and ns.TSM.DetectCharacters then
                     local detected = ns.TSM:DetectCharacters()
