@@ -416,6 +416,19 @@ function UI:RefreshCharactersPage()
         tdfLabel:SetText("Detected from TSM (" .. #detectedChars .. ")")
         tdfLabel:Show()
 
+        -- Clamp tables above the TSM section so they don't overflow into it
+        if #needData > 0 then
+            self.needCharsTable.scrollFrame:ClearAllPoints()
+            self.needCharsTable.scrollFrame:SetPoint("TOPLEFT", self.needCharsTable.headerFrame, "BOTTOMLEFT", 0, 0)
+            self.needCharsTable.scrollFrame:SetPoint("RIGHT", tableContainer, "RIGHT", -22, 0)
+            self.needCharsTable.scrollFrame:SetPoint("BOTTOM", tdfLabel, "TOP", 0, 4)
+        else
+            self.charsTable.scrollFrame:ClearAllPoints()
+            self.charsTable.scrollFrame:SetPoint("TOPLEFT", self.charsTable.headerFrame, "BOTTOMLEFT", 0, 0)
+            self.charsTable.scrollFrame:SetPoint("RIGHT", tableContainer, "RIGHT", -22, 0)
+            self.charsTable.scrollFrame:SetPoint("BOTTOM", tdfLabel, "TOP", 0, 4)
+        end
+
         -- Scroll frame fills remaining space, capped to MAX_VISIBLE_ROWS
         local totalContentH = (#detectedChars + 1) * ROW_H + 10
         tdfScroll:ClearAllPoints()
