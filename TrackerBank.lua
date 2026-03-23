@@ -179,6 +179,9 @@ function Tracker:AutoPullFromBank(onComplete)
             if ns.TodoList and ns.TodoList.RefreshLocations then
                 ns.TodoList:RefreshLocations()
             end
+            if ns.TodoList and ns.TodoList.RefreshTaskSteps then
+                ns.TodoList:RefreshTaskSteps()
+            end
             if ns.UI and ns.UI.Refresh then ns.UI:Refresh() end
             if ns.UI and ns.UI.RefreshMini then ns.UI:RefreshMini() end
             if onComplete then onComplete() end

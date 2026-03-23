@@ -505,6 +505,8 @@ frame:RegisterEvent("PLAYER_MONEY")
 frame:RegisterEvent("PLAYER_INTERACTION_MANAGER_FRAME_SHOW")
 frame:RegisterEvent("PLAYER_INTERACTION_MANAGER_FRAME_HIDE")
 frame:RegisterEvent("GUILDBANKBAGSLOTS_CHANGED")
+frame:RegisterEvent("PLAYERBANKSLOTS_CHANGED")
+frame:RegisterEvent("PLAYER_ACCOUNT_BANK_TAB_SLOTS_CHANGED")
 
 frame:SetScript("OnEvent", function(self, event, ...)
     if event == "PLAYER_LOGIN" then
@@ -636,6 +638,36 @@ frame:SetScript("OnEvent", function(self, event, ...)
             guildBankScanning = false
             guildScanQueue = {}
         end
+
+    elseif event == "PLAYERBANKSLOTS_CHANGED" then
+        -- Personal bank slots changed (manual move between bank and bags/warbank)
+        C_Timer.After(0.5, function()
+            Scanner:ScanCurrentCharacter()
+            Scanner:ScanBank()
+            if ns.TodoList then
+                if ns.TodoList.RefreshLocations then ns.TodoList:RefreshLocations() end
+                if ns.TodoList.RefreshTaskSteps then ns.TodoList:RefreshTaskSteps() end
+            end
+            if ns.UI and ns.UI.mainFrame and ns.UI.mainFrame:IsShown() then
+                ns.UI:Refresh()
+            end
+            if ns.UI and ns.UI.RefreshMini then ns.UI:RefreshMini() end
+        end)
+
+    elseif event == "PLAYER_ACCOUNT_BANK_TAB_SLOTS_CHANGED" then
+        -- Warbank slots changed (manual move between warbank and bags/bank)
+        C_Timer.After(0.5, function()
+            Scanner:ScanCurrentCharacter()
+            Scanner:ScanWarbank()
+            if ns.TodoList then
+                if ns.TodoList.RefreshLocations then ns.TodoList:RefreshLocations() end
+                if ns.TodoList.RefreshTaskSteps then ns.TodoList:RefreshTaskSteps() end
+            end
+            if ns.UI and ns.UI.mainFrame and ns.UI.mainFrame:IsShown() then
+                ns.UI:Refresh()
+            end
+            if ns.UI and ns.UI.RefreshMini then ns.UI:RefreshMini() end
+        end)
 
     elseif event == "GUILDBANKBAGSLOTS_CHANGED" then
         if guildBankOpen then
