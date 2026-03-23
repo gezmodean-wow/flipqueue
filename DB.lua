@@ -76,6 +76,13 @@ function ns:InitDB()
     -- Generator filter persistence
     db.settings.genFilterMode = db.settings.genFilterMode or "all"
     db.settings.genFilterValue = db.settings.genFilterValue or ""
+    -- Generator wizard settings (cross-realm / inventory track)
+    db.settings.genWizardTrack = db.settings.genWizardTrack or nil  -- nil/"inventory"/"crossrealm"
+    db.settings.genWizardStep = db.settings.genWizardStep or 0  -- 0=track select, 1/2/3=steps
+    db.settings.genBuyAllocationOrder = db.settings.genBuyAllocationOrder or {"profit", "population", "lowInventory"}
+    db.settings.genCrossRealmListMode = db.settings.genCrossRealmListMode or "separate"  -- "separate"/"integrated"
+    db.settings.genIntegratedSortMode = db.settings.genIntegratedSortMode or "mostProfitable"
+    db.settings.genCrossRealmRealmFilter = db.settings.genCrossRealmRealmFilter or {}
     -- TSM character detection dismissed list
     db.settings.dismissedTSMChars = db.settings.dismissedTSMChars or {}
 

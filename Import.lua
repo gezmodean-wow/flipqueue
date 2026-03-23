@@ -723,6 +723,16 @@ function Import:ImportFromAuctionatorList(listName)
 end
 
 --------------------------
+-- Deal Classification
+--------------------------
+
+-- Returns true if a deal is a cross-realm flip/buy (has a buyRealm).
+function Import:IsCrossRealmDeal(deal)
+    return (deal.dealType == "flip" or deal.dealType == "buy")
+        and deal.buyRealm and deal.buyRealm ~= ""
+end
+
+--------------------------
 -- Import Management (replaces Queue operations)
 --------------------------
 

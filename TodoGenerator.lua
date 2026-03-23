@@ -233,6 +233,88 @@ end
 -- Generator Helpers
 --------------------------
 
+-- Get sorted array of unique realm names from known characters (skip ignored).
+-- Uses NormalizeRealmKey for dedup so accent variants collapse.
+function TodoList:GetKnownRealms()
+    if not ns.db or not ns.db.characters then return {} end
+
+    local seen = {}  -- normalizedRealm -> displayRealm
+    for charKey, charData in pairs(ns.db.characters) do
+        if not charData.ignored then
+            local realm = charKey:match("%-(.+)$")
+            if realm and realm ~= "" then
+                local normalized = ns:NormalizeRealmKey(realm)
+                if not seen[normalized] then
+                    seen[normalized] = realm
+                end
+            end
+        end
+    end
+
+    local realms = {}
+    for _, realm in pairs(seen) do
+        table.insert(realms, realm)
+    end
+    table.sort(realms)
+    return realms
+end
+
+-- Filter deals to only those targeting allowed realms.
+-- allowedRealms: table of { realmName = true }.
+-- Matches deal.targetRealm or deal.buyRealm against allowed realms using RealmMatches.
+function TodoList:FilterDealsByRealm(deals, allowedRealms)
+    if not deals or not allowedRealms or not next(allowedRealms) then return deals end
+
+    local filtered = {}
+    for _, deal in ipairs(deals) do
+        local matched = false
+        for realm in pairs(allowedRealms) do
+            if ns:RealmMatches(deal.targetRealm, realm)
+                or (deal.buyRealm and ns:RealmMatches(deal.buyRealm, realm)) then
+                matched = true
+                break
+            end
+        end
+        if matched then
+            table.insert(filtered, deal)
+        end
+    end
+    return filtered
+end
+
+-- Count total units of a deal's item across all character inventories and warbank.
+-- Returns integer count. Used to set deal._inventoryCount before sorting.
+function TodoList:CountInventoryForDeal(deal)
+    if not ns.db then return 0 end
+
+    local count = 0
+    local resolvedID = ns:ResolveItemID(deal)
+
+    -- Character inventories
+    for charKey, charData in pairs(ns.db.characters or {}) do
+        if not charData.ignored and charData.inventory and charData.inventory.items then
+            for key, itemData in pairs(charData.inventory.items) do
+                local matched = ns:ItemsMatch(key, itemData.name, deal, resolvedID or false)
+                if matched then
+                    count = count + (itemData.quantity or 0)
+                end
+            end
+        end
+    end
+
+    -- Warbank
+    if ns.db.warbank and ns.db.warbank.items then
+        for key, itemData in pairs(ns.db.warbank.items) do
+            local matched = ns:ItemsMatch(key, itemData.name, deal, resolvedID or false)
+            if matched then
+                count = count + (itemData.quantity or 0)
+            end
+        end
+    end
+
+    return count
+end
+
 -- Find pool item matching a deal. Returns pool index or nil.
 local function FindPoolMatch(pool, deal, poolRemaining)
     local resolvedID = ns:ResolveItemID(deal)
@@ -354,6 +436,28 @@ local function CompareByKeys(a, b, keys)
             local at = a._charTaskCount or 0
             local bt = b._charTaskCount or 0
             if at ~= bt then return at < bt end
+        elseif key == "profit" then
+            -- Like "gold" but prefers profitAmount when available (cross-realm deals)
+            local ag = ns:ParseGoldValue(a.profitAmount or "") or 0
+            if ag == 0 then ag = ns:ParseGoldValue(a.expectedPrice or "") end
+            local bg = ns:ParseGoldValue(b.profitAmount or "") or 0
+            if bg == 0 then bg = ns:ParseGoldValue(b.expectedPrice or "") end
+            if ag ~= bg then return ag > bg end
+        elseif key == "lowInventory" then
+            -- Fewer inventory = higher priority (buy what you don't have)
+            local ai = a._inventoryCount or 0
+            local bi = b._inventoryCount or 0
+            if ai ~= bi then return ai < bi end
+        elseif key == "highInventory" then
+            -- More inventory = higher priority (sell what you have most of)
+            local ai = a._inventoryCount or 0
+            local bi = b._inventoryCount or 0
+            if ai ~= bi then return ai > bi end
+        elseif key == "discount" then
+            -- Higher profitPct = higher priority (best deal percentage)
+            local ap = tonumber(a.profitPct) or 0
+            local bp = tonumber(b.profitPct) or 0
+            if ap ~= bp then return ap > bp end
         end
     end
     -- Final tiebreaker: alphabetical by name
@@ -454,7 +558,7 @@ function TodoList:BuildDisplayGroups(items, sortMode)
         -- Fully deferred groups (no inventory) sort below active groups
         if a._allDeferred ~= b._allDeferred then return not a._allDeferred end
 
-        if sortMode == "profit" then
+        if sortMode == "profit" or sortMode == "mostProfitable" then
             return a.totalGold > b.totalGold
         elseif sortMode == "character" then
             return (a.charName or ""):lower() < (b.charName or ""):lower()
@@ -467,6 +571,27 @@ function TodoList:BuildDisplayGroups(items, sortMode)
             local ac = a.hasNoCompetition and 1 or 0
             local bc = b.hasNoCompetition and 1 or 0
             if ac ~= bc then return ac > bc end
+            return a.totalGold > b.totalGold
+        elseif sortMode == "bestDeal" then
+            -- Sort by average profitPct descending
+            local function avgProfitPct(group)
+                local total, count = 0, 0
+                for _, item in ipairs(group.items) do
+                    local pct = tonumber(item.profitPct) or 0
+                    total = total + pct
+                    count = count + 1
+                end
+                return count > 0 and (total / count) or 0
+            end
+            local ap = avgProfitPct(a)
+            local bp = avgProfitPct(b)
+            if ap ~= bp then return ap > bp end
+            return a.totalGold > b.totalGold
+        elseif sortMode == "prioritizeBuys" then
+            -- Buy groups first, then sells
+            local ab = a.hasBuyTasks and 1 or 0
+            local bb = b.hasBuyTasks and 1 or 0
+            if ab ~= bb then return ab > bb end
             return a.totalGold > b.totalGold
         end
         return a.totalGold > b.totalGold
@@ -489,16 +614,23 @@ end
 -- Generate a to-do list by matching deals (import entries) against the item pool.
 -- source: import source key (e.g., "fpScanner"); defaults to "fpScanner"
 -- allocationOrder: ordered array of criteria for deal priority (e.g., {"gold", "noCompetition"})
+-- opts (optional): table with extended options:
+--   opts.buyAllocationOrder — allocation order for buy tasks (cross-realm buys)
+--   opts.dealFilter — function(deal) returning true to include, false to skip
+--   opts.listMode — "separate" or "integrated" (nil = current behavior)
+--   opts.integratedSortMode — "mostProfitable"/"bestDeal"/"prioritizeBuys" (for integrated mode)
 -- Returns a preview list: { name, createdAt, source, items = { ... } }
+-- When opts.listMode == "separate", returns { buy = buyPreview, sell = sellPreview } instead.
 -- Call CommitList() to save the preview.
 -- Use BuildDisplayGroups() on the result for grouped display.
-function TodoList:GenerateTodoList(source, allocationOrder)
+function TodoList:GenerateTodoList(source, allocationOrder, opts)
     -- Handle backward compat: if source is a table, it's actually allocationOrder (old call style)
     if type(source) == "table" then
         allocationOrder = source
         source = "fpScanner"
     end
     source = source or "fpScanner"
+    opts = opts or {}
 
     if type(allocationOrder) == "string" then
         -- Backward compat: single string -> array
@@ -516,6 +648,17 @@ function TodoList:GenerateTodoList(source, allocationOrder)
         table.insert(deals, deal)
     end
 
+    -- Apply deal filter if provided
+    if opts.dealFilter then
+        local filtered = {}
+        for _, deal in ipairs(deals) do
+            if opts.dealFilter(deal) then
+                table.insert(filtered, deal)
+            end
+        end
+        deals = filtered
+    end
+
     local preview = {
         name      = "Generated " .. date("%Y-%m-%d %H:%M"),
         createdAt = time(),
@@ -524,10 +667,52 @@ function TodoList:GenerateTodoList(source, allocationOrder)
         items     = {},
     }
 
-    if #deals == 0 then return preview end
+    if #deals == 0 then
+        if opts.listMode == "separate" then
+            return { buy = preview, sell = preview }
+        end
+        return preview
+    end
+
+    -- Pre-compute inventory counts if any allocation key needs them
+    local needsInventoryCount = false
+    local allKeys = {}
+    for _, k in ipairs(allocationOrder) do allKeys[k] = true end
+    if opts.buyAllocationOrder then
+        for _, k in ipairs(opts.buyAllocationOrder) do allKeys[k] = true end
+    end
+    if allKeys["lowInventory"] or allKeys["highInventory"] then
+        needsInventoryCount = true
+    end
+    if needsInventoryCount then
+        for _, deal in ipairs(deals) do
+            deal._inventoryCount = self:CountInventoryForDeal(deal)
+        end
+    end
 
     -- Sort deals by allocation priority so high-priority deals get inventory first
-    SortDealsForAllocation(deals, allocationOrder)
+    -- For buy tasks with a separate buyAllocationOrder, we partition and sort separately
+    if opts.buyAllocationOrder then
+        local buyDeals = {}
+        local sellDeals = {}
+        for _, deal in ipairs(deals) do
+            local isCR = (deal.dealType == "flip" or deal.dealType == "buy")
+                and deal.buyRealm and deal.buyRealm ~= ""
+            if isCR then
+                table.insert(buyDeals, deal)
+            else
+                table.insert(sellDeals, deal)
+            end
+        end
+        SortDealsForAllocation(sellDeals, allocationOrder)
+        SortDealsForAllocation(buyDeals, opts.buyAllocationOrder)
+        -- Recombine: sell deals first (they claim pool), then buy deals
+        deals = {}
+        for _, d in ipairs(sellDeals) do table.insert(deals, d) end
+        for _, d in ipairs(buyDeals) do table.insert(deals, d) end
+    else
+        SortDealsForAllocation(deals, allocationOrder)
+    end
 
     -- Track remaining pool quantities
     local poolRemaining = {}
@@ -823,6 +1008,40 @@ function TodoList:GenerateTodoList(source, allocationOrder)
                 })
             end
         end
+    end
+
+    -- Handle list mode options
+    if opts.listMode == "separate" then
+        -- Split into buy and sell preview lists
+        local buyItems = {}
+        local sellItems = {}
+        for _, item in ipairs(preview.items) do
+            if item.action == "buy" then
+                table.insert(buyItems, item)
+            else
+                table.insert(sellItems, item)
+            end
+        end
+
+        local buyPreview = {
+            name      = preview.name .. " (Buy)",
+            createdAt = preview.createdAt,
+            source    = preview.source,
+            importType = preview.importType,
+            items     = buyItems,
+        }
+        local sellPreview = {
+            name      = preview.name .. " (Sell)",
+            createdAt = preview.createdAt,
+            source    = preview.source,
+            importType = preview.importType,
+            items     = sellItems,
+        }
+        return { buy = buyPreview, sell = sellPreview }
+    elseif opts.listMode == "integrated" then
+        preview.integrated = true
+        preview.integratedSortMode = opts.integratedSortMode
+        return preview
     end
 
     -- Items are not pre-sorted here — the UI calls BuildDisplayGroups() for grouped display
