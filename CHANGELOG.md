@@ -1,5 +1,57 @@
 # Changelog
 
+## v0.7.0-alpha.1
+
+### Generator Wizard (#84)
+- **Two-track wizard**: Generator page redesigned as a step-by-step wizard with track selection
+- **Inventory Scan track**: Build Inventory → Import FP Deals → Configure & Generate (3 steps)
+- **Cross-Realm Import track**: Import Deals → Filter Deals → Configure & Generate (3 steps)
+- **Buy priorities**: New priority system for cross-realm buys — profit, population, low inventory, high inventory, discount
+- **List modes**: Generate separate buy/sell lists or a single integrated list (most profitable / best deal / prioritize buys)
+- **Realm filter**: Filter cross-realm deals by realms where you have characters
+- **Auto-generate**: Preview auto-updates on every config change — no more Generate button
+- **Save with name**: Prompt for list name when saving; wizard returns to step 1 after save
+- **FP Premium note**: Import steps indicate FlippingPal Premium requirement
+
+### Transformer Pipeline (#32)
+- **New Transform page**: Input → Transform → Output pipeline for item data conversion
+- **4 input adapters**: TSM groups, imports, inventory, Auctionator lists
+- **5 transforms**: SplitPets, PriceModify, FieldMap, Filter, MergeByKey
+- **4 output adapters**: AAA JSON, FP CSV, TSM group string, Auctionator list
+
+### Cross-Realm Import (#60)
+- **Cross-realm flipping**: Import FP cross-realm flip data (website, CSV, Auctionator formats)
+- **Buy to-dos**: Generate "buy" tasks with browse → buy → deposit steps
+- **Format support**: FP website copy-paste, FP comma CSV, Auctionator inline (^-separated), Auctionator text export, tab-delimited with buy/sell columns
+
+### Sale vs Expiry Tracking (#70, #71)
+- **Sold vs expired**: Mail scan distinguishes sold (gold received) from expired (item returned)
+- **Failed sale tracking**: Tracks post attempts, total fees spent, per-attempt history with TSM price data
+- **Login message**: Splits sold vs expired counts with distinct colors
+- **Log page**: Shows Sold (green) vs Unsold (orange), failed sale count, per-attempt tooltip, total fees lost
+
+### QoL Improvements
+- **Characters page**: Heading style fix (#72), auto-expand table when no "create" section (#76), overflow into TSM section fixed (#92)
+- **Inventory page**: AH-posted items show correct owner/location (#73), "Unassigned" replaces "Unknown" for tracked items (#74)
+- **Scroll tables**: Horizontal scroll bars (#77), auto-hide when nothing to scroll (#78)
+- **Empty states**: Generator button on empty To-Do page (#75) and Mini view (#79)
+- **Sidebar**: Wider default width (#80)
+
+### Bug Fixes
+- **New character auto-assign**: Unassigned tasks automatically assigned when a new character logs in (#83)
+- **Warbank deposit batching**: Uses event-driven batch system instead of one-at-a-time timer
+- **Bank/warbank transfers**: Now trigger to-do step refresh in both directions (#91)
+- **Expired auction cycle-back**: Collected expired items cycle task back to "post" step (#94)
+- **TSM rejection step check**: Only checks tasks on "post" step, not retrieve/collect (#95)
+- **Battle pet detection**: 4-tier matching (key/ID/species/name) across all inventory lookups and mini view (#82)
+- **No more auto-skip**: Tasks defer instead of skip when item not found in stale inventory DB
+- **Auto un-skip**: Skipped tasks re-check and un-skip when item reappears
+- **Auto-complete lists**: Lists auto-archive when all tasks are done/skipped (#88)
+- **Active list auto-promote**: Deleting active list promotes next queued list (#88)
+- **Import [XR] prefix**: Fixed inventory imports incorrectly showing cross-realm indicators (#85)
+- **Cross-realm CSV parsing**: FP source strings (Player Inventory) no longer trigger cross-realm detection
+- **EditBox focus**: Click anywhere on paste area background to focus (#93)
+
 ## v0.6.2
 
 ### TSM Rejection Handling (#38)
