@@ -576,6 +576,7 @@ function TodoList:RefreshTaskSteps()
     -- Build quick bag lookup for current character
     local bagsItemKeys = {}
     local bagsItemIDs = {}
+    local bagsPetSpecies = {} -- speciesID -> count (for battle pet matching)
     pcall(function()
         for _, bagIdx in ipairs(ns.INVENTORY_BAGS) do
             local numSlots = C_Container.GetContainerNumSlots(bagIdx)
@@ -590,6 +591,11 @@ function TodoList:RefreshTaskSteps()
                         if numID then
                             bagsItemIDs[numID] = (bagsItemIDs[numID] or 0) + (info.stackCount or 1)
                         end
+                        -- Track battle pets by species ID for cross-format matching
+                        local speciesID = itemID:match("^pet:(%d+)") or itemID:match("^pet_(%d+)")
+                        if speciesID then
+                            bagsPetSpecies[speciesID] = (bagsPetSpecies[speciesID] or 0) + 1
+                        end
                     end
                 end
             end
@@ -603,8 +609,12 @@ function TodoList:RefreshTaskSteps()
             local stepType = self:GetCurrentStepType(task)
             local itemKey = task.itemKey or ""
             local itemNumID = tonumber(task.itemID) or tonumber(itemKey:match("^(%d+)"))
+            -- Extract pet species ID from any format: "pet:267", "pet_267", "pet:267;q0;"
+            local taskPetSpecies = itemKey:match("^pet:(%d+)") or itemKey:match("^pet_(%d+)")
+                or (task.itemID and (task.itemID:match("^pet:(%d+)") or task.itemID:match("^pet_(%d+)")))
             local inBags = (bagsItemKeys[itemKey] and bagsItemKeys[itemKey] > 0)
                 or (itemNumID and bagsItemIDs[itemNumID] and bagsItemIDs[itemNumID] > 0)
+                or (taskPetSpecies and bagsPetSpecies[taskPetSpecies] and bagsPetSpecies[taskPetSpecies] > 0)
 
             -- Buy tasks have different step logic
             local isBuyTask = task.action == "buy"
