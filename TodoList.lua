@@ -913,6 +913,71 @@ function TodoList:HandleTSMRejections()
     return results
 end
 
+-- Post-AH rejection check: if AH was open and items on "post" step are still
+-- in bags, TSM likely rejected them. Skip those tasks.
+-- Called after AH closes (1s delay for bag events to settle).
+function TodoList:HandlePostAHRejections()
+    if not ns.db or not ns.db.settings.tsmAutoSkipRejected then return end
+
+    local current = self:GetCurrentList()
+    if not current or not current.tasks then return end
+
+    local charKey = ns:GetCharKey()
+    local currentRealm = charKey:match("%-(.+)$") or ""
+
+    -- Build bag lookup
+    local bagsItemKeys = {}
+    local bagsPetSpecies = {}
+    local bagsItemNames = {}
+    pcall(function()
+        for _, bagIdx in ipairs(ns.INVENTORY_BAGS) do
+            local numSlots = C_Container.GetContainerNumSlots(bagIdx)
+            for slot = 1, numSlots do
+                local info = C_Container.GetContainerItemInfo(bagIdx, slot)
+                if info and info.hyperlink then
+                    local itemID, bonusIDs, modifiers = ns:ParseItemLink(info.hyperlink)
+                    if itemID then
+                        local key = ns:MakeItemKey(itemID, bonusIDs, modifiers)
+                        bagsItemKeys[key] = true
+                        local sp = ExtractPetSpecies(itemID)
+                        if sp then bagsPetSpecies[sp] = true end
+                    end
+                    local name = info.hyperlink:match("|h%[(.-)%]|h")
+                    if name then bagsItemNames[name:lower()] = true end
+                end
+            end
+        end
+    end)
+
+    local skipped = 0
+    for _, task in ipairs(current.tasks) do
+        local stepType = task.steps and task.currentStep and task.steps[task.currentStep]
+            and task.steps[task.currentStep].type or nil
+        if task.status == "pending" and task.assignedChar == charKey
+            and stepType == "post"
+            and ns:RealmMatches(task.targetRealm or "", currentRealm) then
+
+            -- Check if item is still in bags (wasn't posted)
+            local itemKey = task.itemKey or ""
+            local petSp = ExtractPetSpecies(itemKey) or (task.itemID and ExtractPetSpecies(task.itemID))
+            local nameLower = task.name and task.name:lower() or nil
+            local stillInBags = bagsItemKeys[itemKey]
+                or (petSp and bagsPetSpecies[petSp])
+                or (nameLower and bagsItemNames[nameLower])
+
+            if stillInBags then
+                task.status = "skipped"
+                task.failReason = "Not posted — TSM may have rejected (no AH price data)"
+                skipped = skipped + 1
+            end
+        end
+    end
+
+    if skipped > 0 then
+        ns:Print(ns.COLORS.ORANGE .. skipped .. " item(s) skipped|r — still in bags after AH (TSM likely rejected)")
+    end
+end
+
 -- Unskip a task back to pending
 function TodoList:UnskipTask(taskIndex)
     if not ns.db or not ns.db.todoLists or not ns.db.todoLists.active then

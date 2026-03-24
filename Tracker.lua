@@ -188,6 +188,18 @@ frame:SetScript("OnEvent", function(self, event)
         Tracker._isAHOpen = false
         wipe(preTodoSnapshot)
 
+        -- Post-AH check: items still in bags on "post" step were likely rejected by TSM
+        -- (HandleTSMRejections can't catch this when TSM has no AuctionDB data)
+        C_Timer.After(1, function()
+            if ns.TodoList and ns.TodoList.HandlePostAHRejections then
+                ns.TodoList:HandlePostAHRejections()
+            end
+            if ns.UI then
+                if ns.UI.RefreshMini then ns.UI:RefreshMini() end
+                if ns.UI.Refresh then ns.UI:Refresh() end
+            end
+        end)
+
     elseif event == "BAG_UPDATE_DELAYED" then
         if isAHOpen and next(preTodoSnapshot) then
             C_Timer.After(0.3, CheckForPosts)
