@@ -635,17 +635,6 @@ function TodoList:RefreshTaskSteps()
                 or (taskPetSpecies and bagsPetSpecies[taskPetSpecies] and bagsPetSpecies[taskPetSpecies] > 0)
                 or (taskNameLower and bagsItemNames[taskNameLower] and bagsItemNames[taskNameLower] > 0)
 
-            -- Debug: trace task detection
-            if task.name and task.name:lower():find("bean") then
-                ns:PrintDebug("[BEAN] step=" .. (stepType or "nil")
-                    .. " status=" .. (task.status or "nil")
-                    .. " inBags=" .. tostring(inBags)
-                    .. " key=" .. itemKey
-                    .. " src=" .. (task.source or "nil")
-                    .. " curStep=" .. tostring(task.currentStep)
-                    .. " #steps=" .. tostring(task.steps and #task.steps or 0))
-            end
-
             -- Buy tasks have different step logic
             local isBuyTask = task.action == "buy"
 
