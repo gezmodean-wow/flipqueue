@@ -405,6 +405,7 @@ function TodoList:MoveTaskToLog(taskIndex, postedPrice, expirySeconds, postedQua
             ns:ImportRemove(item.importSource, item.importKey)
         end
     end
+    self:CheckAutoComplete()
 end
 
 -- Advance a task's current step to the next one.
@@ -770,21 +771,26 @@ function TodoList:RefreshTaskSteps()
         end
     end
 
-    -- Auto-complete list if all tasks are done (skipped/posted/sold)
-    if current.tasks then
-        local allDone = true
-        for _, task in ipairs(current.tasks) do
-            if task.status == "pending" or task.status == "unassigned" then
-                allDone = false
-                break
-            end
-        end
-        if allDone and #current.tasks > 0 then
-            ns:Print(ns.COLORS.GREEN .. "All tasks completed or skipped — archiving to-do list.|r")
-            self:ClearCurrent()
-            changed = true
+    -- Auto-complete list if no actionable tasks remain
+    self:CheckAutoComplete()
+
+    return changed
+end
+
+-- Archive the active list if no actionable tasks remain.
+-- "Actionable" = pending or unassigned. Missing/skipped/posted are all terminal.
+function TodoList:CheckAutoComplete()
+    local current = self:GetCurrentList()
+    if not current or not current.tasks or #current.tasks == 0 then return end
+
+    for _, task in ipairs(current.tasks) do
+        if task.status == "pending" or task.status == "unassigned" then
+            return -- still has work to do
         end
     end
+
+    ns:Print(ns.COLORS.GREEN .. "All tasks completed or skipped — archiving to-do list.|r")
+    self:ClearCurrent()
 
     return changed
 end
@@ -792,6 +798,7 @@ end
 -- Skip a task (TSM below threshold, user skip, etc.)
 function TodoList:SkipTask(taskIndex, reason)
     self:UpdateTaskStatus(taskIndex, "skipped", reason)
+    self:CheckAutoComplete()
 end
 
 --------------------------
