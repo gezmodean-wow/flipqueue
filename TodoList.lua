@@ -445,32 +445,40 @@ end
 
 -- Check if an item exists ANYWHERE across the account (all characters + warbank).
 -- Used to auto-skip tasks for items that are completely gone.
+-- Extract pet species ID from any key format: "pet:267;q0;", "pet_267;;", "pet_267"
+local function ExtractPetSpecies(key)
+    if not key then return nil end
+    return key:match("^pet:(%d+)") or key:match("^pet_(%d+)")
+end
+
+-- Check if an inventory entry has quantity > 0
+local function InvHasQuantity(inv)
+    if not inv then return false end
+    if inv.locations then
+        for _, qty in pairs(inv.locations) do
+            if qty > 0 then return true end
+        end
+    elseif (inv.quantity or 0) > 0 then
+        return true
+    end
+    return false
+end
+
 local function IsItemInAccountInventory(itemKey, itemNumID)
+    local petSpecies = ExtractPetSpecies(itemKey)
+
     for _, charData in pairs(ns.db.characters or {}) do
         if charData.inventory and charData.inventory.items then
-            local inv = charData.inventory.items[itemKey]
-            if inv then
-                if inv.locations then
-                    for _, qty in pairs(inv.locations) do
-                        if qty > 0 then return true end
+            if InvHasQuantity(charData.inventory.items[itemKey]) then return true end
+            for k, invItem in pairs(charData.inventory.items) do
+                if k ~= itemKey then
+                    local kNumID = tonumber((k:gsub(";.*", "")))
+                    if itemNumID and kNumID == itemNumID then
+                        if InvHasQuantity(invItem) then return true end
                     end
-                elseif (inv.quantity or 0) > 0 then
-                    return true
-                end
-            end
-            if itemNumID then
-                for k, invItem in pairs(charData.inventory.items) do
-                    if k ~= itemKey then
-                        local kNumID = tonumber((k:gsub(";.*", "")))
-                        if kNumID == itemNumID then
-                            if invItem.locations then
-                                for _, qty in pairs(invItem.locations) do
-                                    if qty > 0 then return true end
-                                end
-                            elseif (invItem.quantity or 0) > 0 then
-                                return true
-                            end
-                        end
+                    -- Pet species match across formats
+                    if petSpecies and ExtractPetSpecies(k) == petSpecies then
+                        if InvHasQuantity(invItem) then return true end
                     end
                 end
             end
@@ -478,14 +486,12 @@ local function IsItemInAccountInventory(itemKey, itemNumID)
     end
 
     if ns.db.warbank and ns.db.warbank.items then
-        local wbItem = ns.db.warbank.items[itemKey]
-        if wbItem and (wbItem.quantity or 0) > 0 then return true end
-        if itemNumID then
-            for k, wb in pairs(ns.db.warbank.items) do
-                if k ~= itemKey then
-                    local kNumID = tonumber((k:gsub(";.*", "")))
-                    if kNumID == itemNumID and (wb.quantity or 0) > 0 then return true end
-                end
+        if InvHasQuantity(ns.db.warbank.items[itemKey]) then return true end
+        for k, wb in pairs(ns.db.warbank.items) do
+            if k ~= itemKey then
+                local kNumID = tonumber((k:gsub(";.*", "")))
+                if itemNumID and kNumID == itemNumID and (wb.quantity or 0) > 0 then return true end
+                if petSpecies and ExtractPetSpecies(k) == petSpecies and (wb.quantity or 0) > 0 then return true end
             end
         end
     end
@@ -498,33 +504,38 @@ end
 local function FindItemSource(itemKey, itemNumID, charKey, inBags)
     if inBags then return "bags" end
 
+    local petSpecies = ExtractPetSpecies(itemKey)
+
+    local function CheckInv(inv)
+        if not inv then return nil end
+        if inv.locations then
+            if (inv.locations.bags or 0) > 0 then return "bags" end
+            if (inv.locations.bank or 0) > 0 then return "bank" end
+            if (inv.locations.reagent or 0) > 0 then return "reagent" end
+        elseif (inv.quantity or 0) > 0 then
+            return "bags"
+        end
+        return nil
+    end
+
     -- Character's stored inventory (bags, bank, reagent from last scan)
     local charData = ns.db.characters and ns.db.characters[charKey]
     if charData and charData.inventory and charData.inventory.items then
-        local function CheckInv(inv)
-            if not inv then return nil end
-            if inv.locations then
-                if (inv.locations.bags or 0) > 0 then return "bags" end
-                if (inv.locations.bank or 0) > 0 then return "bank" end
-                if (inv.locations.reagent or 0) > 0 then return "reagent" end
-            elseif (inv.quantity or 0) > 0 then
-                return "bags"
-            end
-            return nil
-        end
-
         local found = CheckInv(charData.inventory.items[itemKey])
         if found then return found end
 
-        -- Numeric ID fallback (different bonus/modifier variants)
-        if itemNumID then
-            for k, inv in pairs(charData.inventory.items) do
-                if k ~= itemKey then
-                    local kNumID = tonumber((k:gsub(";.*", "")))
-                    if kNumID == itemNumID then
-                        found = CheckInv(inv)
-                        if found then return found end
-                    end
+        for k, inv in pairs(charData.inventory.items) do
+            if k ~= itemKey then
+                -- Numeric ID fallback (different bonus/modifier variants)
+                local kNumID = tonumber((k:gsub(";.*", "")))
+                if itemNumID and kNumID == itemNumID then
+                    found = CheckInv(inv)
+                    if found then return found end
+                end
+                -- Pet species match across formats
+                if petSpecies and ExtractPetSpecies(k) == petSpecies then
+                    found = CheckInv(inv)
+                    if found then return found end
                 end
             end
         end
@@ -534,12 +545,11 @@ local function FindItemSource(itemKey, itemNumID, charKey, inBags)
     if ns.db.warbank and ns.db.warbank.items then
         local wbItem = ns.db.warbank.items[itemKey]
         if wbItem and (wbItem.quantity or 0) > 0 then return "warbank" end
-        if itemNumID then
-            for k, wb in pairs(ns.db.warbank.items) do
-                if k ~= itemKey then
-                    local kNumID = tonumber((k:gsub(";.*", "")))
-                    if kNumID == itemNumID and (wb.quantity or 0) > 0 then return "warbank" end
-                end
+        for k, wb in pairs(ns.db.warbank.items) do
+            if k ~= itemKey then
+                local kNumID = tonumber((k:gsub(";.*", "")))
+                if itemNumID and kNumID == itemNumID and (wb.quantity or 0) > 0 then return "warbank" end
+                if petSpecies and ExtractPetSpecies(k) == petSpecies and (wb.quantity or 0) > 0 then return "warbank" end
             end
         end
     end
