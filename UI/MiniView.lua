@@ -182,17 +182,33 @@ function UI:RefreshMini()
     local charKey = ns:GetCharKey()
     local myRealm = charKey:match("%-(.+)$") or ""
 
-    -- Build a set of item IDs in bags for quick lookup
+    -- Build bag lookup: item IDs, pet species, and names
     local bagsItemIDs = {}
+    local bagsItemKeys = {}
+    local bagsPetSpecies = {}
+    local bagsItemNames = {}
     pcall(function()
         for _, bagIdx in ipairs(ns.INVENTORY_BAGS) do
             local numSlots = C_Container.GetContainerNumSlots(bagIdx)
             for slot = 1, numSlots do
                 local info = C_Container.GetContainerItemInfo(bagIdx, slot)
                 if info and info.hyperlink then
-                    local slotID = tonumber((ns:ParseItemLink(info.hyperlink)))
-                    if slotID then
-                        bagsItemIDs[slotID] = (bagsItemIDs[slotID] or 0) + (info.stackCount or 1)
+                    local itemID, bonusIDs, modifiers = ns:ParseItemLink(info.hyperlink)
+                    if itemID then
+                        local key = ns:MakeItemKey(itemID, bonusIDs, modifiers)
+                        bagsItemKeys[key] = (bagsItemKeys[key] or 0) + (info.stackCount or 1)
+                        local numID = tonumber(itemID)
+                        if numID then
+                            bagsItemIDs[numID] = (bagsItemIDs[numID] or 0) + (info.stackCount or 1)
+                        end
+                        local speciesID = itemID:match("^pet:(%d+)") or itemID:match("^pet_(%d+)")
+                        if speciesID then
+                            bagsPetSpecies[speciesID] = (bagsPetSpecies[speciesID] or 0) + 1
+                        end
+                    end
+                    local itemName = info.hyperlink:match("|h%[(.-)%]|h")
+                    if itemName and itemName ~= "" then
+                        bagsItemNames[itemName:lower()] = (bagsItemNames[itemName:lower()] or 0) + (info.stackCount or 1)
                     end
                 end
             end
@@ -208,7 +224,14 @@ function UI:RefreshMini()
         for _, task in ipairs(todoTasks) do
             if ns:RealmMatches(task.item.targetRealm or "", myRealm) then
                 local itemNumID = tonumber(task.item.itemID) or tonumber(task.item.itemKey and task.item.itemKey:match("^(%d+)"))
-                local inBags = itemNumID and bagsItemIDs[itemNumID] and bagsItemIDs[itemNumID] > 0
+                local itemKey = task.item.itemKey or ""
+                local petSpecies = itemKey:match("^pet:(%d+)") or itemKey:match("^pet_(%d+)")
+                    or (task.item.itemID and (task.item.itemID:match("^pet:(%d+)") or task.item.itemID:match("^pet_(%d+)")))
+                local taskName = task.item.name and task.item.name:lower() or nil
+                local inBags = (bagsItemKeys[itemKey] and bagsItemKeys[itemKey] > 0)
+                    or (itemNumID and bagsItemIDs[itemNumID] and bagsItemIDs[itemNumID] > 0)
+                    or (petSpecies and bagsPetSpecies[petSpecies] and bagsPetSpecies[petSpecies] > 0)
+                    or (taskName and bagsItemNames[taskName] and bagsItemNames[taskName] > 0)
                 table.insert(tasks, {
                     name     = task.item.name or "?",
                     itemID   = task.item.itemID,
