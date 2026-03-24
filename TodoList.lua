@@ -587,6 +587,7 @@ function TodoList:RefreshTaskSteps()
     local bagsItemKeys = {}
     local bagsItemIDs = {}
     local bagsPetSpecies = {} -- speciesID -> count (for battle pet matching)
+    local bagsItemNames = {} -- lowercase name -> count (fallback for pets/edge cases)
     pcall(function()
         for _, bagIdx in ipairs(ns.INVENTORY_BAGS) do
             local numSlots = C_Container.GetContainerNumSlots(bagIdx)
@@ -607,10 +608,26 @@ function TodoList:RefreshTaskSteps()
                             bagsPetSpecies[speciesID] = (bagsPetSpecies[speciesID] or 0) + 1
                         end
                     end
+                    -- Track item names for fallback matching (especially pets)
+                    local itemName = info.hyperlink:match("|h%[(.-)%]|h")
+                    if itemName and itemName ~= "" then
+                        local lname = itemName:lower()
+                        bagsItemNames[lname] = (bagsItemNames[lname] or 0) + (info.stackCount or 1)
+                    end
                 end
             end
         end
     end)
+
+    -- Debug: dump bag contents summary
+    local bagKeyCount, bagNameCount, bagPetCount = 0, 0, 0
+    for _ in pairs(bagsItemKeys) do bagKeyCount = bagKeyCount + 1 end
+    for _ in pairs(bagsItemNames) do bagNameCount = bagNameCount + 1 end
+    for _ in pairs(bagsPetSpecies) do bagPetCount = bagPetCount + 1 end
+    ns:PrintDebug("Bag scan: " .. bagKeyCount .. " keys, " .. bagNameCount .. " names, " .. bagPetCount .. " pets")
+    for k, v in pairs(bagsPetSpecies) do
+        ns:PrintDebug("  bagPet species=" .. k .. " count=" .. v)
+    end
 
     for taskIdx, task in ipairs(current.tasks) do
         if task.status == "pending" and task.assignedChar == charKey
@@ -620,11 +637,23 @@ function TodoList:RefreshTaskSteps()
             local itemKey = task.itemKey or ""
             local itemNumID = tonumber(task.itemID) or tonumber(itemKey:match("^(%d+)"))
             -- Extract pet species ID from any format: "pet:267", "pet_267", "pet:267;q0;"
-            local taskPetSpecies = itemKey:match("^pet:(%d+)") or itemKey:match("^pet_(%d+)")
-                or (task.itemID and (task.itemID:match("^pet:(%d+)") or task.itemID:match("^pet_(%d+)")))
+            local taskPetSpecies = ExtractPetSpecies(itemKey)
+                or (task.itemID and ExtractPetSpecies(task.itemID))
+            local taskNameLower = task.name and task.name:lower() or nil
             local inBags = (bagsItemKeys[itemKey] and bagsItemKeys[itemKey] > 0)
                 or (itemNumID and bagsItemIDs[itemNumID] and bagsItemIDs[itemNumID] > 0)
                 or (taskPetSpecies and bagsPetSpecies[taskPetSpecies] and bagsPetSpecies[taskPetSpecies] > 0)
+                or (taskNameLower and bagsItemNames[taskNameLower] and bagsItemNames[taskNameLower] > 0)
+
+            -- Debug: log pet/item detection details
+            ns:PrintDebug("Task [" .. (task.name or "?") .. "] key=" .. itemKey
+                .. " id=" .. (task.itemID or "nil") .. " step=" .. (stepType or "nil")
+                .. " petSp=" .. (taskPetSpecies or "nil") .. " name=" .. (taskNameLower or "nil")
+                .. " inBags=" .. tostring(inBags)
+                .. " keyMatch=" .. tostring(bagsItemKeys[itemKey] ~= nil)
+                .. " idMatch=" .. tostring(itemNumID and bagsItemIDs[itemNumID] ~= nil)
+                .. " petMatch=" .. tostring(taskPetSpecies and bagsPetSpecies[taskPetSpecies] ~= nil)
+                .. " nameMatch=" .. tostring(taskNameLower and bagsItemNames[taskNameLower] ~= nil))
 
             -- Buy tasks have different step logic
             local isBuyTask = task.action == "buy"
