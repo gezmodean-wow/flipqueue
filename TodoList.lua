@@ -640,8 +640,23 @@ function TodoList:RefreshTaskSteps()
                         task.source = "bags"
                         justAdvanced = true
                     end
+                elseif stepType == "collect" then
+                    -- Item returned from expired auction (collected from mail) — cycle back to post
+                    if inBags then
+                        -- Reset steps: skip retrieve (item already in bags), go to post
+                        task.steps = {
+                            { type = "retrieve", from = "bags", status = "done" },
+                            { type = "post", status = "pending" },
+                            { type = "collect", status = "pending" },
+                        }
+                        task.currentStep = 2
+                        task.source = "bags"
+                        task.deferredAt = nil
+                        changed = true
+                        justAdvanced = true
+                    end
                 end
-                -- "post" and "collect" steps are advanced by Tracker (bag decrease / auction check)
+                -- "post" step is advanced by Tracker (bag decrease / auction detection)
             end
 
             -- Check item availability for deferral (skip tasks just advanced)
@@ -771,7 +786,12 @@ function TodoList:HandleTSMRejections()
     local messages = {}
 
     for taskIdx, task in ipairs(current.tasks) do
+        -- Only check tasks that are pending, on this character, on this realm,
+        -- and on the "post" step (ready to list on AH)
+        local stepType = task.steps and task.currentStep and task.steps[task.currentStep]
+            and task.steps[task.currentStep].type or nil
         if task.status == "pending" and task.assignedChar == charKey
+            and (stepType == "post" or stepType == nil)
             and ns:RealmMatches(task.targetRealm or "", currentRealm) then
 
             local belowThreshold, ahMin, threshold, opName = ns.TSM:IsBelowThreshold(task.itemKey)
