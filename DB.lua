@@ -85,6 +85,8 @@ function ns:InitDB()
     db.settings.genCrossRealmRealmFilter = db.settings.genCrossRealmRealmFilter or {}
     -- TSM character detection dismissed list
     db.settings.dismissedTSMChars = db.settings.dismissedTSMChars or {}
+    -- Tutorial (first-time interactive walkthrough)
+    if db.settings.tutorialDone == nil then db.settings.tutorialDone = false end
 
     ns.db = db
 

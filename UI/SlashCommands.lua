@@ -300,6 +300,15 @@ SlashCmdList["FLIPQUEUE"] = function(msg)
                 ns.COLORS.GREEN .. "ON" or ns.COLORS.RED .. "OFF") .. "|r")
         end
 
+    elseif msg == "tutorial" then
+        ns.db.settings.tutorialDone = false
+        UI._tutorialActive = true
+        UI._tutorialStep = 1
+        UI._tutorialCallout = 1
+        UI.currentPage = "todo"
+        UI.mainFrame:Show()
+        UI:Refresh()
+
     elseif msg == "help" then
         ns:Print("Commands:")
         print("  /fq - Toggle main window")
@@ -321,6 +330,7 @@ SlashCmdList["FLIPQUEUE"] = function(msg)
         print("  /fq mini - Toggle mini overlay")
         print("  /fq state - Export full FQ state for diagnosis")
         print("  /fq debug - Toggle debug messages")
+        print("  /fq tutorial - Show the first-time tutorial")
         print("  /fq settings - Open settings panel")
         print("  /fq dnt add <name> - Add item to Do Not Track")
         print("  /fq dnt remove <name> - Remove from Do Not Track")

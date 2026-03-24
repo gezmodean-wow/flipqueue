@@ -50,4 +50,5 @@ UI\ImportPage.lua
 UI\ExportPage.lua
 UI\TransformPage.lua
 UI\GeneratorPage.lua
+UI\TutorialPage.lua
 UI\SlashCommands.lua

@@ -204,6 +204,7 @@ local NAV_ITEMS = {
 }
 
 local navButtons = {}
+UI._navButtons = navButtons  -- expose for tutorial highlighting
 local navY = -8
 
 for _, nav in ipairs(NAV_ITEMS) do
@@ -274,6 +275,9 @@ for _, nav in ipairs(NAV_ITEMS) do
         navY = navY - 30
     end
 end
+
+-- Hide Import button (import is done through the Generator wizard)
+if navButtons["import"] then navButtons["import"]:Hide() end
 
 local function UpdateNavHighlights()
     for key, btn in pairs(navButtons) do
@@ -911,6 +915,19 @@ function UI:Refresh()
         navButtons.log.badge:SetText(logCount > 0 and (ns.COLORS.GRAY .. logCount .. "|r") or "")
     end
 
+    -- Tutorial: auto-activate on first open with no data
+    if not ns.db.settings.tutorialDone
+        and not UI._tutorialActive
+        and ns:ImportGetCount("fpScanner") == 0
+        and (not ns.TodoList or not ns.TodoList:GetCurrentList()) then
+        UI._tutorialActive = true
+        UI._tutorialStep = 1
+        UI._tutorialCallout = 1
+    end
+
+    -- Hide old standalone tutorial frame if it exists
+    if self._tutorialFrame then self._tutorialFrame:Hide() end
+
     -- Render active page
     if self.currentPage == "todo" then
         self:RefreshTodoPage()
@@ -961,6 +978,13 @@ function UI:Refresh()
         HideAllActionBtns()
         self:ShowSettingsPage()
         mainFrame.statusText:SetText("FlipQueue v" .. ns.VERSION)
+    end
+
+    -- Tutorial overlay: show callouts on top of the rendered page
+    if UI._tutorialActive and not ns.db.settings.tutorialDone then
+        self:ShowTutorialCallouts()
+    else
+        self:HideTutorialCallouts()
     end
 end
 

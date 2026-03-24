@@ -823,6 +823,44 @@ function UI:CreateSettingsPanel(parent)
     ------------------------------------------------
     -- Credits
     ------------------------------------------------
+    y = y - CreateSectionHeader(content, y, "Tutorial")
+    y = y - ITEM_SPACING
+
+    local tutorialBtn = CreateFrame("Button", nil, content, "BackdropTemplate")
+    tutorialBtn:SetSize(180, 26)
+    tutorialBtn:SetPoint("TOPLEFT", content, "TOPLEFT", LEFT_MARGIN, y)
+    tutorialBtn:SetBackdrop({
+        bgFile = "Interface\\Tooltips\\UI-Tooltip-Background",
+        edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
+        edgeSize = 10,
+        insets = {left = 2, right = 2, top = 2, bottom = 2},
+    })
+    tutorialBtn:SetBackdropColor(0.15, 0.15, 0.2, 1)
+    tutorialBtn:SetBackdropBorderColor(0.3, 0.3, 0.4, 0.8)
+    local tutBtnText = tutorialBtn:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+    tutBtnText:SetPoint("CENTER")
+    tutBtnText:SetText("Show Tutorial Again")
+    tutorialBtn:SetScript("OnEnter", function(self)
+        self:SetBackdropColor(0.2, 0.2, 0.3, 1)
+    end)
+    tutorialBtn:SetScript("OnLeave", function(self)
+        self:SetBackdropColor(0.15, 0.15, 0.2, 1)
+    end)
+    tutorialBtn:SetScript("OnClick", function()
+        ns.db.settings.tutorialDone = false
+        UI._tutorialActive = true
+        UI._tutorialStep = 1
+        UI._tutorialCallout = 1
+        UI.currentPage = "todo"
+        UI:Refresh()
+    end)
+
+    local tutDesc = content:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    tutDesc:SetPoint("LEFT", tutorialBtn, "RIGHT", 8, 0)
+    tutDesc:SetTextColor(DESC_COLOR[1], DESC_COLOR[2], DESC_COLOR[3])
+    tutDesc:SetText("Walk through the first-time setup again")
+    y = y - 30 - SECTION_SPACING
+
     y = y - CreateSectionHeader(content, y, "Credits")
 
     -- Banner logo
