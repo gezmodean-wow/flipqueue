@@ -690,23 +690,30 @@ function TodoList:RefreshTaskSteps()
 
             -- Check item availability for deferral (skip tasks just advanced)
             -- Buy tasks don't need item availability — they need to buy the item
-            if task.status == "pending" and not justAdvanced and not isBuyTask then
+            if (task.status == "pending" or task.status == "skipped") and not justAdvanced and not isBuyTask then
                 local actualSource = FindItemSource(itemKey, itemNumID, charKey, inBags)
 
                 if not actualSource then
                     -- Item not found for this character — check account-wide
                     if not IsItemInAccountInventory(itemKey, itemNumID) then
-                        -- Item gone from entire account — auto-skip
-                        task.status = "skipped"
-                        task.failReason = "Item no longer in any inventory"
-                        task.deferredAt = nil
-                        changed = true
+                        -- Item not in saved DB — defer, don't skip
+                        -- (saved inventory may be stale; bank/warbank not scanned yet)
+                        if not task.deferredAt then
+                            task.deferredAt = time()
+                            changed = true
+                        end
                     elseif not task.deferredAt then
                         task.deferredAt = time()
                         changed = true
                     end
                 else
-                    -- Item found — clear deferral and update source
+                    -- Item found — clear deferral/skip and update source
+                    if task.status == "skipped" and not task.failReason:find("TSM") then
+                        -- Un-skip: item reappeared (was previously not found)
+                        task.status = "pending"
+                        task.failReason = nil
+                        changed = true
+                    end
                     if task.deferredAt then
                         task.deferredAt = nil
                         changed = true
@@ -725,7 +732,7 @@ function TodoList:RefreshTaskSteps()
     -- so their groups sort correctly without needing to log into each character.
     -- Buy tasks are excluded — they don't need existing inventory.
     for taskIdx, task in ipairs(current.tasks) do
-        if task.status == "pending" and task.assignedChar
+        if (task.status == "pending" or task.status == "skipped") and task.assignedChar
             and task.assignedChar ~= charKey
             and task.steps and task.currentStep
             and task.action ~= "buy" then
@@ -735,17 +742,22 @@ function TodoList:RefreshTaskSteps()
             local actualSource = FindItemSource(itemKey, itemNumID, task.assignedChar, false)
 
             if not actualSource then
-                -- Item not found for assigned character — check account-wide
+                -- Item not found — defer (don't skip; saved inventory may be stale)
                 if not IsItemInAccountInventory(itemKey, itemNumID) then
-                    task.status = "skipped"
-                    task.failReason = "Item no longer in any inventory"
-                    task.deferredAt = nil
-                    changed = true
+                    if not task.deferredAt then
+                        task.deferredAt = time()
+                        changed = true
+                    end
                 elseif not task.deferredAt then
                     task.deferredAt = time()
                     changed = true
                 end
             else
+                if task.status == "skipped" and task.failReason and not task.failReason:find("TSM") then
+                    task.status = "pending"
+                    task.failReason = nil
+                    changed = true
+                end
                 if task.deferredAt then
                     task.deferredAt = nil
                     changed = true
@@ -755,6 +767,22 @@ function TodoList:RefreshTaskSteps()
                     changed = true
                 end
             end
+        end
+    end
+
+    -- Auto-complete list if all tasks are done (skipped/posted/sold)
+    if current.tasks then
+        local allDone = true
+        for _, task in ipairs(current.tasks) do
+            if task.status == "pending" or task.status == "unassigned" then
+                allDone = false
+                break
+            end
+        end
+        if allDone and #current.tasks > 0 then
+            ns:Print(ns.COLORS.GREEN .. "All tasks completed or skipped — archiving to-do list.|r")
+            self:ClearCurrent()
+            changed = true
         end
     end
 
