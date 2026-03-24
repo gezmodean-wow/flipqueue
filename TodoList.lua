@@ -619,16 +619,6 @@ function TodoList:RefreshTaskSteps()
         end
     end)
 
-    -- Debug: dump bag contents summary
-    local bagKeyCount, bagNameCount, bagPetCount = 0, 0, 0
-    for _ in pairs(bagsItemKeys) do bagKeyCount = bagKeyCount + 1 end
-    for _ in pairs(bagsItemNames) do bagNameCount = bagNameCount + 1 end
-    for _ in pairs(bagsPetSpecies) do bagPetCount = bagPetCount + 1 end
-    ns:PrintDebug("Bag scan: " .. bagKeyCount .. " keys, " .. bagNameCount .. " names, " .. bagPetCount .. " pets")
-    for k, v in pairs(bagsPetSpecies) do
-        ns:PrintDebug("  bagPet species=" .. k .. " count=" .. v)
-    end
-
     for taskIdx, task in ipairs(current.tasks) do
         if task.status == "pending" and task.assignedChar == charKey
             and task.steps and task.currentStep then
@@ -644,16 +634,6 @@ function TodoList:RefreshTaskSteps()
                 or (itemNumID and bagsItemIDs[itemNumID] and bagsItemIDs[itemNumID] > 0)
                 or (taskPetSpecies and bagsPetSpecies[taskPetSpecies] and bagsPetSpecies[taskPetSpecies] > 0)
                 or (taskNameLower and bagsItemNames[taskNameLower] and bagsItemNames[taskNameLower] > 0)
-
-            -- Debug: log pet/item detection details
-            ns:PrintDebug("Task [" .. (task.name or "?") .. "] key=" .. itemKey
-                .. " id=" .. (task.itemID or "nil") .. " step=" .. (stepType or "nil")
-                .. " petSp=" .. (taskPetSpecies or "nil") .. " name=" .. (taskNameLower or "nil")
-                .. " inBags=" .. tostring(inBags)
-                .. " keyMatch=" .. tostring(bagsItemKeys[itemKey] ~= nil)
-                .. " idMatch=" .. tostring(itemNumID and bagsItemIDs[itemNumID] ~= nil)
-                .. " petMatch=" .. tostring(taskPetSpecies and bagsPetSpecies[taskPetSpecies] ~= nil)
-                .. " nameMatch=" .. tostring(taskNameLower and bagsItemNames[taskNameLower] ~= nil))
 
             -- Buy tasks have different step logic
             local isBuyTask = task.action == "buy"
