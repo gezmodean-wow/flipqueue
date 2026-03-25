@@ -1115,7 +1115,7 @@ function UI:RefreshGeneratorPage(pending)
 
         cr1.premiumNote = cr1:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
         cr1.premiumNote:SetPoint("TOPLEFT", cr1.instrLabel, "BOTTOMLEFT", 0, -2)
-        cr1.premiumNote:SetText("Requires FlippingPal Premium")
+        cr1.premiumNote:SetText("Available with FlippingPal Basic")
         cr1.premiumNote:SetTextColor(0.5, 0.5, 0.5)
 
         cr1.editBg = CreateFrame("Frame", nil, cr1, "BackdropTemplate")

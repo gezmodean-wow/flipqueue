@@ -930,6 +930,8 @@ function UI:CreateSettingsPanel(parent)
     y = y - AddCreditLine(y, "Developed by", "Gezmodean & Claude")
     y = y - 4
     y = y - AddCreditLine(y, "Additional support by", "Berick")
+    y = y - 4
+    y = y - AddCreditLine(y, "Additional testing by", "KittyKiller, Niduin, Artificer Skills")
     y = y - 12
 
     local thanksLabel = content:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")

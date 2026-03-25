@@ -461,19 +461,30 @@ local function BuildNextStepsData()
     end
 
     -- Dependency-aware sort: depositors before their receivers, then by gold value
+    -- Assign numeric priority: depositors get a boost so they sort first
+    local depPriority = {}
+    for _, d in ipairs(data) do
+        local key = d._charKey
+        if key and receiverOf[key] then
+            -- This char receives deposits — lower priority (sort later)
+            depPriority[key] = (depPriority[key] or 0)
+        end
+        if key then
+            for _, d2 in ipairs(data) do
+                local k2 = d2._charKey
+                if k2 and receiverOf[k2] and receiverOf[k2][key] then
+                    -- This char deposits for someone — higher priority (sort first)
+                    depPriority[key] = (depPriority[key] or 0) + 1
+                end
+            end
+        end
+    end
+
     table.sort(data, function(a, b)
         if not a or not b then return a ~= nil end
-        local aKey = a._charKey
-        local bKey = b._charKey
-
-        -- If B depends on A (A deposits for B), A comes first
-        if aKey and bKey and receiverOf[bKey] and receiverOf[bKey][aKey] then
-            return true
-        end
-        if aKey and bKey and receiverOf[aKey] and receiverOf[aKey][bKey] then
-            return false
-        end
-
+        local aPri = depPriority[a._charKey] or 0
+        local bPri = depPriority[b._charKey] or 0
+        if aPri ~= bPri then return aPri > bPri end
         return (a._sortValue or 0) > (b._sortValue or 0)
     end)
 
