@@ -29,6 +29,8 @@ local function BuildLogData()
         local statusStr
         if aStatus == "sold" then
             statusStr = ns.COLORS.GREEN .. "Sold" .. "|r"
+        elseif aStatus == "cancelled" then
+            statusStr = ns.COLORS.ORANGE .. "Cancelled" .. "|r"
         elseif aStatus == "expired" then
             statusStr = ns.COLORS.RED .. "Expired" .. "|r"
         elseif aStatus == "collected" then

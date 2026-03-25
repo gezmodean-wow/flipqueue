@@ -469,6 +469,30 @@ function UI:RefreshTodoPage()
             row.bg:SetColorTexture(0.12, 0.15, 0.12, 0.6)
             row.icon:SetTexture(task.icon)
             row.text:SetText(task.text)
+            row:EnableMouse(true)
+            if task._dismissible and task._onDismiss then
+                row:SetScript("OnMouseDown", function(_, button)
+                    if button == "RightButton" then
+                        task._onDismiss()
+                        self:Refresh()
+                        if self.RefreshMini then self:RefreshMini() end
+                    end
+                end)
+                row:SetScript("OnEnter", function(self)
+                    self.bg:SetColorTexture(0.18, 0.2, 0.18, 0.8)
+                    GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+                    GameTooltip:SetText("Right-click to dismiss", 0.7, 0.7, 0.7)
+                    GameTooltip:Show()
+                end)
+                row:SetScript("OnLeave", function(self)
+                    self.bg:SetColorTexture(0.12, 0.15, 0.12, 0.6)
+                    GameTooltip:Hide()
+                end)
+            else
+                row:SetScript("OnMouseDown", nil)
+                row:SetScript("OnEnter", nil)
+                row:SetScript("OnLeave", nil)
+            end
             row:Show()
         end
         charTaskHeight = #myTasks * 22 + 4
@@ -630,7 +654,7 @@ function UI:RefreshTodoPage()
                     row.text:SetJustifyH("LEFT")
                     row.text:SetWordWrap(false)
                     row.rightText = row:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
-                    row.rightText:SetPoint("RIGHT", row, "RIGHT", -6, 0)
+                    row.rightText:SetPoint("RIGHT", row, "RIGHT", -52, 0)
                     row.rightText:SetJustifyH("RIGHT")
                     row.rightText:SetWordWrap(false)
                     row.rightText:SetMaxLines(1)
@@ -703,6 +727,65 @@ function UI:RefreshTodoPage()
                 local goldStr = FormatGoldValue(group.totalGold)
                 local goldColor = isUnassigned and ns.COLORS.GRAY or ns.COLORS.YELLOW
                 hdr.rightText:SetText(goldColor .. "~" .. goldStr .. "|r")
+
+                -- Group-level action buttons (complete/skip/delete all items in group)
+                local groupIndices = {}
+                for _, item in ipairs(group.items) do
+                    if item._taskIndex then table.insert(groupIndices, item._taskIndex) end
+                end
+                if #groupIndices > 0 then
+                    UI.SetupTaskActionBtns(hdr)
+                    local groupRefresh = function()
+                        self:Refresh()
+                        if self.RefreshMini then self:RefreshMini() end
+                    end
+                    local btns = hdr._taskActionBtns
+                    btns.complete:SetScript("OnClick", function()
+                        ns.TodoList:BulkComplete(groupIndices)
+                        groupRefresh()
+                    end)
+                    btns.skip:SetScript("OnClick", function()
+                        ns.TodoList:BulkSkip(groupIndices, "bulk skip")
+                        groupRefresh()
+                    end)
+                    btns.delete:SetScript("OnClick", function()
+                        ns.TodoList:BulkDelete(groupIndices)
+                        groupRefresh()
+                    end)
+                    UI.HideTaskActionBtns(hdr)
+
+                    local hdrBgR, hdrBgG, hdrBgB, hdrBgA
+                    if isUnassigned then
+                        hdrBgR, hdrBgG, hdrBgB, hdrBgA = 0.15, 0.08, 0.08, 0.7
+                    elseif isCurrentChar then
+                        hdrBgR = hasBuys and 0.08 or 0.1
+                        hdrBgG = hasBuys and 0.15 or 0.2
+                        hdrBgB = hasBuys and 0.2 or 0.1
+                        hdrBgA = 0.8
+                    elseif group._allDeferred then
+                        hdrBgR, hdrBgG, hdrBgB, hdrBgA = 0.1, 0.1, 0.1, 0.5
+                    else
+                        hdrBgR = hasBuys and 0.08 or 0.12
+                        hdrBgG = hasBuys and 0.12 or 0.15
+                        hdrBgB = hasBuys and 0.18 or 0.2
+                        hdrBgA = 0.8
+                    end
+                    hdr:EnableMouse(true)
+                    hdr:SetScript("OnEnter", function(self)
+                        self.bg:SetColorTexture(hdrBgR + 0.06, hdrBgG + 0.06, hdrBgB + 0.06, hdrBgA + 0.1)
+                        UI.ShowTaskActionBtns(self)
+                    end)
+                    hdr:SetScript("OnLeave", function(self)
+                        self._actionBtnHovered = false
+                        C_Timer.After(0.1, function()
+                            if not self._actionBtnHovered and not self:IsMouseOver() then
+                                self.bg:SetColorTexture(hdrBgR, hdrBgG, hdrBgB, hdrBgA)
+                                UI.HideTaskActionBtns(self)
+                            end
+                        end)
+                    end)
+                end
+
                 y = y + HDR_H
 
                 -- Item rows

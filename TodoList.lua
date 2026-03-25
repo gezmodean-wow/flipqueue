@@ -802,8 +802,8 @@ function TodoList:RefreshTaskSteps()
                     end
                 else
                     -- Item found — clear deferral/skip and update source
-                    if task.status == "skipped" and not task.failReason:find("TSM") then
-                        -- Un-skip: item reappeared (was previously not found)
+                    if task.status == "skipped" then
+                        -- Un-skip: item reappeared in inventory — re-evaluate
                         task.status = "pending"
                         task.failReason = nil
                         changed = true
@@ -912,6 +912,43 @@ function TodoList:DeleteTask(taskIndex)
     self:CheckAutoComplete()
 end
 
+-- Bulk operations on a list of task indices.
+-- Indices are sorted descending so removals don't shift subsequent indices.
+
+function TodoList:BulkComplete(taskIndices)
+    -- Sort descending for safe removal
+    table.sort(taskIndices, function(a, b) return a > b end)
+    for _, idx in ipairs(taskIndices) do
+        self:MoveTaskToLog(idx)
+    end
+    self:CheckAutoComplete()
+end
+
+function TodoList:BulkSkip(taskIndices, reason)
+    for _, idx in ipairs(taskIndices) do
+        self:UpdateTaskStatus(idx, "skipped", reason or "bulk skip")
+    end
+    self:CheckAutoComplete()
+end
+
+function TodoList:BulkDelete(taskIndices)
+    if not ns.db or not ns.db.todoLists or not ns.db.todoLists.active then return end
+    local tasks = ns.db.todoLists.active.tasks
+    if not tasks then return end
+    -- Sort descending so indices don't shift
+    table.sort(taskIndices, function(a, b) return a > b end)
+    for _, idx in ipairs(taskIndices) do
+        local item = tasks[idx]
+        if item then
+            if item.importSource and item.importKey then
+                ns:ImportRemove(item.importSource, item.importKey)
+            end
+            table.remove(tasks, idx)
+        end
+    end
+    self:CheckAutoComplete()
+end
+
 --------------------------
 -- TSM Rejection Handling
 --------------------------
@@ -970,6 +1007,9 @@ function TodoList:HandleTSMRejections()
             and ns:RealmMatches(task.targetRealm or "", currentRealm) then
 
             -- Check TSM rejection reason
+            -- Only reject if TSM explicitly says the price is below threshold.
+            -- If there's no AH data (ahMin is nil), TSM may still post using normalPrice,
+            -- so we do NOT treat missing AH data as a rejection.
             local belowThreshold, ahMin, threshold, opName = ns.TSM:IsBelowThreshold(task.itemKey)
             local reason = nil
 
@@ -978,14 +1018,6 @@ function TodoList:HandleTSMRejections()
                 local ahMinStr = ahMin and ns.TSM:FormatCopper(ahMin) or "?"
                 local opStr = opName and (" [" .. opName .. "]") or ""
                 reason = "TSM: AH price " .. ahMinStr .. " below min " .. threshStr .. opStr
-            elseif not ahMin then
-                -- TSM has no AuctionDB data for this item/realm — it won't post
-                local op = ns.TSM:GetItemAuctioningOp(task.itemKey)
-                if op then
-                    reason = "TSM: no AH price data for this realm — cannot evaluate min price"
-                else
-                    reason = "TSM: no auctioning operation assigned to this item"
-                end
             end
 
             if reason then

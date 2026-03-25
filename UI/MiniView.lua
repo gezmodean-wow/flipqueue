@@ -314,6 +314,10 @@ function UI:RefreshMini()
             -- Show grouped summary of the to-do list (top 5 chars + up to 2 create char)
             local currentList = ns.TodoList:GetCurrentList()
             if currentList and currentList.tasks then
+                -- Annotate task indices (same as TodoPage) so bulk actions work
+                for i, task in ipairs(currentList.tasks) do
+                    task._taskIndex = i
+                end
                 local MAX_MINI_CHARS = 5
                 local sortMode = (UI.GetGenSortMode and UI:GetGenSortMode()) or "profit"
                 local displayGroups = ns.TodoList:BuildDisplayGroups(currentList.tasks, sortMode)
@@ -347,7 +351,54 @@ function UI:RefreshMini()
                     if gPosts > 0 then table.insert(gParts, gPosts .. " to post") end
                     if gBuys > 0 then table.insert(gParts, gBuys .. " to buy") end
                     row.tooltipExtra = table.concat(gParts, ", ") .. ", ~" .. goldStr
+
+                    -- Collect task indices for bulk action buttons
+                    local grpIndices = {}
+                    for _, gi in ipairs(group.items) do
+                        if gi._taskIndex then table.insert(grpIndices, gi._taskIndex) end
+                    end
                     row:SetScript("OnMouseDown", nil)
+                    if #grpIndices > 0 then
+                        local miniRefresh = function()
+                            UI:RefreshMini()
+                            if UI.mainFrame and UI.mainFrame:IsShown() then UI:Refresh() end
+                        end
+                        UI.SetupTaskActionBtns(row)
+                        local btns = row._taskActionBtns
+                        btns.complete:SetScript("OnClick", function()
+                            ns.TodoList:BulkComplete(grpIndices)
+                            miniRefresh()
+                        end)
+                        btns.skip:SetScript("OnClick", function()
+                            ns.TodoList:BulkSkip(grpIndices, "bulk skip")
+                            miniRefresh()
+                        end)
+                        btns.delete:SetScript("OnClick", function()
+                            ns.TodoList:BulkDelete(grpIndices)
+                            miniRefresh()
+                        end)
+                        UI.HideTaskActionBtns(row)
+                        row:SetScript("OnEnter", function(self)
+                            UI.ShowTaskActionBtns(self)
+                            if self.tooltipItemName then
+                                GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+                                GameTooltip:SetText(self.tooltipItemName, 1, 1, 1)
+                                if self.tooltipExtra then
+                                    GameTooltip:AddLine(self.tooltipExtra, 0.7, 0.7, 0.7, true)
+                                end
+                                GameTooltip:Show()
+                            end
+                        end)
+                        row:SetScript("OnLeave", function(self)
+                            self._actionBtnHovered = false
+                            C_Timer.After(0.1, function()
+                                if not self._actionBtnHovered and not self:IsMouseOver() then
+                                    GameTooltip:Hide()
+                                    UI.HideTaskActionBtns(self)
+                                end
+                            end)
+                        end)
+                    end
 
                     local charEntry = ns.db.characters and ns.db.characters[group.charKey]
                     local cc = charEntry and UI._CLASS_COLORS and UI._CLASS_COLORS[charEntry.class] or "888888"
@@ -391,7 +442,52 @@ function UI:RefreshMini()
                         row.tooltipItemName = nil
                         local realmName = group.realm ~= "" and group.realm or "?"
                         row.tooltipExtra = "Create a character on " .. realmName .. " (" .. #group.items .. " items)"
+
+                        -- Bulk action buttons for unassigned (create char) groups
+                        local uIndices = {}
+                        for _, gi in ipairs(group.items) do
+                            if gi._taskIndex then table.insert(uIndices, gi._taskIndex) end
+                        end
                         row:SetScript("OnMouseDown", nil)
+                        if #uIndices > 0 then
+                            local miniRefresh = function()
+                                UI:RefreshMini()
+                                if UI.mainFrame and UI.mainFrame:IsShown() then UI:Refresh() end
+                            end
+                            UI.SetupTaskActionBtns(row)
+                            local btns = row._taskActionBtns
+                            btns.complete:SetScript("OnClick", function()
+                                ns.TodoList:BulkComplete(uIndices)
+                                miniRefresh()
+                            end)
+                            btns.skip:SetScript("OnClick", function()
+                                ns.TodoList:BulkSkip(uIndices, "bulk skip")
+                                miniRefresh()
+                            end)
+                            btns.delete:SetScript("OnClick", function()
+                                ns.TodoList:BulkDelete(uIndices)
+                                miniRefresh()
+                            end)
+                            UI.HideTaskActionBtns(row)
+                            row:SetScript("OnEnter", function(self)
+                                UI.ShowTaskActionBtns(self)
+                                if self.tooltipExtra then
+                                    GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+                                    GameTooltip:SetText(self.tooltipExtra, 0.7, 0.7, 0.7)
+                                    GameTooltip:Show()
+                                end
+                            end)
+                            row:SetScript("OnLeave", function(self)
+                                self._actionBtnHovered = false
+                                C_Timer.After(0.1, function()
+                                    if not self._actionBtnHovered and not self:IsMouseOver() then
+                                        GameTooltip:Hide()
+                                        UI.HideTaskActionBtns(self)
+                                    end
+                                end)
+                            end)
+                        end
+
                         row.text:SetText(
                             ns.COLORS.GRAY .. "Create char " .. ns.COLORS.RESET ..
                             ns.COLORS.RED .. realmName .. ns.COLORS.RESET ..
@@ -549,9 +645,20 @@ function UI:RefreshMini()
             row.icon:SetTexture(task.icon)
             row.text:SetText(task.text)
             row.tooltipItemID = nil
-            row.tooltipItemName = nil
+            row.tooltipItemName = task._dismissible and "Right-click to dismiss" or nil
             row.tooltipExtra = nil
-            row:SetScript("OnMouseDown", nil)
+            if task._dismissible and task._onDismiss then
+                local capturedDismiss = task._onDismiss
+                row:SetScript("OnMouseDown", function(_, button)
+                    if button == "RightButton" then
+                        capturedDismiss()
+                        UI:RefreshMini()
+                        if UI.mainFrame and UI.mainFrame:IsShown() then UI:Refresh() end
+                    end
+                end)
+            else
+                row:SetScript("OnMouseDown", nil)
+            end
             row:Show()
         end
     end

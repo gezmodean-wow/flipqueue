@@ -65,6 +65,7 @@ function Tracker:ScanMailForSales()
                                 entry.soldAt = time()
                                 entry.soldPrice = buyout or money or 0
                                 entry.ahFee = ahCut or 0
+                                entry.collectedAt = time()
                                 soldCount = soldCount + 1
                                 break
                             end
@@ -170,12 +171,16 @@ mailFrame:SetScript("OnEvent", function(self, event)
         isMailOpen = true
         mailScanRetries = 0
 
-        -- Mark expired auctions as collected (user is checking mail)
+        -- Mark expired/cancelled/sold auctions as collected (user is checking mail)
         if ns.db then
             local charKey = ns:GetCharKey()
             for _, entry in ipairs(ns.db.log) do
-                if entry.auctionStatus == "expired" and entry.charKey == charKey then
-                    entry.auctionStatus = "collected"
+                if entry.charKey == charKey then
+                    if entry.auctionStatus == "expired" or entry.auctionStatus == "cancelled" then
+                        entry.auctionStatus = "collected"
+                    elseif entry.auctionStatus == "sold" and not entry.collectedAt then
+                        entry.collectedAt = time()
+                    end
                 end
             end
         end

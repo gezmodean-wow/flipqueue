@@ -167,15 +167,18 @@ local function BuildCurrentCharTasks()
         })
     end
 
-    -- Check Mail: distinguish sold (collect gold) vs expired (collect items)
+    -- Check Mail: distinguish sold (collect gold) vs expired/cancelled (collect items)
     local soldInMail = 0
     local expiredInMail = 0
+    local cancelledInMail = 0
     for _, entry in ipairs(ns.db.log) do
         if entry.charKey == myCharKey then
             if entry.auctionStatus == "sold" and not entry.collectedAt then
                 soldInMail = soldInMail + 1
             elseif entry.auctionStatus == "expired" then
                 expiredInMail = expiredInMail + 1
+            elseif entry.auctionStatus == "cancelled" then
+                cancelledInMail = cancelledInMail + 1
             end
         end
     end
@@ -184,6 +187,14 @@ local function BuildCurrentCharTasks()
             icon   = "Interface\\Icons\\INV_Misc_Coin_01",
             text   = ns.COLORS.GREEN .. "Check Mail:|r " .. soldInMail .. " auction(s) sold — collect gold",
             sort   = 2,
+            _dismissible = true,
+            _onDismiss = function()
+                for _, entry in ipairs(ns.db.log) do
+                    if entry.charKey == myCharKey and entry.auctionStatus == "sold" and not entry.collectedAt then
+                        entry.collectedAt = time()
+                    end
+                end
+            end,
         })
     end
     if expiredInMail > 0 then
@@ -191,6 +202,29 @@ local function BuildCurrentCharTasks()
             icon   = "Interface\\Icons\\INV_Letter_15",
             text   = ns.COLORS.YELLOW .. "Check Mail:|r " .. expiredInMail .. " expired auction(s) — collect items",
             sort   = 3,
+            _dismissible = true,
+            _onDismiss = function()
+                for _, entry in ipairs(ns.db.log) do
+                    if entry.charKey == myCharKey and entry.auctionStatus == "expired" then
+                        entry.auctionStatus = "collected"
+                    end
+                end
+            end,
+        })
+    end
+    if cancelledInMail > 0 then
+        table.insert(tasks, {
+            icon   = "Interface\\Icons\\INV_Letter_15",
+            text   = ns.COLORS.ORANGE .. "Check Mail:|r " .. cancelledInMail .. " cancelled auction(s) — collect items",
+            sort   = 3,
+            _dismissible = true,
+            _onDismiss = function()
+                for _, entry in ipairs(ns.db.log) do
+                    if entry.charKey == myCharKey and entry.auctionStatus == "cancelled" then
+                        entry.auctionStatus = "collected"
+                    end
+                end
+            end,
         })
     end
 

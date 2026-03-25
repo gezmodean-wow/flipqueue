@@ -132,25 +132,28 @@ frame:RegisterEvent("AUCTION_HOUSE_CLOSED")
 frame:RegisterEvent("BAG_UPDATE_DELAYED")
 frame:RegisterEvent("BANKFRAME_OPENED")
 frame:RegisterEvent("OWNED_AUCTIONS_UPDATED")
+frame:RegisterEvent("AUCTION_CANCELED")
 
 frame:SetScript("OnEvent", function(self, event)
     if event == "AUCTION_HOUSE_SHOW" then
         isAHOpen = true
         Tracker._isAHOpen = true
+        Tracker._pendingCancels = 0
         SnapshotBags()
 
-        -- Mark expired auctions as collected (user is at the AH)
+        -- Mark expired/cancelled auctions as collected (user is at the AH)
         if ns.db then
             local charKey = ns:GetCharKey()
             local cleared = 0
             for _, entry in ipairs(ns.db.log) do
-                if entry.auctionStatus == "expired" and entry.charKey == charKey then
+                if (entry.auctionStatus == "expired" or entry.auctionStatus == "cancelled")
+                        and entry.charKey == charKey then
                     entry.auctionStatus = "collected"
                     cleared = cleared + 1
                 end
             end
             if cleared > 0 then
-                ns:Print(ns.COLORS.GREEN .. "Collected " .. cleared .. " expired auction(s).|r")
+                ns:Print(ns.COLORS.GREEN .. "Collected " .. cleared .. " expired/cancelled auction(s).|r")
             end
         end
 
@@ -230,10 +233,17 @@ frame:SetScript("OnEvent", function(self, event)
 
     elseif event == "OWNED_AUCTIONS_UPDATED" then
         if isAHOpen then
-            Tracker:CheckOwnedAuctions()
-            Tracker:UpdateLogExpiry()
-            -- Sold detection only via mail scanning (ScanMailForSales)
-            -- Owned auction disappearance can't distinguish sold vs cancelled
+            -- Delay slightly so AUCTION_CANCELED (which fires after) can set the counter first
+            C_Timer.After(0.3, function()
+                if Tracker._isAHOpen then
+                    Tracker:CheckOwnedAuctions()
+                    Tracker:UpdateLogExpiry()
+                end
+            end)
         end
+
+    elseif event == "AUCTION_CANCELED" then
+        -- Count pending cancels — consumed by reconciliation in CheckOwnedAuctions
+        Tracker._pendingCancels = (Tracker._pendingCancels or 0) + 1
     end
 end)

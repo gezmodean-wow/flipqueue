@@ -191,10 +191,8 @@ local NAV_ITEMS = {
     {key = "characters", label = "Characters",     icon = "Interface\\Icons\\Achievement_GuildPerk_EverybodysFriend"},
     -- Guild bank page disabled: Blizzard API returns unreliable item data
     -- {key = "guilds",     label = "Guilds",          icon = "Interface\\Icons\\INV_Misc_Tabard_ClutchofTheConclave"},
-    {key = "section", label = "FLIPPINGPAL"},
-    {key = "export",     label = "Export",         icon = "Interface\\Icons\\INV_Scroll_11"},
-    {key = "import",     label = "Import",         icon = "Interface\\Icons\\Ability_Creature_Cursed_04"},
-    {key = "transform", label = "Transform",     icon = "Interface\\Icons\\INV_Gizmo_GoldenBolt"},
+    {key = "section", label = "TOOLS"},
+    {key = "transform", label = "Transform",     icon = "Interface\\Icons\\Trade_Engineering"},
     {key = "section", label = "INTEGRATIONS"},
     {key = "tsm",        label = "TSM",            icon = "Interface\\Icons\\INV_Misc_Coin_17"},
     {key = "auctionator", label = "Auctionator",   icon = "Interface\\Icons\\INV_Misc_Note_01"},
@@ -276,8 +274,6 @@ for _, nav in ipairs(NAV_ITEMS) do
     end
 end
 
--- Hide Import button (import is done through the Generator wizard)
-if navButtons["import"] then navButtons["import"]:Hide() end
 
 local function UpdateNavHighlights()
     for key, btn in pairs(navButtons) do

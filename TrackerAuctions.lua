@@ -21,12 +21,24 @@ function Tracker:CheckOwnedAuctions()
     -- If no auctions on AH, reconcile all "active" log entries for this character
     if #owned == 0 then
         local charKey = ns:GetCharKey()
+        local pendingCancels = Tracker._pendingCancels or 0
+        local cancelledCount = 0
         local cleared = 0
         for _, entry in ipairs(ns.db.log) do
             if entry.auctionStatus == "active" and entry.charKey == charKey then
-                entry.auctionStatus = "collected"
+                if pendingCancels > 0 then
+                    entry.auctionStatus = "cancelled"
+                    pendingCancels = pendingCancels - 1
+                    cancelledCount = cancelledCount + 1
+                else
+                    entry.auctionStatus = "collected"
+                end
                 cleared = cleared + 1
             end
+        end
+        Tracker._pendingCancels = 0
+        if cancelledCount > 0 then
+            ns:Print(ns.COLORS.YELLOW .. cancelledCount .. " auction(s) cancelled — items in mail.|r")
         end
         if cleared > 0 then
             ns:PrintDebug("Reconciled " .. cleared ..
@@ -204,8 +216,11 @@ function Tracker:CheckOwnedAuctions()
         ownedByItemID[aID] = (ownedByItemID[aID] or 0) + 1
     end
 
-    -- Walk log entries for this character: if "active" but not on AH, mark collected
+    -- Walk log entries for this character: if "active" but not on AH, determine fate
+    -- Use pending cancel count to distinguish cancelled vs silently collected
+    local pendingCancels = Tracker._pendingCancels or 0
     local reconciledCount = 0
+    local cancelledCount = 0
     local ownedConsumed = {} -- track how many owned auctions we've "used up" per ID
     for _, entry in ipairs(ns.db.log) do
         if entry.auctionStatus == "active" and entry.charKey == charKey then
@@ -217,14 +232,26 @@ function Tracker:CheckOwnedAuctions()
                     -- This log entry is accounted for by an actual auction
                     ownedConsumed[entryID] = used + 1
                 else
-                    -- No matching auction on AH — this entry is stale
-                    entry.auctionStatus = "collected"
+                    -- No matching auction on AH — determine why
+                    if pendingCancels > 0 then
+                        entry.auctionStatus = "cancelled"
+                        pendingCancels = pendingCancels - 1
+                        cancelledCount = cancelledCount + 1
+                    else
+                        -- Silently mark as collected — ScanMailForSales will detect
+                        -- actual sales and set "sold" status with gold amount
+                        entry.auctionStatus = "collected"
+                    end
                     reconciledCount = reconciledCount + 1
                 end
             end
         end
     end
+    Tracker._pendingCancels = 0 -- reset after reconciliation
 
+    if cancelledCount > 0 then
+        ns:Print(ns.COLORS.YELLOW .. cancelledCount .. " auction(s) cancelled — items in mail.|r")
+    end
     if reconciledCount > 0 then
         ns:PrintDebug("Reconciled " .. reconciledCount ..
             " stale log entries (not found on AH).|r")

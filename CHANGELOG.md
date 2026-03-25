@@ -1,5 +1,22 @@
 # Changelog
 
+## v0.7.0-alpha.7
+
+### Bug Fixes
+- **Auction cancellation detection**: New `AUCTION_CANCELED` event tracking distinguishes cancelled vs sold auctions — cancelled shows "collect items" (orange), sold is detected via mail invoice data only. Fixes false "collect gold" messages on cancel.
+- **Stale reconciliation**: Auction entries no longer on AH are silently marked "collected" instead of falsely "sold". Actual sales detected only by `ScanMailForSales`.
+- **TSM false rejection removed**: No longer skips items when TSM has no AH price data — TSM posts using normalPrice, so missing `DBMinBuyout` is not a rejection.
+- **Skipped tasks un-skip**: Items returning to bags now un-skip ALL skipped tasks (removed TSM-skip exception that prevented recovery).
+- **Mail clears sold entries**: Opening mailbox now sets `collectedAt` on sold entries and clears cancelled/expired, so "Check Mail" tasks resolve immediately.
+- **Mini view task indices**: Grouped summary now annotates `_taskIndex` before building display groups, fixing bulk actions on character/create-char groups.
+
+### Features
+- **Bulk group actions**: Complete/skip/delete all tasks in a character group — hover action buttons on group headers in both To-Do page and Mini View, including "Create character" groups.
+- **Dismissible mail tasks**: Right-click "Check Mail" rows in To-Do page or Mini View to dismiss stuck entries.
+- **Gold text offset**: Price/gold text on to-do item rows moved left to avoid overlap with action buttons.
+- **Log: Cancelled status**: Log page shows "Cancelled" (orange) for cancelled auctions.
+- **Sidebar cleanup**: Removed Export and Import from sidebar, renamed "FlippingPal" section to "Tools", updated Transform icon.
+
 ## v0.7.0-alpha.6
 
 ### Bug Fixes
