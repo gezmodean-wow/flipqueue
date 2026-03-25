@@ -212,7 +212,11 @@ frame:SetScript("OnEvent", function(self, event)
 
     elseif event == "BANKFRAME_OPENED" then
         C_Timer.After(1, function()
-            -- Scanner already scans bags/bank/warbank at 0.5s — just do auto-pull and gold here
+            -- Scanner already scans bags/bank/warbank at 0.5s — refresh locations first
+            -- so deposit tasks are resolved before auto-pull runs
+            if ns.TodoList and ns.TodoList.RefreshLocations then
+                ns.TodoList:RefreshLocations()
+            end
             -- Pull completes async, then chain deposit + gold + task refresh
             Tracker:AutoPullFromBank(function()
                 Tracker:AutoDepositToWarbank()

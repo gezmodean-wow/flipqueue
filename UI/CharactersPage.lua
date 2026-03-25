@@ -431,9 +431,16 @@ function UI:RefreshCharactersPage()
 
         -- Scroll frame fills remaining space, capped to MAX_VISIBLE_ROWS
         local totalContentH = (#detectedChars + 1) * ROW_H + 10
+        local maxScrollH = MAX_VISIBLE_ROWS * ROW_H + 10
         tdfScroll:ClearAllPoints()
         tdfScroll:SetPoint("TOPLEFT", tableContainer, "TOPLEFT", 0, tsmSectionTop - 16)
-        tdfScroll:SetPoint("BOTTOMRIGHT", tableContainer, "BOTTOMRIGHT", -22, 0)
+        if totalContentH > maxScrollH then
+            -- Cap height to MAX_VISIBLE_ROWS and let the scroll frame handle overflow
+            tdfScroll:SetPoint("RIGHT", tableContainer, "RIGHT", -22, 0)
+            tdfScroll:SetHeight(maxScrollH)
+        else
+            tdfScroll:SetPoint("BOTTOMRIGHT", tableContainer, "BOTTOMRIGHT", -22, 0)
+        end
         tdfScroll:Show()
         tdfContent:SetWidth(tdfScroll:GetWidth() or 500)
 

@@ -299,12 +299,21 @@ local function BuildNextStepsData()
 
                 -- Check if this character also has deposit tasks
                 local depInfo = depositsByChar[group.charKey]
-                local detailStr = #group.items .. " items to post"
+                -- Count buy vs sell items in group
+                local groupBuys, groupPosts = 0, 0
+                for _, gi in ipairs(group.items) do
+                    if gi.action == "buy" then groupBuys = groupBuys + 1 else groupPosts = groupPosts + 1 end
+                end
+                local detailParts = {}
+                if groupPosts > 0 then table.insert(detailParts, groupPosts .. " to post") end
+                if groupBuys > 0 then table.insert(detailParts, groupBuys .. " to buy") end
+                local detailStr = table.concat(detailParts, ", ")
                 if depInfo then
                     detailStr = detailStr .. " + " .. depInfo.count .. " to deposit"
                     depositsByChar[group.charKey] = nil  -- merged, don't create standalone
                 end
 
+                local actionVerb = groupBuys > 0 and groupPosts == 0 and "buy" or "post"
                 table.insert(data, {
                     action    = ns.COLORS.YELLOW .. "Log in" .. "|r",
                     target    = coloredName .. "  (" .. realm .. ")",
@@ -314,8 +323,8 @@ local function BuildNextStepsData()
                     _sortValue = group.totalGold,
                     _charKey   = group.charKey,
                     _tooltipText = group.charKey,
-                    _tooltipExtra = string.format("Log in to %s to post %d items\nEstimated value: %s",
-                        group.charKey, #group.items, FormatGoldValue(group.totalGold)),
+                    _tooltipExtra = string.format("Log in to %s to %s %d items\nEstimated value: %s",
+                        group.charKey, actionVerb, #group.items, FormatGoldValue(group.totalGold)),
                 })
             elseif not group.charKey then
                 -- Unassigned group = "Create char" entry
@@ -558,3 +567,71 @@ UI._CLASS_COLORS = CLASS_COLORS
 UI._FormatGoldValue = FormatGoldValue
 UI.BuildNextStepsData = BuildNextStepsData
 UI.BuildCurrentCharTasks = BuildCurrentCharTasks
+
+-- Build an Auctionator search string for a buy task item.
+-- Format: "ItemName";category;minIlvl;maxIlvl;?;?;?;?;?;price;quality;#;;
+local function BuildAuctionatorSearchString(item)
+    local name = '"' .. (item.name or "") .. '"'
+    -- Parse buy price to gold integer
+    local priceGold = ns:ParseGoldValue(item.buyPrice or "")
+    local priceStr = priceGold > 0 and tostring(math.ceil(priceGold)) or ""
+    -- Quality: map string to number if needed
+    local qualNum = ""
+    if item.quality then
+        local q = tonumber(item.quality)
+        if q and q >= 1 then qualNum = tostring(q) end
+    end
+    -- Format: name;8 empty fields;price;quality;#;;
+    return name .. ";;;;;;;;;" .. priceStr .. ";" .. qualNum .. ";#;;"
+end
+
+-- Create Auctionator shopping lists from active buy tasks, grouped by realm.
+-- Creates one list per realm: "FQ Buy - RealmName"
+-- Returns (totalCount, listsCreated) on success, or (nil, errorMsg) on failure.
+function UI.CreateBuyTaskShoppingList()
+    if not (type(Auctionator) == "table" and type(Auctionator.API) == "table"
+            and type(Auctionator.API.v1) == "table") then
+        return nil, "Auctionator is not installed"
+    end
+    if not ns.TodoList then return nil, "TodoList not loaded" end
+
+    local byRealm = ns.TodoList:GetBuyTasksByRealm()
+
+    local totalItems = 0
+    local listsCreated = 0
+    local errors = {}
+
+    for realm, items in pairs(byRealm) do
+        local searchStrings = {}
+        local seen = {}
+        for _, item in ipairs(items) do
+            local lower = (item.name or ""):lower()
+            if not seen[lower] then
+                seen[lower] = true
+                table.insert(searchStrings, BuildAuctionatorSearchString(item))
+            end
+        end
+
+        if #searchStrings > 0 then
+            local listName = "FQ Buy - " .. realm
+            local ok, err = pcall(Auctionator.API.v1.CreateShoppingList, "FlipQueue", listName, searchStrings)
+            if ok then
+                listsCreated = listsCreated + 1
+                totalItems = totalItems + #searchStrings
+            else
+                table.insert(errors, realm .. ": " .. tostring(err))
+            end
+        end
+    end
+
+    if listsCreated > 0 then
+        if #errors > 0 then
+            return totalItems, listsCreated .. " lists (" .. #errors .. " failed)"
+        end
+        return totalItems, listsCreated .. " lists"
+    elseif #errors > 0 then
+        return nil, table.concat(errors, "; ")
+    else
+        return nil, "No buy tasks found"
+    end
+end

@@ -246,7 +246,19 @@ function UI:RefreshTodoPage()
         todoPageTitle = todoPageTitle .. "  " .. ns.COLORS.GRAY .. "[" .. currentTodoListForTitle.importType .. "]" .. "|r"
     end
     mainFrame.pageTitle:SetText(todoPageTitle)
-    UI._LayoutActionBtns(mainFrame.actionBtns.clearTodoList, mainFrame.actionBtns.rescan, mainFrame.actionBtns.pullBank)
+    -- Show Auctionator buy list button if buy tasks exist and Auctionator is installed
+    local hasBuyTasks = false
+    if ns.TodoList and ns.TodoList.GetBuyTaskNames then
+        hasBuyTasks = #ns.TodoList:GetBuyTaskNames() > 0
+    end
+    local hasAuctionator = type(Auctionator) == "table" and type(Auctionator.API) == "table"
+        and type(Auctionator.API.v1) == "table"
+    if hasBuyTasks and hasAuctionator then
+        UI._LayoutActionBtns(mainFrame.actionBtns.clearTodoList, mainFrame.actionBtns.rescan,
+            mainFrame.actionBtns.pullBank, mainFrame.actionBtns.auctBuyList)
+    else
+        UI._LayoutActionBtns(mainFrame.actionBtns.clearTodoList, mainFrame.actionBtns.rescan, mainFrame.actionBtns.pullBank)
+    end
 
     -- Try TodoList first, fall back to queue-based data
     local todoData = BuildTodoData()
@@ -269,6 +281,151 @@ function UI:RefreshTodoPage()
         end
     end
 
+    -- ==========================================
+    -- TO-DO LIST SELECTOR BAR
+    -- ==========================================
+    local listBarHeight = 0
+    local queued = ns.TodoList and ns.TodoList:GetQueuedLists() or {}
+
+    if currentTodoList or #queued > 0 then
+        if not self._listSelectorBar then
+            local bar = CreateFrame("Frame", nil, tableContainer, "BackdropTemplate")
+            bar:SetHeight(24)
+            bar:SetBackdrop({
+                bgFile = "Interface\\Tooltips\\UI-Tooltip-Background",
+                edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
+                edgeSize = 10,
+                insets = {left = 2, right = 2, top = 2, bottom = 2},
+            })
+            bar:SetBackdropColor(0.08, 0.08, 0.12, 0.9)
+            bar:SetBackdropBorderColor(0.25, 0.25, 0.35, 0.7)
+
+            bar.label = bar:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+            bar.label:SetPoint("LEFT", bar, "LEFT", 8, 0)
+            bar.label:SetJustifyH("LEFT")
+
+            -- Dropdown toggle button
+            bar.dropBtn = CreateFrame("Button", nil, bar)
+            bar.dropBtn:SetSize(16, 16)
+            bar.dropBtn:SetPoint("RIGHT", bar, "RIGHT", -6, 0)
+            bar.dropBtn.tex = bar.dropBtn:CreateTexture(nil, "ARTWORK")
+            bar.dropBtn.tex:SetAllPoints()
+            bar.dropBtn.tex:SetTexture("Interface\\Buttons\\UI-SpellbookIcon-NextPage-Up")
+            bar.dropBtn.highlight = bar.dropBtn:CreateTexture(nil, "HIGHLIGHT")
+            bar.dropBtn.highlight:SetAllPoints()
+            bar.dropBtn.highlight:SetColorTexture(1, 1, 1, 0.15)
+
+            -- Dropdown frame
+            bar.dropdown = CreateFrame("Frame", nil, bar, "BackdropTemplate")
+            bar.dropdown:SetBackdrop({
+                bgFile = "Interface\\Tooltips\\UI-Tooltip-Background",
+                edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
+                edgeSize = 10,
+                insets = {left = 2, right = 2, top = 2, bottom = 2},
+            })
+            bar.dropdown:SetBackdropColor(0.06, 0.06, 0.1, 0.95)
+            bar.dropdown:SetBackdropBorderColor(0.3, 0.3, 0.4, 0.8)
+            bar.dropdown:SetPoint("TOPLEFT", bar, "BOTTOMLEFT", 0, -2)
+            bar.dropdown:SetPoint("RIGHT", bar, "RIGHT", 0, 0)
+            bar.dropdown:SetFrameStrata("DIALOG")
+            bar.dropdown:Hide()
+            bar.dropdown.rows = {}
+
+            bar.dropBtn:SetScript("OnClick", function()
+                if bar.dropdown:IsShown() then bar.dropdown:Hide() else bar.dropdown:Show() end
+            end)
+
+            -- Close dropdown when clicking outside
+            bar.dropdown:SetScript("OnShow", function(self)
+                self:SetPropagateKeyboardInput(true)
+            end)
+            bar:SetScript("OnHide", function() bar.dropdown:Hide() end)
+
+            self._listSelectorBar = bar
+        end
+
+        local bar = self._listSelectorBar
+        bar:ClearAllPoints()
+        bar:SetPoint("TOPLEFT", tableContainer, "TOPLEFT", 0, 0)
+        bar:SetPoint("TOPRIGHT", tableContainer, "TOPRIGHT", 0, 0)
+        bar:Show()
+        bar.dropdown:Hide()
+
+        -- Label: active list name + task count
+        local activeName = currentTodoList and (currentTodoList.name or "Unnamed") or "(no active list)"
+        local pendingStr = totalTodoTasks > 0 and ("  " .. ns.COLORS.GREEN .. totalTodoTasks .. " tasks|r") or ""
+        local queueStr = #queued > 0 and ("  " .. ns.COLORS.GRAY .. "+" .. #queued .. " queued|r") or ""
+        bar.label:SetText(ns.COLORS.YELLOW .. activeName .. "|r" .. pendingStr .. queueStr)
+
+        -- Populate dropdown rows
+        for _, r in ipairs(bar.dropdown.rows) do r:Hide() end
+        local ddY = -4
+        local ddIdx = 0
+        local DDR_H = 20
+
+        local function GetDDRow()
+            ddIdx = ddIdx + 1
+            local row = bar.dropdown.rows[ddIdx]
+            if not row then
+                row = CreateFrame("Button", nil, bar.dropdown)
+                row:SetHeight(DDR_H)
+                row.bg = row:CreateTexture(nil, "BACKGROUND")
+                row.bg:SetAllPoints()
+                row.text = row:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+                row.text:SetPoint("LEFT", row, "LEFT", 8, 0)
+                row.text:SetPoint("RIGHT", row, "RIGHT", -8, 0)
+                row.text:SetJustifyH("LEFT")
+                row.text:SetWordWrap(false)
+                row:SetScript("OnEnter", function(self) self.bg:SetColorTexture(0.15, 0.15, 0.25, 0.8) end)
+                row:SetScript("OnLeave", function(self) self.bg:SetColorTexture(0, 0, 0, 0) end)
+                bar.dropdown.rows[ddIdx] = row
+            end
+            row:ClearAllPoints()
+            row:SetPoint("TOPLEFT", bar.dropdown, "TOPLEFT", 2, ddY)
+            row:SetPoint("RIGHT", bar.dropdown, "RIGHT", -2, 0)
+            row.bg:SetColorTexture(0, 0, 0, 0)
+            row:SetScript("OnClick", nil)
+            row:Show()
+            ddY = ddY - DDR_H
+            return row
+        end
+
+        -- Active list entry
+        if currentTodoList then
+            local aRow = GetDDRow()
+            local aCnt = 0
+            for _, t in ipairs(currentTodoList.tasks or {}) do
+                if t.status == "pending" then aCnt = aCnt + 1 end
+            end
+            aRow.text:SetText(ns.COLORS.GREEN .. "> " .. "|r" ..
+                ns.COLORS.YELLOW .. (currentTodoList.name or "Unnamed") .. "|r" ..
+                ns.COLORS.GRAY .. "  (" .. aCnt .. " tasks) [active]|r")
+        end
+
+        -- Queued lists
+        for qi, qList in ipairs(queued) do
+            local qRow = GetDDRow()
+            local qCnt = 0
+            for _, t in ipairs(qList.tasks or {}) do
+                if t.status == "pending" then qCnt = qCnt + 1 end
+            end
+            qRow.text:SetText(ns.COLORS.GRAY .. "  " .. qi .. ". " .. "|r" ..
+                (qList.name or "Unnamed") ..
+                ns.COLORS.GRAY .. "  (" .. qCnt .. " tasks)|r")
+            qRow:SetScript("OnClick", function()
+                ns.TodoList:PromoteToActive(qi)
+                bar.dropdown:Hide()
+                self:Refresh()
+                if self.RefreshMini then self:RefreshMini() end
+            end)
+        end
+
+        bar.dropdown:SetHeight(math.abs(ddY) + 4)
+        listBarHeight = 28 -- bar height + gap
+    else
+        if self._listSelectorBar then self._listSelectorBar:Hide() end
+    end
+
     -- Current character tasks frame (Check AH, Check Mail, Expiring)
     if not self._charTasksFrame then
         local ctf = CreateFrame("Frame", nil, tableContainer)
@@ -278,6 +435,9 @@ function UI:RefreshTodoPage()
         ctf.rows = {}
         self._charTasksFrame = ctf
     end
+    self._charTasksFrame:ClearAllPoints()
+    self._charTasksFrame:SetPoint("TOPLEFT", tableContainer, "TOPLEFT", 0, -listBarHeight)
+    self._charTasksFrame:SetPoint("TOPRIGHT", tableContainer, "TOPRIGHT", 0, -listBarHeight)
 
     -- Hide old task rows
     for _, row in ipairs(self._charTasksFrame.rows) do
@@ -318,7 +478,7 @@ function UI:RefreshTodoPage()
         charTaskHeight = 0
     end
 
-    local contentOffset = -charTaskHeight
+    local contentOffset = -charTaskHeight - listBarHeight
 
     -- Create summary banner (reused across refreshes)
     if not self._postSummaryFrame then
@@ -500,6 +660,16 @@ function UI:RefreshTodoPage()
                 local isCurrentChar = group.charKey == charKey
                 local hasBuys = group.hasBuyTasks
 
+                -- Build "X to post, Y to buy" count string for header
+                local grpBuys, grpPosts = 0, 0
+                for _, gi2 in ipairs(group.items) do
+                    if gi2.action == "buy" then grpBuys = grpBuys + 1 else grpPosts = grpPosts + 1 end
+                end
+                local cntParts = {}
+                if grpPosts > 0 then table.insert(cntParts, grpPosts .. " to post") end
+                if grpBuys > 0 then table.insert(cntParts, grpBuys .. " to buy") end
+                local countStr = #cntParts > 0 and table.concat(cntParts, ", ") or (#group.items .. " items")
+
                 -- Group header
                 local hdr = GetRow(HDR_H)
                 if isUnassigned then
@@ -513,7 +683,7 @@ function UI:RefreshTodoPage()
                     local cc = CLASS_COLORS[ns.db.characters[group.charKey] and ns.db.characters[group.charKey].class] or "888888"
                     hdr.text:SetText("|cff" .. cc .. group.charName .. "|r" ..
                         ns.COLORS.GRAY .. " - " .. group.realm .. "|r" ..
-                        ns.COLORS.GREEN .. "  (YOU — " .. #group.items .. " items)|r" .. buyTag)
+                        ns.COLORS.GREEN .. "  (YOU — " .. countStr .. ")|r" .. buyTag)
                 else
                     local charInv = ns.db.characters and ns.db.characters[group.charKey]
                     local cc = charInv and CLASS_COLORS[charInv.class] or "888888"
@@ -521,12 +691,12 @@ function UI:RefreshTodoPage()
                     if group._allDeferred then
                         hdr.bg:SetColorTexture(0.1, 0.1, 0.1, 0.5)
                         hdr.text:SetText("|cff" .. cc .. group.charName .. "|r" ..
-                            ns.COLORS.GRAY .. " - " .. group.realm .. "  (" .. #group.items .. " items)" ..
+                            ns.COLORS.GRAY .. " - " .. group.realm .. "  (" .. countStr .. ")" ..
                             ns.COLORS.RED .. " [no inventory]" .. "|r" .. buyTag)
                     else
                         hdr.bg:SetColorTexture(hasBuys and 0.08 or 0.12, hasBuys and 0.12 or 0.15, hasBuys and 0.18 or 0.2, 0.8)
                         hdr.text:SetText("|cff" .. cc .. group.charName .. "|r" ..
-                            ns.COLORS.GRAY .. " - " .. group.realm .. "  (" .. #group.items .. " items)|r" .. buyTag)
+                            ns.COLORS.GRAY .. " - " .. group.realm .. "  (" .. countStr .. ")|r" .. buyTag)
                     end
                 end
 
@@ -710,7 +880,7 @@ function UI:RefreshTodoPage()
                 if g.charKey then assignedCount = assignedCount + #g.items end
             end
             mainFrame.statusText:SetText(
-                "Nothing to post on " .. charKey:match("^(.-)%-") ..
+                "No tasks on " .. charKey:match("^(.-)%-") ..
                 "  |  " .. assignedCount .. " tasks across " .. #displayGroups .. " groups" ..
                 (missingCount > 0 and ("  |  " .. missingCount .. " not in inventory") or ""))
         else
@@ -784,8 +954,8 @@ function UI:RefreshTodoPage()
         self.postNowTable:SetData(data)
 
         if #nextData > 0 then
-            local postNowHeight = math.max(60, (#data + 1) * 20 + 22) + charTaskHeight
-            if postNowHeight > 250 + charTaskHeight then postNowHeight = 250 + charTaskHeight end
+            local postNowHeight = math.max(60, (#data + 1) * 20 + 22) + charTaskHeight + listBarHeight
+            if postNowHeight > 250 + charTaskHeight + listBarHeight then postNowHeight = 250 + charTaskHeight + listBarHeight end
 
             if not self._nextStepsLabel then
                 self._nextStepsLabel = tableContainer:CreateFontString(nil, "OVERLAY", "GameFontNormal")
@@ -818,6 +988,19 @@ function UI:RefreshTodoPage()
             self.postNowTable.scrollFrame:SetPoint("BOTTOMRIGHT", tableContainer, "BOTTOMRIGHT", -22, 0)
         end
 
-        mainFrame.statusText:SetText(postCount .. " items to post  |  " .. #nextData .. " next steps  |  Hover for actions")
+        -- Count buy vs sell items for accurate status text
+        local statusBuys, statusPosts = 0, 0
+        for _, row in ipairs(data) do
+            if row._todoItem and row._todoItem.action == "buy" then
+                statusBuys = statusBuys + 1
+            else
+                statusPosts = statusPosts + 1
+            end
+        end
+        local statusParts = {}
+        if statusPosts > 0 then table.insert(statusParts, statusPosts .. " to post") end
+        if statusBuys > 0 then table.insert(statusParts, statusBuys .. " to buy") end
+        local statusStr = #statusParts > 0 and table.concat(statusParts, ", ") or (postCount .. " items")
+        mainFrame.statusText:SetText(statusStr .. "  |  " .. #nextData .. " next steps  |  Hover for actions")
     end
 end

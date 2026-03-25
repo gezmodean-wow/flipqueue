@@ -225,6 +225,53 @@ function TodoList:GetPendingCount()
     return count
 end
 
+-- Get unique item names from pending buy tasks in the active list.
+-- Returns array of item name strings.
+function TodoList:GetBuyTaskNames()
+    if not ns.db or not ns.db.todoLists or not ns.db.todoLists.active then
+        return {}
+    end
+
+    local names = {}
+    local seen = {}
+    for _, item in ipairs(ns.db.todoLists.active.tasks) do
+        if item.status == "pending" and item.action == "buy" then
+            local name = item.name
+            if name and name ~= "" then
+                local lower = name:lower()
+                if not seen[lower] then
+                    seen[lower] = true
+                    table.insert(names, name)
+                end
+            end
+        end
+    end
+    return names
+end
+
+-- Get pending buy tasks grouped by buyRealm.
+-- Returns { [realm] = { {name, buyPrice, quality, quantity}, ... } }
+function TodoList:GetBuyTasksByRealm()
+    if not ns.db or not ns.db.todoLists or not ns.db.todoLists.active then
+        return {}
+    end
+
+    local byRealm = {}
+    for _, item in ipairs(ns.db.todoLists.active.tasks) do
+        if item.status == "pending" and item.action == "buy" then
+            local realm = item.buyRealm or "Unknown"
+            if not byRealm[realm] then byRealm[realm] = {} end
+            table.insert(byRealm[realm], {
+                name     = item.name or "",
+                buyPrice = item.buyPrice or "",
+                quality  = item.quality,
+                quantity = item.quantity or 1,
+            })
+        end
+    end
+    return byRealm
+end
+
 -- Get counts by status
 function TodoList:GetStatusCounts()
     local counts = {
@@ -278,6 +325,21 @@ function TodoList:RefreshLocations()
         end
     end)
 
+    -- Build warbank lookup (for deposit task resolution)
+    local warbankItemKeys = {}
+    local warbankItemIDs = {}
+    if ns.db and ns.db.warbank and ns.db.warbank.items then
+        for key, wbItem in pairs(ns.db.warbank.items) do
+            if wbItem.quantity and wbItem.quantity > 0 then
+                warbankItemKeys[key] = wbItem.quantity
+                local numID = tonumber(key:match("^(%d+)"))
+                if numID then
+                    warbankItemIDs[numID] = (warbankItemIDs[numID] or 0) + wbItem.quantity
+                end
+            end
+        end
+    end
+
     local changed = false
     for _, item in ipairs(current.tasks) do
         if item.status == "pending" and item.assignedChar == charKey then
@@ -294,6 +356,27 @@ function TodoList:RefreshLocations()
                 -- Full scan (bank open, etc.) will set the correct location
                 item.source = "unavailable"
                 changed = true
+            end
+        end
+
+        -- Update deposit tasks: when this char is the depositor and item is now in warbank
+        if item.status == "pending" and item.depositFrom == charKey
+                and item.source == "unavailable" then
+            local itemKey = item.itemKey or ""
+            local itemNumID = tonumber(item.itemID) or tonumber(itemKey:match("^(%d+)"))
+            local inWarbank = (warbankItemKeys[itemKey] and warbankItemKeys[itemKey] > 0)
+                or (itemNumID and warbankItemIDs[itemNumID] and warbankItemIDs[itemNumID] > 0)
+            local inBags = (bagsItemKeys[itemKey] and bagsItemKeys[itemKey] > 0)
+                or (itemNumID and bagsItemIDs[itemNumID] and bagsItemIDs[itemNumID] > 0)
+
+            if inWarbank then
+                item.source = "warbank"
+                item.depositFrom = nil
+                item.deferredAt = nil
+                changed = true
+            elseif inBags then
+                -- Depositor still has it in bags — keep depositFrom but update source
+                item.source = "unavailable"
             end
         end
     end
@@ -643,7 +726,15 @@ function TodoList:RefreshTaskSteps()
             if isBuyTask then
                 -- Buy task steps: browse → buy → deposit
                 if stepType == "browse" then
-                    -- "browse" is user-initiated at AH — no auto-advance
+                    -- Item appeared in bags (bought from AH and collected from mail)
+                    -- Advance past browse and buy in one go
+                    if inBags then
+                        self:AdvanceStep(taskIdx) -- browse → buy
+                        self:AdvanceStep(taskIdx) -- buy → deposit (or done)
+                        changed = true
+                        task.source = "bags"
+                        justAdvanced = true
+                    end
                 elseif stepType == "buy" then
                     -- If item now in bags, the buy step is complete
                     if inBags then

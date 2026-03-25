@@ -35,6 +35,7 @@ function ns:InitDB()
         autoDepositWarbank = false,
         showLoginMessage = true,
         autoWithdrawGold = false,
+        maxWithdrawGold = 0, -- 0 = no limit, otherwise max gold per withdrawal
     }
     db.settings.collapsed = db.settings.collapsed or {}
     db.settings.sortMode  = db.settings.sortMode or "realm"

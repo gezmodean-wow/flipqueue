@@ -179,9 +179,49 @@ function UI:CreateSettingsPanel(parent)
 
     settingsWidgets.autoGold, h = CreateSettingsCheckbox(content, y,
         "Auto-withdraw gold for AH fees",
-        "When you open the bank, withdraw enough gold from your warband bank to cover estimated AH listing fees. Assumes 60% of vendor price (48h post) with vendor at ~5% of market value.",
+        "When you open the bank, withdraw enough gold from your warband bank to cover estimated AH listing fees and buy task costs.",
         "autoWithdrawGold")
     y = y - h - ITEM_SPACING
+
+    -- Max withdrawal gold input
+    do
+        local row = CreateFrame("Frame", nil, content)
+        row:SetPoint("TOPLEFT", content, "TOPLEFT", LEFT_MARGIN, y)
+        row:SetPoint("RIGHT", content, "RIGHT", RIGHT_MARGIN, 0)
+        row:SetHeight(52)
+
+        local title = row:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+        title:SetPoint("TOPLEFT", row, "TOPLEFT", 0, 0)
+        title:SetText("Max withdrawal per visit (gold)")
+
+        local box = CreateFrame("EditBox", nil, row, "InputBoxTemplate")
+        box:SetSize(100, 20)
+        box:SetPoint("TOPLEFT", title, "BOTTOMLEFT", 4, -4)
+        box:SetAutoFocus(false)
+        box:SetMaxLetters(10)
+        box:SetNumeric(true)
+        box:SetScript("OnEscapePressed", function(self) self:ClearFocus() end)
+        box:SetScript("OnEnterPressed", function(self)
+            local val = tonumber(self:GetText()) or 0
+            if ns.db then ns.db.settings.maxWithdrawGold = val end
+            self:ClearFocus()
+        end)
+        box:SetScript("OnEditFocusLost", function(self)
+            local val = tonumber(self:GetText()) or 0
+            if ns.db then ns.db.settings.maxWithdrawGold = val end
+        end)
+
+        local descText = row:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+        descText:SetPoint("TOPLEFT", box, "BOTTOMLEFT", -4, -4)
+        descText:SetPoint("RIGHT", row, "RIGHT", 0, 0)
+        descText:SetJustifyH("LEFT")
+        descText:SetWordWrap(true)
+        descText:SetTextColor(DESC_COLOR[1], DESC_COLOR[2], DESC_COLOR[3])
+        descText:SetText("Maximum gold to withdraw per bank visit. 0 = no limit.")
+
+        settingsWidgets.maxWithdrawBox = box
+    end
+    y = y - 52 - ITEM_SPACING
 
     settingsWidgets.tsmAutoSkip, h = CreateSettingsCheckbox(content, y,
         "Auto-handle TSM rejections",
@@ -938,6 +978,10 @@ function UI:RefreshSettings()
     end
     if settingsWidgets.autoGold then
         settingsWidgets.autoGold:SetChecked(ns.db.settings.autoWithdrawGold)
+    end
+    if settingsWidgets.maxWithdrawBox then
+        local val = ns.db.settings.maxWithdrawGold or 0
+        settingsWidgets.maxWithdrawBox:SetText(tostring(val))
     end
     if settingsWidgets.tsmAutoSkip then
         settingsWidgets.tsmAutoSkip:SetChecked(ns.db.settings.tsmAutoSkipRejected)

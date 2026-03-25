@@ -1,5 +1,30 @@
 # Changelog
 
+## v0.7.0-alpha.6
+
+### Bug Fixes
+- **Warbank deposit scan** (#101): After depositing items to warbank, the addon now scans warbank (not just personal bank) so deposit tasks are properly resolved
+- **Buy tasks say "to post"** (#102): Mini view and to-do page now correctly label buy tasks as "to buy" instead of "to post" everywhere — title, group headers, next steps, status bar
+- **TSM detected chars overflow** (#66): Detected characters section now caps at 8 visible rows with scroll instead of overflowing the window
+- **Auto-pull grabs just-deposited items**: Bank open now runs RefreshLocations before auto-pull, preventing items just deposited to warbank from being pulled back out
+- **Auto-pull ignores buy tasks**: Buy tasks are no longer pulled from bank — they need to be purchased from the AH
+- **Deposit tasks stuck after warbank deposit**: RefreshLocations now checks warbank inventory for deposit tasks — clears depositFrom and updates source to "warbank" when item is found
+- **Buy task browse step stuck**: Browse step now auto-advances when item appears in bags (bought from AH + collected from mail), double-advancing through buy step
+- **Gold auto-withdraw for buy tasks**: hasTasks check now matches buy tasks on buyRealm; CalculatePostingFees skips buy tasks; CalculatePurchaseCosts implemented with actual buy prices
+
+### Features
+- **Auctionator shopping lists from buy tasks** (#103): Creates per-realm shopping lists ("FQ Buy - RealmName") in Auctionator search format with price filters — button on To-Do page and Mini View when Auctionator is installed
+- **To-Do list selector** (#104): Compact bar at top of To-Do page showing active list name + task count; dropdown to switch between active and queued lists
+- **Mini view: auto-width**: Frame automatically stretches to fit content text (200-500px range)
+- **Mini view: resizable**: Drag grip in bottom-right corner to set preferred width (persisted)
+- **Mini view: collapsible**: Collapse/expand button in header — collapsed shows first 2 rows only
+- **Mini view: buy task display**: Buy tasks shown with [BUY] prefix, correct price/realm, waiting icon
+- **Mini view: deferred task filtering**: Deposit tasks for items not in inventory are hidden
+- **Max withdrawal setting**: New "Max withdrawal per visit" gold input in Settings — caps auto-withdraw amount per bank visit (0 = no limit)
+
+### Closed Issues
+- #69 (To-Do scroll), #68 (auto-import reset), #67 (hidden char tasks), #38 (TSM rejection), #105 (generator save nav) — all previously fixed
+
 ## v0.7.0-alpha.4
 
 ### Bug Fixes

@@ -489,6 +489,15 @@ mainFrame.actionBtns.clearTodoList = CreateActionBtn("Clear All Lists", "Clear c
     StaticPopup_Show("FLIPQUEUE_CLEAR_TODOLIST")
 end)
 
+mainFrame.actionBtns.auctBuyList = CreateActionBtn("Buy List", "Create Auctionator shopping lists from buy tasks", function()
+    local count, result = UI.CreateBuyTaskShoppingList()
+    if count then
+        ns:Print(ns.COLORS.GREEN .. "Created " .. result .. " with " .. count .. " items.|r")
+    else
+        ns:Print(ns.COLORS.RED .. (result or "Error creating list") .. "|r")
+    end
+end)
+
 mainFrame.actionBtns.importFromFP = CreateActionBtn("Import from FP", "Switch to Import page to paste FlippingPal data", function()
     UI.currentPage = "import"
     UI:Refresh()
@@ -808,6 +817,7 @@ local function HideAllTables()
     if UI._tsmDetectedFrame then UI._tsmDetectedFrame:Hide() end
     if UI._tsmDetectedLabel then UI._tsmDetectedLabel:Hide() end
     if UI._tsmDetectedScroll then UI._tsmDetectedScroll:Hide() end
+    if UI._listSelectorBar then UI._listSelectorBar:Hide() end
 end
 
 local function ShowTable(tbl)

@@ -4,22 +4,26 @@ local addonName, ns = ...
 
 local UI = ns.UI
 local MINI_ROW_HEIGHT = 18
-local MINI_WIDTH = 280
+local MINI_WIDTH_DEFAULT = 280
+local MINI_WIDTH_MIN = 200
+local MINI_WIDTH_MAX = 500
+local COLLAPSED_ROWS = 2
 
 --------------------------
 -- Mini Frame
 --------------------------
 
 local mini = CreateFrame("Frame", "FlipQueueMiniFrame", UIParent, "BackdropTemplate")
-mini:SetSize(MINI_WIDTH, 60)
+mini:SetSize(MINI_WIDTH_DEFAULT, 60)
 mini:SetPoint("TOPRIGHT", UIParent, "TOPRIGHT", -200, -200)
 mini:SetMovable(true)
+mini:SetResizable(true)
+mini:SetResizeBounds(MINI_WIDTH_MIN, 40, MINI_WIDTH_MAX, 600)
 mini:EnableMouse(true)
 mini:RegisterForDrag("LeftButton")
 mini:SetScript("OnDragStart", mini.StartMoving)
 mini:SetScript("OnDragStop", function(self)
     self:StopMovingOrSizing()
-    -- Save position
     if ns.db then
         local point, _, relPoint, x, y = self:GetPoint()
         ns.db.settings.miniPos = {point = point, relPoint = relPoint, x = x, y = y}
@@ -35,6 +39,9 @@ mini:SetBackdrop({
 })
 mini:SetBackdropColor(0.05, 0.05, 0.1, 0.9)
 mini:SetBackdropBorderColor(0.3, 0.3, 0.4, 0.8)
+
+-- Collapsed state
+local miniCollapsed = false
 
 --------------------------
 -- Header bar
@@ -108,6 +115,32 @@ local importBtn = CreateIconButton(header, "Interface\\Buttons\\UI-GuildButton-M
     UI:Refresh()
 end)
 importBtn:SetPoint("RIGHT", scanBtn, "LEFT", -ICON_SPACING, 0)
+
+-- Collapse/expand toggle button
+local collapseBtn = CreateIconButton(header, "Interface\\Buttons\\UI-MinusButton-Up", "Collapse", function()
+    miniCollapsed = not miniCollapsed
+    if ns.db then ns.db.settings.miniCollapsed = miniCollapsed end
+    UI:RefreshMini()
+end)
+collapseBtn:SetPoint("RIGHT", importBtn, "LEFT", -ICON_SPACING, 0)
+
+-- Resize grip (bottom-right corner)
+local resizeGrip = CreateFrame("Button", nil, mini)
+resizeGrip:SetSize(12, 12)
+resizeGrip:SetPoint("BOTTOMRIGHT", mini, "BOTTOMRIGHT", -2, 2)
+resizeGrip:SetNormalTexture("Interface\\ChatFrame\\UI-ChatIM-SizeGrabber-Up")
+resizeGrip:SetHighlightTexture("Interface\\ChatFrame\\UI-ChatIM-SizeGrabber-Highlight")
+resizeGrip:SetPushedTexture("Interface\\ChatFrame\\UI-ChatIM-SizeGrabber-Down")
+resizeGrip:SetScript("OnMouseDown", function()
+    mini:StartSizing("RIGHT")
+end)
+resizeGrip:SetScript("OnMouseUp", function()
+    mini:StopMovingOrSizing()
+    if ns.db then
+        ns.db.settings.miniWidth = math.floor(mini:GetWidth() + 0.5)
+    end
+    UI:RefreshMini()
+end)
 
 --------------------------
 -- Task rows area
@@ -222,7 +255,16 @@ function UI:RefreshMini()
     if useTodoList then
         local todoTasks = ns.TodoList:GetCharacterTasks(charKey)
         for _, task in ipairs(todoTasks) do
-            if ns:RealmMatches(task.item.targetRealm or "", myRealm) then
+            local isBuyTask = task.item.action == "buy"
+            local realmToMatch = isBuyTask and task.item.buyRealm or task.item.targetRealm
+            if ns:RealmMatches(realmToMatch or "", myRealm) then
+                -- Skip deferred tasks (item not available to this character)
+                local isDeferred = task.item.deferredAt
+                    or (task.item.depositFrom and task.item.depositFrom ~= charKey)
+                if not isBuyTask and isDeferred then
+                    -- skip — don't show deposit tasks for items we don't have
+                else
+
                 local itemNumID = tonumber(task.item.itemID) or tonumber(task.item.itemKey and task.item.itemKey:match("^(%d+)"))
                 local itemKey = task.item.itemKey or ""
                 local petSpecies = itemKey:match("^pet:(%d+)") or itemKey:match("^pet_(%d+)")
@@ -235,19 +277,27 @@ function UI:RefreshMini()
                 table.insert(tasks, {
                     name     = task.item.name or "?",
                     itemID   = task.item.itemID,
-                    price    = task.item.expectedPrice,
-                    realm    = task.item.targetRealm,
+                    price    = isBuyTask and task.item.buyPrice or task.item.expectedPrice,
+                    realm    = isBuyTask and task.item.buyRealm or task.item.targetRealm,
                     icon     = task.item.icon,
                     source   = task.item.source,
                     inBags   = inBags,
                     _taskIdx = task.taskIndex,
                     _isTodo  = true,
+                    _isBuy   = isBuyTask,
                 })
+                end -- else (not deferred)
             end
         end
     end
 
     local rowIndex = 0
+
+    -- Count buy vs post tasks (used for title and Auctionator button)
+    local buyCount, postCount = 0, 0
+    for _, t in ipairs(tasks) do
+        if t._isBuy then buyCount = buyCount + 1 else postCount = postCount + 1 end
+    end
 
     -- Pre-check for char tasks (Check AH, Expiring, etc.)
     local preCharTasks = UI.BuildCurrentCharTasks and UI.BuildCurrentCharTasks() or {}
@@ -288,7 +338,15 @@ function UI:RefreshMini()
                     row.tooltipItemID = nil
                     row.tooltipItemName = group.charKey
                     local goldStr = group.totalGold >= 1000 and string.format("%.1fk", group.totalGold / 1000) or (math.floor(group.totalGold) .. "g")
-                    row.tooltipExtra = #group.items .. " items, ~" .. goldStr
+                    -- Count buy vs sell in group
+                    local gBuys, gPosts = 0, 0
+                    for _, gi in ipairs(group.items) do
+                        if gi.action == "buy" then gBuys = gBuys + 1 else gPosts = gPosts + 1 end
+                    end
+                    local gParts = {}
+                    if gPosts > 0 then table.insert(gParts, gPosts .. " to post") end
+                    if gBuys > 0 then table.insert(gParts, gBuys .. " to buy") end
+                    row.tooltipExtra = table.concat(gParts, ", ") .. ", ~" .. goldStr
                     row:SetScript("OnMouseDown", nil)
 
                     local charEntry = ns.db.characters and ns.db.characters[group.charKey]
@@ -296,10 +354,13 @@ function UI:RefreshMini()
                     local charName = group.charName or "?"
                     local realmShort = group.realm:match("^([^,]+)") or group.realm
 
+                    local countLabel = gBuys > 0 and gPosts > 0
+                        and (gPosts .. "P+" .. gBuys .. "B")
+                        or (gBuys > 0 and (gBuys .. "B") or tostring(#group.items))
                     row.text:SetText(
                         "|cff" .. cc .. charName .. "|r" ..
                         ns.COLORS.GRAY .. " " .. realmShort .. ns.COLORS.RESET ..
-                        ns.COLORS.GRAY .. " (" .. #group.items .. ")" .. ns.COLORS.RESET ..
+                        ns.COLORS.GRAY .. " (" .. countLabel .. ")" .. ns.COLORS.RESET ..
                         ns.COLORS.GREEN .. " ~" .. goldStr .. ns.COLORS.RESET)
                     row:Show()
                 end
@@ -356,8 +417,11 @@ function UI:RefreshMini()
                 ns.COLORS.GRAY .. " - nothing to do" .. ns.COLORS.RESET)
         end
     else
+        local titleParts = {}
+        if postCount > 0 then table.insert(titleParts, postCount .. " to post") end
+        if buyCount > 0 then table.insert(titleParts, buyCount .. " to buy") end
         titleText:SetText(ns.COLORS.YELLOW .. "FQ" .. ns.COLORS.RESET ..
-            ns.COLORS.GREEN .. " - " .. #tasks .. " to post" .. ns.COLORS.RESET)
+            ns.COLORS.GREEN .. " - " .. table.concat(titleParts, ", ") .. ns.COLORS.RESET)
 
         for _, task in ipairs(tasks) do
             rowIndex = rowIndex + 1
@@ -366,8 +430,12 @@ function UI:RefreshMini()
             row.icon:SetTexture(task.icon)
             row.tooltipItemID = task.itemID
             row.tooltipItemName = task.name
-            row.tooltipExtra = (task.realm or "") ~= "" and
-                ("Sell on: " .. task.realm .. "  @  " .. (task.price or "?")) or nil
+            if task._isBuy then
+                row.tooltipExtra = "BUY on: " .. (task.realm or "?") .. "  @  " .. (task.price or "?")
+            else
+                row.tooltipExtra = (task.realm or "") ~= "" and
+                    ("Sell on: " .. task.realm .. "  @  " .. (task.price or "?")) or nil
+            end
 
             local priceStr = ""
             if task.price and task.price ~= "" then
@@ -376,7 +444,9 @@ function UI:RefreshMini()
 
             -- Status icon using WoW's built-in ReadyCheck textures
             local statusIcon
-            if task.inBags then
+            if task._isBuy then
+                statusIcon = "|TInterface\\RaidFrame\\ReadyCheck-Waiting:0|t "
+            elseif task.inBags then
                 statusIcon = "|TInterface\\RaidFrame\\ReadyCheck-Ready:0|t "
             elseif task.source == "warbank" or task.source == "bank" then
                 statusIcon = "|TInterface\\RaidFrame\\ReadyCheck-Waiting:0|t "
@@ -384,7 +454,8 @@ function UI:RefreshMini()
                 statusIcon = "|TInterface\\RaidFrame\\ReadyCheck-NotReady:0|t "
             end
 
-            row.text:SetText(statusIcon .. ns.COLORS.WHITE .. task.name .. ns.COLORS.RESET .. priceStr)
+            local namePrefix = task._isBuy and (ns.COLORS.CYAN .. "[BUY] " .. ns.COLORS.RESET) or ""
+            row.text:SetText(statusIcon .. namePrefix .. ns.COLORS.WHITE .. task.name .. ns.COLORS.RESET .. priceStr)
 
             -- Action buttons (complete/skip/delete) on mouseover
             local capturedTask = task
@@ -445,6 +516,28 @@ function UI:RefreshMini()
 
             row:Show()
         end
+    end
+
+    -- Auctionator shopping list button (when buy tasks exist and Auctionator is loaded)
+    if buyCount and buyCount > 0 and type(Auctionator) == "table"
+            and type(Auctionator.API) == "table" and type(Auctionator.API.v1) == "table" then
+        rowIndex = rowIndex + 1
+        local auctRow = GetOrCreateMiniRow(rowIndex)
+        auctRow.icon:SetTexture("Interface\\Icons\\INV_Misc_Spyglass_03")
+        auctRow.text:SetText(ns.COLORS.YELLOW .. "Create Auctionator Buy List" .. ns.COLORS.RESET)
+        auctRow.tooltipItemID = nil
+        auctRow.tooltipItemName = "Create Shopping List"
+        auctRow.tooltipExtra = "Create Auctionator shopping lists grouped by realm (" .. buyCount .. " buy items)"
+        auctRow:SetScript("OnMouseDown", function()
+            local count, result = UI.CreateBuyTaskShoppingList()
+            if count then
+                ns:Print(ns.COLORS.GREEN .. "Created " .. result .. " with " .. count .. " items.|r")
+            else
+                ns:Print(ns.COLORS.RED .. "Error: " .. (result or "unknown") .. "|r")
+            end
+            UI:RefreshMini()
+        end)
+        auctRow:Show()
     end
 
     -- Current character tasks (Check AH, Check Mail, Expiring)
@@ -542,10 +635,56 @@ function UI:RefreshMini()
         genRow:Show()
     end
 
+    -- Auto-width: measure text and stretch to fit (within bounds)
+    local savedWidth = ns.db and ns.db.settings.miniWidth
+    local maxTextW = 0
+    for i = 1, rowIndex do
+        local row = miniRows[i]
+        if row and row:IsShown() and row.text then
+            local tw = row.text:GetStringWidth()
+            local iconW = (row.icon and row.icon:IsShown()) and (MINI_ROW_HEIGHT + 3) or 0
+            local totalW = tw + iconW + 12 -- padding
+            if totalW > maxTextW then maxTextW = totalW end
+        end
+    end
+    local desiredW = math.max(maxTextW + 12, MINI_WIDTH_MIN)
+    if savedWidth and savedWidth >= MINI_WIDTH_MIN then
+        desiredW = math.max(desiredW, savedWidth)
+    end
+    desiredW = math.min(desiredW, MINI_WIDTH_MAX)
+    mini:SetWidth(desiredW)
+
+    -- Collapse: only show first N rows
+    local visibleRows = rowIndex
+    if miniCollapsed and rowIndex > COLLAPSED_ROWS then
+        for i = COLLAPSED_ROWS + 1, rowIndex do
+            if miniRows[i] then miniRows[i]:Hide() end
+        end
+        visibleRows = COLLAPSED_ROWS
+    end
+
+    -- Update collapse button icon
+    if miniCollapsed then
+        collapseBtn.tex:SetTexture("Interface\\Buttons\\UI-PlusButton-Up")
+        collapseBtn:SetScript("OnEnter", function(self)
+            GameTooltip:SetOwner(self, "ANCHOR_BOTTOM")
+            GameTooltip:SetText("Expand (" .. rowIndex .. " rows)", 1, 1, 1)
+            GameTooltip:Show()
+        end)
+    else
+        collapseBtn.tex:SetTexture("Interface\\Buttons\\UI-MinusButton-Up")
+        collapseBtn:SetScript("OnEnter", function(self)
+            GameTooltip:SetOwner(self, "ANCHOR_BOTTOM")
+            GameTooltip:SetText("Collapse", 1, 1, 1)
+            GameTooltip:Show()
+        end)
+    end
+
     -- Resize frame to fit content
-    local contentHeight = math.max(1, rowIndex) * MINI_ROW_HEIGHT
+    local contentHeight = math.max(1, visibleRows) * MINI_ROW_HEIGHT
     taskArea:SetHeight(contentHeight)
     mini:SetHeight(24 + contentHeight + 8)
+    resizeGrip:SetShown(not miniCollapsed)
 end
 
 --------------------------
@@ -553,10 +692,21 @@ end
 --------------------------
 
 function UI:ShowMini()
-    if ns.db and ns.db.settings.miniPos then
-        local p = ns.db.settings.miniPos
-        mini:ClearAllPoints()
-        mini:SetPoint(p.point or "TOPRIGHT", UIParent, p.relPoint or "TOPRIGHT", p.x or -200, p.y or -200)
+    if ns.db then
+        -- Restore position
+        if ns.db.settings.miniPos then
+            local p = ns.db.settings.miniPos
+            mini:ClearAllPoints()
+            mini:SetPoint(p.point or "TOPRIGHT", UIParent, p.relPoint or "TOPRIGHT", p.x or -200, p.y or -200)
+        end
+        -- Restore width
+        if ns.db.settings.miniWidth and ns.db.settings.miniWidth >= MINI_WIDTH_MIN then
+            mini:SetWidth(ns.db.settings.miniWidth)
+        end
+        -- Restore collapsed state
+        if ns.db.settings.miniCollapsed then
+            miniCollapsed = true
+        end
     end
     mini:Show()
     if ns.db then ns.db.settings.showMini = true end

@@ -29,7 +29,9 @@ function Tracker:AutoPullFromBank(onComplete)
         local todoTasks = ns.TodoList:GetCharacterTasks(charKey)
         for _, task in ipairs(todoTasks) do
             local item = task.item
-            if ns:RealmMatches(item.targetRealm or "", currentRealm) then
+            if item.action == "buy" then
+                -- Buy tasks are purchased from AH, not pulled from bank
+            elseif ns:RealmMatches(item.targetRealm or "", currentRealm) then
                 local targetQty = math.max(item.quantity or 1, defaultQty)
                 if tsmEnabled then
                     local op = ns.TSM:GetItemAuctioningOp(item.itemKey)
@@ -48,12 +50,14 @@ function Tracker:AutoPullFromBank(onComplete)
     end
 
     -- Also pull items that need depositing to warbank for other characters
+    -- Only pull from personal bank — skip items already in warbank or with source resolved
     if ns.TodoList and ns.TodoList:GetCurrentList() then
         local todoList = ns.TodoList:GetCurrentList()
         if todoList.tasks then
             for _, item in ipairs(todoList.tasks) do
                 if item.status == "pending" and item.depositFrom == charKey
-                    and item.assignedChar ~= charKey then
+                    and item.assignedChar ~= charKey
+                    and item.source ~= "warbank" then
                     local inBags = Tracker._CountInBags(item)
                     if inBags <= 0 and not needed[item] then
                         needed[item] = item.quantity or 1
@@ -297,7 +301,9 @@ function Tracker:CalculatePostingFees(charKey, currentRealm)
     local depositDetails = {}
 
     for _, task in ipairs(goldTasks) do
-        if ns:RealmMatches(task.item.targetRealm or "", currentRealm) then
+        if task.item.action == "buy" then
+            -- Skip buy tasks — they use CalculatePurchaseCosts
+        elseif ns:RealmMatches(task.item.targetRealm or "", currentRealm) then
             local queueItem = task.item
             itemCount = itemCount + 1
 
@@ -392,10 +398,36 @@ function Tracker:CalculatePostingFees(charKey, currentRealm)
     return totalDepositCopper, itemCount, depositDetails
 end
 
--- Calculate purchase costs for buy-type tasks (future #60).
--- Returns 0 until buy tasks are implemented.
+-- Calculate purchase costs for buy-type tasks.
+-- Returns totalCopper, itemCount, details[]
 function Tracker:CalculatePurchaseCosts(charKey, currentRealm)
-    return 0, 0, {}
+    local buyTasks = ns.TodoList and ns.TodoList:GetCharacterTasks(charKey) or {}
+    local totalCopper = 0
+    local itemCount = 0
+    local details = {}
+
+    for _, task in ipairs(buyTasks) do
+        if task.item.action == "buy"
+                and ns:RealmMatches(task.item.buyRealm or "", currentRealm) then
+            local buyPriceGold = ns:ParseGoldValue(task.item.buyPrice or "")
+            if buyPriceGold > 0 then
+                local qty = task.item.quantity or 1
+                local costCopper = math.ceil(buyPriceGold * 10000) * qty -- ParseGoldValue returns gold, convert to copper
+                totalCopper = totalCopper + costCopper
+                itemCount = itemCount + 1
+                table.insert(details, {
+                    name = task.item.name or tostring(task.item.itemID),
+                    vendorCopper = 0,
+                    duration = "buy",
+                    mult = 1,
+                    deposit = costCopper,
+                    qty = qty,
+                })
+            end
+        end
+    end
+
+    return totalCopper, itemCount, details
 end
 
 -- Calculate total gold required: posting fees + purchase costs.
@@ -424,7 +456,9 @@ function Tracker:AutoWithdrawGold()
     if ns.TodoList then
         local todoTasks = ns.TodoList:GetCharacterTasks(charKey)
         for _, task in ipairs(todoTasks) do
-            if ns:RealmMatches(task.item.targetRealm or "", currentRealm) then
+            local isBuy = task.item.action == "buy"
+            local realmToMatch = isBuy and task.item.buyRealm or task.item.targetRealm
+            if ns:RealmMatches(realmToMatch or "", currentRealm) then
                 hasTasks = true
                 break
             end
@@ -486,6 +520,17 @@ function Tracker:AutoWithdrawGold()
 
     -- Round up to whole gold
     shortfallCopper = shortfallGold * 10000
+
+    -- Enforce max withdrawal cap
+    local maxGold = ns.db.settings.maxWithdrawGold or 0
+    if maxGold > 0 then
+        local maxCopper = maxGold * 10000
+        if shortfallCopper > maxCopper then
+            shortfallCopper = maxCopper
+            shortfallGold = maxGold
+            ns:Print(ns.COLORS.YELLOW .. "Capped withdrawal to " .. maxGold .. "g (max setting).|r")
+        end
+    end
 
     if warbankCopper < shortfallCopper then
         local warbankGold = math.floor(warbankCopper / 10000)
@@ -633,6 +678,7 @@ function Tracker:AutoDepositToWarbank()
             if ns.Scanner then
                 ns.Scanner:ScanCurrentCharacter()
                 ns.Scanner:ScanBank()
+                ns.Scanner:ScanWarbank()
             end
             if ns.TodoList and ns.TodoList.RefreshLocations then
                 ns.TodoList:RefreshLocations()
