@@ -1153,3 +1153,134 @@ function Import:Save(items, source)
 
     return added
 end
+
+-- Async chunked version of Save — processes items in batches via C_Timer
+-- to keep the UI responsive during large imports.
+-- onProgress(processed, total): called after each chunk
+-- onComplete(added): called when all items are saved
+function Import:SaveChunked(items, source, chunkSize, onProgress, onComplete)
+    if not ns.db or not ns.db.imports then
+        if onComplete then onComplete(0) end
+        return
+    end
+
+    source = source or "fpScanner"
+    chunkSize = chunkSize or 50
+
+    -- Phase 1: synchronous prep (fast, O(n))
+    for _, item in ipairs(items) do
+        item.targetRealm = CleanRealmString(item.targetRealm or "")
+    end
+
+    local clusterMap = {}
+    for _, item in ipairs(items) do
+        local realm = item.targetRealm
+        if realm and realm:find(",") then
+            for name in realm:gmatch("([^,]+)") do
+                name = strtrim(name)
+                if name ~= "" and #name >= 3 then
+                    local key = name:lower()
+                    if not clusterMap[key] or #realm > #clusterMap[key] then
+                        clusterMap[key] = realm
+                    end
+                end
+            end
+        end
+    end
+
+    for _, item in ipairs(items) do
+        local realm = item.targetRealm
+        if realm and realm ~= "" and not realm:find(",") then
+            local full = clusterMap[realm:lower()]
+            if full then item.targetRealm = full end
+        end
+    end
+
+    -- Clear existing imports and start chunked insert
+    ns.db.imports[source] = {}
+    local srcMap = ns.db.imports[source]
+
+    local idx = 1
+    local added = 0
+    local deduped = 0
+    local total = #items
+
+    local function ProcessChunk()
+        local chunkEnd = math.min(idx + chunkSize - 1, total)
+        for i = idx, chunkEnd do
+            local item = items[i]
+            local key = ns:MakeImportKey(item.itemKey, item.name, item.targetRealm)
+            local existing = srcMap[key]
+
+            if existing then
+                if item.expectedPrice and item.expectedPrice ~= "" then
+                    existing.expectedPrice = item.expectedPrice
+                end
+                if #(item.targetRealm or "") > #(existing.targetRealm or "") then
+                    existing.targetRealm = item.targetRealm
+                end
+                deduped = deduped + 1
+            else
+                local isDuplicate = false
+                local itemName = (item.name or ""):lower()
+                for existKey, existItem in pairs(srcMap) do
+                    local keyMatch = existItem.itemKey == item.itemKey
+                    local nameMatch = itemName ~= "" and existItem.name
+                        and existItem.name:lower() == itemName
+                    if (keyMatch or nameMatch) and ns:RealmsOverlap(existItem.targetRealm, item.targetRealm) then
+                        if item.expectedPrice and item.expectedPrice ~= "" then
+                            existItem.expectedPrice = item.expectedPrice
+                        end
+                        if #(item.targetRealm or "") > #(existItem.targetRealm or "") then
+                            existItem.targetRealm = item.targetRealm
+                        end
+                        isDuplicate = true
+                        deduped = deduped + 1
+                        break
+                    end
+                end
+
+                if not isDuplicate then
+                    srcMap[key] = {
+                        itemKey       = item.itemKey,
+                        itemID        = item.itemID or "",
+                        name          = item.name or "",
+                        quality       = item.quality or "",
+                        ilvl          = item.ilvl or 0,
+                        bonusIDs      = item.bonusIDs or "",
+                        modifiers     = item.modifiers or "",
+                        quantity      = item.quantity or 1,
+                        category      = item.category,
+                        expansion     = item.expansion,
+                        sellRate      = item.sellRate,
+                        targetRealm   = item.targetRealm,
+                        expectedPrice = item.expectedPrice,
+                        noCompetition = item.noCompetition,
+                        importedAt    = time(),
+                        dealType      = item.dealType,
+                        buyRealm      = item.buyRealm,
+                        buyPrice      = item.buyPrice,
+                        profitAmount  = item.profitAmount,
+                        profitPct     = item.profitPct,
+                        saleAvg       = item.saleAvg,
+                    }
+                    added = added + 1
+                end
+            end
+        end
+
+        idx = chunkEnd + 1
+        if onProgress then onProgress(math.min(idx - 1, total), total) end
+
+        if idx <= total then
+            C_Timer.After(0, ProcessChunk)
+        else
+            if deduped > 0 then
+                ns:Print(ns.COLORS.GRAY .. "Merged " .. deduped .. " connected-realm duplicates.|r")
+            end
+            if onComplete then onComplete(added) end
+        end
+    end
+
+    ProcessChunk()
+end

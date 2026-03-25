@@ -437,6 +437,117 @@ local function BuildNextStepsData()
 end
 
 -- ==========================================
+-- TASK ACTION BUTTONS (complete / skip / delete)
+-- ==========================================
+
+local ACTION_BTN_SIZE = 14
+local ACTION_BTN_GAP = 1
+
+local function MakeActionBtn(parent, icon, tooltipText)
+    local btn = CreateFrame("Button", nil, parent)
+    btn:SetSize(ACTION_BTN_SIZE, ACTION_BTN_SIZE)
+    btn:SetFrameLevel((parent:GetFrameLevel() or 1) + 5)
+    btn.tex = btn:CreateTexture(nil, "ARTWORK")
+    btn.tex:SetAllPoints()
+    btn.tex:SetTexture(icon)
+    btn.highlight = btn:CreateTexture(nil, "HIGHLIGHT")
+    btn.highlight:SetAllPoints()
+    btn.highlight:SetColorTexture(1, 1, 1, 0.3)
+    btn._tooltipText = tooltipText
+    btn:SetScript("OnEnter", function(self)
+        GameTooltip:SetOwner(self, "ANCHOR_TOP")
+        GameTooltip:SetText(self._tooltipText, 1, 1, 1)
+        GameTooltip:Show()
+        parent._actionBtnHovered = true
+    end)
+    btn:SetScript("OnLeave", function(self)
+        GameTooltip:Hide()
+        parent._actionBtnHovered = false
+        C_Timer.After(0.1, function()
+            if not parent._actionBtnHovered and not parent:IsMouseOver() then
+                UI.HideTaskActionBtns(parent)
+            end
+        end)
+    end)
+    btn:Hide()
+    return btn
+end
+
+-- Create 3 action buttons on a row frame (idempotent — returns existing if already created).
+function UI.SetupTaskActionBtns(row)
+    if row._taskActionBtns then return row._taskActionBtns end
+
+    local btns = {}
+    btns.delete = MakeActionBtn(row, "Interface\\Buttons\\UI-StopButton", "Delete task")
+    btns.delete:SetPoint("RIGHT", row, "RIGHT", -4, 0)
+
+    btns.skip = MakeActionBtn(row, "Interface\\Buttons\\UI-SpellbookIcon-NextPage-Up", "Skip task")
+    btns.skip:SetPoint("RIGHT", btns.delete, "LEFT", -ACTION_BTN_GAP, 0)
+
+    btns.complete = MakeActionBtn(row, "Interface\\RaidFrame\\ReadyCheck-Ready", "Mark complete")
+    btns.complete:SetPoint("RIGHT", btns.skip, "LEFT", -ACTION_BTN_GAP, 0)
+
+    row._taskActionBtns = btns
+    return btns
+end
+
+function UI.ShowTaskActionBtns(row)
+    if not row._taskActionBtns then return end
+    row._taskActionBtns.complete:Show()
+    row._taskActionBtns.skip:Show()
+    row._taskActionBtns.delete:Show()
+end
+
+function UI.HideTaskActionBtns(row)
+    if not row._taskActionBtns then return end
+    row._taskActionBtns.complete:Hide()
+    row._taskActionBtns.skip:Hide()
+    row._taskActionBtns.delete:Hide()
+end
+
+-- Wire button click handlers to a specific task index.
+function UI.WireTaskActionBtns(row, taskIndex, refreshFn)
+    local btns = row._taskActionBtns
+    if not btns then return end
+
+    btns.complete:SetScript("OnClick", function()
+        if ns.TodoList then
+            local task = ns.db and ns.db.todoLists and ns.db.todoLists.active
+                and ns.db.todoLists.active.tasks[taskIndex]
+            local name = task and task.name or "task"
+            ns.TodoList:MoveTaskToLog(taskIndex)
+            ns:Print(ns.COLORS.GREEN .. "Completed:|r " .. name)
+        end
+        UI.HideTaskActionBtns(row)
+        if refreshFn then refreshFn() end
+    end)
+
+    btns.skip:SetScript("OnClick", function()
+        if ns.TodoList then
+            local task = ns.db and ns.db.todoLists and ns.db.todoLists.active
+                and ns.db.todoLists.active.tasks[taskIndex]
+            local name = task and task.name or "task"
+            ns.TodoList:SkipTask(taskIndex, "manual skip")
+            ns:Print(ns.COLORS.ORANGE .. "Skipped:|r " .. name)
+        end
+        UI.HideTaskActionBtns(row)
+        if refreshFn then refreshFn() end
+    end)
+
+    btns.delete:SetScript("OnClick", function()
+        if ns.TodoList then
+            local task = ns.db and ns.db.todoLists and ns.db.todoLists.active
+                and ns.db.todoLists.active.tasks[taskIndex]
+            local name = task and task.name or "task"
+            ns.TodoList:DeleteTask(taskIndex)
+            ns:Print(ns.COLORS.RED .. "Deleted:|r " .. name)
+        end
+        UI.HideTaskActionBtns(row)
+        if refreshFn then refreshFn() end
+    end)
+end
+
+-- ==========================================
 -- EXPOSE ON UI TABLE
 -- ==========================================
 

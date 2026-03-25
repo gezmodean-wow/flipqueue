@@ -386,8 +386,47 @@ function UI:RefreshMini()
 
             row.text:SetText(statusIcon .. ns.COLORS.WHITE .. task.name .. ns.COLORS.RESET .. priceStr)
 
-            -- Right-click to mark posted, Shift+Right to skip
+            -- Action buttons (complete/skip/delete) on mouseover
             local capturedTask = task
+            if capturedTask._isTodo and capturedTask._taskIdx then
+                local miniRefresh = function()
+                    UI:RefreshMini()
+                    if UI.mainFrame and UI.mainFrame:IsShown() then UI:Refresh() end
+                end
+                UI.SetupTaskActionBtns(row)
+                UI.WireTaskActionBtns(row, capturedTask._taskIdx, miniRefresh)
+                UI.HideTaskActionBtns(row)
+
+                row:SetScript("OnEnter", function(self)
+                    UI.ShowTaskActionBtns(self)
+                    if self.tooltipItemID or self.tooltipItemName then
+                        GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+                        local numID = tonumber(self.tooltipItemID)
+                        if numID and numID > 0 then
+                            GameTooltip:SetItemByID(numID)
+                        elseif self.tooltipItemName and self.tooltipItemName ~= "" then
+                            GameTooltip:SetText(self.tooltipItemName, 1, 1, 1)
+                            if self.tooltipExtra then
+                                GameTooltip:AddLine(self.tooltipExtra, 0.7, 0.7, 0.7, true)
+                            end
+                            GameTooltip:Show()
+                        end
+                    end
+                end)
+                row:SetScript("OnLeave", function(self)
+                    self._actionBtnHovered = false
+                    C_Timer.After(0.1, function()
+                        if not self._actionBtnHovered and not self:IsMouseOver() then
+                            GameTooltip:Hide()
+                            UI.HideTaskActionBtns(self)
+                        end
+                    end)
+                end)
+            else
+                UI.HideTaskActionBtns(row)
+            end
+
+            -- Right-click to mark posted, Shift+Right to skip (kept as alternative)
             row:SetScript("OnMouseDown", function(self, button)
                 if button == "RightButton" then
                     if capturedTask._isTodo and ns.TodoList then

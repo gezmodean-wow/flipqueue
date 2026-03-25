@@ -12,10 +12,11 @@ local function BuildCharactersData()
     local charData = {}
 
     -- Build AH cluster groups: characters whose realms overlap share an AH
+    -- Exclude hidden/ignored characters so they don't cause others to show "Shared AH"
     local clusters = {}  -- array of {realms={}, chars={charKey, ...}}
-    for charKey in pairs(ns.db.characters) do
+    for charKey, inv in pairs(ns.db.characters) do
         local realm = charKey:match("%-(.+)$") or ""
-        if realm ~= "" then
+        if realm ~= "" and not inv.ignored then
             local found = nil
             for _, c in ipairs(clusters) do
                 for _, cr in ipairs(c.realms) do
@@ -25,7 +26,6 @@ local function BuildCharactersData()
             end
             if found then
                 table.insert(found.chars, charKey)
-                -- Add realm if not already present
                 local realmSeen = false
                 for _, cr in ipairs(found.realms) do
                     if cr == realm then realmSeen = true; break end

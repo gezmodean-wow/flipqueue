@@ -436,7 +436,15 @@ function UI:RefreshTodoPage()
             todoScroll:Show()
             todoContent:SetWidth(todoScroll:GetWidth() or 500)
 
-            for _, row in ipairs(todoRows) do row:Hide() end
+            for _, row in ipairs(todoRows) do
+                row:Hide()
+                UI.HideTaskActionBtns(row)
+            end
+
+            -- Annotate tasks with their array index so action buttons can target them
+            for i, task in ipairs(currentTodoList.tasks) do
+                task._taskIndex = i
+            end
 
             local displayGroups, missingCount = ns.TodoList:BuildDisplayGroups(
                 currentTodoList.tasks, UI:GetGenSortMode())
@@ -479,6 +487,10 @@ function UI:RefreshTodoPage()
                 row.text:ClearAllPoints()
                 row.text:SetPoint("LEFT", row, "LEFT", 6, 0)
                 row.text:SetPoint("RIGHT", row.rightText, "LEFT", -4, 0)
+                -- Clear mouseover state (action buttons set per item, not headers)
+                row:SetScript("OnEnter", nil)
+                row:SetScript("OnLeave", nil)
+                UI.HideTaskActionBtns(row)
                 row:Show()
                 return row
             end
@@ -644,6 +656,47 @@ function UI:RefreshTodoPage()
                     end
                     row.rightText:SetText(priceStr .. sourceTag)
 
+                    -- Mouseover: highlight + action buttons (complete/skip/delete)
+                    row:EnableMouse(true)
+                    local taskIdx = item._taskIndex
+                    if taskIdx then
+                        UI.SetupTaskActionBtns(row)
+                        UI.WireTaskActionBtns(row, taskIdx, function()
+                            self:Refresh()
+                            if self.RefreshMini then self:RefreshMini() end
+                        end)
+                        UI.HideTaskActionBtns(row)
+
+                        local bgR, bgG, bgB, bgA
+                        if isUnassigned then
+                            bgR, bgG, bgB, bgA = 0.1, 0.06, 0.06, 0.4
+                        elseif isBuyItem then
+                            bgR, bgG, bgB, bgA = 0.06, 0.1, 0.15, 0.5
+                        else
+                            bgR = ii % 2 == 0 and 0.08 or 0.06
+                            bgG = bgR
+                            bgB = ii % 2 == 0 and 0.12 or 0.1
+                            bgA = 0.5
+                        end
+                        row:SetScript("OnEnter", function(self)
+                            self.bg:SetColorTexture(bgR + 0.06, bgG + 0.06, bgB + 0.06, bgA + 0.15)
+                            UI.ShowTaskActionBtns(self)
+                        end)
+                        row:SetScript("OnLeave", function(self)
+                            self._actionBtnHovered = false
+                            C_Timer.After(0.1, function()
+                                if not self._actionBtnHovered and not self:IsMouseOver() then
+                                    self.bg:SetColorTexture(bgR, bgG, bgB, bgA)
+                                    UI.HideTaskActionBtns(self)
+                                end
+                            end)
+                        end)
+                    else
+                        row:SetScript("OnEnter", nil)
+                        row:SetScript("OnLeave", nil)
+                        UI.HideTaskActionBtns(row)
+                    end
+
                     y = y + ITEM_H
                 end
                 y = y + 2 -- gap between groups
@@ -709,6 +762,10 @@ function UI:RefreshTodoPage()
 
         UI._ShowTable(self.postNowTable)
 
+        local actionRefresh = function()
+            self:Refresh()
+            if self.RefreshMini then self:RefreshMini() end
+        end
         self.postNowTable:SetRowClickHandler(function(rowData, button)
             if button == "RightButton" then
                 if rowData._taskIndex and ns.TodoList then
@@ -719,11 +776,11 @@ function UI:RefreshTodoPage()
                         ns.TodoList:MoveTaskToLog(rowData._taskIndex)
                         ns:Print("Posted: " .. rowData.name .. " -> moved to log")
                     end
-                    self:Refresh()
-                    if self.RefreshMini then self:RefreshMini() end
+                    actionRefresh()
                 end
             end
         end)
+        self.postNowTable:EnableRowActions(actionRefresh)
         self.postNowTable:SetData(data)
 
         if #nextData > 0 then
@@ -761,6 +818,6 @@ function UI:RefreshTodoPage()
             self.postNowTable.scrollFrame:SetPoint("BOTTOMRIGHT", tableContainer, "BOTTOMRIGHT", -22, 0)
         end
 
-        mainFrame.statusText:SetText(postCount .. " items to post  |  " .. #nextData .. " next steps  |  Right-click: posted  |  Shift+Right: skip")
+        mainFrame.statusText:SetText(postCount .. " items to post  |  " .. #nextData .. " next steps  |  Hover for actions")
     end
 end

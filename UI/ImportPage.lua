@@ -47,6 +47,43 @@ importScroll:SetScript("OnSizeChanged", function(sf, w)
     importEdit:SetWidth(w)
 end)
 
+-- Progress bar (shown during async import, hidden otherwise)
+local progressBar = CreateFrame("Frame", nil, importPage, "BackdropTemplate")
+progressBar:SetHeight(22)
+progressBar:SetPoint("TOPLEFT", importEditBg, "BOTTOMLEFT", 0, -2)
+progressBar:SetPoint("TOPRIGHT", importEditBg, "BOTTOMRIGHT", 0, -2)
+progressBar:SetBackdrop({
+    bgFile = "Interface\\Tooltips\\UI-Tooltip-Background",
+    edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
+    edgeSize = 10,
+    insets = {left = 2, right = 2, top = 2, bottom = 2},
+})
+progressBar:SetBackdropColor(0.05, 0.05, 0.08, 1)
+progressBar:SetBackdropBorderColor(0.25, 0.25, 0.35, 0.8)
+
+progressBar.fill = progressBar:CreateTexture(nil, "ARTWORK")
+progressBar.fill:SetColorTexture(0.15, 0.55, 0.15, 0.9)
+progressBar.fill:SetPoint("TOPLEFT", progressBar, "TOPLEFT", 3, -3)
+progressBar.fill:SetPoint("BOTTOMLEFT", progressBar, "BOTTOMLEFT", 3, 3)
+progressBar.fill:SetWidth(1)
+
+progressBar.text = progressBar:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+progressBar.text:SetPoint("CENTER", progressBar, "CENTER", 0, 0)
+progressBar.text:SetTextColor(0.9, 0.9, 0.9)
+progressBar:Hide()
+
+local function ShowProgress(processed, total)
+    progressBar:Show()
+    local pct = total > 0 and (processed / total) or 0
+    local barWidth = math.max(1, (progressBar:GetWidth() - 6) * pct)
+    progressBar.fill:SetWidth(barWidth)
+    progressBar.text:SetText(string.format("Importing... %d / %d  (%d%%)", processed, total, math.floor(pct * 100)))
+end
+
+local function HideProgress()
+    progressBar:Hide()
+end
+
 -- Preview table (below editbox, fills remaining space)
 UI.importPreviewTable = UI:CreateScrollTable(importPage, {
     {key = "status",   label = "Status",  width = 52,  align = "CENTER", sortable = true},
@@ -130,25 +167,44 @@ local importPreviewResults = nil
 
 -- Auto-detect paste and build preview
 local importLastLen = 0
+local importBusy = false -- guard against re-entrant pastes during async save
+
 importEdit:SetScript("OnTextChanged", function(self, userInput)
     if not userInput then return end
+    if importBusy then return end
     local text = self:GetText()
     local newLen = #text
     if importLastLen < 10 and newLen > 50 and text:find("\n") then
         local items = ns.Import:Parse(text)
         if #items > 0 then
             if importSkipCheck:GetChecked() then
-                local added = ns.Import:Save(items)
-                ns:Print("Imported " .. added .. " new items (" .. #items .. " parsed, duplicates merged).")
+                -- Auto-import: accept paste immediately, process async with progress bar
+                importBusy = true
                 importEdit:SetText("")
+                importEdit:ClearFocus()
                 importPreviewData = nil
                 importPreviewResults = nil
                 UI.importPreviewTable:SetData({})
-                importStatus:SetText(ns.COLORS.GREEN .. added .. " items imported!|r")
                 importLastLen = 0
-                TryAutoGenerateTodo()
-                UI:Refresh()
-                UI:RefreshMini()
+
+                local total = #items
+                ShowProgress(0, total)
+                importStatus:SetText(ns.COLORS.YELLOW .. "Processing " .. total .. " items...|r")
+
+                ns.Import:SaveChunked(items, nil, 50,
+                    function(processed, t) -- onProgress
+                        ShowProgress(processed, t)
+                    end,
+                    function(added) -- onComplete
+                        HideProgress()
+                        importBusy = false
+                        ns:Print("Imported " .. added .. " new items (" .. total .. " parsed, duplicates merged).")
+                        importStatus:SetText(ns.COLORS.GREEN .. added .. " items imported!|r")
+                        TryAutoGenerateTodo()
+                        UI:Refresh()
+                        UI:RefreshMini()
+                    end
+                )
             else
                 importPreviewData = items
                 importPreviewResults = ns.Import:PreviewAdd(items)

@@ -653,8 +653,10 @@ function TodoList:RefreshTaskSteps()
                         justAdvanced = true
                     end
                 elseif stepType == "deposit" then
-                    -- If item left bags (deposited to warbank), deposit step is complete
-                    if not inBags and task.source == "bags" then
+                    -- If item left bags for any reason (deposited, posted, vendored),
+                    -- treat deposit step as complete. Don't check task.source — RefreshLocations
+                    -- may have already changed it to "unavailable" before we run.
+                    if not inBags then
                         self:AdvanceStep(taskIdx)
                         changed = true
                         justAdvanced = true
@@ -798,6 +800,24 @@ end
 -- Skip a task (TSM below threshold, user skip, etc.)
 function TodoList:SkipTask(taskIndex, reason)
     self:UpdateTaskStatus(taskIndex, "skipped", reason)
+    self:CheckAutoComplete()
+end
+
+-- Delete a task entirely (remove from list, no logging).
+function TodoList:DeleteTask(taskIndex)
+    if not ns.db or not ns.db.todoLists or not ns.db.todoLists.active then
+        return
+    end
+    local tasks = ns.db.todoLists.active.tasks
+    if not tasks or not tasks[taskIndex] then return end
+
+    local item = tasks[taskIndex]
+    -- Clean up import reference
+    if item.importSource and item.importKey then
+        ns:ImportRemove(item.importSource, item.importKey)
+    end
+
+    table.remove(tasks, taskIndex)
     self:CheckAutoComplete()
 end
 

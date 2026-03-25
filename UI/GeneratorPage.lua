@@ -1175,21 +1175,7 @@ function UI:RefreshGeneratorPage(pending)
         cr1.statusLabel:SetTextColor(0.5, 0.5, 0.5)
         cr1.statusLabel:SetText("")
 
-        cr1.importBtn = CreateHeaderBtn(cr1, "Import", "Import pasted cross-realm data", function()
-            if cr1._previewData and #cr1._previewData > 0 then
-                local added = ns.Import:Save(cr1._previewData, "fpCrossRealm")
-                ns:Print("Imported " .. added .. " cross-realm deals (" .. #cr1._previewData .. " parsed).")
-                cr1.editBox:SetText("")
-                cr1._previewData = nil
-                cr1._previewResults = nil
-                cr1._lastLen = 0
-                cr1.previewTable:SetData({})
-                cr1.statusLabel:SetText(ns.COLORS.CYAN .. added .. " cross-realm deals imported!|r")
-                UI:Refresh()
-                if UI.RefreshMini then UI:RefreshMini() end
-            end
-        end)
-        cr1.importBtn:SetPoint("LEFT", cr1.statusLabel, "RIGHT", 10, 0)
+        -- Import button removed — use the Import page tab instead
 
         cr1._lastLen = 0
         cr1._previewData = nil
@@ -1279,7 +1265,7 @@ function UI:RefreshGeneratorPage(pending)
                     if newCount > 0 then table.insert(parts, ns.COLORS.GREEN .. newCount .. " new|r") end
                     if updateCount > 0 then table.insert(parts, ns.COLORS.YELLOW .. updateCount .. " updates|r") end
                     if dupCount > 0 then table.insert(parts, ns.COLORS.GRAY .. dupCount .. " dupes|r") end
-                    cr1.statusLabel:SetText(table.concat(parts, "  ") .. "  -- click Import to confirm")
+                    cr1.statusLabel:SetText(table.concat(parts, "  ") .. "  -- use Import tab to save")
                 else
                     cr1.statusLabel:SetText(ns.COLORS.RED .. "No items found in pasted data.|r")
                 end
@@ -1317,6 +1303,7 @@ function UI:RefreshGeneratorPage(pending)
 
         cr2.tsmCheck = CreateFrame("CheckButton", "FlipQueueCRTSMCheck", cr2, "UICheckButtonTemplate")
         cr2.tsmCheck:SetSize(20, 20)
+        cr2.tsmCheck:SetScript("OnClick", function() UI:Refresh() end)
         cr2.tsmCheckLabel = cr2:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
         cr2.tsmCheckLabel:SetText("Filter by TSM Group")
         cr2.tsmCheckLabel:SetTextColor(0.7, 0.7, 0.7)
@@ -1370,6 +1357,7 @@ function UI:RefreshGeneratorPage(pending)
 
         cr2.auctCheck = CreateFrame("CheckButton", "FlipQueueCRAuctCheck", cr2, "UICheckButtonTemplate")
         cr2.auctCheck:SetSize(20, 20)
+        cr2.auctCheck:SetScript("OnClick", function() UI:Refresh() end)
         cr2.auctCheckLabel = cr2:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
         cr2.auctCheckLabel:SetText("Filter by Auctionator List")
         cr2.auctCheckLabel:SetTextColor(0.7, 0.7, 0.7)
@@ -1423,6 +1411,7 @@ function UI:RefreshGeneratorPage(pending)
 
         cr2.realmCheck = CreateFrame("CheckButton", "FlipQueueCRRealmCheck", cr2, "UICheckButtonTemplate")
         cr2.realmCheck:SetSize(20, 20)
+        cr2.realmCheck:SetScript("OnClick", function() UI:Refresh() end)
         cr2.realmCheckLabel = cr2:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
         cr2.realmCheckLabel:SetText("Only show realms with characters")
         cr2.realmCheckLabel:SetTextColor(0.7, 0.7, 0.7)
@@ -1551,6 +1540,25 @@ function UI:RefreshGeneratorPage(pending)
 
         -- Status label
         cr3.statusLabel = cr3:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+
+        -- Separate-mode name inputs (one per column)
+        local function CreateInlineNameBox(parent, labelText, labelColor)
+            local label = parent:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+            label:SetText(labelText)
+            label:SetTextColor(unpack(labelColor))
+            local box = CreateFrame("EditBox", nil, parent, "InputBoxTemplate")
+            box:SetSize(120, 18)
+            box:SetAutoFocus(false)
+            box:SetMaxLetters(60)
+            box:SetFontObject("GameFontHighlightSmall")
+            box:SetScript("OnEscapePressed", function(self) self:ClearFocus() end)
+            box:SetScript("OnEnterPressed", function(self) self:ClearFocus() end)
+            box:Hide()
+            label:Hide()
+            return label, box
+        end
+        cr3.buyNameLabel, cr3.buyNameBox = CreateInlineNameBox(cr3, "Buy list:", {0.4, 0.8, 0.9})
+        cr3.sellNameLabel, cr3.sellNameBox = CreateInlineNameBox(cr3, "Sell list:", {0.9, 0.8, 0.3})
 
         -- Divider
         cr3.listDivider = cr3:CreateTexture(nil, "ARTWORK")
@@ -2763,7 +2771,7 @@ function UI:RefreshGeneratorPage(pending)
                 end
                 UI._generatorPreview = nil
                 gf.nameBox._initialized = false
-                SaveWizardState(UI._wizardTrack, 1)
+                SaveWizardState(nil, 0)
                 UI:Refresh()
                 if UI.RefreshMini then UI:RefreshMini() end
             end)
@@ -2926,13 +2934,13 @@ function UI:RefreshGeneratorPage(pending)
                 end
             end
 
-            -- Realm Filter
+            -- Realm Filter: only pass deals where the SELL realm has a character.
+            -- Don't match on buyRealm alone — that causes "create char" tasks for the sell realm.
             if cr2.realmCheck:GetChecked() and UI._crRealmFilter and next(UI._crRealmFilter) then
                 local matched = false
                 for realm, enabled in pairs(UI._crRealmFilter) do
                     if enabled then
-                        if ns:RealmMatches(deal.targetRealm, realm)
-                            or (deal.buyRealm and ns:RealmMatches(deal.buyRealm, realm)) then
+                        if ns:RealmMatches(deal.targetRealm, realm) then
                             matched = true
                             break
                         end
@@ -3267,7 +3275,8 @@ function UI:RefreshGeneratorPage(pending)
         local LIST_ROW_H = 28
 
         -- Reuse the same RenderAllocList helper (defined in inventory step 3, but we define a local version here)
-        local function RenderAllocListCR(orderTable, allocMeta, rowPool, parent, yStart, onChanged)
+        -- colMode: nil=full-width, "left"=left half, "right"=right half
+        local function RenderAllocListCR(orderTable, allocMeta, rowPool, parent, yStart, onChanged, colMode)
             for _, row in ipairs(rowPool) do row:Hide() end
             local y = yStart
             local ds = gf._dragState
@@ -3312,8 +3321,16 @@ function UI:RefreshGeneratorPage(pending)
                 end
 
                 row:ClearAllPoints()
-                row:SetPoint("TOPLEFT", parent, "TOPLEFT", 4, y)
-                row:SetPoint("RIGHT", parent, "RIGHT", -4, 0)
+                if colMode == "left" then
+                    row:SetPoint("TOPLEFT", parent, "TOPLEFT", 4, y)
+                    row:SetPoint("TOPRIGHT", parent, "TOP", -4, y)
+                elseif colMode == "right" then
+                    row:SetPoint("TOPLEFT", parent, "TOP", 4, y)
+                    row:SetPoint("TOPRIGHT", parent, "TOPRIGHT", -4, y)
+                else
+                    row:SetPoint("TOPLEFT", parent, "TOPLEFT", 4, y)
+                    row:SetPoint("TOPRIGHT", parent, "TOPRIGHT", -4, y)
+                end
 
                 local brightness = 1 - (idx - 1) * 0.15
                 local c = meta.color
@@ -3470,32 +3487,33 @@ function UI:RefreshGeneratorPage(pending)
             UI:Refresh()
         end
 
-        -- Layout
+        -- Layout: Buy & Sell priorities side by side
         local rightY = -4
 
-        -- Buy Priorities
-        cr3.buyAllocDesc:ClearAllPoints()
-        cr3.buyAllocDesc:SetPoint("TOPLEFT", cr3, "TOPLEFT", 6, rightY)
-        cr3.buyAllocDesc:SetPoint("RIGHT", cr3, "RIGHT", -6, 0)
-        rightY = rightY - 14
+        -- Labels above each column
         cr3.buyAllocLabel:ClearAllPoints()
         cr3.buyAllocLabel:SetPoint("TOPLEFT", cr3, "TOPLEFT", 6, rightY)
-        rightY = rightY - 14
-        rightY = RenderAllocListCR(ns.db.settings.genBuyAllocationOrder, BUY_ALLOC_META,
-            cr3.buyAllocRows, cr3, rightY, CRAutoRegenerate)
-        rightY = rightY - 8
-
-        -- Sell Priorities
-        cr3.sellAllocDesc:ClearAllPoints()
-        cr3.sellAllocDesc:SetPoint("TOPLEFT", cr3, "TOPLEFT", 6, rightY)
-        cr3.sellAllocDesc:SetPoint("RIGHT", cr3, "RIGHT", -6, 0)
-        rightY = rightY - 14
         cr3.sellAllocLabel:ClearAllPoints()
-        cr3.sellAllocLabel:SetPoint("TOPLEFT", cr3, "TOPLEFT", 6, rightY)
-        rightY = rightY - 14
-        rightY = RenderAllocListCR(UI:GetGenAllocationOrder(), SELL_ALLOC_META,
-            cr3.sellAllocRows, cr3, rightY, CRAutoRegenerate)
-        rightY = rightY - 8
+        cr3.sellAllocLabel:SetPoint("LEFT", cr3, "CENTER", 6, 0)
+        cr3.sellAllocLabel:SetPoint("TOP", cr3, "TOP", 0, rightY)
+        rightY = rightY - 16
+
+        -- Descriptions (shortened, under each label)
+        cr3.buyAllocDesc:ClearAllPoints()
+        cr3.buyAllocDesc:SetPoint("TOPLEFT", cr3, "TOPLEFT", 6, rightY)
+        cr3.buyAllocDesc:SetPoint("RIGHT", cr3, "CENTER", -6, 0)
+        cr3.sellAllocDesc:ClearAllPoints()
+        cr3.sellAllocDesc:SetPoint("LEFT", cr3, "CENTER", 6, 0)
+        cr3.sellAllocDesc:SetPoint("TOP", cr3, "TOP", 0, rightY)
+        cr3.sellAllocDesc:SetPoint("RIGHT", cr3, "RIGHT", -6, 0)
+        rightY = rightY - 28
+
+        -- Lists side by side
+        local buyEndY = RenderAllocListCR(ns.db.settings.genBuyAllocationOrder, BUY_ALLOC_META,
+            cr3.buyAllocRows, cr3, rightY, CRAutoRegenerate, "left")
+        local sellEndY = RenderAllocListCR(UI:GetGenAllocationOrder(), SELL_ALLOC_META,
+            cr3.sellAllocRows, cr3, rightY, CRAutoRegenerate, "right")
+        rightY = math.min(buyEndY, sellEndY) - 8
 
         -- List Mode Toggle
         cr3.listModeLabel:ClearAllPoints()
@@ -3590,6 +3608,40 @@ function UI:RefreshGeneratorPage(pending)
         end
         rightY = rightY - 14
 
+        -- Separate-mode name inputs (side by side above columns)
+        if isSeparate then
+            cr3.buyNameLabel:ClearAllPoints()
+            cr3.buyNameLabel:SetPoint("TOPLEFT", cr3, "TOPLEFT", 6, rightY)
+            cr3.buyNameLabel:Show()
+            cr3.buyNameBox:ClearAllPoints()
+            cr3.buyNameBox:SetPoint("LEFT", cr3.buyNameLabel, "RIGHT", 4, 0)
+            cr3.buyNameBox:SetPoint("RIGHT", cr3, "CENTER", -6, 0)
+            cr3.buyNameBox:Show()
+            if not cr3.buyNameBox._initialized then
+                cr3.buyNameBox:SetText("Buy " .. date("%m-%d"))
+                cr3.buyNameBox._initialized = true
+            end
+
+            cr3.sellNameLabel:ClearAllPoints()
+            cr3.sellNameLabel:SetPoint("LEFT", cr3, "CENTER", 6, 0)
+            cr3.sellNameLabel:SetPoint("TOP", cr3, "TOP", 0, rightY)
+            cr3.sellNameLabel:Show()
+            cr3.sellNameBox:ClearAllPoints()
+            cr3.sellNameBox:SetPoint("LEFT", cr3.sellNameLabel, "RIGHT", 4, 0)
+            cr3.sellNameBox:SetPoint("RIGHT", cr3, "RIGHT", -6, 0)
+            cr3.sellNameBox:Show()
+            if not cr3.sellNameBox._initialized then
+                cr3.sellNameBox:SetText("Sell " .. date("%m-%d"))
+                cr3.sellNameBox._initialized = true
+            end
+            rightY = rightY - 22
+        else
+            cr3.buyNameLabel:Hide()
+            cr3.buyNameBox:Hide()
+            cr3.sellNameLabel:Hide()
+            cr3.sellNameBox:Hide()
+        end
+
         -- Divider
         cr3.listDivider:ClearAllPoints()
         cr3.listDivider:SetPoint("TOPLEFT", cr3, "TOPLEFT", 6, rightY + 2)
@@ -3611,10 +3663,10 @@ function UI:RefreshGeneratorPage(pending)
         local QualityColorName = UI._QualityColorName
         local GEN_ROW_H = 18
         local HDR_ROW_H = 22
-        local genY = 0
         local genRowIdx = 0
 
-        local function GetOrCreateCRGenRow(height)
+        -- colMode: nil=full-width, "left"=left half, "right"=right half
+        local function GetOrCreateCRGenRow(height, yPos, colMode)
             genRowIdx = genRowIdx + 1
             local row = cr3.genRows[genRowIdx]
             if not row then
@@ -3636,8 +3688,16 @@ function UI:RefreshGeneratorPage(pending)
             end
             row:SetHeight(height)
             row:ClearAllPoints()
-            row:SetPoint("TOPLEFT", cr3.genContent, "TOPLEFT", 0, -genY)
-            row:SetPoint("RIGHT", cr3.genContent, "RIGHT", 0, 0)
+            if colMode == "left" then
+                row:SetPoint("TOPLEFT", cr3.genContent, "TOPLEFT", 0, -yPos)
+                row:SetPoint("TOPRIGHT", cr3.genContent, "TOP", -4, -yPos)
+            elseif colMode == "right" then
+                row:SetPoint("TOPLEFT", cr3.genContent, "TOP", 4, -yPos)
+                row:SetPoint("TOPRIGHT", cr3.genContent, "TOPRIGHT", 0, -yPos)
+            else
+                row:SetPoint("TOPLEFT", cr3.genContent, "TOPLEFT", 0, -yPos)
+                row:SetPoint("TOPRIGHT", cr3.genContent, "TOPRIGHT", 0, -yPos)
+            end
             row.icon:Hide()
             row.nameText:SetText("")
             row.rightText:SetText("")
@@ -3648,26 +3708,28 @@ function UI:RefreshGeneratorPage(pending)
             return row
         end
 
-        local function RenderGroupedPreview(items, sortMode, sectionLabel)
-            if not items or #items == 0 then return end
+        -- Returns the ending Y position after rendering
+        local function RenderGroupedPreview(items, sortMode, sectionLabel, colMode, startY)
+            if not items or #items == 0 then return startY or 0 end
+            local y = startY or 0
 
             local displayGroups, missingCount = ns.TodoList:BuildDisplayGroups(items, sortMode or "profit")
 
             -- Section header
             if sectionLabel then
-                local shdr = GetOrCreateCRGenRow(HDR_ROW_H)
+                local shdr = GetOrCreateCRGenRow(HDR_ROW_H, y, colMode)
                 shdr.bg:SetColorTexture(0.08, 0.12, 0.18, 0.9)
                 shdr.nameText:ClearAllPoints()
                 shdr.nameText:SetPoint("LEFT", shdr, "LEFT", 6, 0)
                 shdr.nameText:SetPoint("RIGHT", shdr.rightText, "LEFT", -4, 0)
                 shdr.nameText:SetText(sectionLabel)
-                genY = genY + HDR_ROW_H
+                y = y + HDR_ROW_H
             end
 
             for gi, group in ipairs(displayGroups) do
                 local isUnassigned = not group.charKey
 
-                local hdr = GetOrCreateCRGenRow(HDR_ROW_H)
+                local hdr = GetOrCreateCRGenRow(HDR_ROW_H, y, colMode)
 
                 if isUnassigned then
                     hdr.bg:SetColorTexture(0.15, 0.08, 0.08, 0.7)
@@ -3696,11 +3758,11 @@ function UI:RefreshGeneratorPage(pending)
                     hdr.rightText:SetText(goldColor .. "~" .. goldStr .. "|r")
                 end
 
-                genY = genY + HDR_ROW_H
+                y = y + HDR_ROW_H
 
                 -- Item rows
                 for ii, item in ipairs(group.items) do
-                    local row = GetOrCreateCRGenRow(GEN_ROW_H)
+                    local row = GetOrCreateCRGenRow(GEN_ROW_H, y, colMode)
                     if isUnassigned then
                         row.bg:SetColorTexture(0.1, 0.06, 0.06, 0.4)
                     elseif item.action == "buy" then
@@ -3802,59 +3864,74 @@ function UI:RefreshGeneratorPage(pending)
                         GameTooltip:Hide()
                     end)
 
-                    genY = genY + GEN_ROW_H
+                    y = y + GEN_ROW_H
                 end
 
-                genY = genY + 2
+                y = y + 2
             end
+            return y
         end
 
         -- Render based on mode
+        local genY = 0
         if isSeparate then
             local buyItems = previewSource.buy and previewSource.buy.items or {}
             local sellItems = previewSource.sell and previewSource.sell.items or {}
-            RenderGroupedPreview(buyItems, "profit", ns.COLORS.CYAN .. "BUY LIST|r" ..
-                ns.COLORS.GRAY .. "  (" .. #buyItems .. " tasks)|r")
-            RenderGroupedPreview(sellItems, UI:GetGenSortMode(), ns.COLORS.YELLOW .. "SELL LIST|r" ..
-                ns.COLORS.GRAY .. "  (" .. #sellItems .. " tasks)|r")
+            local buyEndY = RenderGroupedPreview(buyItems, "profit",
+                ns.COLORS.CYAN .. "BUY LIST|r" .. ns.COLORS.GRAY .. "  (" .. #buyItems .. " tasks)|r",
+                "left", 0)
+            local sellEndY = RenderGroupedPreview(sellItems, UI:GetGenSortMode(),
+                ns.COLORS.YELLOW .. "SELL LIST|r" .. ns.COLORS.GRAY .. "  (" .. #sellItems .. " tasks)|r",
+                "right", 0)
+            genY = math.max(buyEndY, sellEndY)
         elseif previewSource and previewSource.items then
             local sortMode = intSortMode or "profit"
-            -- Map integrated sort modes to BuildDisplayGroups sort modes
             local displaySortMode = sortMode
-            RenderGroupedPreview(previewSource.items, displaySortMode, nil)
+            genY = RenderGroupedPreview(previewSource.items, displaySortMode, nil, nil, 0)
         end
 
         cr3.genContent:SetHeight(math.max(1, genY))
 
         -- Save button logic (cross-realm track)
         if UI._generatorPreview then
-            gf.nameLabel:Show()
-            gf.nameBox:Show()
             gf.saveBtn:Show()
+            if isSeparate then
+                -- Separate mode: use per-column name boxes, hide shared one
+                gf.nameLabel:Hide()
+                gf.nameBox:Hide()
+            else
+                -- Integrated mode: use shared name box
+                gf.nameLabel:Show()
+                gf.nameBox:Show()
+            end
             gf.saveBtn:SetScript("OnClick", function()
-                local listName = gf.nameBox:GetText():match("^%s*(.-)%s*$")
-                if not listName or listName == "" then
-                    listName = "Generated " .. date("%Y-%m-%d %H:%M")
-                end
-
                 if isSeparate and previewSource.buy and previewSource.sell then
-                    -- Save two separate lists
+                    -- Read names from per-column boxes
+                    local buyName = cr3.buyNameBox:GetText():match("^%s*(.-)%s*$")
+                    if not buyName or buyName == "" then buyName = "Buy " .. date("%m-%d %H:%M") end
+                    local sellName = cr3.sellNameBox:GetText():match("^%s*(.-)%s*$")
+                    if not sellName or sellName == "" then sellName = "Sell " .. date("%m-%d %H:%M") end
+
                     local currentList2 = ns.TodoList:GetCurrentList()
                     local buyCount = previewSource.buy.items and #previewSource.buy.items or 0
                     local sellCount = previewSource.sell.items and #previewSource.sell.items or 0
 
                     if buyCount > 0 then
-                        previewSource.buy.name = listName .. " (Buy)"
+                        previewSource.buy.name = buyName
                         ns.TodoList:CommitList(previewSource.buy, currentList2 and "upcoming" or "replace")
                     end
                     if sellCount > 0 then
-                        previewSource.sell.name = listName .. " (Sell)"
+                        previewSource.sell.name = sellName
                         ns.TodoList:CommitList(previewSource.sell, "upcoming")
                     end
 
-                    ns:Print(ns.COLORS.GREEN .. "Saved \"" .. listName .. "\": " ..
-                        buyCount .. " buy + " .. sellCount .. " sell tasks.|r")
+                    ns:Print(ns.COLORS.GREEN .. "Saved \"" .. buyName .. "\" (" ..
+                        buyCount .. " buy) + \"" .. sellName .. "\" (" .. sellCount .. " sell)|r")
                 elseif previewSource and previewSource.items then
+                    local listName = gf.nameBox:GetText():match("^%s*(.-)%s*$")
+                    if not listName or listName == "" then
+                        listName = "Generated " .. date("%Y-%m-%d %H:%M")
+                    end
                     local count = #previewSource.items
                     previewSource.name = listName
                     local currentList2 = ns.TodoList:GetCurrentList()
@@ -3869,7 +3946,9 @@ function UI:RefreshGeneratorPage(pending)
 
                 UI._generatorPreview = nil
                 gf.nameBox._initialized = false
-                SaveWizardState(UI._wizardTrack, 1)
+                cr3.buyNameBox._initialized = false
+                cr3.sellNameBox._initialized = false
+                SaveWizardState(nil, 0)
                 UI:Refresh()
                 if UI.RefreshMini then UI:RefreshMini() end
             end)

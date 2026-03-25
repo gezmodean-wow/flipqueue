@@ -1,5 +1,29 @@
 # Changelog
 
+## v0.7.0-alpha.4
+
+### Bug Fixes
+- **Deposit task stuck**: Buy task deposit step no longer gets stuck when item is posted on AH instead of deposited — fixed race condition where RefreshLocations clobbered task.source before RefreshTaskSteps could check it
+- **Hidden character shared AH**: Hidden/ignored characters no longer cause other characters on the same realm to show "Shared AH" status
+- **TSM/Auctionator/Realm filter checkboxes**: Checking a filter checkbox now immediately refreshes the UI to show the filter content (was requiring a page navigation first)
+- **Realm filter "create char" tasks**: "Only show realms with characters" now correctly filters by sell realm — no longer passes deals where only the buy realm has a character
+- **Save returns to track selection**: Saving a generated list now returns to the track selection screen instead of step 1 of the same track
+
+### Task Management
+- **Mouseover action buttons**: Hover over any task row in the To-Do page or Mini View to see complete/skip/delete buttons on the right side
+- **DeleteTask**: New function to remove a task entirely without logging
+
+### Import Performance
+- **Async chunked import**: Large imports now process in batches of 50 with a progress bar — UI no longer freezes during import
+- **Progress bar**: Shows "Importing... X / Y (Z%)" with a green fill bar during processing
+
+### Generator Improvements
+- **Side-by-side buy/sell lists**: Separate mode now renders buy and sell preview lists in left/right columns instead of vertical stacking
+- **Side-by-side priorities**: Buy and Sell priority lists shown horizontally in Step 3
+- **Per-list naming**: Separate mode has individual name inputs for buy and sell lists above each column
+- **Sell list includes planned buys**: Cross-realm flips not yet purchased now generate both a buy task and a deferred sell task
+- **Removed import button**: Superfluous Import button on Generator cross-realm Step 1 removed — use Import tab instead
+
 ## v0.7.0-alpha.1
 
 ### Generator Wizard (#84)

@@ -522,6 +522,16 @@ function ScrollTableMixin:Render()
             row.cells[j]:SetText(value or "")
         end
 
+        -- Action buttons setup (before OnEnter/OnLeave so closures capture state)
+        local hasActions = self._rowActionsEnabled and rowData._taskIndex
+        if hasActions then
+            UI.SetupTaskActionBtns(row)
+            UI.WireTaskActionBtns(row, rowData._taskIndex, self._actionRefreshFn)
+            UI.HideTaskActionBtns(row)
+        elseif row._taskActionBtns then
+            UI.HideTaskActionBtns(row)
+        end
+
         -- Custom row color tint (or reset to default alternating)
         if rowData._rowColor then
             local c = rowData._rowColor
@@ -530,10 +540,22 @@ function ScrollTableMixin:Render()
             row:SetScript("OnEnter", function(self)
                 self.bg:SetColorTexture(c[1], c[2], c[3], baseAlpha + 0.08)
                 if row._onEnter then row._onEnter(row) end
+                if hasActions then UI.ShowTaskActionBtns(self) end
             end)
             row:SetScript("OnLeave", function(self)
-                self.bg:SetColorTexture(c[1], c[2], c[3], baseAlpha)
-                GameTooltip:Hide()
+                if hasActions then
+                    self._actionBtnHovered = false
+                    C_Timer.After(0.1, function()
+                        if not self._actionBtnHovered and not self:IsMouseOver() then
+                            self.bg:SetColorTexture(c[1], c[2], c[3], baseAlpha)
+                            GameTooltip:Hide()
+                            UI.HideTaskActionBtns(self)
+                        end
+                    end)
+                else
+                    self.bg:SetColorTexture(c[1], c[2], c[3], baseAlpha)
+                    GameTooltip:Hide()
+                end
             end)
         else
             local defaultAlpha = i % 2 == 0 and 0.03 or 0
@@ -541,10 +563,22 @@ function ScrollTableMixin:Render()
             row:SetScript("OnEnter", function(self)
                 self.bg:SetColorTexture(1, 1, 1, 0.08)
                 if row._onEnter then row._onEnter(row) end
+                if hasActions then UI.ShowTaskActionBtns(self) end
             end)
             row:SetScript("OnLeave", function(self)
-                self.bg:SetColorTexture(1, 1, 1, defaultAlpha)
-                GameTooltip:Hide()
+                if hasActions then
+                    self._actionBtnHovered = false
+                    C_Timer.After(0.1, function()
+                        if not self._actionBtnHovered and not self:IsMouseOver() then
+                            self.bg:SetColorTexture(1, 1, 1, defaultAlpha)
+                            GameTooltip:Hide()
+                            UI.HideTaskActionBtns(self)
+                        end
+                    end)
+                else
+                    self.bg:SetColorTexture(1, 1, 1, defaultAlpha)
+                    GameTooltip:Hide()
+                end
             end)
         end
 
@@ -609,6 +643,12 @@ end
 
 function ScrollTableMixin:SetRowClickHandler(fn)
     self.onRowClick = fn
+end
+
+-- Enable mouseover action buttons (complete/skip/delete) on rows that have _taskIndex.
+function ScrollTableMixin:EnableRowActions(refreshFn)
+    self._rowActionsEnabled = true
+    self._actionRefreshFn = refreshFn
 end
 
 function ScrollTableMixin:SetSort(key, asc)

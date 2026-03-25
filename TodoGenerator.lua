@@ -950,6 +950,7 @@ function TodoList:GenerateTodoList(source, allocationOrder, opts)
                     end
                 end
 
+                local dealQty = math.max(deal.quantity or 1, defaultQty)
                 table.insert(preview.items, {
                     itemKey       = deal.itemKey,
                     itemID        = deal.itemID,
@@ -957,7 +958,7 @@ function TodoList:GenerateTodoList(source, allocationOrder, opts)
                     icon          = deal.icon,
                     targetRealm   = deal.targetRealm,
                     expectedPrice = deal.expectedPrice,
-                    quantity      = math.max(deal.quantity or 1, defaultQty),
+                    quantity      = dealQty,
                     assignedChar  = buyAssignment,
                     status        = buyAssignment and "pending" or "unassigned",
                     source        = nil,
@@ -980,6 +981,55 @@ function TodoList:GenerateTodoList(source, allocationOrder, opts)
                         { type = "browse", status = "pending" },
                         { type = "buy",    status = "pending" },
                         { type = "deposit", to = "warbank", status = "pending" },
+                    },
+                    currentStep = 1,
+                })
+
+                -- Also generate the sell-side task (blocked until buy deposits to warbank)
+                local sellAssignment = nil
+                for charKey, charData in pairs(ns.db.characters or {}) do
+                    local charRealm = charKey:match("%-(.+)$")
+                    if charRealm and ns:RealmMatches(deal.targetRealm, charRealm)
+                        and not (type(charData) == "table" and charData.ignored) then
+                        sellAssignment = charKey
+                        break
+                    end
+                end
+
+                table.insert(preview.items, {
+                    itemKey       = deal.itemKey,
+                    itemID        = deal.itemID,
+                    name          = deal.name,
+                    icon          = deal.icon,
+                    targetRealm   = deal.targetRealm,
+                    expectedPrice = deal.expectedPrice,
+                    quantity      = dealQty,
+                    assignedChar  = sellAssignment,
+                    status        = sellAssignment and "pending" or "unassigned",
+                    source        = "unavailable",
+                    quality       = deal.quality,
+                    sellRate      = deal.sellRate,
+                    noCompetition = deal.noCompetition,
+                    category      = deal.category,
+                    attempts      = 0,
+                    importSource  = source,
+                    importKey     = deal._importKey,
+                    -- Cross-realm: sell side (blocked by buy)
+                    action          = "sell",
+                    dealType        = deal.dealType,
+                    buyRealm        = deal.buyRealm,
+                    buyPrice        = deal.buyPrice,
+                    profitAmount    = deal.profitAmount,
+                    profitPct       = deal.profitPct,
+                    saleAvg         = deal.saleAvg,
+                    depositFrom     = buyAssignment,
+                    depositLocation = "warbank",
+                    blockedBy       = buyAssignment,
+                    deferredAt      = time(),
+                    steps = {
+                        { type = "retrieve", from = "warbank", status = "pending" },
+                        { type = "post", status = "pending" },
+                        { type = "collect", status = "pending" },
                     },
                     currentStep = 1,
                 })
