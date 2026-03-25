@@ -419,6 +419,7 @@ local function BuildNextStepsData()
 
     -- Dependency-aware sort: depositors before their receivers, then by gold value
     table.sort(data, function(a, b)
+        if not a or not b then return a ~= nil end
         local aKey = a._charKey
         local bKey = b._charKey
 
