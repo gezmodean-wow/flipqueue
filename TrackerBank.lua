@@ -88,7 +88,9 @@ function Tracker:AutoPullFromBank(onComplete)
         if ok and numSlots then
             for slot = 1, numSlots do
                 local ok2, info = pcall(C_Container.GetContainerItemInfo, bagIndex, slot)
-                if ok2 and info and info.hyperlink and not info.isBound then
+                -- Don't filter by isBound — BtW/WuE items show as bound but
+                -- can move to/from warbank. The game rejects truly invalid moves.
+                if ok2 and info and info.hyperlink then
                     local itemID, bonusIDs, modifiers = ns:ParseItemLink(info.hyperlink)
                     if itemID then
                         local key = ns:MakeItemKey(itemID, bonusIDs, modifiers)
@@ -592,7 +594,9 @@ function Tracker:AutoDepositToWarbank()
         if ok and numSlots then
             for slot = 1, numSlots do
                 local ok2, info = pcall(C_Container.GetContainerItemInfo, bagIndex, slot)
-                if ok2 and info and info.hyperlink and not info.isBound then
+                -- Don't filter by isBound — BtW/WuE items show as bound but
+                -- can move to warbank. The game rejects truly invalid moves.
+                if ok2 and info and info.hyperlink then
                     local itemID, bonusIDs, modifiers = ns:ParseItemLink(info.hyperlink)
                     if itemID then
                         local key = ns:MakeItemKey(itemID, bonusIDs, modifiers)

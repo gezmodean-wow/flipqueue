@@ -471,6 +471,70 @@ function TodoList:RefreshLocations()
         end
     end
 
+    -- Step 5: Cross-character deposit resolution (quantity-aware)
+    -- For tasks without a depositFrom, search ALL characters' stored inventories.
+    -- Track consumed quantities so a character with 2 items doesn't get assigned 3 deposits.
+
+    -- Build available quantity map: charKey -> lowercase name -> available qty
+    -- Also count how many have already been assigned as depositFrom in earlier steps
+    local charAvailable = {} -- charKey -> { lname -> qty }
+    for ck, charData in pairs(ns.db.characters or {}) do
+        if ck ~= charKey and not charData.ignored
+                and charData.inventory and charData.inventory.items then
+            local byName = {}
+            for k, invItem in pairs(charData.inventory.items) do
+                if invItem.name and invItem.name ~= "" then
+                    local totalQty = 0
+                    if invItem.locations then
+                        for _, qty in pairs(invItem.locations) do totalQty = totalQty + qty end
+                    elseif (invItem.quantity or 0) > 0 then
+                        totalQty = invItem.quantity
+                    end
+                    if totalQty > 0 then
+                        local ln = invItem.name:lower()
+                        byName[ln] = (byName[ln] or 0) + totalQty
+                    end
+                end
+            end
+            if next(byName) then
+                charAvailable[ck] = byName
+            end
+        end
+    end
+
+    -- Deduct items already assigned as depositFrom to this character (from Step 4 or prior state)
+    for _, item in ipairs(current.tasks) do
+        if item.status == "pending" and item.depositFrom
+                and charAvailable[item.depositFrom] then
+            local ln = (item.name or ""):lower()
+            if ln ~= "" and charAvailable[item.depositFrom][ln] then
+                charAvailable[item.depositFrom][ln] =
+                    charAvailable[item.depositFrom][ln] - (item.quantity or 1)
+            end
+        end
+    end
+
+    -- Assign deposit tasks from remaining available quantities
+    for _, item in ipairs(current.tasks) do
+        if item.status == "pending" and item.assignedChar
+                and not item.depositFrom and item.source == "unavailable" then
+            local lname = (item.name or ""):lower()
+            if lname ~= "" then
+                local qty = item.quantity or 1
+                for ck, byName in pairs(charAvailable) do
+                    if ck ~= item.assignedChar and (byName[lname] or 0) >= qty then
+                        item.depositFrom = ck
+                        item.blockedBy = ck
+                        item.failReason = "Item not in accessible inventory — may need depositing to warbank"
+                        byName[lname] = byName[lname] - qty
+                        changed = true
+                        break
+                    end
+                end
+            end
+        end
+    end
+
     return changed
 end
 
@@ -573,6 +637,16 @@ function TodoList:MoveTaskToLog(taskIndex, postedPrice, expirySeconds, postedQua
         item.quantity = taskQty - moveQty
     else
         item.status = "posted"
+        -- Advance step past "post" so steps stay in sync with status
+        if item.steps and item.currentStep then
+            for i = item.currentStep, #item.steps do
+                if item.steps[i].type == "post" then
+                    item.steps[i].status = "completed"
+                    item.currentStep = i + 1
+                    break
+                end
+            end
+        end
         -- Remove from imports source
         if item.importSource and item.importKey then
             ns:ImportRemove(item.importSource, item.importKey)
@@ -673,6 +747,76 @@ local function IsItemInAccountInventory(itemKey, itemNumID)
     return false
 end
 
+-- Find which character(s) hold a given item across the account.
+-- Returns charKey of the holder, or nil if not found on any character.
+-- Excludes the assignedChar (they don't hold the item, that's why we're looking).
+-- Excludes ignored characters.
+-- consumed: optional table { "charKey:lname" -> qty } to track allocated quantities.
+-- itemName: item name for quantity tracking (required if consumed is provided).
+-- taskQty: quantity needed (default 1).
+local function FindItemHolder(itemKey, itemNumID, excludeChar, consumed, itemName, taskQty)
+    local petSpecies = ExtractPetSpecies(itemKey)
+    taskQty = taskQty or 1
+
+    -- Helper: check if a character has enough unconsumed quantity of an item
+    local function HasAvailable(charKey, inv)
+        if not inv then return false end
+        local totalQty = 0
+        if inv.locations then
+            for _, qty in pairs(inv.locations) do totalQty = totalQty + qty end
+        elseif (inv.quantity or 0) > 0 then
+            totalQty = inv.quantity
+        end
+        if totalQty <= 0 then return false end
+        -- Check consumed quantities
+        if consumed and itemName then
+            local ckey = charKey .. ":" .. itemName:lower()
+            local used = consumed[ckey] or 0
+            if totalQty - used < taskQty then return false end
+        end
+        return true
+    end
+
+    -- Helper: mark quantity as consumed
+    local function Consume(charKey)
+        if consumed and itemName then
+            local ckey = charKey .. ":" .. itemName:lower()
+            consumed[ckey] = (consumed[ckey] or 0) + taskQty
+        end
+    end
+
+    for charKey, charData in pairs(ns.db.characters or {}) do
+        if charKey ~= excludeChar and not charData.ignored
+            and charData.inventory and charData.inventory.items then
+            -- Exact key
+            if HasAvailable(charKey, charData.inventory.items[itemKey]) then
+                Consume(charKey)
+                return charKey
+            end
+            -- Fallback matching
+            for k, invItem in pairs(charData.inventory.items) do
+                if k ~= itemKey then
+                    local kNumID = tonumber((k:gsub(";.*", "")))
+                    if itemNumID and kNumID == itemNumID then
+                        if HasAvailable(charKey, invItem) then
+                            Consume(charKey)
+                            return charKey
+                        end
+                    end
+                    if petSpecies and ExtractPetSpecies(k) == petSpecies then
+                        if HasAvailable(charKey, invItem) then
+                            Consume(charKey)
+                            return charKey
+                        end
+                    end
+                end
+            end
+        end
+    end
+
+    return nil
+end
+
 -- Find actual storage location of a task's item accessible to the current character.
 -- Returns "bags", "bank", "reagent", "warbank", or "guildbank" if found; nil otherwise.
 local function FindItemSource(itemKey, itemNumID, charKey, inBags)
@@ -744,6 +888,10 @@ function TodoList:RefreshTaskSteps()
 
     local charKey = ns:GetCharKey()
     local changed = false
+
+    -- Shared consumed-quantity map for FindItemHolder across both loops
+    -- Tracks "charKey:lname" -> qty to prevent over-allocating deposits
+    local holderConsumed = {}
 
     -- One-time cleanup: strip "..." from targetRealm fields (FP website truncation)
     if not current._realmsCleaned then
@@ -886,12 +1034,25 @@ function TodoList:RefreshTaskSteps()
                             task.deferredAt = time()
                             changed = true
                         end
-                    elseif not task.deferredAt then
-                        task.deferredAt = time()
-                        changed = true
+                    else
+                        -- Item exists on account but not on this character —
+                        -- find who has it and set blockedBy/depositFrom
+                        local holder = FindItemHolder(itemKey, itemNumID, charKey,
+                            holderConsumed, task.name, task.quantity)
+                        if holder and task.blockedBy ~= holder then
+                            task.blockedBy = holder
+                            task.depositFrom = holder
+                            task.source = "unavailable"
+                            task.failReason = "Item not in accessible inventory — may need depositing to warbank"
+                            changed = true
+                        end
+                        if not task.deferredAt then
+                            task.deferredAt = time()
+                            changed = true
+                        end
                     end
                 else
-                    -- Item found — clear deferral/skip and update source
+                    -- Item found — clear deferral/skip/blockedBy and update source
                     if task.status == "skipped" then
                         -- Un-skip: item reappeared in inventory — re-evaluate
                         task.status = "pending"
@@ -900,6 +1061,11 @@ function TodoList:RefreshTaskSteps()
                     end
                     if task.deferredAt then
                         task.deferredAt = nil
+                        changed = true
+                    end
+                    if task.blockedBy then
+                        task.blockedBy = nil
+                        task.depositFrom = nil
                         changed = true
                     end
                     if task.source == "unavailable" or task.source ~= actualSource then
@@ -926,15 +1092,28 @@ function TodoList:RefreshTaskSteps()
             local actualSource = FindItemSource(itemKey, itemNumID, task.assignedChar, false)
 
             if not actualSource then
-                -- Item not found — defer (don't skip; saved inventory may be stale)
+                -- Item not found for assigned char — check account-wide
                 if not IsItemInAccountInventory(itemKey, itemNumID) then
                     if not task.deferredAt then
                         task.deferredAt = time()
                         changed = true
                     end
-                elseif not task.deferredAt then
-                    task.deferredAt = time()
-                    changed = true
+                else
+                    -- Item exists on account but not on assigned char —
+                    -- find who has it and set blockedBy/depositFrom
+                    local holder = FindItemHolder(itemKey, itemNumID, task.assignedChar,
+                        holderConsumed, task.name, task.quantity)
+                    if holder and task.blockedBy ~= holder then
+                        task.blockedBy = holder
+                        task.depositFrom = holder
+                        task.source = "unavailable"
+                        task.failReason = "Item not in accessible inventory — may need depositing to warbank"
+                        changed = true
+                    end
+                    if not task.deferredAt then
+                        task.deferredAt = time()
+                        changed = true
+                    end
                 end
             else
                 if task.status == "skipped" and task.failReason and not task.failReason:find("TSM") then
@@ -946,10 +1125,50 @@ function TodoList:RefreshTaskSteps()
                     task.deferredAt = nil
                     changed = true
                 end
+                -- Clear blockedBy/depositFrom — item is now accessible
+                if task.blockedBy then
+                    task.blockedBy = nil
+                    task.depositFrom = nil
+                    changed = true
+                end
                 if task.source ~= actualSource then
                     task.source = actualSource
                     changed = true
                 end
+            end
+        end
+    end
+
+    -- Cleanup posted tasks: advance stale steps, clear stale deferral/blocker state.
+    -- Posted tasks are terminal — they should reflect their final state accurately.
+    for _, task in ipairs(current.tasks) do
+        if task.status == "posted" and task.steps and task.currentStep then
+            -- Advance past the "post" step if it's still pending
+            for i = 1, #task.steps do
+                if task.steps[i].type == "post" and task.steps[i].status ~= "completed" then
+                    task.steps[i].status = "completed"
+                    if task.currentStep <= i then
+                        task.currentStep = i + 1
+                    end
+                    changed = true
+                end
+            end
+            -- Also advance "retrieve" if still pending (item was retrieved to post)
+            for i = 1, #task.steps do
+                if task.steps[i].type == "retrieve" and task.steps[i].status ~= "completed" then
+                    task.steps[i].status = "completed"
+                    changed = true
+                end
+            end
+            -- Clear stale deferral/blocker on posted tasks
+            if task.deferredAt then
+                task.deferredAt = nil
+                changed = true
+            end
+            if task.blockedBy then
+                task.blockedBy = nil
+                task.depositFrom = nil
+                changed = true
             end
         end
     end

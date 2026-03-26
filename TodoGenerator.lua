@@ -536,27 +536,46 @@ function TodoList:BuildDisplayGroups(items, sortMode)
 
     -- Pre-compute deferred status: groups where ALL items have been deferred
     -- (checked on login but no inventory found) sort lower
+    -- Also compute depositor status: characters that need to deposit items
+    -- to unblock other characters should sort first (login priority)
+    local blockedBySet = {} -- charKey -> count of tasks they unblock
+    for _, item in ipairs(items) do
+        if item.blockedBy then
+            blockedBySet[item.blockedBy] = (blockedBySet[item.blockedBy] or 0) + 1
+        end
+    end
+
     for _, group in ipairs(groups) do
         local allDeferred = #group.items > 0
+        local hasActiveTask = false
         for _, item in ipairs(group.items) do
             if not item.deferredAt then
                 allDeferred = false
-                break
+                hasActiveTask = true
             end
         end
         group._allDeferred = allDeferred
+        -- A depositor is a character who holds items that other characters need.
+        -- They should log in first to deposit, even if their own tasks are deferred.
+        group._unblocksCount = group.charKey and blockedBySet[group.charKey] or 0
+        group._isDepositor = group._unblocksCount > 0
+        -- A group is "blocked only" if ALL its tasks are deferred and it has no deposit duties
+        group._blockedOnly = allDeferred and not group._isDepositor
     end
 
     -- Sort groups by the chosen mode.
-    -- Tiers: assigned+active > assigned+deferred > unassigned
+    -- Tiers: depositors > assigned+active > assigned+blocked-only > unassigned
     table.sort(groups, function(a, b)
         -- Unassigned always last
         local aAssigned = a.charKey and 1 or 0
         local bAssigned = b.charKey and 1 or 0
         if aAssigned ~= bAssigned then return aAssigned > bAssigned end
 
-        -- Fully deferred groups (no inventory) sort below active groups
-        if a._allDeferred ~= b._allDeferred then return not a._allDeferred end
+        -- Depositors (characters that unblock others) sort first
+        if a._isDepositor ~= b._isDepositor then return a._isDepositor end
+
+        -- Blocked-only groups (all deferred, no deposit duties) sort below active groups
+        if a._blockedOnly ~= b._blockedOnly then return not a._blockedOnly end
 
         if sortMode == "profit" or sortMode == "mostProfitable" then
             return a.totalGold > b.totalGold
