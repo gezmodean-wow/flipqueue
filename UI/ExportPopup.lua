@@ -61,10 +61,12 @@ function UI:ShowExportPopup(text, statusMsg)
         edit:SetMultiLine(true)
         edit:SetAutoFocus(false)
         edit:SetFontObject("ChatFontNormal")
+        edit:SetMaxLetters(0)
         edit:SetWidth(scroll:GetWidth() or 450)
+        edit:EnableMouse(true)
+        edit:SetScript("OnEscapePressed", function() exportPopup:Hide() end)
         scroll:SetScrollChild(edit)
         scroll:SetScript("OnSizeChanged", function(sf, w) edit:SetWidth(w) end)
-        edit:SetScript("OnEscapePressed", function() exportPopup:Hide() end)
         exportPopup._edit = edit
 
         -- Status text
@@ -83,11 +85,155 @@ function UI:ShowExportPopup(text, statusMsg)
         end)
     end
 
-    exportPopup._edit:SetText(text or "")
+    -- Escape pipe characters (WoW treats | as control char; || = literal pipe)
+    local safeText = (text or ""):gsub("|", "||")
+
+    exportPopup._edit:SetText(safeText)
+    exportPopup._edit:SetCursorPosition(0)
     exportPopup._edit:HighlightText()
     exportPopup._edit:SetFocus(true)
     exportPopup._status:SetText(statusMsg and (ns.COLORS.GREEN .. statusMsg .. "|r") or "")
     exportPopup:Show()
+end
+
+-- ==========================================
+-- DEBUG EXPORT (SimpleHTML — no char limit)
+-- ==========================================
+
+local debugPopup
+
+function UI:ShowDebugExport(text, statusMsg)
+    if not debugPopup then
+        debugPopup = CreateFrame("Frame", "FlipQueueDebugPopup", UIParent, "BackdropTemplate")
+        debugPopup:SetSize(700, 500)
+        debugPopup:SetPoint("CENTER")
+        debugPopup:SetMovable(true)
+        debugPopup:EnableMouse(true)
+        debugPopup:RegisterForDrag("LeftButton")
+        debugPopup:SetScript("OnDragStart", debugPopup.StartMoving)
+        debugPopup:SetScript("OnDragStop", debugPopup.StopMovingOrSizing)
+        debugPopup:SetFrameStrata("DIALOG")
+        debugPopup:SetClampedToScreen(true)
+        debugPopup:SetBackdrop({
+            bgFile = "Interface\\Tooltips\\UI-Tooltip-Background",
+            edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
+            edgeSize = 16,
+            insets = {left = 4, right = 4, top = 4, bottom = 4},
+        })
+        debugPopup:SetBackdropColor(0.05, 0.05, 0.08, 0.98)
+        debugPopup:SetBackdropBorderColor(0.3, 0.3, 0.4, 1)
+
+        -- Title bar
+        local bar = CreateFrame("Frame", nil, debugPopup)
+        bar:SetHeight(24)
+        bar:SetPoint("TOPLEFT", debugPopup, "TOPLEFT", 4, -4)
+        bar:SetPoint("TOPRIGHT", debugPopup, "TOPRIGHT", -4, -4)
+        local barBg = bar:CreateTexture(nil, "BACKGROUND")
+        barBg:SetAllPoints()
+        barBg:SetColorTexture(0.12, 0.12, 0.18, 1)
+
+        local title = bar:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+        title:SetPoint("LEFT", bar, "LEFT", 8, 0)
+        title:SetText(ns.COLORS.YELLOW .. "FQ Debug Export" .. ns.COLORS.RESET)
+
+        local closeBtn = CreateFrame("Button", nil, bar)
+        closeBtn:SetSize(18, 18)
+        closeBtn:SetPoint("RIGHT", bar, "RIGHT", -4, 0)
+        closeBtn:SetNormalTexture("Interface\\Buttons\\UI-StopButton")
+        closeBtn:SetHighlightTexture("Interface\\Buttons\\UI-StopButton")
+        closeBtn:GetHighlightTexture():SetAlpha(0.3)
+        closeBtn:SetScript("OnClick", function() debugPopup:Hide() end)
+
+        -- "Save & Reload" button
+        local saveBtn = CreateFrame("Button", nil, bar, "UIPanelButtonTemplate")
+        saveBtn:SetSize(110, 20)
+        saveBtn:SetPoint("RIGHT", closeBtn, "LEFT", -8, 0)
+        saveBtn:SetText("Save & Reload")
+        saveBtn:SetScript("OnClick", function()
+            if ns.db then
+                ns:Print(ns.COLORS.GREEN .. "Saving debug export to disk...|r")
+                C_Timer.After(0.2, ReloadUI)
+            end
+        end)
+        saveBtn:SetScript("OnEnter", function(self)
+            GameTooltip:SetOwner(self, "ANCHOR_TOP")
+            GameTooltip:SetText("Save to WTF/SavedVariables/flipqueue.lua\nand reload UI to flush to disk", 1, 1, 1)
+            GameTooltip:Show()
+        end)
+        saveBtn:SetScript("OnLeave", function() GameTooltip:Hide() end)
+
+        -- Scroll frame
+        local scroll = CreateFrame("ScrollFrame", nil, debugPopup, "UIPanelScrollFrameTemplate")
+        scroll:SetPoint("TOPLEFT", bar, "BOTTOMLEFT", 0, -4)
+        scroll:SetPoint("BOTTOMRIGHT", debugPopup, "BOTTOMRIGHT", -26, 30)
+
+        -- SimpleHTML child
+        local html = CreateFrame("SimpleHTML", nil, scroll)
+        html:SetWidth(scroll:GetWidth() or 650)
+        html:SetFontObject("p", "GameFontHighlightSmall")
+        html:SetHyperlinkFormat("p", "")
+        scroll:SetScrollChild(html)
+        scroll:SetScript("OnSizeChanged", function(sf, w) html:SetWidth(w) end)
+
+        -- Mouse wheel scrolling
+        scroll:EnableMouseWheel(true)
+        scroll:SetScript("OnMouseWheel", function(self, delta)
+            local current = self:GetVerticalScroll()
+            local maxScroll = self:GetVerticalScrollRange()
+            local step = 40
+            local newScroll = math.max(0, math.min(current - (delta * step), maxScroll))
+            self:SetVerticalScroll(newScroll)
+        end)
+
+        debugPopup._html = html
+        debugPopup._scroll = scroll
+
+        -- Status text
+        local status = debugPopup:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+        status:SetPoint("LEFT", debugPopup, "BOTTOMLEFT", 8, 17)
+        status:SetTextColor(0.5, 0.5, 0.5)
+        debugPopup._status = status
+
+        debugPopup:SetScript("OnKeyDown", function(self, key)
+            if key == "ESCAPE" then
+                self:Hide()
+                self:SetPropagateKeyboardInput(false)
+            else
+                self:SetPropagateKeyboardInput(true)
+            end
+        end)
+    end
+
+    -- Convert to HTML — replace pipes with semicolons to avoid WoW escape parsing
+    local safeText = (text or "")
+        :gsub("|", ";")
+        :gsub("&", "&amp;")
+        :gsub("<", "&lt;")
+        :gsub(">", "&gt;")
+        :gsub("\n", "<br/>")
+
+    -- Build HTML in chunks to avoid massive single string
+    local htmlStr = "<html><body><p>" .. safeText .. "</p></body></html>"
+
+    ns:Print("ShowDebugExport: htmlLen=" .. #htmlStr)
+    local ok, err = pcall(debugPopup._html.SetText, debugPopup._html, htmlStr)
+    if not ok then
+        ns:Print(ns.COLORS.RED .. "SimpleHTML error: " .. tostring(err) .. "|r")
+        debugPopup._html:SetText("<html><body><p>Error rendering (" .. #htmlStr .. " chars). Use Save &amp; Reload button.</p></body></html>")
+    else
+        ns:Print("SimpleHTML SetText OK")
+    end
+    debugPopup._status:SetText(statusMsg or "")
+    debugPopup:Show()
+
+    -- Update dimensions after show — SimpleHTML needs explicit height
+    C_Timer.After(0.1, function()
+        local w = debugPopup._scroll:GetWidth()
+        if w and w > 10 then debugPopup._html:SetWidth(w) end
+        -- SimpleHTML doesn't auto-size — estimate height from line count
+        local lineCount = select(2, (text or ""):gsub("\n", "\n")) + 1
+        debugPopup._html:SetHeight(lineCount * 14 + 20)
+    end)
 end
 
 -- ==========================================

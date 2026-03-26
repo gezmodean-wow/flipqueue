@@ -127,32 +127,37 @@ SlashCmdList["FLIPQUEUE"] = function(msg)
     elseif msg == "state" or msg == "diag" then
         if ns.db then
             local lines = {}
-            local function L(s) table.insert(lines, s) end
+            local function L(s) table.insert(lines, s or "?") end
+            local function V(v) if v == nil then return "-" elseif type(v) == "boolean" then return v and "1" or "0" elseif type(v) == "table" then return "{tbl}" else return tostring(v) end end
 
-            L("=== FlipQueue State ===")
-            L("schema=" .. (ns.db.schemaVersion or "?") .. " time=" .. date("%Y-%m-%d %H:%M") .. " char=" .. ns:GetCharKey())
+            local buildOk, buildErr = pcall(function()
 
-            -- Settings (key ones)
+            L("FQ|" .. (ns.db.schemaVersion or "?") .. "|" .. date("%Y-%m-%d %H:%M:%S") .. "|" .. ns:GetCharKey())
+
+            -- Settings (all relevant)
             local s = ns.db.settings or {}
-            L("-- Settings")
-            L("autoPull=" .. tostring(s.autoPullBank) .. " autoDeposit=" .. tostring(s.autoDepositWarbank)
-                .. " autoGold=" .. tostring(s.autoWithdrawGold) .. " autoScan=" .. tostring(s.autoScan))
-            L("sellQtyMode=" .. tostring(s.sellQtyMode or "default") .. " defaultSellQty=" .. tostring(s.defaultSellQty or 1)
-                .. " pullBatch=" .. tostring(s.pullBatchSize or 5))
-            L("tsmEnabled=" .. tostring(s.tsmEnabled) .. " tsmProfile=" .. tostring(s.tsmProfile or ""))
+            L("S|scan=" .. V(s.autoScan) .. "|pull=" .. V(s.autoPullBank) .. "|dep=" .. V(s.autoDepositWarbank)
+                .. "|gold=" .. V(s.autoWithdrawGold) .. "|maxG=" .. V(s.maxWithdrawGold)
+                .. "|batch=" .. V(s.pullBatchSize) .. "|sellQty=" .. V(s.sellQtyMode) .. "/" .. V(s.defaultSellQty)
+                .. "|tsm=" .. V(s.tsmEnabled) .. "|prof=" .. V(s.tsmProfile)
+                .. "|tsmSkip=" .. V(s.tsmAutoSkipRejected) .. "|tsmPrice=" .. V(s.tsmPriceSource)
+                .. "|tsmUpdate=" .. V(s.tsmAutoUpdatePrice) .. "|tsmAge=" .. V(s.tsmPriceMaxAge)
+                .. "|mini=" .. V(s.showMini) .. "|debug=" .. V(s.debugMessages)
+                .. "|autoGen=" .. V(s.importAutoGenerate) .. "|autoImp=" .. V(s.importAutoImport)
+                .. "|sort=" .. V(s.genSortMode) .. "|filter=" .. V(s.genFilterMode))
 
             -- Characters
-            L("-- Characters (" .. (function() local n=0; for _ in pairs(ns.db.characters or {}) do n=n+1 end; return n end)() .. ")")
             local charKeys = {}
             for ck in pairs(ns.db.characters or {}) do table.insert(charKeys, ck) end
             table.sort(charKeys)
             for _, ck in ipairs(charKeys) do
                 local c = ns.db.characters[ck]
-                local itemCount = 0
+                local itemCount, totalQty = 0, 0
                 local locCounts = {}
                 if c.inventory and c.inventory.items then
                     for _, item in pairs(c.inventory.items) do
                         itemCount = itemCount + 1
+                        totalQty = totalQty + (item.quantity or 0)
                         if item.locations then
                             for loc, qty in pairs(item.locations) do
                                 locCounts[loc] = (locCounts[loc] or 0) + qty
@@ -160,137 +165,128 @@ SlashCmdList["FLIPQUEUE"] = function(msg)
                         end
                     end
                 end
-                local locParts = {}
-                for loc, qty in pairs(locCounts) do table.insert(locParts, loc .. "=" .. qty) end
-                table.sort(locParts)
-                L(ck .. " class=" .. tostring(c.class) .. " lvl=" .. tostring(c.level)
-                    .. " gold=" .. ns:FormatGold(c.gold or 0)
-                    .. " guild=" .. tostring(c.guild or "none")
-                    .. " ignored=" .. tostring(c.ignored or false)
-                    .. " login=" .. (c.lastLogin and date("%m/%d %H:%M", c.lastLogin) or "?")
-                    .. " items=" .. itemCount .. " {" .. table.concat(locParts, ",") .. "}")
+                local lp = {}
+                for loc, qty in pairs(locCounts) do table.insert(lp, loc .. ":" .. qty) end
+                table.sort(lp)
+                local scanAge = c.inventory and c.inventory.lastScan and (time() - c.inventory.lastScan) or -1
+                L("C|" .. ck .. "|" .. V(c.class) .. "|" .. V(c.level) .. "|g=" .. math.floor((c.gold or 0) / 10000)
+                    .. "|ign=" .. V(c.ignored) .. "|login=" .. (c.lastLogin and date("%m/%d %H:%M", c.lastLogin) or "-")
+                    .. "|items=" .. itemCount .. "/" .. totalQty .. "|scan=" .. (scanAge >= 0 and scanAge .. "s" or "-")
+                    .. "|" .. table.concat(lp, ","))
             end
 
             -- Warbank
-            local wbCount = 0
-            local wbQty = 0
+            local wbItems = {}
             if ns.db.warbank and ns.db.warbank.items then
-                for _, item in pairs(ns.db.warbank.items) do
-                    wbCount = wbCount + 1
-                    wbQty = wbQty + (item.quantity or 0)
+                for key, item in pairs(ns.db.warbank.items) do
+                    if item.quantity and item.quantity > 0 then
+                        table.insert(wbItems, (item.name or key) .. "x" .. item.quantity)
+                    end
                 end
             end
-            L("-- Warbank: " .. wbCount .. " unique, " .. wbQty .. " total qty")
+            table.sort(wbItems)
+            local wbScanAge = ns.db.warbank and ns.db.warbank.lastScan and (time() - ns.db.warbank.lastScan) or -1
+            L("WB|" .. #wbItems .. " items|scan=" .. (wbScanAge >= 0 and wbScanAge .. "s" or "-"))
+            if #wbItems > 0 then
+                L("WBI|" .. table.concat(wbItems, "|"))
+            end
 
-            -- Imports
-            L("-- Imports")
+            -- Imports (summary by source+realm)
             for src, srcMap in pairs(ns.db.imports or {}) do
-                local count = 0
                 local realms = {}
                 for _, deal in pairs(srcMap) do
-                    count = count + 1
                     local r = deal.targetRealm or "?"
                     realms[r] = (realms[r] or 0) + 1
                 end
-                L(src .. ": " .. count .. " deals")
-                local realmList = {}
-                for r, n in pairs(realms) do table.insert(realmList, r .. "(" .. n .. ")") end
-                table.sort(realmList)
-                for _, rs in ipairs(realmList) do L("  " .. rs) end
+                local rp = {}
+                for r, n in pairs(realms) do table.insert(rp, r .. ":" .. n) end
+                table.sort(rp)
+                L("I|" .. src .. "|" .. table.concat(rp, "|"))
             end
 
-            -- Todo Lists
-            L("-- TodoLists")
+            -- Todo Lists — full task dump
             local active = ns.db.todoLists and ns.db.todoLists.active
             if active and active.tasks then
-                L("active: \"" .. (active.name or "?") .. "\" tasks=" .. #active.tasks)
-                local statusCounts = {}
-                local charCounts = {}
-                local deferredCount = 0
-                for _, task in ipairs(active.tasks) do
-                    local st = task.status or "pending"
-                    statusCounts[st] = (statusCounts[st] or 0) + 1
-                    if task.assignedChar then
-                        if not charCounts[task.assignedChar] then
-                            charCounts[task.assignedChar] = { total = 0, deferred = 0, statuses = {} }
+                L("TD|\"" .. (active.name or "?") .. "\"|" .. #active.tasks .. " tasks")
+                for i, t in ipairs(active.tasks) do
+                    local stepStr = "-"
+                    if t.steps and t.currentStep then
+                        local parts = {}
+                        for si, st in ipairs(t.steps) do
+                            local marker = si == t.currentStep and ">" or ""
+                            table.insert(parts, marker .. st.type .. ":" .. (st.status or "?"))
                         end
-                        local cc = charCounts[task.assignedChar]
-                        cc.total = cc.total + 1
-                        cc.statuses[st] = (cc.statuses[st] or 0) + 1
-                        if task.deferredAt then
-                            cc.deferred = cc.deferred + 1
-                            deferredCount = deferredCount + 1
-                        end
+                        stepStr = table.concat(parts, ",")
                     end
-                end
-                local stParts = {}
-                for st, n in pairs(statusCounts) do table.insert(stParts, st .. "=" .. n) end
-                table.sort(stParts)
-                L("  statuses: " .. table.concat(stParts, " "))
-                L("  deferred: " .. deferredCount)
-
-                -- Per-character task breakdown
-                local charList = {}
-                for ck in pairs(charCounts) do table.insert(charList, ck) end
-                table.sort(charList)
-                for _, ck in ipairs(charList) do
-                    local cc = charCounts[ck]
-                    local csParts = {}
-                    for st, n in pairs(cc.statuses) do table.insert(csParts, st .. "=" .. n) end
-                    table.sort(csParts)
-                    L("  " .. ck .. ": " .. cc.total .. " tasks (" .. table.concat(csParts, " ")
-                        .. ") deferred=" .. cc.deferred)
-                end
-
-                -- Show individual tasks with issues (deferred, unavailable, blocked)
-                local problemTasks = {}
-                for i, task in ipairs(active.tasks) do
-                    if task.status == "pending" and (task.deferredAt or task.source == "unavailable" or task.blockedBy) then
-                        table.insert(problemTasks, {
-                            idx = i,
-                            name = task.name or "?",
-                            char = task.assignedChar or "unassigned",
-                            source = task.source or "?",
-                            deferred = task.deferredAt and date("%m/%d %H:%M", task.deferredAt) or "no",
-                            blockedBy = task.blockedBy or "",
-                            step = task.currentStep or 0,
-                            stepType = task.steps and task.steps[task.currentStep] and task.steps[task.currentStep].type or "?",
-                        })
-                    end
-                end
-                if #problemTasks > 0 then
-                    L("  -- Problem tasks (" .. #problemTasks .. ")")
-                    for _, pt in ipairs(problemTasks) do
-                        L("  #" .. pt.idx .. " " .. pt.name .. " @" .. pt.char
-                            .. " src=" .. pt.source .. " step=" .. pt.stepType
-                            .. " deferred=" .. pt.deferred
-                            .. (pt.blockedBy ~= "" and (" blocked=" .. pt.blockedBy) or ""))
-                    end
+                    L("T|" .. i .. "|" .. (t.status or "?")
+                        .. "|" .. (t.name or "?")
+                        .. "|k=" .. (t.itemKey or "-")
+                        .. "|q=" .. V(t.quantity)
+                        .. "|char=" .. (t.assignedChar or "-")
+                        .. "|realm=" .. (t.targetRealm or "-")
+                        .. "|src=" .. (t.source or "-")
+                        .. "|act=" .. (t.action or "sell")
+                        .. "|dep=" .. (t.depositFrom or "-")
+                        .. "|def=" .. (t.deferredAt and date("%H:%M", t.deferredAt) or "-")
+                        .. "|blk=" .. (t.blockedBy or "-")
+                        .. "|steps=" .. stepStr
+                        .. (t.failReason and ("|fail=" .. t.failReason) or "")
+                        .. (t.tsmRejectedFrom and ("|tsmRej=" .. t.tsmRejectedFrom) or ""))
                 end
             else
-                L("active: none")
+                L("TD|none")
             end
             local upcoming = ns.db.todoLists and ns.db.todoLists.upcoming or {}
-            L("upcoming: " .. #upcoming .. " list(s)")
-
-            -- Log summary
-            local logCounts = {}
-            for _, entry in ipairs(ns.db.log or {}) do
-                local st = entry.auctionStatus or "?"
-                logCounts[st] = (logCounts[st] or 0) + 1
+            for qi, qList in ipairs(upcoming) do
+                local qCount = qList.tasks and #qList.tasks or 0
+                L("TQ|" .. qi .. "|\"" .. (qList.name or "?") .. "\"|" .. qCount .. " tasks")
             end
-            local logParts = {}
-            for st, n in pairs(logCounts) do table.insert(logParts, st .. "=" .. n) end
-            table.sort(logParts)
-            L("-- Log: " .. #(ns.db.log or {}) .. " entries (" .. table.concat(logParts, " ") .. ")")
+
+            -- Log (last 50 entries, compressed)
+            local log = ns.db.log or {}
+            local logStart = math.max(1, #log - 49)
+            L("LOG|" .. #log .. " total|showing " .. (#log - logStart + 1))
+            for i = logStart, #log do
+                local e = log[i]
+                L("L|" .. (e.auctionStatus or "?")
+                    .. "|" .. (e.name or "?")
+                    .. "|k=" .. (e.itemKey or "-")
+                    .. "|char=" .. (e.charKey or "-")
+                    .. "|realm=" .. (e.targetRealm or "-")
+                    .. "|price=" .. (e.postedPrice or e.expectedPrice or "-")
+                    .. "|posted=" .. (e.postedAt and date("%m/%d %H:%M", e.postedAt) or "-")
+                    .. "|exp=" .. (e.expiresAt and date("%m/%d %H:%M", e.expiresAt) or "-")
+                    .. "|sold=" .. (e.soldAt and date("%m/%d %H:%M", e.soldAt) or "-")
+                    .. "|soldG=" .. (e.soldPrice and ns:FormatGold(e.soldPrice) or "-")
+                    .. "|col=" .. (e.collectedAt and date("%m/%d %H:%M", e.collectedAt) or "-")
+                    .. "|qty=" .. V(e.postedQuantity)
+                    .. (e.failReason and ("|fail=" .. e.failReason) or "")
+                    .. (e.saleOutcome and ("|out=" .. e.saleOutcome) or ""))
+            end
 
             -- DNT
             local dntCount = 0
             for _ in pairs(ns.db.doNotTrack or {}) do dntCount = dntCount + 1 end
-            L("-- DoNotTrack: " .. dntCount .. " items")
+            L("DNT|" .. dntCount)
+
+            -- Runtime state
+            local tr = ns.Tracker or {}
+            L("RT|pullIP=" .. V(tr._pullInProgress) .. "|depIP=" .. V(tr._depositInProgress)
+                .. "|cancels=" .. V(tr._pendingCancels) .. "|ahOpen=" .. V(tr._isAHOpen))
+
+            end) -- pcall
+
+            if not buildOk then
+                table.insert(lines, "ERROR|" .. tostring(buildErr))
+            end
 
             local output = table.concat(lines, "\n")
-            UI:ShowExportPopup(output, "Ctrl+A, Ctrl+C to copy — paste to Claude for diagnosis")
+
+            -- Save full export to SavedVariables as backup
+            ns.db._debugExport = output
+            ns.db._debugExportAt = date("%Y-%m-%d %H:%M:%S")
+
+            UI:ShowExportPopup(output, #lines .. " lines, " .. #output .. " chars — Ctrl+A, Ctrl+C to copy")
         end
 
     elseif msg == "debug" then

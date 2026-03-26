@@ -263,11 +263,10 @@ function UI:RefreshMini()
             local isBuyTask = task.item.action == "buy"
             local realmToMatch = isBuyTask and task.item.buyRealm or task.item.targetRealm
             if ns:RealmMatches(realmToMatch or "", myRealm) then
-                -- Skip deferred tasks (item not available to this character)
-                local isDeferred = task.item.deferredAt
-                    or (task.item.depositFrom and task.item.depositFrom ~= charKey)
-                if not isBuyTask and isDeferred then
-                    -- skip — don't show deposit tasks for items we don't have
+                -- Skip tasks where another character needs to deposit first
+                local needsOtherDeposit = task.item.depositFrom and task.item.depositFrom ~= charKey
+                if not isBuyTask and needsOtherDeposit then
+                    -- skip — item is on another character, not actionable here
                 else
 
                 local itemNumID = tonumber(task.item.itemID) or tonumber(task.item.itemKey and task.item.itemKey:match("^(%d+)"))
@@ -290,6 +289,8 @@ function UI:RefreshMini()
                     _taskIdx = task.taskIndex,
                     _isTodo  = true,
                     _isBuy   = isBuyTask,
+                    _deferred = task.item.deferredAt and true or false,
+                    _depositFrom = task.item.depositFrom,
                 })
                 end -- else (not deferred)
             end
@@ -297,6 +298,7 @@ function UI:RefreshMini()
     end
 
     local rowIndex = 0
+    local personalRowEnd = 0  -- tracks end of current character's rows (collapse preserves these)
 
     -- Count buy vs post tasks (used for title and Auctionator button)
     local buyCount, postCount = 0, 0
@@ -543,20 +545,34 @@ function UI:RefreshMini()
                 priceStr = ns.COLORS.GREEN .. " " .. task.price .. ns.COLORS.RESET
             end
 
-            -- Status icon using WoW's built-in ReadyCheck textures
-            local statusIcon
+            -- Status icon and suffix tag
+            local statusIcon, statusTag
             if task._isBuy then
                 statusIcon = "|TInterface\\RaidFrame\\ReadyCheck-Waiting:0|t "
+                statusTag = ""
             elseif task.inBags then
                 statusIcon = "|TInterface\\RaidFrame\\ReadyCheck-Ready:0|t "
-            elseif task.source == "warbank" or task.source == "bank" then
+                statusTag = ""
+            elseif task.source == "warbank" then
                 statusIcon = "|TInterface\\RaidFrame\\ReadyCheck-Waiting:0|t "
+                statusTag = ns.COLORS.YELLOW .. " [wb]" .. ns.COLORS.RESET
+            elseif task.source == "bank" then
+                statusIcon = "|TInterface\\RaidFrame\\ReadyCheck-Waiting:0|t "
+                statusTag = ns.COLORS.BLUE .. " [bank]" .. ns.COLORS.RESET
+            elseif task._depositFrom then
+                local depName = task._depositFrom:match("^(.-)%-") or task._depositFrom
+                statusIcon = "|TInterface\\RaidFrame\\ReadyCheck-NotReady:0|t "
+                statusTag = ns.COLORS.CYAN .. " [via " .. depName .. "]" .. ns.COLORS.RESET
+            elseif task._deferred then
+                statusIcon = "|TInterface\\RaidFrame\\ReadyCheck-NotReady:0|t "
+                statusTag = ns.COLORS.RED .. " [deferred]" .. ns.COLORS.RESET
             else
                 statusIcon = "|TInterface\\RaidFrame\\ReadyCheck-NotReady:0|t "
+                statusTag = ns.COLORS.RED .. " [not found]" .. ns.COLORS.RESET
             end
 
             local namePrefix = task._isBuy and (ns.COLORS.CYAN .. "[BUY] " .. ns.COLORS.RESET) or ""
-            row.text:SetText(statusIcon .. namePrefix .. ns.COLORS.WHITE .. task.name .. ns.COLORS.RESET .. priceStr)
+            row.text:SetText(statusIcon .. namePrefix .. ns.COLORS.WHITE .. task.name .. ns.COLORS.RESET .. statusTag .. priceStr)
 
             -- Action buttons (complete/skip/delete) on mouseover
             local capturedTask = task
@@ -668,6 +684,9 @@ function UI:RefreshMini()
         end
     end
 
+    -- Mark end of personal rows (collapse preserves everything above this point)
+    personalRowEnd = rowIndex
+
     -- Next Steps section (always show — login tasks, expiring auctions, etc.)
     local nextData = UI.BuildNextStepsData and UI.BuildNextStepsData() or {}
     local MAX_MINI_STEPS = 3
@@ -766,13 +785,30 @@ function UI:RefreshMini()
     desiredW = math.min(desiredW, MINI_WIDTH_MAX)
     mini:SetWidth(desiredW)
 
-    -- Collapse: only show first N rows
+    -- Collapse: hide rows beyond personal tasks, show "+N more" hint
+    -- personalRowEnd marks the last row that belongs to the current character's tasks
     local visibleRows = rowIndex
-    if miniCollapsed and rowIndex > COLLAPSED_ROWS then
-        for i = COLLAPSED_ROWS + 1, rowIndex do
+    if miniCollapsed and rowIndex > personalRowEnd then
+        for i = personalRowEnd + 1, rowIndex do
             if miniRows[i] then miniRows[i]:Hide() end
         end
-        visibleRows = COLLAPSED_ROWS
+        visibleRows = personalRowEnd
+        -- Show "+N more" hint
+        local hiddenCount = rowIndex - personalRowEnd
+        if hiddenCount > 0 then
+            visibleRows = visibleRows + 1
+            local hintRow = GetOrCreateMiniRow(visibleRows)
+            hintRow.icon:SetTexture(nil)
+            hintRow.text:SetText(ns.COLORS.GRAY .. "+" .. hiddenCount .. " more... (click + to expand)" .. ns.COLORS.RESET)
+            hintRow.tooltipItemID = nil
+            hintRow.tooltipItemName = nil
+            hintRow.tooltipExtra = nil
+            hintRow:SetScript("OnMouseDown", nil)
+            hintRow:SetScript("OnEnter", nil)
+            hintRow:SetScript("OnLeave", nil)
+            if hintRow._taskActionBtns then UI.HideTaskActionBtns(hintRow) end
+            hintRow:Show()
+        end
     end
 
     -- Update collapse button icon

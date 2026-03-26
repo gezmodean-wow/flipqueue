@@ -302,9 +302,11 @@ function TodoList:RefreshLocations()
 
     local charKey = ns:GetCharKey()
 
-    -- Live scan current character's bags for item keys and IDs
+    -- Live scan current character's bags for item keys, IDs, pet species, and names
     local bagsItemKeys = {} -- itemKey -> qty
     local bagsItemIDs = {}  -- numericID -> qty
+    local bagsPetSpecies = {} -- speciesID string -> qty
+    local bagsItemNames = {} -- lowercase name -> qty
     pcall(function()
         for _, bagIdx in ipairs(ns.INVENTORY_BAGS) do
             local numSlots = C_Container.GetContainerNumSlots(bagIdx)
@@ -319,6 +321,14 @@ function TodoList:RefreshLocations()
                         if numID then
                             bagsItemIDs[numID] = (bagsItemIDs[numID] or 0) + (info.stackCount or 1)
                         end
+                        local petSpec = itemID:match("^pet:(%d+)") or itemID:match("^pet_(%d+)")
+                        if petSpec then
+                            bagsPetSpecies[petSpec] = (bagsPetSpecies[petSpec] or 0) + 1
+                        end
+                    end
+                    local itemName = info.hyperlink:match("|h%[(.-)%]|h")
+                    if itemName and itemName ~= "" then
+                        bagsItemNames[itemName:lower()] = (bagsItemNames[itemName:lower()] or 0) + (info.stackCount or 1)
                     end
                 end
             end
@@ -326,8 +336,11 @@ function TodoList:RefreshLocations()
     end)
 
     -- Build warbank lookup (for deposit task resolution)
+    -- Multiple indexes: exact key, numeric ID, pet species, lowercase name
     local warbankItemKeys = {}
     local warbankItemIDs = {}
+    local warbankPetSpecies = {}
+    local warbankItemNames = {}
     if ns.db and ns.db.warbank and ns.db.warbank.items then
         for key, wbItem in pairs(ns.db.warbank.items) do
             if wbItem.quantity and wbItem.quantity > 0 then
@@ -336,17 +349,46 @@ function TodoList:RefreshLocations()
                 if numID then
                     warbankItemIDs[numID] = (warbankItemIDs[numID] or 0) + wbItem.quantity
                 end
+                -- Pet species: "pet:267;..." or "pet_267;..."
+                local petSpec = key:match("^pet:(%d+)") or key:match("^pet_(%d+)")
+                if petSpec then
+                    warbankPetSpecies[petSpec] = (warbankPetSpecies[petSpec] or 0) + wbItem.quantity
+                end
+                -- Name index
+                if wbItem.name and wbItem.name ~= "" then
+                    local lname = wbItem.name:lower()
+                    warbankItemNames[lname] = (warbankItemNames[lname] or 0) + wbItem.quantity
+                end
             end
         end
+    end
+
+    -- Helper: check if a task item is in a lookup set (bags or warbank)
+    local function IsItemInLookup(item, keyMap, idMap, petMap, nameMap)
+        local itemKey = item.itemKey or ""
+        local itemNumID = tonumber(item.itemID) or tonumber(itemKey:match("^(%d+)"))
+        -- Exact key
+        if keyMap[itemKey] and keyMap[itemKey] > 0 then return true end
+        -- Numeric ID
+        if itemNumID and idMap[itemNumID] and idMap[itemNumID] > 0 then return true end
+        -- Pet species
+        if petMap then
+            local petSpec = itemKey:match("^pet:(%d+)") or itemKey:match("^pet_(%d+)")
+                or (item.itemID and (tostring(item.itemID):match("^pet:(%d+)") or tostring(item.itemID):match("^pet_(%d+)")))
+            if petSpec and petMap[petSpec] and petMap[petSpec] > 0 then return true end
+        end
+        -- Name fallback
+        if nameMap and item.name and item.name ~= "" then
+            local lname = item.name:lower()
+            if nameMap[lname] and nameMap[lname] > 0 then return true end
+        end
+        return false
     end
 
     local changed = false
     for _, item in ipairs(current.tasks) do
         if item.status == "pending" and item.assignedChar == charKey then
-            local itemKey = item.itemKey or ""
-            local itemNumID = tonumber(item.itemID) or tonumber(itemKey:match("^(%d+)"))
-            local inBags = (bagsItemKeys[itemKey] and bagsItemKeys[itemKey] > 0)
-                or (itemNumID and bagsItemIDs[itemNumID] and bagsItemIDs[itemNumID] > 0)
+            local inBags = IsItemInLookup(item, bagsItemKeys, bagsItemIDs, bagsPetSpecies, bagsItemNames)
 
             if inBags and item.source ~= "bags" then
                 item.source = "bags"
@@ -362,12 +404,8 @@ function TodoList:RefreshLocations()
         -- Update deposit tasks: when this char is the depositor and item is now in warbank
         if item.status == "pending" and item.depositFrom == charKey
                 and item.source == "unavailable" then
-            local itemKey = item.itemKey or ""
-            local itemNumID = tonumber(item.itemID) or tonumber(itemKey:match("^(%d+)"))
-            local inWarbank = (warbankItemKeys[itemKey] and warbankItemKeys[itemKey] > 0)
-                or (itemNumID and warbankItemIDs[itemNumID] and warbankItemIDs[itemNumID] > 0)
-            local inBags = (bagsItemKeys[itemKey] and bagsItemKeys[itemKey] > 0)
-                or (itemNumID and bagsItemIDs[itemNumID] and bagsItemIDs[itemNumID] > 0)
+            local inWarbank = IsItemInLookup(item, warbankItemKeys, warbankItemIDs, warbankPetSpecies, warbankItemNames)
+            local inBags = IsItemInLookup(item, bagsItemKeys, bagsItemIDs, bagsPetSpecies, bagsItemNames)
 
             if inWarbank then
                 item.source = "warbank"
@@ -377,6 +415,58 @@ function TodoList:RefreshLocations()
             elseif inBags then
                 -- Depositor still has it in bags — keep depositFrom but update source
                 item.source = "unavailable"
+            end
+        end
+
+    end
+
+    -- Reconcile deposit tasks: clear all depositFrom pointing to current char first,
+    -- then re-assign based on actual bag surplus. This ensures quantity is respected.
+    -- Step 1: Clear all depositFrom == charKey (will re-assign below if surplus exists)
+    for _, item in ipairs(current.tasks) do
+        if item.status == "pending" and item.depositFrom == charKey
+                and item.assignedChar ~= charKey then
+            item.depositFrom = nil
+            item.source = "unavailable"
+            changed = true
+        end
+    end
+
+    -- Step 2: Count how many of each item the current char needs for their own tasks
+    local ownNeeded = {} -- lowercase name -> qty needed by current char
+    for _, item in ipairs(current.tasks) do
+        if item.status == "pending" and item.assignedChar == charKey then
+            local lname = (item.name or ""):lower()
+            if lname ~= "" then
+                ownNeeded[lname] = (ownNeeded[lname] or 0) + (item.quantity or 1)
+            end
+        end
+    end
+
+    -- Step 3: Build available surplus from bags minus own needs
+    local surplusByName = {}
+    for lname, qty in pairs(bagsItemNames) do
+        local needed = ownNeeded[lname] or 0
+        local surplus = qty - needed
+        if surplus > 0 then
+            surplusByName[lname] = surplus
+        end
+    end
+
+    -- Step 4: Assign deposit tasks from surplus, one per task until exhausted
+    for _, item in ipairs(current.tasks) do
+        if item.status == "pending" and item.assignedChar ~= charKey
+                and item.assignedChar and not item.depositFrom then
+            local lname = (item.name or ""):lower()
+            if lname ~= "" and surplusByName[lname] and surplusByName[lname] > 0 then
+                local qty = item.quantity or 1
+                if surplusByName[lname] >= qty then
+                    item.depositFrom = charKey
+                    item.source = "unavailable"
+                    item.deferredAt = nil
+                    surplusByName[lname] = surplusByName[lname] - qty
+                    changed = true
+                end
             end
         end
     end
