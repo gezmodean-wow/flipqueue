@@ -715,13 +715,14 @@ UI.inventoryTable:SetSort("name", true)
 
 -- Characters table
 UI.charsTable = UI:CreateScrollTable(tableContainer, {
-    {key = "toggle",    label = "",             width = 28,  align = "CENTER", sortable = false},
     {key = "name",      label = "Character",   width = 105, sortable = true},
-    {key = "realm",     label = "Realm",        width = 120, sortable = true},
+    {key = "realm",     label = "Realm",        width = 100, sortable = true},
     {key = "gold",      label = "Gold",         width = 70,  align = "RIGHT", sortable = true},
-    {key = "tasks",     label = "Tasks",        width = 40,  align = "CENTER", sortable = true},
-    {key = "auctions",  label = "Auctions",     width = 100, align = "CENTER", sortable = true},
-    {key = "lastLogin", label = "Last Login",   width = 75,  sortable = true},
+    {key = "tasks",     label = "Tasks",        width = 36,  align = "CENTER", sortable = true},
+    {key = "auctions",  label = "Auctions",     width = 90, align = "CENTER", sortable = true},
+    {key = "pull",      label = "Pull",         width = 30,  align = "CENTER", sortable = false},
+    {key = "dep",       label = "Dep",          width = 30,  align = "CENTER", sortable = false},
+    {key = "depAll",    label = "All",           width = 30,  align = "CENTER", sortable = false},
     {key = "status",    label = "Status",       width = 62,  sortable = true},
 })
 UI.charsTable:SetSort("name", true)
@@ -814,6 +815,8 @@ local function HideAllTables()
     if UI._tsmDetectedLabel then UI._tsmDetectedLabel:Hide() end
     if UI._tsmDetectedScroll then UI._tsmDetectedScroll:Hide() end
     if UI._listSelectorBar then UI._listSelectorBar:Hide() end
+    if UI._charConfigPanel then UI._charConfigPanel:Hide() end
+    if UI._globalDefaultsBar then UI._globalDefaultsBar:Hide() end
 end
 
 local function ShowTable(tbl)

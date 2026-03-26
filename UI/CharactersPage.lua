@@ -1,8 +1,61 @@
 -- UI/CharactersPage.lua
--- Character list: gold, task counts, auction summary, ignore/show toggles
+-- Character list: gold, task counts, auction summary, per-char settings, config panel
 local addonName, ns = ...
 
 local UI = ns.UI
+
+-- ==========================================
+-- 3-STATE SETTING DISPLAY HELPERS
+-- ==========================================
+
+-- Format a 3-state setting value for column display:
+--   nil = gray dash (using global default)
+--   true = green checkmark
+--   false = red X
+local function FormatSettingColumn(rawValue, globalDefault)
+    if rawValue == true then
+        return "|cff00ff00" .. "On" .. "|r"
+    elseif rawValue == false then
+        return "|cffff3333" .. "Off" .. "|r"
+    else
+        -- Using global default — show inherited value in dim color
+        if globalDefault then
+            return "|cff557755" .. "On" .. "|r"
+        else
+            return "|cff775555" .. "Off" .. "|r"
+        end
+    end
+end
+
+-- Format a 3-state setting for the config panel button label:
+--   nil = "Default (On)" or "Default (Off)" in gray
+--   true = "On" in green
+--   false = "Off" in red
+local function FormatSettingLabel(rawValue, globalDefault)
+    if rawValue == true then
+        return "|cff00ff00On|r"
+    elseif rawValue == false then
+        return "|cffff3333Off|r"
+    else
+        local defStr = globalDefault and "On" or "Off"
+        return "|cff888888Default (" .. defStr .. ")|r"
+    end
+end
+
+-- Cycle a 3-state value: nil -> true -> false -> nil
+local function CycleTriState(current)
+    if current == nil then
+        return true
+    elseif current == true then
+        return false
+    else
+        return nil
+    end
+end
+
+-- ==========================================
+-- BUILD CHARACTER DATA
+-- ==========================================
 
 local function BuildCharactersData()
     if not ns.db then return {}, {} end
@@ -83,7 +136,6 @@ local function BuildCharactersData()
         local goldCopper = inv.gold or 0
         local goldStr = ns:FormatGold(goldCopper)
         local lastLoginTime = inv.lastLogin or 0
-        local lastLoginStr = ns:FormatRelativeTime(lastLoginTime)
 
         -- Auction summary
         local auctionInfo = auctionsByChar[charKey]
@@ -133,15 +185,20 @@ local function BuildCharactersData()
             if oKey == charKey then orderPos = oi; break end
         end
 
-        local toggleIcon = isHidden and "|cff666666X|r" or "|cff00ff00O|r"
+        -- Per-character setting raw values for Pull/Dep/All columns
+        local pullRaw = ns:GetCharSettingRaw(charKey, "autoPullBank")
+        local depRaw = ns:GetCharSettingRaw(charKey, "autoDepositWarbank")
+        local depAllRaw = ns:GetCharSettingRaw(charKey, "autoDepositAll")
+
         table.insert(charData, {
-            toggle    = toggleIcon,
             name      = coloredName,
             realm     = realm,
             gold      = goldStr,
             tasks     = isHidden and "-" or tostring(#tasks),
             auctions  = auctionStr ~= "" and auctionStr or "",
-            lastLogin = lastLoginStr,
+            pull      = FormatSettingColumn(pullRaw, ns.db.settings.autoPullBank),
+            dep       = FormatSettingColumn(depRaw, ns.db.settings.autoDepositWarbank),
+            depAll    = FormatSettingColumn(depAllRaw, ns.db.settings.autoDepositAll),
             status    = statusStr,
             _sortName = name:lower(),
             _sortGold = goldCopper,
@@ -153,10 +210,9 @@ local function BuildCharactersData()
             _orderPos = orderPos,
             _tooltipText = charKey,
             _tooltipExtra = string.format(
-                "Gold: %s\n%d queue tasks%s\nLast login: %s\nStatus: %s%s\n\nClick to %s\nShift+Right-click: move up\nCtrl+Right-click: move down",
+                "Gold: %s\n%d queue tasks%s\nStatus: %s%s\n\nClick to configure\nShift+Right-click: move up\nCtrl+Right-click: move down",
                 goldStr, #tasks,
                 auctionInfo and ("\n" .. auctionInfo.active .. " active, " .. auctionInfo.done .. " done auction(s)") or "",
-                lastLoginStr,
                 isHidden and "Hidden" or (charCluster[charKey] and "Shared AH" or "Active"),
                 charCluster[charKey] and ("\nAH Cluster: " .. table.concat(charCluster[charKey].realms, ", ") ..
                     "\nShared with: " .. table.concat(
@@ -166,8 +222,7 @@ local function BuildCharactersData()
                                 table.insert(names, ock:match("^(.-)%-") or ock)
                             end
                             return names
-                        end)(), ", ")) or "",
-                isHidden and "re-enable" or "hide"),
+                        end)(), ", ")) or ""),
         })
     end
 
@@ -189,8 +244,6 @@ local function BuildCharactersData()
         end
 
         -- Merge overlapping realm clusters (multi-pass for transitive overlaps)
-        -- e.g., "Kirin Tor" + "Sentinels" + "Kirin Tor, Steamwheedle Cartel, Sentinels"
-        -- all collapse into one entry regardless of processing order
         local merged = {}
         for _, entry in ipairs(rawNeed) do
             table.insert(merged, { realm = entry.realm, items = entry.items, gold = entry.gold })
@@ -230,27 +283,543 @@ local function BuildCharactersData()
     return charData, needData
 end
 
+-- ==========================================
+-- CONFIG PANEL (right-side detail panel)
+-- ==========================================
+
+local configPanel       -- the Frame itself
+local configWidgets = {}  -- named references to sub-widgets
+
+local TAB_ICON_SIZE = 26
+local TAB_SPACING = 4
+
+local function EnsureConfigPanel(tableContainer)
+    if configPanel then return end
+
+    local PANEL_WIDTH = 210
+
+    configPanel = CreateFrame("Frame", nil, tableContainer, "BackdropTemplate")
+    configPanel:SetWidth(PANEL_WIDTH)
+    configPanel:SetPoint("TOPLEFT", tableContainer, "TOPRIGHT", 2, 0)
+    configPanel:SetPoint("BOTTOMLEFT", tableContainer, "BOTTOMRIGHT", 2, 0)
+    configPanel:SetBackdrop({
+        bgFile   = "Interface\\Tooltips\\UI-Tooltip-Background",
+        edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
+        edgeSize = 12,
+        insets   = {left = 2, right = 2, top = 2, bottom = 2},
+    })
+    configPanel:SetBackdropColor(0.08, 0.08, 0.1, 0.95)
+    configPanel:SetBackdropBorderColor(0.3, 0.3, 0.4, 0.8)
+    configPanel:SetFrameLevel(tableContainer:GetFrameLevel() + 5)
+    configPanel:Hide()
+    UI._charConfigPanel = configPanel
+
+    local L_MARGIN = 8
+    local R_MARGIN = -8
+
+    -- Close button (top-right)
+    local closeBtn = CreateFrame("Button", nil, configPanel)
+    closeBtn:SetSize(16, 16)
+    closeBtn:SetPoint("TOPRIGHT", configPanel, "TOPRIGHT", -4, -4)
+    closeBtn:SetNormalTexture("Interface\\Buttons\\UI-StopButton")
+    closeBtn:SetHighlightTexture("Interface\\Buttons\\UI-StopButton")
+    closeBtn:SetScript("OnClick", function() configPanel:Hide() end)
+    configWidgets.closeBtn = closeBtn
+
+    -- Character name + realm
+    local nameLabel = configPanel:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+    nameLabel:SetPoint("TOPLEFT", configPanel, "TOPLEFT", L_MARGIN, -8)
+    nameLabel:SetPoint("RIGHT", closeBtn, "LEFT", -4, 0)
+    nameLabel:SetJustifyH("LEFT")
+    nameLabel:SetWordWrap(true)
+    configWidgets.nameLabel = nameLabel
+
+    local realmLabel = configPanel:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+    realmLabel:SetPoint("TOPLEFT", nameLabel, "BOTTOMLEFT", 0, -2)
+    realmLabel:SetJustifyH("LEFT")
+    configWidgets.realmLabel = realmLabel
+
+    -- Divider
+    local div1 = configPanel:CreateTexture(nil, "ARTWORK")
+    div1:SetHeight(1)
+    div1:SetPoint("TOPLEFT", realmLabel, "BOTTOMLEFT", 0, -6)
+    div1:SetPoint("RIGHT", configPanel, "RIGHT", R_MARGIN, 0)
+    div1:SetColorTexture(0.35, 0.35, 0.45, 0.6)
+
+    -- Ignore Character checkbox
+    local ignoreRow = CreateFrame("Frame", nil, configPanel)
+    ignoreRow:SetPoint("TOPLEFT", div1, "BOTTOMLEFT", 0, -6)
+    ignoreRow:SetPoint("RIGHT", configPanel, "RIGHT", R_MARGIN, 0)
+    ignoreRow:SetHeight(22)
+
+    local ignoreCB = CreateFrame("CheckButton", nil, ignoreRow, "UICheckButtonTemplate")
+    ignoreCB:SetSize(22, 22)
+    ignoreCB:SetPoint("TOPLEFT", ignoreRow, "TOPLEFT", 0, 0)
+    ignoreCB.text:SetText("Ignore Character")
+    ignoreCB.text:SetFontObject("GameFontHighlightSmall")
+    configWidgets.ignoreCB = ignoreCB
+
+    local ignoreDesc = configPanel:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+    ignoreDesc:SetPoint("TOPLEFT", ignoreRow, "BOTTOMLEFT", 22, -1)
+    ignoreDesc:SetPoint("RIGHT", configPanel, "RIGHT", R_MARGIN, 0)
+    ignoreDesc:SetJustifyH("LEFT")
+    ignoreDesc:SetWordWrap(true)
+    ignoreDesc:SetTextColor(0.5, 0.5, 0.5)
+    ignoreDesc:SetText("Skip for task routing")
+
+    -- Divider
+    local div2 = configPanel:CreateTexture(nil, "ARTWORK")
+    div2:SetHeight(1)
+    div2:SetPoint("TOPLEFT", ignoreDesc, "BOTTOMLEFT", -22, -6)
+    div2:SetPoint("RIGHT", configPanel, "RIGHT", R_MARGIN, 0)
+    div2:SetColorTexture(0.35, 0.35, 0.45, 0.6)
+
+    -- Section label: Automation Overrides
+    local autoLabel = configPanel:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    autoLabel:SetPoint("TOPLEFT", div2, "BOTTOMLEFT", 0, -4)
+    autoLabel:SetTextColor(0.9, 0.8, 0.3)
+    autoLabel:SetText("Automation Overrides")
+
+    -- Helper to create a 3-state toggle row
+    local function Create3StateRow(anchorBelow, labelText, settingKey)
+        local row = CreateFrame("Frame", nil, configPanel)
+        row:SetPoint("TOPLEFT", anchorBelow, "BOTTOMLEFT", 0, -4)
+        row:SetPoint("RIGHT", configPanel, "RIGHT", R_MARGIN, 0)
+        row:SetHeight(20)
+
+        local lbl = row:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+        lbl:SetPoint("LEFT", row, "LEFT", 0, 0)
+        lbl:SetText(labelText)
+
+        local btn = CreateFrame("Button", nil, row, "BackdropTemplate")
+        btn:SetSize(110, 18)
+        btn:SetPoint("RIGHT", row, "RIGHT", 0, 0)
+        btn:SetBackdrop({
+            bgFile   = "Interface\\Tooltips\\UI-Tooltip-Background",
+            edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
+            edgeSize = 8,
+            insets   = {left = 1, right = 1, top = 1, bottom = 1},
+        })
+        btn:SetBackdropColor(0.12, 0.12, 0.15, 1)
+        btn:SetBackdropBorderColor(0.3, 0.3, 0.4, 0.8)
+
+        btn.text = btn:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+        btn.text:SetPoint("CENTER")
+
+        btn._settingKey = settingKey
+        return row, btn
+    end
+
+    -- Auto-Pull
+    local pullRow, pullBtn = Create3StateRow(autoLabel, "Pull:", "autoPullBank")
+    configWidgets.pullRow = pullRow
+    configWidgets.pullBtn = pullBtn
+
+    -- Auto-Deposit
+    local depRow, depBtn = Create3StateRow(pullRow, "Deposit:", "autoDepositWarbank")
+    configWidgets.depRow = depRow
+    configWidgets.depBtn = depBtn
+
+    -- Auto-Deposit All
+    local depAllRow, depAllBtn = Create3StateRow(depRow, "Dep. All:", "autoDepositAll")
+    configWidgets.depAllRow = depAllRow
+    configWidgets.depAllBtn = depAllBtn
+
+    -- Divider
+    local div3 = configPanel:CreateTexture(nil, "ARTWORK")
+    div3:SetHeight(1)
+    div3:SetPoint("TOPLEFT", depAllRow, "BOTTOMLEFT", 0, -6)
+    div3:SetPoint("RIGHT", configPanel, "RIGHT", R_MARGIN, 0)
+    div3:SetColorTexture(0.35, 0.35, 0.45, 0.6)
+
+    -- Bank tab selection: personal bank (6 tabs)
+    local bankLabel = configPanel:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    bankLabel:SetPoint("TOPLEFT", div3, "BOTTOMLEFT", 0, -4)
+    bankLabel:SetTextColor(0.9, 0.8, 0.3)
+    bankLabel:SetText("Bank Tabs")
+    configWidgets.bankLabel = bankLabel
+
+    configWidgets.bankTabBtns = {}
+    for i = 1, 6 do
+        local tabBtn = CreateFrame("CheckButton", nil, configPanel)
+        tabBtn:SetSize(TAB_ICON_SIZE, TAB_ICON_SIZE)
+        tabBtn:SetPoint("TOPLEFT", bankLabel, "BOTTOMLEFT", (i - 1) * (TAB_ICON_SIZE + TAB_SPACING), -4)
+
+        tabBtn.icon = tabBtn:CreateTexture(nil, "ARTWORK")
+        tabBtn.icon:SetSize(TAB_ICON_SIZE - 2, TAB_ICON_SIZE - 2)
+        tabBtn.icon:SetPoint("CENTER")
+        tabBtn.icon:SetTexture("Interface\\Icons\\INV_Misc_Bag_29")
+
+        tabBtn.border = tabBtn:CreateTexture(nil, "OVERLAY")
+        tabBtn.border:SetAllPoints()
+        tabBtn.border:SetColorTexture(0.3, 0.8, 0.3, 0.4)
+        tabBtn.border:Hide()
+
+        tabBtn.uncheckedBorder = tabBtn:CreateTexture(nil, "OVERLAY")
+        tabBtn.uncheckedBorder:SetAllPoints()
+        tabBtn.uncheckedBorder:SetColorTexture(0.5, 0.1, 0.1, 0.4)
+        tabBtn.uncheckedBorder:Hide()
+
+        tabBtn.label = tabBtn:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+        tabBtn.label:SetPoint("TOP", tabBtn, "BOTTOM", 0, -1)
+        tabBtn.label:SetText(tostring(i))
+        tabBtn.label:SetTextColor(0.7, 0.7, 0.7)
+
+        tabBtn.tabIndex = i
+        configWidgets.bankTabBtns[i] = tabBtn
+    end
+
+    -- Divider before warbank
+    local div4 = configPanel:CreateTexture(nil, "ARTWORK")
+    div4:SetHeight(1)
+    -- Position dynamically below bank tabs: bankLabel + 4 + TAB_ICON_SIZE + label height + gap
+    div4:SetPoint("TOPLEFT", bankLabel, "BOTTOMLEFT", 0, -(TAB_ICON_SIZE + 18))
+    div4:SetPoint("RIGHT", configPanel, "RIGHT", R_MARGIN, 0)
+    div4:SetColorTexture(0.35, 0.35, 0.45, 0.6)
+    configWidgets.div4 = div4
+
+    -- Warbank tab selection (5 tabs, global/shared)
+    local wbLabel = configPanel:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    wbLabel:SetPoint("TOPLEFT", div4, "BOTTOMLEFT", 0, -4)
+    wbLabel:SetTextColor(0.9, 0.8, 0.3)
+    wbLabel:SetText("Warbank Tabs (shared)")
+    configWidgets.wbLabel = wbLabel
+
+    configWidgets.warbankTabBtns = {}
+    for i = 1, 5 do
+        local tabBtn = CreateFrame("CheckButton", nil, configPanel)
+        tabBtn:SetSize(TAB_ICON_SIZE, TAB_ICON_SIZE)
+        tabBtn:SetPoint("TOPLEFT", wbLabel, "BOTTOMLEFT", (i - 1) * (TAB_ICON_SIZE + TAB_SPACING), -4)
+
+        tabBtn.icon = tabBtn:CreateTexture(nil, "ARTWORK")
+        tabBtn.icon:SetSize(TAB_ICON_SIZE - 2, TAB_ICON_SIZE - 2)
+        tabBtn.icon:SetPoint("CENTER")
+        tabBtn.icon:SetTexture("Interface\\Icons\\INV_Misc_Bag_29")
+
+        tabBtn.border = tabBtn:CreateTexture(nil, "OVERLAY")
+        tabBtn.border:SetAllPoints()
+        tabBtn.border:SetColorTexture(0.3, 0.8, 0.3, 0.4)
+        tabBtn.border:Hide()
+
+        tabBtn.uncheckedBorder = tabBtn:CreateTexture(nil, "OVERLAY")
+        tabBtn.uncheckedBorder:SetAllPoints()
+        tabBtn.uncheckedBorder:SetColorTexture(0.5, 0.1, 0.1, 0.4)
+        tabBtn.uncheckedBorder:Hide()
+
+        tabBtn.label = tabBtn:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+        tabBtn.label:SetPoint("TOP", tabBtn, "BOTTOM", 0, -1)
+        tabBtn.label:SetText(tostring(i))
+        tabBtn.label:SetTextColor(0.7, 0.7, 0.7)
+
+        tabBtn.tabIndex = i
+        configWidgets.warbankTabBtns[i] = tabBtn
+    end
+end
+
+-- Populate and show the config panel for a given character
+local function ShowConfigPanel(charKey)
+    if not configPanel then return end
+    if not ns.db or not ns.db.characters then return end
+
+    local charData = ns.db.characters[charKey]
+    if not charData then return end
+
+    local CLASS_COLORS = UI._CLASS_COLORS
+    local name = charKey:match("^(.-)%-") or charKey
+    local realm = charKey:match("%-(.+)$") or ""
+    local classColor = CLASS_COLORS[charData.class] or "888888"
+
+    configWidgets.nameLabel:SetText("|cff" .. classColor .. name .. "|r")
+    configWidgets.realmLabel:SetText(realm)
+
+    -- Ignore checkbox
+    configWidgets.ignoreCB:SetChecked(charData.ignored or false)
+    configWidgets.ignoreCB:SetScript("OnClick", function(self)
+        charData.ignored = self:GetChecked()
+        if charData.ignored then
+            ns:Print("Hidden character: " .. charKey .. " (will be skipped for task routing)")
+        else
+            ns:Print("Re-enabled character: " .. charKey)
+        end
+        RefreshCharactersTable()
+    end)
+
+    -- 3-state buttons
+    local function SetupTriStateBtn(btn, settingKey)
+        local rawVal = ns:GetCharSettingRaw(charKey, settingKey)
+        local globalDefault = ns.db.settings[settingKey]
+        btn.text:SetText(FormatSettingLabel(rawVal, globalDefault))
+
+        btn:SetScript("OnClick", function()
+            local current = ns:GetCharSettingRaw(charKey, settingKey)
+            local newVal = CycleTriState(current)
+            ns:SetCharSetting(charKey, settingKey, newVal)
+            -- Update button label
+            local updated = ns:GetCharSettingRaw(charKey, settingKey)
+            btn.text:SetText(FormatSettingLabel(updated, ns.db.settings[settingKey]))
+            RefreshCharactersTable()
+        end)
+
+        btn:SetScript("OnEnter", function(self)
+            GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+            local current = ns:GetCharSettingRaw(charKey, settingKey)
+            if current == nil then
+                GameTooltip:SetText("Using global default", 0.7, 0.7, 0.7)
+                GameTooltip:AddLine("Click to override to On", 0.5, 0.5, 0.5)
+            elseif current == true then
+                GameTooltip:SetText("Override: On", 0, 1, 0)
+                GameTooltip:AddLine("Click to override to Off", 0.5, 0.5, 0.5)
+            else
+                GameTooltip:SetText("Override: Off", 1, 0.2, 0.2)
+                GameTooltip:AddLine("Click to clear override (use global)", 0.5, 0.5, 0.5)
+            end
+            GameTooltip:Show()
+        end)
+        btn:SetScript("OnLeave", function() GameTooltip:Hide() end)
+    end
+
+    SetupTriStateBtn(configWidgets.pullBtn, "autoPullBank")
+    SetupTriStateBtn(configWidgets.depBtn, "autoDepositWarbank")
+    SetupTriStateBtn(configWidgets.depAllBtn, "autoDepositAll")
+
+    -- Bank tab buttons (per-character)
+    local pt = ns.db.settings.pullTabs or {}
+
+    -- Try to get tab data from C_Bank API
+    local bankTabData, warbankTabData
+    if C_Bank and C_Bank.FetchPurchasedBankTabData then
+        local ok1, data1 = pcall(C_Bank.FetchPurchasedBankTabData, Enum.BankType.Character)
+        if ok1 and data1 then bankTabData = data1 end
+        local ok2, data2 = pcall(C_Bank.FetchPurchasedBankTabData, Enum.BankType.Account)
+        if ok2 and data2 then warbankTabData = data2 end
+    end
+
+    for i = 1, 6 do
+        local btn = configWidgets.bankTabBtns[i]
+        local charCfg = pt.bank and pt.bank[charKey]
+        local enabled = not charCfg or charCfg[i] ~= false
+
+        -- Update icon/label from API data if available
+        if bankTabData and bankTabData[i] then
+            local td = bankTabData[i]
+            if td.icon then btn.icon:SetTexture(td.icon) end
+            if td.name and td.name ~= "" then
+                btn.label:SetText(td.name)
+            else
+                btn.label:SetText(tostring(i))
+            end
+        end
+
+        if enabled then
+            btn.icon:SetDesaturated(false)
+            btn.icon:SetAlpha(1)
+            btn.border:Show()
+            btn.uncheckedBorder:Hide()
+            btn.label:SetTextColor(0.7, 0.9, 0.7)
+        else
+            btn.icon:SetDesaturated(true)
+            btn.icon:SetAlpha(0.5)
+            btn.border:Hide()
+            btn.uncheckedBorder:Show()
+            btn.label:SetTextColor(0.5, 0.4, 0.4)
+        end
+
+        btn:SetScript("OnClick", function()
+            if not ns.db then return end
+            local pullTabs = ns.db.settings.pullTabs
+            if not pullTabs.bank then pullTabs.bank = {} end
+            if not pullTabs.bank[charKey] then pullTabs.bank[charKey] = {} end
+            local isEnabled = pullTabs.bank[charKey][i] ~= false
+            pullTabs.bank[charKey][i] = not isEnabled
+            ShowConfigPanel(charKey)
+            RefreshCharactersTable()
+        end)
+
+        btn:SetScript("OnEnter", function(self)
+            GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+            GameTooltip:SetText(self.label:GetText() or ("Bank Tab " .. i), 1, 1, 1)
+            local cfg = pt.bank and pt.bank[charKey]
+            local isOn = not cfg or cfg[i] ~= false
+            GameTooltip:AddLine(isOn and "Enabled (click to disable)" or "Disabled (click to enable)", 0.7, 0.7, 0.7)
+            GameTooltip:Show()
+        end)
+        btn:SetScript("OnLeave", function() GameTooltip:Hide() end)
+    end
+
+    -- Warbank tab buttons (global/shared)
+    for i = 1, 5 do
+        local btn = configWidgets.warbankTabBtns[i]
+        local enabled = not pt.warbank or pt.warbank[i] ~= false
+
+        if warbankTabData and warbankTabData[i] then
+            local td = warbankTabData[i]
+            if td.icon then btn.icon:SetTexture(td.icon) end
+            if td.name and td.name ~= "" then
+                btn.label:SetText(td.name)
+            else
+                btn.label:SetText(tostring(i))
+            end
+        end
+
+        if enabled then
+            btn.icon:SetDesaturated(false)
+            btn.icon:SetAlpha(1)
+            btn.border:Show()
+            btn.uncheckedBorder:Hide()
+            btn.label:SetTextColor(0.7, 0.9, 0.7)
+        else
+            btn.icon:SetDesaturated(true)
+            btn.icon:SetAlpha(0.5)
+            btn.border:Hide()
+            btn.uncheckedBorder:Show()
+            btn.label:SetTextColor(0.5, 0.4, 0.4)
+        end
+
+        btn:SetScript("OnClick", function()
+            if not ns.db then return end
+            local pullTabs = ns.db.settings.pullTabs
+            if not pullTabs.warbank then pullTabs.warbank = {} end
+            local isEnabled = pullTabs.warbank[i] ~= false
+            pullTabs.warbank[i] = not isEnabled
+            ShowConfigPanel(charKey)
+            RefreshCharactersTable()
+        end)
+
+        btn:SetScript("OnEnter", function(self)
+            GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+            GameTooltip:SetText(self.label:GetText() or ("Warbank Tab " .. i), 1, 1, 1)
+            local isOn = not pt.warbank or pt.warbank[i] ~= false
+            GameTooltip:AddLine(isOn and "Enabled (click to disable)" or "Disabled (click to enable)", 0.7, 0.7, 0.7)
+            GameTooltip:Show()
+        end)
+        btn:SetScript("OnLeave", function() GameTooltip:Hide() end)
+    end
+
+    configPanel._charKey = charKey
+    configPanel:Show()
+end
+
+-- ==========================================
+-- GLOBAL DEFAULTS BAR
+-- ==========================================
+
+local globalDefaultsBar
+local globalDefaultsWidgets = {}
+
+local function EnsureGlobalDefaultsBar(tableContainer)
+    if globalDefaultsBar then return end
+
+    globalDefaultsBar = CreateFrame("Frame", nil, tableContainer, "BackdropTemplate")
+    globalDefaultsBar:SetHeight(24)
+    globalDefaultsBar:SetPoint("TOPLEFT", tableContainer, "TOPLEFT", 0, 0)
+    globalDefaultsBar:SetPoint("TOPRIGHT", tableContainer, "TOPRIGHT", 0, 0)
+    globalDefaultsBar:SetBackdrop({
+        bgFile = "Interface\\Tooltips\\UI-Tooltip-Background",
+    })
+    globalDefaultsBar:SetBackdropColor(0.1, 0.1, 0.14, 0.8)
+    UI._globalDefaultsBar = globalDefaultsBar
+
+    local lbl = globalDefaultsBar:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    lbl:SetPoint("LEFT", globalDefaultsBar, "LEFT", 6, 0)
+    lbl:SetTextColor(0.9, 0.8, 0.3)
+    lbl:SetText("Global Defaults:")
+
+    -- Helper: create a small checkbox
+    local function MakeGlobalCB(anchorTo, label, settingKey, tooltipDesc)
+        local cb = CreateFrame("CheckButton", nil, globalDefaultsBar, "UICheckButtonTemplate")
+        cb:SetSize(18, 18)
+        cb:SetPoint("LEFT", anchorTo, "RIGHT", 8, 0)
+        cb.text:SetText(label)
+        cb.text:SetFontObject("GameFontHighlightSmall")
+
+        cb:SetScript("OnClick", function(self)
+            if ns.db then
+                ns.db.settings[settingKey] = self:GetChecked()
+                RefreshCharactersTable()
+            end
+        end)
+
+        cb:SetScript("OnEnter", function(self)
+            GameTooltip:SetOwner(self, "ANCHOR_BOTTOM")
+            GameTooltip:SetText(label, 1, 1, 1)
+            GameTooltip:AddLine(tooltipDesc, 0.7, 0.7, 0.7, true)
+            GameTooltip:Show()
+        end)
+        cb:SetScript("OnLeave", function() GameTooltip:Hide() end)
+
+        return cb
+    end
+
+    globalDefaultsWidgets.pullCB = MakeGlobalCB(lbl, "Pull",
+        "autoPullBank", "Auto-pull queued items from bank when opening bank")
+
+    globalDefaultsWidgets.depCB = MakeGlobalCB(globalDefaultsWidgets.pullCB.text, "Deposit",
+        "autoDepositWarbank", "Auto-deposit items to warbank for other characters")
+
+    globalDefaultsWidgets.depAllCB = MakeGlobalCB(globalDefaultsWidgets.depCB.text, "Dep. All",
+        "autoDepositAll", "Auto-deposit ALL extra items to bank/warbank")
+end
+
+local function RefreshGlobalDefaultsBar()
+    if not globalDefaultsBar or not ns.db then return end
+    globalDefaultsWidgets.pullCB:SetChecked(ns.db.settings.autoPullBank)
+    globalDefaultsWidgets.depCB:SetChecked(ns.db.settings.autoDepositWarbank)
+    globalDefaultsWidgets.depAllCB:SetChecked(ns.db.settings.autoDepositAll)
+    globalDefaultsBar:Show()
+end
+
+-- Lightweight refresh: update table data + global defaults bar without rebuilding config panel.
+-- Call this instead of UI:Refresh() when changing settings inside the config panel.
+local function RefreshCharactersTable()
+    local charData = BuildCharactersData()
+    if UI.charsTable then
+        UI.charsTable:SetData(charData)
+    end
+    RefreshGlobalDefaultsBar()
+    if UI.mainFrame and UI.mainFrame.statusText then
+        local charCount, hiddenCount, totalGold = 0, 0, 0
+        for ck, ckData in pairs(ns.db.characters or {}) do
+            charCount = charCount + 1
+            if ckData.ignored then hiddenCount = hiddenCount + 1 end
+            if ckData.gold then totalGold = totalGold + ckData.gold end
+        end
+        local parts = { charCount .. " characters" }
+        if totalGold > 0 then table.insert(parts, ns:FormatGold(totalGold) .. " total") end
+        if hiddenCount > 0 then table.insert(parts, hiddenCount .. " hidden") end
+        table.insert(parts, ns.COLORS.GRAY .. "Click character to configure" .. "|r")
+        UI.mainFrame.statusText:SetText(table.concat(parts, "  |  "))
+    end
+end
+
+-- ==========================================
+-- REFRESH PAGE
+-- ==========================================
+
 function UI:RefreshCharactersPage()
     local mainFrame = UI.mainFrame
     local tableContainer = UI.tableContainer
     mainFrame.pageTitle:SetText("Characters & Realms")
     UI._HideAllActionBtns()
 
+    -- Ensure global defaults bar and config panel are created
+    EnsureGlobalDefaultsBar(tableContainer)
+    EnsureConfigPanel(tableContainer)
+
+    RefreshGlobalDefaultsBar()
+
     local charData, needData = BuildCharactersData()
+
+    -- Position charsTable header below the global defaults bar
+    self.charsTable.headerFrame:ClearAllPoints()
+    self.charsTable.headerFrame:SetPoint("TOPLEFT", globalDefaultsBar, "BOTTOMLEFT", 0, -1)
+    self.charsTable.headerFrame:SetPoint("TOPRIGHT", globalDefaultsBar, "BOTTOMRIGHT", 0, -1)
 
     -- Show known characters table
     UI._ShowTable(self.charsTable)
     self.charsTable:SetRowClickHandler(function(rowData, button, rowIndex)
         if button == "LeftButton" and rowData._charKey then
-            local charRecord = ns.db.characters[rowData._charKey]
-            if charRecord and charRecord.ignored then
-                charRecord.ignored = false
-                ns:Print("Re-enabled character: " .. rowData._charKey)
-            elseif charRecord then
-                charRecord.ignored = true
-                ns:Print("Hidden character: " .. rowData._charKey .. " (will be skipped for task routing)")
-            end
-            self:Refresh()
+            -- Left-click opens config panel
+            ShowConfigPanel(rowData._charKey)
         elseif button == "RightButton" and rowData._charKey then
             if IsShiftKeyDown() then
                 local order = ns.db.settings.characterOrder
@@ -282,16 +851,6 @@ function UI:RefreshCharactersPage()
                     end
                 end
                 self:Refresh()
-            else
-                local charRecord2 = ns.db.characters[rowData._charKey]
-                if charRecord2 and charRecord2.ignored then
-                    charRecord2.ignored = false
-                    ns:Print("Re-enabled character: " .. rowData._charKey)
-                elseif charRecord2 then
-                    charRecord2.ignored = true
-                    ns:Print("Hidden character: " .. rowData._charKey .. " (will be skipped for task routing)")
-                end
-                self:Refresh()
             end
         end
     end)
@@ -299,6 +858,7 @@ function UI:RefreshCharactersPage()
 
     -- Show "need characters" table below if there are entries
     if #needData > 0 then
+        local GLOBALS_H = 25  -- height of global defaults bar + gap
         local charsHeight = math.max(60, (#charData + 1) * 20 + 22)
         if charsHeight > 250 then charsHeight = 250 end
 
@@ -307,7 +867,7 @@ function UI:RefreshCharactersPage()
             self._needCharsLabel = tableContainer:CreateFontString(nil, "OVERLAY", "GameFontNormal")
         end
         self._needCharsLabel:ClearAllPoints()
-        self._needCharsLabel:SetPoint("TOPLEFT", tableContainer, "TOPLEFT", 4, -charsHeight - 6)
+        self._needCharsLabel:SetPoint("TOPLEFT", tableContainer, "TOPLEFT", 4, -(GLOBALS_H + charsHeight + 6))
         self._needCharsLabel:SetPoint("RIGHT", tableContainer, "RIGHT", -4, 0)
         self._needCharsLabel:SetJustifyH("LEFT")
         self._needCharsLabel:SetTextColor(1, 0.4, 0.4)
@@ -315,8 +875,8 @@ function UI:RefreshCharactersPage()
         self._needCharsLabel:Show()
 
         self.needCharsTable.headerFrame:ClearAllPoints()
-        self.needCharsTable.headerFrame:SetPoint("TOPLEFT", tableContainer, "TOPLEFT", 0, -charsHeight - 18)
-        self.needCharsTable.headerFrame:SetPoint("TOPRIGHT", tableContainer, "TOPRIGHT", 0, -charsHeight - 18)
+        self.needCharsTable.headerFrame:SetPoint("TOPLEFT", tableContainer, "TOPLEFT", 0, -(GLOBALS_H + charsHeight + 18))
+        self.needCharsTable.headerFrame:SetPoint("TOPRIGHT", tableContainer, "TOPRIGHT", 0, -(GLOBALS_H + charsHeight + 18))
 
         self.needCharsTable.scrollFrame:ClearAllPoints()
         self.needCharsTable.scrollFrame:SetPoint("TOPLEFT", self.needCharsTable.headerFrame, "BOTTOMLEFT", 0, 0)
@@ -385,6 +945,7 @@ function UI:RefreshCharactersPage()
         local ROW_H = 22
         local MAX_VISIBLE_ROWS = 8
         local yOff = 0
+        local GLOBALS_H = 25
 
         -- Helper: propagate mouse wheel from child frames to scroll parent
         local function PropagateScroll(frame)
@@ -404,11 +965,11 @@ function UI:RefreshCharactersPage()
             local charsHeight = math.max(60, (#charData + 1) * 20 + 22)
             if charsHeight > 250 then charsHeight = 250 end
             local needHeight = math.max(40, (#needData + 1) * 20 + 22)
-            tsmSectionTop = -charsHeight - 10 - needHeight - 10
+            tsmSectionTop = -(GLOBALS_H + charsHeight + 10 + needHeight + 10)
         else
             local charsHeight = math.max(60, (#charData + 1) * 20 + 22)
             if charsHeight > 250 then charsHeight = 250 end
-            tsmSectionTop = -charsHeight - 10
+            tsmSectionTop = -(GLOBALS_H + charsHeight + 10)
         end
 
         tdfLabel:ClearAllPoints()
@@ -566,6 +1127,7 @@ function UI:RefreshCharactersPage()
         tdfContent:SetHeight(math.max(1, math.abs(yOff) + 10))
     end
 
+    -- Status bar
     local charCount = 0
     local hiddenCount = 0
     local totalGold = 0
@@ -582,6 +1144,11 @@ function UI:RefreshCharactersPage()
         table.insert(statusParts, hiddenCount .. " hidden")
     end
     table.insert(statusParts, #needData .. " realms need chars")
-    table.insert(statusParts, ns.COLORS.GRAY .. "Click to hide/show" .. "|r")
+    table.insert(statusParts, ns.COLORS.GRAY .. "Click character to configure" .. "|r")
     mainFrame.statusText:SetText(table.concat(statusParts, "  |  "))
+
+    -- If config panel is showing, refresh it to stay in sync
+    if configPanel and configPanel:IsShown() and configPanel._charKey then
+        ShowConfigPanel(configPanel._charKey)
+    end
 end

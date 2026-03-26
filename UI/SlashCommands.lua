@@ -137,7 +137,7 @@ SlashCmdList["FLIPQUEUE"] = function(msg)
             -- Settings (all relevant)
             local s = ns.db.settings or {}
             L("S|scan=" .. V(s.autoScan) .. "|pull=" .. V(s.autoPullBank) .. "|dep=" .. V(s.autoDepositWarbank)
-                .. "|gold=" .. V(s.autoWithdrawGold) .. "|maxG=" .. V(s.maxWithdrawGold)
+                .. "|depAll=" .. V(s.autoDepositAll) .. "|gold=" .. V(s.autoWithdrawGold) .. "|maxG=" .. V(s.maxWithdrawGold)
                 .. "|batch=" .. V(s.pullBatchSize) .. "|sellQty=" .. V(s.sellQtyMode) .. "/" .. V(s.defaultSellQty)
                 .. "|tsm=" .. V(s.tsmEnabled) .. "|prof=" .. V(s.tsmProfile)
                 .. "|tsmSkip=" .. V(s.tsmAutoSkipRejected) .. "|tsmPrice=" .. V(s.tsmPriceSource)

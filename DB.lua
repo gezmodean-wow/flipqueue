@@ -33,6 +33,7 @@ function ns:InitDB()
         autoScan         = true,
         autoPullBank     = false,
         autoDepositWarbank = false,
+        autoDepositAll = false,
         showLoginMessage = true,
         autoWithdrawGold = false,
         maxWithdrawGold = 0, -- 0 = no limit, otherwise max gold per withdrawal
@@ -222,6 +223,38 @@ function ns:CleanupLegacyData()
         end
         db._cleanupVersion = currentVersion
     end
+end
+
+--------------------------
+-- Per-Character Settings
+--------------------------
+
+-- Get effective setting for a character (per-char override or global default).
+-- Per-char value of nil means "inherit global."
+function ns:GetCharSetting(charKey, settingKey)
+    local charData = ns.db.characters and ns.db.characters[charKey]
+    if charData and charData.settings and charData.settings[settingKey] ~= nil then
+        return charData.settings[settingKey]
+    end
+    return ns.db.settings[settingKey]
+end
+
+-- Set per-character override. Pass nil to clear and inherit global default.
+function ns:SetCharSetting(charKey, settingKey, value)
+    if not ns.db or not ns.db.characters then return end
+    local charData = ns.db.characters[charKey]
+    if not charData then return end
+    charData.settings = charData.settings or {}
+    charData.settings[settingKey] = value
+end
+
+-- Get the per-character override value (nil/true/false) without falling back to global.
+function ns:GetCharSettingRaw(charKey, settingKey)
+    local charData = ns.db.characters and ns.db.characters[charKey]
+    if charData and charData.settings then
+        return charData.settings[settingKey]
+    end
+    return nil
 end
 
 --------------------------

@@ -11,7 +11,7 @@ local Tracker = ns.Tracker
 local PULL_TIMEOUT = 5  -- seconds to wait for locks before giving up on a batch
 
 function Tracker:AutoPullFromBank(onComplete)
-    if not ns.db or not ns.db.settings.autoPullBank then
+    if not ns.db or not ns:GetCharSetting(ns:GetCharKey(), "autoPullBank") then
         if onComplete then onComplete() end
         return
     end
@@ -559,7 +559,7 @@ end
 --------------------------
 
 function Tracker:AutoDepositToWarbank()
-    if not ns.db or not ns.db.settings.autoDepositWarbank then return end
+    if not ns.db or not ns:GetCharSetting(ns:GetCharKey(), "autoDepositWarbank") then return end
 
     local charKey = ns:GetCharKey()
     local todoList = ns.TodoList and ns.TodoList:GetCurrentList()
@@ -783,5 +783,322 @@ function Tracker:AutoDepositToWarbank()
     end
 
     ns:PrintDebug("Depositing " .. totalMoves .. " item(s) to warbank...")
+    ExecuteNextBatch()
+end
+
+--------------------------
+-- Deposit All Extra Items
+--------------------------
+
+-- Deposit all bag items NOT needed by the current character's tasks.
+-- Prioritizes warbank, falls back to personal bank.
+-- Requires autoDepositAll setting enabled.
+function Tracker:AutoDepositExtraItems()
+    if not ns.db or not ns:GetCharSetting(ns:GetCharKey(), "autoDepositAll") then return end
+
+    local charKey = ns:GetCharKey()
+
+    -- Build set of items the current character needs in bags for tasks
+    local keepKeys = {}  -- itemKey -> qty needed
+    local keepNames = {} -- lowercase name -> qty needed
+    if ns.TodoList then
+        local myTasks = ns.TodoList:GetCharacterTasks(charKey)
+        for _, task in ipairs(myTasks) do
+            local item = task.item
+            if item.itemKey then
+                keepKeys[item.itemKey] = (keepKeys[item.itemKey] or 0) + (item.quantity or 1)
+            end
+            if item.name and item.name ~= "" then
+                local ln = item.name:lower()
+                keepNames[ln] = (keepNames[ln] or 0) + (item.quantity or 1)
+            end
+        end
+    end
+
+    -- Items to never deposit (keep in bags always)
+    local KEEP_ITEM_IDS = { [6948] = true } -- Hearthstone
+
+    -- Scan bags for items to deposit (everything not in keepKeys/keepNames)
+    -- Split into warbank-eligible and bank-only (soulbound items can't go to warbank)
+    local warbankMoves = {} -- { bag, slot, name } — can go to warbank or bank
+    local bankOnlyMoves = {} -- { bag, slot, name } — soulbound, bank only
+    local consumedKeys = {}  -- itemKey -> qty consumed by keep
+    local consumedNames = {} -- lname -> qty consumed by keep
+
+    for _, bagIndex in ipairs(ns.INVENTORY_BAGS) do
+        local ok, numSlots = pcall(C_Container.GetContainerNumSlots, bagIndex)
+        if ok and numSlots then
+            for slot = 1, numSlots do
+                local ok2, info = pcall(C_Container.GetContainerItemInfo, bagIndex, slot)
+                if ok2 and info and info.hyperlink then
+                    local itemID, bonusIDs, modifiers = ns:ParseItemLink(info.hyperlink)
+                    if itemID then
+                        local numID = tonumber(itemID) or tonumber((itemID:gsub(";.*", "")))
+
+                        -- Skip items that should never be deposited
+                        if KEEP_ITEM_IDS[numID] then
+                            -- Hearthstone etc — always keep in bags
+                        else
+                            local key = ns:MakeItemKey(itemID, bonusIDs, modifiers)
+                            local stackCount = info.stackCount or 1
+
+                            -- Check if this item should be kept for tasks
+                            local shouldKeep = false
+                            local neededByKey = keepKeys[key] or 0
+                            local usedByKey = consumedKeys[key] or 0
+                            if neededByKey > usedByKey then
+                                consumedKeys[key] = usedByKey + stackCount
+                                shouldKeep = true
+                            else
+                                -- Name fallback
+                                local itemName = Tracker._GetNameFromLink(info.hyperlink)
+                                if itemName then
+                                    local ln = itemName:lower()
+                                    local neededByName = keepNames[ln] or 0
+                                    local usedByName = consumedNames[ln] or 0
+                                    if neededByName > usedByName then
+                                        consumedNames[ln] = usedByName + stackCount
+                                        shouldKeep = true
+                                    end
+                                end
+                            end
+
+                            if not shouldKeep then
+                                local itemName = Tracker._GetNameFromLink(info.hyperlink)
+                                local moveEntry = {
+                                    bag = bagIndex,
+                                    slot = slot,
+                                    name = itemName or ("Item " .. key),
+                                }
+                                -- Check bind type: BoP (1) and Quest (4) can't go to warbank
+                                local isSoulbound = false
+                                if info.isBound then
+                                    local ok3, _, _, _, _, _, _, _, _, _, _, _, _, bindType =
+                                        pcall(C_Item.GetItemInfo, info.hyperlink)
+                                    if ok3 and (bindType == 1 or bindType == 4) then
+                                        isSoulbound = true
+                                    end
+                                end
+                                if isSoulbound then
+                                    table.insert(bankOnlyMoves, moveEntry)
+                                else
+                                    table.insert(warbankMoves, moveEntry)
+                                end
+                            end
+                        end
+                    end
+                end
+            end
+        end
+    end
+
+    if #warbankMoves == 0 and #bankOnlyMoves == 0 then return end
+
+    -- Find empty slots: warbank and personal bank separately
+    local warbankEmpty = {}
+    for _, wbBag in ipairs(ns:GetEnabledWarbankTabs()) do
+        local ok, numSlots = pcall(C_Container.GetContainerNumSlots, wbBag)
+        if ok and numSlots then
+            for slot = 1, numSlots do
+                local ok2, info = pcall(C_Container.GetContainerItemInfo, wbBag, slot)
+                if ok2 and not info then
+                    table.insert(warbankEmpty, { bag = wbBag, slot = slot })
+                end
+            end
+        end
+    end
+
+    local bankEmpty = {}
+    for _, bankBag in ipairs(ns:GetEnabledBankTabs()) do
+        local ok, numSlots = pcall(C_Container.GetContainerNumSlots, bankBag)
+        if ok and numSlots and numSlots > 0 then
+            for slot = 1, numSlots do
+                local ok2, info = pcall(C_Container.GetContainerItemInfo, bankBag, slot)
+                if ok2 and not info then
+                    table.insert(bankEmpty, { bag = bankBag, slot = slot })
+                end
+            end
+        end
+    end
+
+    -- Check for bank access
+    if #warbankEmpty == 0 and #bankEmpty == 0 then
+        local hasBankAccess = false
+        for _, bankBag in ipairs(ns.BANK_TABS) do
+            local ok, numSlots = pcall(C_Container.GetContainerNumSlots, bankBag)
+            if ok and numSlots and numSlots > 0 then
+                hasBankAccess = true
+                break
+            end
+        end
+        if not hasBankAccess then
+            ns:PrintError("No bank slots available — purchase bank tabs to deposit items.")
+        else
+            ns:Print(ns.COLORS.YELLOW .. "Warbank and bank are full!|r Cannot deposit " ..
+                (#warbankMoves + #bankOnlyMoves) .. " extra item(s).")
+        end
+        return
+    end
+
+    -- Pair moves with destination slots:
+    -- Warbank-eligible items → warbank first, overflow to bank
+    -- Bank-only items (soulbound) → bank only
+    local moves = {}     -- { bag, slot, name }
+    local emptySlots = {} -- paired destinations
+    local wbIdx, bkIdx = 1, 1
+
+    for _, m in ipairs(warbankMoves) do
+        if wbIdx <= #warbankEmpty then
+            table.insert(moves, m)
+            table.insert(emptySlots, warbankEmpty[wbIdx])
+            wbIdx = wbIdx + 1
+        elseif bkIdx <= #bankEmpty then
+            table.insert(moves, m)
+            table.insert(emptySlots, bankEmpty[bkIdx])
+            bkIdx = bkIdx + 1
+        end
+    end
+    for _, m in ipairs(bankOnlyMoves) do
+        if bkIdx <= #bankEmpty then
+            table.insert(moves, m)
+            table.insert(emptySlots, bankEmpty[bkIdx])
+            bkIdx = bkIdx + 1
+        end
+    end
+
+    if #moves == 0 then
+        local skipped = #warbankMoves + #bankOnlyMoves
+        if skipped > 0 then
+            ns:Print(ns.COLORS.YELLOW .. "Not enough free slots — " .. skipped .. " item(s) remain in bags.|r")
+        end
+        return
+    end
+
+    local totalRequested = #warbankMoves + #bankOnlyMoves
+    if #moves < totalRequested then
+        ns:Print(ns.COLORS.YELLOW .. "Only " .. #moves .. " free slot(s) — depositing " ..
+            #moves .. " of " .. totalRequested .. " extra item(s).|r")
+    end
+
+    -- Execute deposits using same batch pattern as AutoDepositToWarbank
+    local totalMoves = math.min(#moves, #emptySlots)
+    local depositedNames = {}
+    local depositErrors = 0
+    local moveIndex = 1
+    local aborted = false
+    Tracker._depositInProgress = true
+
+    local listener = CreateFrame("Frame")
+
+    local function Cleanup()
+        listener:UnregisterAllEvents()
+        listener:SetScript("OnEvent", nil)
+        Tracker._depositInProgress = false
+    end
+
+    local function FinishDeposit()
+        Cleanup()
+        if #depositedNames > 0 then
+            local destLabel = #warbankEmpty > 0 and "warbank/bank" or "bank"
+            ns:Print(ns.COLORS.CYAN .. "Deposited " .. #depositedNames ..
+                " extra item(s) to " .. destLabel .. ":|r " ..
+                table.concat(depositedNames, ", "))
+        end
+        if depositErrors > 0 then
+            ns:Print(ns.COLORS.YELLOW .. depositErrors ..
+                " item(s) failed to deposit.|r")
+        end
+        C_Timer.After(1, function()
+            if ns.Scanner then
+                ns.Scanner:ScanCurrentCharacter()
+                ns.Scanner:ScanBank()
+                ns.Scanner:ScanWarbank()
+            end
+            if ns.UI and ns.UI.Refresh then ns.UI:Refresh() end
+            if ns.UI and ns.UI.RefreshMini then ns.UI:RefreshMini() end
+        end)
+    end
+
+    local function ExecuteNextBatch()
+        if aborted or moveIndex > totalMoves then
+            FinishDeposit()
+            return
+        end
+
+        local batchSize = ns.db and ns.db.settings.pullBatchSize or 5
+        local batchEnd = math.min(moveIndex + batchSize - 1, totalMoves)
+        local batchMoved = 0
+
+        for i = moveIndex, batchEnd do
+            local src = moves[i]
+            local dest = emptySlots[i]
+
+            local okLock, srcInfo = pcall(C_Container.GetContainerItemInfo, src.bag, src.slot)
+            if okLock and srcInfo and srcInfo.isLocked then
+                depositErrors = depositErrors + 1
+            else
+                pcall(ClearCursor)
+                local ok1 = pcall(C_Container.PickupContainerItem, src.bag, src.slot)
+                if ok1 then
+                    local ok2 = pcall(C_Container.PickupContainerItem, dest.bag, dest.slot)
+                    if ok2 then
+                        table.insert(depositedNames, src.name)
+                        batchMoved = batchMoved + 1
+                    else
+                        pcall(ClearCursor)
+                        depositErrors = depositErrors + 1
+                    end
+                else
+                    depositErrors = depositErrors + 1
+                end
+            end
+        end
+
+        moveIndex = batchEnd + 1
+
+        if moveIndex > totalMoves then
+            C_Timer.After(0.3, FinishDeposit)
+        elseif batchMoved > 0 then
+            local waitingForUnlock = true
+            listener:RegisterEvent("ITEM_LOCK_CHANGED")
+            listener:RegisterEvent("UI_ERROR_MESSAGE")
+            listener:SetScript("OnEvent", function(_, event, errorType, message)
+                if event == "UI_ERROR_MESSAGE" then
+                    if (message and (message:find("Internal Bag Error") or message == ERR_INTERNAL_BAG_ERROR)) then
+                        aborted = true
+                        depositErrors = depositErrors + 1
+                        listener:UnregisterEvent("ITEM_LOCK_CHANGED")
+                        listener:UnregisterEvent("UI_ERROR_MESSAGE")
+                        FinishDeposit()
+                        return
+                    elseif (message and (message:find("Inventory is full") or message == ERR_INV_FULL)) then
+                        aborted = true
+                        listener:UnregisterEvent("ITEM_LOCK_CHANGED")
+                        listener:UnregisterEvent("UI_ERROR_MESSAGE")
+                        FinishDeposit()
+                        return
+                    end
+                elseif event == "ITEM_LOCK_CHANGED" and waitingForUnlock then
+                    waitingForUnlock = false
+                    listener:UnregisterEvent("ITEM_LOCK_CHANGED")
+                    listener:UnregisterEvent("UI_ERROR_MESSAGE")
+                    C_Timer.After(0.1, ExecuteNextBatch)
+                end
+            end)
+
+            C_Timer.After(PULL_TIMEOUT, function()
+                if waitingForUnlock then
+                    waitingForUnlock = false
+                    listener:UnregisterEvent("ITEM_LOCK_CHANGED")
+                    listener:UnregisterEvent("UI_ERROR_MESSAGE")
+                    ExecuteNextBatch()
+                end
+            end)
+        else
+            C_Timer.After(0.5, ExecuteNextBatch)
+        end
+    end
+
+    ns:PrintDebug("Depositing " .. totalMoves .. " extra item(s) to warbank/bank...")
     ExecuteNextBatch()
 end

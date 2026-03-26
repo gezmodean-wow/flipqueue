@@ -226,6 +226,8 @@ frame:SetScript("OnEvent", function(self, event)
             -- Pull completes async, then chain deposit + gold + task refresh
             Tracker:AutoPullFromBank(function()
                 Tracker:AutoDepositToWarbank()
+                -- Deposit extra non-task items (after task deposits complete)
+                Tracker:AutoDepositExtraItems()
                 Tracker:AutoWithdrawGold()
                 -- Refresh task steps (items may now be in bags after pull/deposit)
                 if ns.TodoList and ns.TodoList.RefreshTaskSteps then
