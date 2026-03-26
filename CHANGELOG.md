@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.7.0
+
+### Bug Fixes
+- **Deposit refresh race condition**: BAG_UPDATE_DELAYED no longer runs stale RefreshLocations during active pull/deposit operations — prevents to-do list from flickering or showing incorrect state
+- **Mini view action buttons persist**: Action buttons, OnEnter/OnLeave scripts now explicitly cleaned up during row refresh
+
 ## v0.7.0-alpha.7
 
 ### Bug Fixes

@@ -154,12 +154,14 @@ function Tracker:AutoPullFromBank(onComplete)
     local pulledNames = {}
     local pullErrors = 0
     local aborted = false
+    Tracker._pullInProgress = true
 
     local listener = CreateFrame("Frame")
 
     local function Cleanup()
         listener:UnregisterAllEvents()
         listener:SetScript("OnEvent", nil)
+        Tracker._pullInProgress = false
     end
 
     local function FinishPull()
@@ -652,12 +654,14 @@ function Tracker:AutoDepositToWarbank()
     local depositErrors = 0
     local moveIndex = 1
     local aborted = false
+    Tracker._depositInProgress = true
 
     local listener = CreateFrame("Frame")
 
     local function Cleanup()
         listener:UnregisterAllEvents()
         listener:SetScript("OnEvent", nil)
+        Tracker._depositInProgress = false
     end
 
     local function FinishDeposit()

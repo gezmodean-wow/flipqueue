@@ -195,8 +195,11 @@ frame:SetScript("OnEvent", function(self, event)
         if isAHOpen and next(preTodoSnapshot) then
             C_Timer.After(0.3, CheckForPosts)
         end
+        -- Skip refresh during active deposit/pull — FinishDeposit handles it with fresh scans
+        if Tracker._depositInProgress or Tracker._pullInProgress then return end
         -- Rescan inventory and refresh todo locations/steps on every item movement
         C_Timer.After(0.5, function()
+            if Tracker._depositInProgress or Tracker._pullInProgress then return end
             if ns.Scanner then ns.Scanner:ScanCurrentCharacter() end
             if ns.TodoList then
                 if ns.TodoList.RefreshLocations then

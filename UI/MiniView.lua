@@ -203,13 +203,18 @@ function UI:RefreshMini()
     if not mini:IsShown() then return end
     if not ns.db then return end
 
-    -- Hide all rows
+    -- Hide all rows and clean up action buttons
     for _, row in ipairs(miniRows) do
         row:Hide()
         row:SetScript("OnMouseDown", nil)
+        row:SetScript("OnEnter", nil)
+        row:SetScript("OnLeave", nil)
         row.tooltipItemID = nil
         row.tooltipItemName = nil
         row.tooltipExtra = nil
+        if row._taskActionBtns then
+            UI.HideTaskActionBtns(row)
+        end
     end
 
     local charKey = ns:GetCharKey()
