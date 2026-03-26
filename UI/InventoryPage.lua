@@ -11,7 +11,7 @@ local BOUND_TYPES = {
 -- Determine item status with enhanced model:
 -- Assigned (green, 1) — item has active to-do task
 -- Posted (yellow, 2) — item in log with active auction → show "AH: realm"
--- Check AH (orange, 3) — item in log with expired auction
+-- Check Mail (orange, 3) — item in log with expired auction
 -- Unassigned (dim white, 4) — tracked item with known location but no task
 -- Unknown (dim gray, 5) — location cannot be determined
 -- Ignored (red, 6) — in DNT list
@@ -52,7 +52,7 @@ local function GetItemStatus(key, itemData, hasKnownLocation)
                 return "Posted", ns.COLORS.YELLOW .. "Posted" .. "|r",
                     ahRealm ~= "" and ("AH: " .. ahRealm) or nil, entry.charKey
             elseif entry.auctionStatus == "expired" then
-                return "Check AH", ns.COLORS.ORANGE .. "Check AH" .. "|r", nil, nil
+                return "Check Mail", ns.COLORS.ORANGE .. "Check Mail" .. "|r", nil, nil
             end
         end
     end
@@ -126,7 +126,7 @@ local function BuildFullInventoryData()
                         _quantity   = itemData.quantity,
                         _statusKey  = statusKey,
                         _sortStatus = statusKey == "Assigned" and 1 or statusKey == "Posted" and 2
-                            or statusKey == "Check AH" and 3 or statusKey == "Unassigned" and 4
+                            or statusKey == "Check Mail" and 3 or statusKey == "Unassigned" and 4
                             or statusKey == "Unknown" and 5 or 6,
                         _charKey    = charKey,
                     })
@@ -174,7 +174,7 @@ local function BuildFullInventoryData()
                     _quantity   = itemData.quantity,
                     _statusKey  = statusKey,
                     _sortStatus = statusKey == "Assigned" and 1 or statusKey == "Posted" and 2
-                        or statusKey == "Check AH" and 3 or statusKey == "Unassigned" and 4
+                        or statusKey == "Check Mail" and 3 or statusKey == "Unassigned" and 4
                         or statusKey == "Unknown" and 5 or 6,
                     _charKey    = "Warbank",
                 })
@@ -222,7 +222,7 @@ local function BuildFullInventoryData()
                         _quantity   = itemData.quantity,
                         _statusKey  = statusKey,
                         _sortStatus = statusKey == "Assigned" and 1 or statusKey == "Posted" and 2
-                            or statusKey == "Check AH" and 3 or statusKey == "Unassigned" and 4
+                            or statusKey == "Check Mail" and 3 or statusKey == "Unassigned" and 4
                             or statusKey == "Unknown" and 5 or 6,
                         _charKey    = "Guild:" .. guildName,
                     })
@@ -244,7 +244,7 @@ function UI:RefreshInventoryPage()
     self.inventoryTable:SetRowClickHandler(function(rowData, button)
         if button == "RightButton" then
             local statusKey = rowData._statusKey
-            if statusKey == "Unknown" or statusKey == "Unassigned" or statusKey == "Check AH" then
+            if statusKey == "Unknown" or statusKey == "Unassigned" or statusKey == "Check Mail" then
                 if IsShiftKeyDown() then
                     local added = ns.Import:Save({{
                         itemKey  = rowData._itemKey,
@@ -288,7 +288,7 @@ function UI:RefreshInventoryPage()
     local statusParts = {#data .. " tradeable items"}
     if (statusCounts.Assigned or 0) > 0 then table.insert(statusParts, ns.COLORS.GREEN .. statusCounts.Assigned .. " assigned|r") end
     if (statusCounts.Posted or 0) > 0 then table.insert(statusParts, ns.COLORS.YELLOW .. statusCounts.Posted .. " posted|r") end
-    if (statusCounts["Check AH"] or 0) > 0 then table.insert(statusParts, ns.COLORS.ORANGE .. statusCounts["Check AH"] .. " check AH|r") end
+    if (statusCounts["Check Mail"] or 0) > 0 then table.insert(statusParts, ns.COLORS.ORANGE .. statusCounts["Check Mail"] .. " check mail|r") end
     if (statusCounts.Unassigned or 0) > 0 then table.insert(statusParts, "|cffbbbbbb" .. statusCounts.Unassigned .. " unassigned|r") end
     if (statusCounts.Unknown or 0) > 0 then table.insert(statusParts, ns.COLORS.GRAY .. statusCounts.Unknown .. " unknown|r") end
     if (statusCounts.Ignored or 0) > 0 then table.insert(statusParts, ns.COLORS.RED .. statusCounts.Ignored .. " ignored|r") end

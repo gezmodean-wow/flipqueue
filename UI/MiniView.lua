@@ -306,7 +306,7 @@ function UI:RefreshMini()
         if t._isBuy then buyCount = buyCount + 1 else postCount = postCount + 1 end
     end
 
-    -- Pre-check for char tasks (Check AH, Expiring, etc.)
+    -- Pre-check for char tasks (Check Mail, Expiring, etc.)
     local preCharTasks = UI.BuildCurrentCharTasks and UI.BuildCurrentCharTasks() or {}
 
     if #tasks == 0 then
@@ -657,7 +657,7 @@ function UI:RefreshMini()
         auctRow:Show()
     end
 
-    -- Current character tasks (Check AH, Check Mail, Expiring)
+    -- Current character tasks (Check Mail, Expiring)
     local charTasks = UI.BuildCurrentCharTasks and UI.BuildCurrentCharTasks() or {}
     if #charTasks > 0 then
         for _, task in ipairs(charTasks) do

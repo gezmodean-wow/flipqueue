@@ -147,7 +147,7 @@ end
 -- CURRENT CHARACTER TASKS
 -- ==========================================
 
--- Build "Check AH" / "Check Mail" / expiring task list for current character
+-- Build "Check Mail" / expiring task list for current character
 local function BuildCurrentCharTasks()
     if not ns.db then return {} end
     local tasks = {}
@@ -158,14 +158,8 @@ local function BuildCurrentCharTasks()
         and ns.Tracker:GetAuctionSummaryByCharacter() or {}
     local myAuctions = auctionsByChar[myCharKey]
 
-    -- Check AH: expired auctions to collect
-    if myAuctions and myAuctions.done > 0 then
-        table.insert(tasks, {
-            icon   = "Interface\\Icons\\INV_Misc_Coin_02",
-            text   = ns.COLORS.GREEN .. "Check AH:|r " .. myAuctions.done .. " auction(s) expired — collect at AH",
-            sort   = 1,
-        })
-    end
+    -- Active auctions info (not actionable, just informational)
+    -- Expired auctions are in MAIL, not AH — handled by "Check Mail" below
 
     -- Check Mail: distinguish sold (collect gold) vs expired/cancelled (collect items)
     local soldInMail = 0
@@ -402,7 +396,7 @@ local function BuildNextStepsData()
         end
     end
 
-    -- 3) Other characters with done (expired) auctions to check
+    -- 3) Other characters with done (expired) auctions — items are in mail
     local auctionsByChar = ns.Tracker and ns.Tracker.GetAuctionSummaryByCharacter
         and ns.Tracker:GetAuctionSummaryByCharacter() or {}
 
@@ -415,16 +409,16 @@ local function BuildNextStepsData()
             local coloredName = "|cff" .. classColor .. name .. "|r"
 
             table.insert(data, {
-                action    = ns.COLORS.GREEN .. "Check AH" .. "|r",
+                action    = ns.COLORS.YELLOW .. "Check Mail" .. "|r",
                 target    = coloredName .. "  (" .. realm .. ")",
                 itemCount = info.done,
                 value     = FormatGoldValue(info.totalValue or 0),
-                detail    = info.done .. " auction(s) done",
+                detail    = info.done .. " expired auction(s)",
                 _sortValue = -2,
                 _tooltipText = charKey,
-                _tooltipExtra = string.format("Log in to %s to collect %d expired auction(s)%s",
+                _tooltipExtra = string.format("Log in to %s to collect %d expired item(s) from mail%s",
                     charKey, info.done,
-                    info.active > 0 and ("\n" .. info.active .. " still active") or ""),
+                    info.active > 0 and ("\n" .. info.active .. " still active on AH") or ""),
             })
         end
     end

@@ -180,7 +180,7 @@ frame:SetScript("OnEvent", function(self, event)
             C_AuctionHouse.QueryOwnedAuctions({})
         end
 
-        -- Refresh UI to clear "Check AH" tasks
+        -- Refresh UI to clear "Check Mail" tasks
         if ns.UI then
             if ns.UI.RefreshMini then ns.UI:RefreshMini() end
             if ns.UI.Refresh then ns.UI:Refresh() end

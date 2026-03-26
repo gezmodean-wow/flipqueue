@@ -426,7 +426,7 @@ function UI:RefreshTodoPage()
         if self._listSelectorBar then self._listSelectorBar:Hide() end
     end
 
-    -- Current character tasks frame (Check AH, Check Mail, Expiring)
+    -- Current character tasks frame (Check Mail, Expiring)
     if not self._charTasksFrame then
         local ctf = CreateFrame("Frame", nil, tableContainer)
         ctf:SetPoint("TOPLEFT", tableContainer, "TOPLEFT", 0, 0)
