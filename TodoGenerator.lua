@@ -547,14 +547,18 @@ function TodoList:BuildDisplayGroups(items, sortMode)
 
     for _, group in ipairs(groups) do
         local allDeferred = #group.items > 0
-        local hasActiveTask = false
+        local allStuck = #group.items > 0  -- all deferred with no blocker (truly unresolvable)
         for _, item in ipairs(group.items) do
             if not item.deferredAt then
                 allDeferred = false
-                hasActiveTask = true
+                allStuck = false
+            elseif item.blockedBy then
+                -- Deferred but has a blocker — waiting on a deposit, not stuck
+                allStuck = false
             end
         end
         group._allDeferred = allDeferred
+        group._allStuck = allStuck  -- no items exist anywhere, nothing actionable
         -- A depositor is a character who holds items that other characters need.
         -- They should log in first to deposit, even if their own tasks are deferred.
         group._unblocksCount = group.charKey and blockedBySet[group.charKey] or 0
@@ -562,6 +566,16 @@ function TodoList:BuildDisplayGroups(items, sortMode)
         -- A group is "blocked only" if ALL its tasks are deferred and it has no deposit duties
         group._blockedOnly = allDeferred and not group._isDepositor
     end
+
+    -- Remove stuck groups: all tasks deferred, no blocker, no deposit duties.
+    -- These characters have nothing actionable — items don't exist anywhere.
+    local filteredGroups = {}
+    for _, group in ipairs(groups) do
+        if not group._allStuck or group._isDepositor then
+            table.insert(filteredGroups, group)
+        end
+    end
+    groups = filteredGroups
 
     -- Sort groups by the chosen mode.
     -- Tiers: depositors > assigned+active > assigned+blocked-only > unassigned
