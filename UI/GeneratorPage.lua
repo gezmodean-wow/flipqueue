@@ -1940,6 +1940,16 @@ function UI:RefreshGeneratorPage(pending)
         gf.nextBtn:Show()
         gf.nextBtn.text:SetText("Next")
         gf.nextBtn:SetScript("OnClick", function()
+            -- Cross-realm step 1→2: save parsed deals to DB before advancing
+            if wizTrack == "crossrealm" and wizStep == 1 then
+                local cr1 = gf.crStepContainers[1]
+                if cr1._previewData and #cr1._previewData > 0 then
+                    local added = ns.Import:Save(cr1._previewData, "fpCrossRealm")
+                    ns:PrintDebug("Cross-realm import: saved " .. added .. " deals to DB.")
+                    cr1._previewData = nil
+                    cr1._previewResults = nil
+                end
+            end
             SaveWizardState(wizTrack, wizStep + 1)
             -- Auto-generate on entering step 3 (inventory track)
             -- Cross-realm auto-generates on every step 3 render
