@@ -294,9 +294,9 @@ local function BuildNextStepsData()
     local receiverOf = {}      -- receiverCharKey -> { depositorCharKey = true }
 
     if todoList and todoList.tasks then
-        -- Collect deposit dependencies
+        -- Collect deposit dependencies (only pending tasks — posted/skipped are terminal)
         for _, item in ipairs(todoList.tasks) do
-            if item.source == "unavailable" and item.depositFrom then
+            if item.status == "pending" and item.source == "unavailable" and item.depositFrom then
                 if not depositsByChar[item.depositFrom] then
                     depositsByChar[item.depositFrom] = { count = 0, gold = 0 }
                 end
