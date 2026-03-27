@@ -962,29 +962,39 @@ function TodoList:RefreshTaskSteps()
 
             local justAdvanced = false
             if isBuyTask then
-                -- Buy task steps: browse → buy → deposit
+                -- Buy task steps: browse → buy → collect → deposit
                 if stepType == "browse" then
-                    -- Item appeared in bags (bought from AH and collected from mail)
-                    -- Advance past browse and buy in one go
+                    -- Item appeared in bags (bought + collected from mail without hook)
+                    -- Advance past browse, buy, and collect in one go
                     if inBags then
                         self:AdvanceStep(taskIdx) -- browse → buy
-                        self:AdvanceStep(taskIdx) -- buy → deposit (or done)
+                        self:AdvanceStep(taskIdx) -- buy → collect
+                        self:AdvanceStep(taskIdx) -- collect → deposit
                         changed = true
                         task.source = "bags"
                         justAdvanced = true
                     end
                 elseif stepType == "buy" then
-                    -- If item now in bags, the buy step is complete
+                    -- Purchase hook already advanced browse→buy.
+                    -- Item now in bags (collected from mail) → advance past buy and collect
                     if inBags then
-                        self:AdvanceStep(taskIdx)
+                        self:AdvanceStep(taskIdx) -- buy → collect
+                        self:AdvanceStep(taskIdx) -- collect → deposit
+                        changed = true
+                        task.source = "bags"
+                        justAdvanced = true
+                    end
+                elseif stepType == "collect" then
+                    -- Waiting for mail collection. Item in bags = collected.
+                    if inBags then
+                        self:AdvanceStep(taskIdx) -- collect → deposit
                         changed = true
                         task.source = "bags"
                         justAdvanced = true
                     end
                 elseif stepType == "deposit" then
                     -- If item left bags for any reason (deposited, posted, vendored),
-                    -- treat deposit step as complete. Don't check task.source — RefreshLocations
-                    -- may have already changed it to "unavailable" before we run.
+                    -- treat deposit step as complete.
                     if not inBags then
                         self:AdvanceStep(taskIdx)
                         changed = true
@@ -1195,6 +1205,44 @@ function TodoList:CheckAutoComplete()
     self:ClearCurrent()
 
     return changed
+end
+
+-- Advance buy tasks matching a purchased item.
+-- Called from AH purchase hooks (PlaceBid / ConfirmCommoditiesPurchase).
+-- Advances browse → buy (purchase confirmed, item en route to mail).
+function TodoList:OnItemPurchased(itemID, itemName)
+    local current = self:GetCurrentList()
+    if not current or not current.tasks then return end
+
+    local charKey = ns:GetCharKey()
+    local currentRealm = charKey:match("%-(.+)$") or GetRealmName()
+    local numID = tonumber(itemID)
+    local lname = itemName and itemName:lower() or nil
+
+    for taskIdx, task in ipairs(current.tasks) do
+        if task.status == "pending" and task.action == "buy"
+                and task.assignedChar == charKey
+                and ns:RealmMatches(task.buyRealm or "", currentRealm)
+                and task.steps and task.currentStep then
+            local stepType = self:GetCurrentStepType(task)
+            if stepType == "browse" then
+                -- Match by numeric ID or name
+                local taskNumID = tonumber(task.itemID) or tonumber((task.itemKey or ""):match("^(%d+)"))
+                local matched = (numID and taskNumID and numID == taskNumID)
+                    or (lname and task.name and task.name:lower() == lname)
+                if matched then
+                    self:AdvanceStep(taskIdx) -- browse → buy
+                    self:AdvanceStep(taskIdx) -- buy → collect (waiting for mail)
+                    ns:Print(ns.COLORS.GREEN .. "Purchased:|r " .. (task.name or "?") .. " — collect from mail")
+                    if ns.UI then
+                        if ns.UI.Refresh then ns.UI:Refresh() end
+                        if ns.UI.RefreshMini then ns.UI:RefreshMini() end
+                    end
+                    return -- one purchase = one task advancement
+                end
+            end
+        end
+    end
 end
 
 -- Skip a task (TSM below threshold, user skip, etc.)
@@ -1429,6 +1477,7 @@ function TodoList:ReassignUnassignedTasks()
                                 task.steps = {
                                     { type = "browse", status = "pending" },
                                     { type = "buy",    status = "pending" },
+                                    { type = "collect", status = "pending" },
                                     { type = "deposit", to = "warbank", status = "pending" },
                                 }
                             else

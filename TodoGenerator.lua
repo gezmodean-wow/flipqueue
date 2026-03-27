@@ -1033,6 +1033,7 @@ function TodoList:GenerateTodoList(source, allocationOrder, opts)
                     steps = {
                         { type = "browse", status = "pending" },
                         { type = "buy",    status = "pending" },
+                        { type = "collect", status = "pending" },
                         { type = "deposit", to = "warbank", status = "pending" },
                     },
                     currentStep = 1,

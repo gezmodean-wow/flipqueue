@@ -253,3 +253,40 @@ frame:SetScript("OnEvent", function(self, event)
         Tracker._pendingCancels = (Tracker._pendingCancels or 0) + 1
     end
 end)
+
+--------------------------
+-- AH Purchase Hooks
+--------------------------
+-- Detect when the player buys an item on the AH (non-commodity and commodity)
+-- and advance buy task steps immediately (browse → buy → collect).
+
+-- Non-commodity buyout: PlaceBid with bidAmount matching buyout = purchase
+if C_AuctionHouse and C_AuctionHouse.PlaceBid then
+    hooksecurefunc(C_AuctionHouse, "PlaceBid", function(auctionID, bidAmount)
+        if not ns.TodoList or not ns.TodoList.OnItemPurchased then return end
+        -- Look up the auction info to get the item
+        local info = C_AuctionHouse.GetAuctionInfoByID(auctionID)
+        if info and info.itemKey then
+            local itemID = info.itemKey.itemID
+            local itemName
+            if itemID then
+                local ok, n = pcall(C_Item.GetItemInfo, itemID)
+                itemName = ok and n or nil
+            end
+            ns.TodoList:OnItemPurchased(itemID, itemName)
+        end
+    end)
+end
+
+-- Commodity purchase confirmation
+if C_AuctionHouse and C_AuctionHouse.ConfirmCommoditiesPurchase then
+    hooksecurefunc(C_AuctionHouse, "ConfirmCommoditiesPurchase", function(itemID, quantity)
+        if not ns.TodoList or not ns.TodoList.OnItemPurchased then return end
+        local itemName
+        if itemID then
+            local ok, n = pcall(C_Item.GetItemInfo, itemID)
+            itemName = ok and n or nil
+        end
+        ns.TodoList:OnItemPurchased(itemID, itemName)
+    end)
+end
