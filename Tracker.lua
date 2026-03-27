@@ -209,10 +209,11 @@ frame:SetScript("OnEvent", function(self, event)
                     ns.TodoList:RefreshTaskSteps()
                 end
             end
-            if ns.UI and ns.UI.mainFrame and ns.UI.mainFrame:IsShown() then
-                if ns.UI.currentPage == "todo" or ns.UI.currentPage == "generator" then
+            if ns.UI then
+                if ns.UI.mainFrame and ns.UI.mainFrame:IsShown() then
                     ns.UI:Refresh()
                 end
+                if ns.UI.RefreshMini then ns.UI:RefreshMini() end
             end
         end)
 
