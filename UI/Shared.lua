@@ -251,7 +251,7 @@ local function BuildCurrentCharTasks()
     if todoList and todoList.tasks then
         local myRealm = myCharKey:match("%-(.+)$") or ""
         for _, item in ipairs(todoList.tasks) do
-            if item.source == "unavailable" and item.depositFrom == myCharKey then
+            if item.status == "pending" and item.source == "unavailable" and item.depositFrom == myCharKey then
                 local itemName = item.name or "?"
                 local forChar = item.assignedChar and (item.assignedChar:match("^(.-)%-") or item.assignedChar) or "?"
                 local targetRealm = item.assignedChar and (item.assignedChar:match("%-(.+)$") or "") or ""
