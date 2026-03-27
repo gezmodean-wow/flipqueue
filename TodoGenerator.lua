@@ -488,12 +488,32 @@ function TodoList:BuildDisplayGroups(items, sortMode)
     local byChar = {}
     local charOrder = {}
     local skippedMissing = 0
+    -- Track realm group keys for connected realm merging
+    local realmGroupKeys = {} -- array of { key, realm } for existing unassigned groups
     for _, item in ipairs(items) do
         local key
         if item.status == "pending" and item.assignedChar then
             key = item.assignedChar
         elseif item.status == "unassigned" then
-            key = "_realm:" .. ns:NormalizeRealmKey(item.targetRealm or "")
+            -- Merge connected realms: check if this realm overlaps an existing group
+            local itemRealm = item.targetRealm or ""
+            local merged = false
+            for _, rg in ipairs(realmGroupKeys) do
+                if ns:RealmMatches(itemRealm, rg.realm) then
+                    key = rg.key
+                    -- Keep the longer realm string (more complete cluster name)
+                    if #itemRealm > #rg.realm then
+                        rg.realm = itemRealm
+                        if byChar[key] then byChar[key].realm = itemRealm end
+                    end
+                    merged = true
+                    break
+                end
+            end
+            if not merged then
+                key = "_realm:" .. ns:NormalizeRealmKey(itemRealm)
+                table.insert(realmGroupKeys, { key = key, realm = itemRealm })
+            end
         elseif item.status == "missing" then
             skippedMissing = skippedMissing + 1
             key = nil
