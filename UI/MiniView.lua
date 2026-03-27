@@ -8,6 +8,7 @@ local MINI_WIDTH_DEFAULT = 280
 local MINI_WIDTH_MIN = 200
 local MINI_WIDTH_MAX = 500
 local COLLAPSED_ROWS = 2
+local MAX_MINI_ROWS = 20
 
 --------------------------
 -- Mini Frame
@@ -828,10 +829,32 @@ function UI:RefreshMini()
         end)
     end
 
-    -- Resize frame to fit content
+    -- Cap visible rows to prevent going off-screen
+    if visibleRows > MAX_MINI_ROWS then
+        for i = MAX_MINI_ROWS + 1, visibleRows do
+            if miniRows[i] then miniRows[i]:Hide() end
+        end
+        local truncated = visibleRows - MAX_MINI_ROWS + 1 -- +1 because we replace last visible with hint
+        if miniRows[MAX_MINI_ROWS] then
+            miniRows[MAX_MINI_ROWS].icon:SetTexture(nil)
+            miniRows[MAX_MINI_ROWS].text:SetText(ns.COLORS.GRAY .. "+" .. truncated .. " more..." .. ns.COLORS.RESET)
+            miniRows[MAX_MINI_ROWS].tooltipItemID = nil
+            miniRows[MAX_MINI_ROWS].tooltipItemName = nil
+            miniRows[MAX_MINI_ROWS].tooltipExtra = nil
+            miniRows[MAX_MINI_ROWS]:SetScript("OnMouseDown", nil)
+            miniRows[MAX_MINI_ROWS]:SetScript("OnEnter", nil)
+            miniRows[MAX_MINI_ROWS]:SetScript("OnLeave", nil)
+            if miniRows[MAX_MINI_ROWS]._taskActionBtns then UI.HideTaskActionBtns(miniRows[MAX_MINI_ROWS]) end
+        end
+        visibleRows = MAX_MINI_ROWS
+    end
+
+    -- Resize frame to fit content, clamped to screen height
     local contentHeight = math.max(1, visibleRows) * MINI_ROW_HEIGHT
     taskArea:SetHeight(contentHeight)
-    mini:SetHeight(24 + contentHeight + 8)
+    local frameHeight = 24 + contentHeight + 8
+    local maxScreenHeight = UIParent:GetHeight() * 0.8
+    mini:SetHeight(math.min(frameHeight, maxScreenHeight))
     resizeGrip:SetShown(not miniCollapsed)
 end
 

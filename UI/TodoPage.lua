@@ -444,13 +444,37 @@ function UI:RefreshTodoPage()
         row:Hide()
     end
 
+    local MAX_CHAR_TASKS_HEIGHT = 200 -- ~9 rows before scrolling
     local charTaskHeight = 0
     if #myTasks > 0 then
         self._charTasksFrame:Show()
+
+        -- Create scroll frame for tasks if not already present
+        if not self._charTasksScroll then
+            local scroll = CreateFrame("ScrollFrame", nil, self._charTasksFrame, "UIPanelScrollFrameTemplate")
+            scroll:SetPoint("TOPLEFT", self._charTasksFrame, "TOPLEFT", 0, 0)
+            scroll:SetPoint("BOTTOMRIGHT", self._charTasksFrame, "BOTTOMRIGHT", -16, 0)
+            local scrollChild = CreateFrame("Frame", nil, scroll)
+            scrollChild:SetWidth(scroll:GetWidth())
+            scroll:SetScrollChild(scrollChild)
+            self._charTasksScroll = scroll
+            self._charTasksScrollChild = scrollChild
+            -- Style the scrollbar to be subtle
+            if scroll.ScrollBar then
+                scroll.ScrollBar:SetAlpha(0.6)
+            end
+        end
+
+        local scrollChild = self._charTasksScrollChild
+        -- Move rows to scroll child parent
+        for _, row in ipairs(self._charTasksFrame.rows) do
+            row:Hide()
+        end
+
         for i, task in ipairs(myTasks) do
             local row = self._charTasksFrame.rows[i]
             if not row then
-                row = CreateFrame("Frame", nil, self._charTasksFrame)
+                row = CreateFrame("Frame", nil, scrollChild)
                 row:SetHeight(22)
                 row.bg = row:CreateTexture(nil, "BACKGROUND")
                 row.bg:SetAllPoints()
@@ -463,9 +487,13 @@ function UI:RefreshTodoPage()
                 row.text:SetJustifyH("LEFT")
                 self._charTasksFrame.rows[i] = row
             end
+            -- Re-parent to scroll child if needed
+            if row:GetParent() ~= scrollChild then
+                row:SetParent(scrollChild)
+            end
             row:ClearAllPoints()
-            row:SetPoint("TOPLEFT", self._charTasksFrame, "TOPLEFT", 0, -(i - 1) * 22)
-            row:SetPoint("RIGHT", self._charTasksFrame, "RIGHT", 0, 0)
+            row:SetPoint("TOPLEFT", scrollChild, "TOPLEFT", 0, -(i - 1) * 22)
+            row:SetPoint("RIGHT", scrollChild, "RIGHT", 0, 0)
             row.bg:SetColorTexture(0.12, 0.15, 0.12, 0.6)
             row.icon:SetTexture(task.icon)
             row.text:SetText(task.text)
@@ -495,10 +523,23 @@ function UI:RefreshTodoPage()
             end
             row:Show()
         end
-        charTaskHeight = #myTasks * 22 + 4
+
+        local fullContentHeight = #myTasks * 22 + 4
+        scrollChild:SetHeight(fullContentHeight)
+        scrollChild:SetWidth(self._charTasksScroll:GetWidth())
+
+        charTaskHeight = math.min(fullContentHeight, MAX_CHAR_TASKS_HEIGHT)
         self._charTasksFrame:SetHeight(charTaskHeight)
+
+        -- Show/hide scrollbar based on need
+        local needsScroll = fullContentHeight > MAX_CHAR_TASKS_HEIGHT
+        if self._charTasksScroll.ScrollBar then
+            self._charTasksScroll.ScrollBar:SetShown(needsScroll)
+        end
+        self._charTasksScroll:Show()
     else
         self._charTasksFrame:Hide()
+        if self._charTasksScroll then self._charTasksScroll:Hide() end
         charTaskHeight = 0
     end
 
@@ -992,9 +1033,11 @@ function UI:RefreshTodoPage()
                 self._nextStepsLabel:SetText("Next Steps (" .. #nextData .. ")")
                 self._nextStepsLabel:Show()
 
+                -- Anchor header below label, scroll frame below header
                 self.nextStepsTable.headerFrame:ClearAllPoints()
-                self.nextStepsTable.headerFrame:SetPoint("TOPLEFT", tableContainer, "TOPLEFT", 0, belowBanner - 10)
-                self.nextStepsTable.headerFrame:SetPoint("TOPRIGHT", tableContainer, "TOPRIGHT", 0, belowBanner - 10)
+                self.nextStepsTable.headerFrame:SetPoint("TOPLEFT", self._nextStepsLabel, "BOTTOMLEFT", -4, -2)
+                self.nextStepsTable.headerFrame:SetPoint("TOPRIGHT", tableContainer, "TOPRIGHT", 0, 0)
+                self.nextStepsTable.headerFrame:SetFrameLevel(tableContainer:GetFrameLevel() + 10)
                 self.nextStepsTable.scrollFrame:ClearAllPoints()
                 self.nextStepsTable.scrollFrame:SetPoint("TOPLEFT", self.nextStepsTable.headerFrame, "BOTTOMLEFT", 0, 0)
                 self.nextStepsTable.scrollFrame:SetPoint("BOTTOMRIGHT", tableContainer, "BOTTOMRIGHT", -22, 0)
@@ -1049,21 +1092,26 @@ function UI:RefreshTodoPage()
             self._nextStepsLabel:SetText("Next Steps (" .. #nextData .. ")")
             self._nextStepsLabel:Show()
 
+            -- Anchor header below label
             self.nextStepsTable.headerFrame:ClearAllPoints()
-            self.nextStepsTable.headerFrame:SetPoint("TOPLEFT", tableContainer, "TOPLEFT", 0, -postNowHeight - 10)
-            self.nextStepsTable.headerFrame:SetPoint("TOPRIGHT", tableContainer, "TOPRIGHT", 0, -postNowHeight - 10)
+            self.nextStepsTable.headerFrame:SetPoint("TOPLEFT", self._nextStepsLabel, "BOTTOMLEFT", -4, -2)
+            self.nextStepsTable.headerFrame:SetPoint("TOPRIGHT", tableContainer, "TOPRIGHT", 0, 0)
 
             self.nextStepsTable.scrollFrame:ClearAllPoints()
             self.nextStepsTable.scrollFrame:SetPoint("TOPLEFT", self.nextStepsTable.headerFrame, "BOTTOMLEFT", 0, 0)
             self.nextStepsTable.scrollFrame:SetPoint("BOTTOMRIGHT", tableContainer, "BOTTOMRIGHT", -22, 0)
 
+            -- Raise next steps header above postNow scroll content so it doesn't get overlapped
+            self.nextStepsTable.headerFrame:SetFrameLevel(tableContainer:GetFrameLevel() + 10)
+
             UI._ShowTable(self.nextStepsTable)
             self.nextStepsTable:SetData(nextData)
 
+            -- Constrain postNow scroll to end at the next steps label
             self.postNowTable.scrollFrame:ClearAllPoints()
             self.postNowTable.scrollFrame:SetPoint("TOPLEFT", self.postNowTable.headerFrame, "BOTTOMLEFT", 0, 0)
             self.postNowTable.scrollFrame:SetPoint("RIGHT", tableContainer, "RIGHT", -22, 0)
-            self.postNowTable.scrollFrame:SetHeight(postNowHeight - charTaskHeight - 22)
+            self.postNowTable.scrollFrame:SetPoint("BOTTOM", self._nextStepsLabel, "TOP", 0, 2)
         else
             if self._nextStepsLabel then self._nextStepsLabel:Hide() end
             self.postNowTable.scrollFrame:ClearAllPoints()

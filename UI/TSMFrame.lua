@@ -318,13 +318,26 @@ function UI:CreateTSMPanel(parent)
     ------------------------------------------------
     y = y - SectionHeader(content, y, "Auctioning Operations")
 
-    tsmWidgets.opInfo = content:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-    tsmWidgets.opInfo:SetPoint("TOPLEFT", content, "TOPLEFT", LEFT_MARGIN, y)
-    tsmWidgets.opInfo:SetPoint("RIGHT", content, "RIGHT", RIGHT_MARGIN, 0)
+    local MAX_OPS_HEIGHT = 120
+    local opScrollFrame = CreateFrame("ScrollFrame", nil, content, "UIPanelScrollFrameTemplate")
+    opScrollFrame:SetPoint("TOPLEFT", content, "TOPLEFT", LEFT_MARGIN, y)
+    opScrollFrame:SetPoint("RIGHT", content, "RIGHT", RIGHT_MARGIN - 16, 0)
+    opScrollFrame:SetHeight(MAX_OPS_HEIGHT)
+    if opScrollFrame.ScrollBar then opScrollFrame.ScrollBar:SetAlpha(0.6) end
+
+    local opScrollChild = CreateFrame("Frame", nil, opScrollFrame)
+    opScrollChild:SetWidth(opScrollFrame:GetWidth())
+    opScrollFrame:SetScrollChild(opScrollChild)
+
+    tsmWidgets.opInfo = opScrollChild:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    tsmWidgets.opInfo:SetPoint("TOPLEFT", opScrollChild, "TOPLEFT", 0, 0)
+    tsmWidgets.opInfo:SetPoint("RIGHT", opScrollChild, "RIGHT", 0, 0)
     tsmWidgets.opInfo:SetJustifyH("LEFT")
     tsmWidgets.opInfo:SetWordWrap(true)
     tsmWidgets.opInfo:SetSpacing(2)
-    y = y - 60
+    tsmWidgets.opScrollFrame = opScrollFrame
+    tsmWidgets.opScrollChild = opScrollChild
+    y = y - MAX_OPS_HEIGHT
 
     tsmWidgets.opDesc = content:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
     tsmWidgets.opDesc:SetPoint("TOPLEFT", content, "TOPLEFT", LEFT_MARGIN, y)
@@ -521,6 +534,16 @@ function UI:RefreshTSMPage()
             end
         else
             tsmWidgets.opInfo:SetText("|cff888888Enable TSM and select a profile to see operations.|r")
+        end
+        -- Resize scroll child to fit content
+        if tsmWidgets.opScrollChild then
+            local textHeight = tsmWidgets.opInfo:GetStringHeight() or 60
+            tsmWidgets.opScrollChild:SetHeight(math.max(textHeight + 4, 20))
+            tsmWidgets.opScrollChild:SetWidth(tsmWidgets.opScrollFrame:GetWidth())
+            -- Hide scrollbar if content fits
+            if tsmWidgets.opScrollFrame.ScrollBar then
+                tsmWidgets.opScrollFrame.ScrollBar:SetShown(textHeight > 120)
+            end
         end
     end
 
