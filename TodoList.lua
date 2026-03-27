@@ -477,17 +477,25 @@ function TodoList:RefreshLocations()
 
     -- Build available quantity map: charKey -> lowercase name -> available qty
     -- Also count how many have already been assigned as depositFrom in earlier steps
+    -- Include ALL characters (even current) — current char's bank items can be
+    -- pulled and deposited to warbank for other characters.
+    -- Step 4 already handled current char's BAG surplus; Step 5 handles bank items.
     local charAvailable = {} -- charKey -> { lname -> qty }
     for ck, charData in pairs(ns.db.characters or {}) do
-        if ck ~= charKey and not charData.ignored
+        if not charData.ignored
                 and charData.inventory and charData.inventory.items then
             local byName = {}
             for k, invItem in pairs(charData.inventory.items) do
                 if invItem.name and invItem.name ~= "" then
                     local totalQty = 0
                     if invItem.locations then
-                        for _, qty in pairs(invItem.locations) do totalQty = totalQty + qty end
-                    elseif (invItem.quantity or 0) > 0 then
+                        -- For current character, only count bank items (bags handled by Step 4)
+                        if ck == charKey then
+                            totalQty = (invItem.locations.bank or 0) + (invItem.locations.reagent or 0)
+                        else
+                            for _, qty in pairs(invItem.locations) do totalQty = totalQty + qty end
+                        end
+                    elseif ck ~= charKey and (invItem.quantity or 0) > 0 then
                         totalQty = invItem.quantity
                     end
                     if totalQty > 0 then
