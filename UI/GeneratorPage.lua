@@ -1265,7 +1265,7 @@ function UI:RefreshGeneratorPage(pending)
                     if newCount > 0 then table.insert(parts, ns.COLORS.GREEN .. newCount .. " new|r") end
                     if updateCount > 0 then table.insert(parts, ns.COLORS.YELLOW .. updateCount .. " updates|r") end
                     if dupCount > 0 then table.insert(parts, ns.COLORS.GRAY .. dupCount .. " dupes|r") end
-                    cr1.statusLabel:SetText(table.concat(parts, "  ") .. "  -- use Import tab to save")
+                    cr1.statusLabel:SetText(table.concat(parts, "  ") .. "  -- review results, then click Next to filter")
                 else
                     cr1.statusLabel:SetText(ns.COLORS.RED .. "No items found in pasted data.|r")
                 end
