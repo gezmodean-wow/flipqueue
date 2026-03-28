@@ -558,12 +558,18 @@ end
 -- Warbank Auto-Deposit
 --------------------------
 
-function Tracker:AutoDepositToWarbank()
-    if not ns.db or not ns:GetCharSetting(ns:GetCharKey(), "autoDepositWarbank") then return end
+function Tracker:AutoDepositToWarbank(onComplete)
+    if not ns.db or not ns:GetCharSetting(ns:GetCharKey(), "autoDepositWarbank") then
+        if onComplete then onComplete() end
+        return
+    end
 
     local charKey = ns:GetCharKey()
     local todoList = ns.TodoList and ns.TodoList:GetCurrentList()
-    if not todoList or not todoList.tasks then return end
+    if not todoList or not todoList.tasks then
+        if onComplete then onComplete() end
+        return
+    end
 
     -- Find items this character needs to deposit for other characters
     local depositTasks = {}
@@ -574,7 +580,10 @@ function Tracker:AutoDepositToWarbank()
         end
     end
 
-    if #depositTasks == 0 then return end
+    if #depositTasks == 0 then
+        if onComplete then onComplete() end
+        return
+    end
 
     -- Exclude items the current character also needs for posting
     local myPostingKeys = {}
@@ -626,7 +635,10 @@ function Tracker:AutoDepositToWarbank()
         end
     end
 
-    if #moves == 0 then return end
+    if #moves == 0 then
+        if onComplete then onComplete() end
+        return
+    end
 
     -- Find empty warbank slots
     local emptySlots = {}
@@ -644,6 +656,7 @@ function Tracker:AutoDepositToWarbank()
 
     if #emptySlots == 0 then
         ns:Print(ns.COLORS.RED .. "Warbank is full!|r Cannot deposit " .. #moves .. " item(s).")
+        if onComplete then onComplete() end
         return
     end
 
@@ -696,6 +709,7 @@ function Tracker:AutoDepositToWarbank()
             end
             if ns.UI and ns.UI.Refresh then ns.UI:Refresh() end
             if ns.UI and ns.UI.RefreshMini then ns.UI:RefreshMini() end
+            if onComplete then onComplete() end
         end)
     end
 

@@ -219,19 +219,21 @@ frame:SetScript("OnEvent", function(self, event)
 
     elseif event == "BANKFRAME_OPENED" then
         C_Timer.After(1, function()
-            -- Scanner already scans bags/bank/warbank at 0.5s — refresh locations first
-            -- so deposit tasks are resolved before auto-pull runs
-            if ns.TodoList and ns.TodoList.RefreshLocations then
-                ns.TodoList:RefreshLocations()
+            -- Scanner already scans bags/bank/warbank at 0.5s — refresh task state
+            -- with fresh data so depositFrom/source are correct before auto-pull runs
+            if ns.TodoList then
+                if ns.TodoList.RefreshLocations then ns.TodoList:RefreshLocations() end
+                if ns.TodoList.RefreshTaskSteps then ns.TodoList:RefreshTaskSteps() end
             end
             -- Pull completes async, then chain deposit + gold + task refresh
             Tracker:AutoPullFromBank(function()
                 -- Withdraw gold FIRST while all pulled items are still in bags
                 -- (deposit operations move items out, which breaks vendor price lookup)
                 Tracker:AutoWithdrawGold()
-                -- Then deposit task items and extras
-                Tracker:AutoDepositToWarbank()
-                Tracker:AutoDepositExtraItems()
+                -- Then deposit task items, chaining extras after completion
+                Tracker:AutoDepositToWarbank(function()
+                    Tracker:AutoDepositExtraItems()
+                end)
                 -- Refresh task steps (items may now be in bags after pull/deposit)
                 if ns.TodoList and ns.TodoList.RefreshTaskSteps then
                     ns.TodoList:RefreshTaskSteps()

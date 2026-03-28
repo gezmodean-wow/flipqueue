@@ -1095,6 +1095,61 @@ function TodoList:RefreshTaskSteps()
         end
     end
 
+    -- Build map of items the current character needs for its own tasks,
+    -- so we can identify excess items in bags available for deposit to other chars.
+    local myNeededKeys = {}  -- itemKey -> qty needed
+    local myNeededIDs = {}   -- numID -> qty needed
+    local myNeededNames = {} -- lname -> qty needed
+    for _, task in ipairs(current.tasks) do
+        if task.status == "pending" and task.assignedChar == charKey and task.action ~= "buy" then
+            local ik = task.itemKey or ""
+            myNeededKeys[ik] = (myNeededKeys[ik] or 0) + (task.quantity or 1)
+            local nid = tonumber(task.itemID) or tonumber(ik:match("^(%d+)"))
+            if nid then
+                myNeededIDs[nid] = (myNeededIDs[nid] or 0) + (task.quantity or 1)
+            end
+            if task.name and task.name ~= "" then
+                myNeededNames[task.name:lower()] = (myNeededNames[task.name:lower()] or 0) + (task.quantity or 1)
+            end
+        end
+    end
+
+    -- Track excess items consumed by deposit assignments (prevent double-counting)
+    local excessConsumed = {} -- "id_or_name" -> qty consumed
+
+    -- Helper: does the current character have excess items in bags for deposit?
+    -- Uses numeric ID as primary check (robust to key format differences between
+    -- tasks and bag items — e.g., bare import key "12345;;" vs enriched "12345;4795;28:").
+    local function CurrentCharHasExcess(itemKey, itemNumID, taskName, taskQty)
+        taskQty = taskQty or 1
+        -- Primary: numeric item ID (aggregates across all key variants)
+        if itemNumID then
+            local idKey = tostring(itemNumID)
+            local inBagsID = bagsItemIDs[itemNumID] or 0
+            local neededID = myNeededIDs[itemNumID] or 0
+            local consumedID = excessConsumed[idKey] or 0
+            if inBagsID - neededID - consumedID >= taskQty then
+                excessConsumed[idKey] = consumedID + taskQty
+                return true
+            end
+            -- If this item ID exists in bags at all, trust the ID-based count
+            if inBagsID > 0 then return false end
+        end
+        -- Fallback: name (for items without a usable numeric ID, e.g., battle pets)
+        if taskName and taskName ~= "" then
+            local lname = taskName:lower()
+            local nameKey = "n:" .. lname
+            local inBagsName = bagsItemNames[lname] or 0
+            local neededName = myNeededNames[lname] or 0
+            local consumedName = excessConsumed[nameKey] or 0
+            if inBagsName - neededName - consumedName >= taskQty then
+                excessConsumed[nameKey] = consumedName + taskQty
+                return true
+            end
+        end
+        return false
+    end
+
     -- Also check availability for OTHER characters' tasks using stored DB data.
     -- Can't advance steps or scan live bags for them, but can set/clear deferral
     -- so their groups sort correctly without needing to log into each character.
@@ -1133,7 +1188,8 @@ function TodoList:RefreshTaskSteps()
                         changed = true
                     end
                 end
-            else
+            elseif actualSource == "warbank" then
+                -- Warbank is accessible to all characters — trust this source
                 if task.status == "skipped" and task.failReason and not task.failReason:find("TSM") then
                     task.status = "pending"
                     task.failReason = nil
@@ -1143,15 +1199,49 @@ function TodoList:RefreshTaskSteps()
                     task.deferredAt = nil
                     changed = true
                 end
-                -- Clear blockedBy/depositFrom — item is now accessible
                 if task.blockedBy then
                     task.blockedBy = nil
                     task.depositFrom = nil
                     changed = true
                 end
-                if task.source ~= actualSource then
-                    task.source = actualSource
+                if task.source ~= "warbank" then
+                    task.source = "warbank"
                     changed = true
+                end
+            else
+                -- Source is from assigned char's stored inventory (bags/bank/reagent).
+                -- This data may be stale if the character hasn't logged in recently.
+                -- If the current character has excess of this item in bags, prefer
+                -- flagging as a deposit — the stale source might be wrong, and showing
+                -- a deposit task is safer than hiding it.
+                if CurrentCharHasExcess(itemKey, itemNumID, task.name, task.quantity or 1) then
+                    if task.depositFrom ~= charKey then
+                        task.blockedBy = charKey
+                        task.depositFrom = charKey
+                        task.source = "unavailable"
+                        task.failReason = "Item in current character's bags — deposit to warbank"
+                        if not task.deferredAt then task.deferredAt = time() end
+                        changed = true
+                    end
+                else
+                    if task.status == "skipped" and task.failReason and not task.failReason:find("TSM") then
+                        task.status = "pending"
+                        task.failReason = nil
+                        changed = true
+                    end
+                    if task.deferredAt then
+                        task.deferredAt = nil
+                        changed = true
+                    end
+                    if task.blockedBy then
+                        task.blockedBy = nil
+                        task.depositFrom = nil
+                        changed = true
+                    end
+                    if task.source ~= actualSource then
+                        task.source = actualSource
+                        changed = true
+                    end
                 end
             end
         end
