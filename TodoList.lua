@@ -901,6 +901,17 @@ function TodoList:RefreshTaskSteps()
     -- Tracks "charKey:lname" -> qty to prevent over-allocating deposits
     local holderConsumed = {}
 
+    -- Pre-populate holderConsumed with items the current character needs for its
+    -- own pending tasks. Without this, FindItemHolder sees the current character's
+    -- inventory as available for deposit, even though those items are needed here.
+    for _, task in ipairs(current.tasks) do
+        if task.status == "pending" and task.assignedChar == charKey
+            and task.action ~= "buy" and task.name and task.name ~= "" then
+            local ckey = charKey .. ":" .. task.name:lower()
+            holderConsumed[ckey] = (holderConsumed[ckey] or 0) + (task.quantity or 1)
+        end
+    end
+
     -- One-time cleanup: strip "..." from targetRealm fields (FP website truncation)
     if not current._realmsCleaned then
         for _, task in ipairs(current.tasks) do
