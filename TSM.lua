@@ -253,14 +253,14 @@ function TSM:GetPrice(fqKey, priceSource)
     local tsmStr = self:ItemKeyToTSMString(fqKey)
     if not tsmStr then return nil end
 
-    local ok, copper = pcall(TSM_API.GetCustomPriceValue, TSM_API, priceSource, tsmStr)
+    local ok, copper = pcall(TSM_API.GetCustomPriceValue, priceSource, tsmStr)
     local value = ok and copper or nil
 
     -- Fallback: try base item ID
     if not value then
         local baseStr = BaseItemID(fqKey)
         if baseStr and baseStr ~= tsmStr then
-            ok, copper = pcall(TSM_API.GetCustomPriceValue, TSM_API, priceSource, baseStr)
+            ok, copper = pcall(TSM_API.GetCustomPriceValue, priceSource, baseStr)
             value = ok and copper or nil
         end
     end

@@ -57,6 +57,9 @@ function ns:InitDB()
     if db.settings.tsmShowColumns == nil then db.settings.tsmShowColumns = false end
     if db.settings.tsmAutoUpdatePrice == nil then db.settings.tsmAutoUpdatePrice = false end
     db.settings.tsmPriceMaxAge     = db.settings.tsmPriceMaxAge or 3600
+    -- Transform page defaults
+    db.settings.transformPriceSource  = db.settings.transformPriceSource or "DBMarket"
+    db.settings.transformDiscount     = db.settings.transformDiscount or 90
     db.settings.defaultSellQty     = db.settings.defaultSellQty or 1
     db.settings.sellQtyMode        = db.settings.sellQtyMode or "tsm"  -- "fixed" or "tsm"
     -- Character ordering for manual sort

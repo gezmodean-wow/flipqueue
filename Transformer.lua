@@ -47,13 +47,12 @@ function Transformer:InputFromTSMGroup(profile, groupPath)
     local itemsDB = ns.TSM:GetItemsDB(profile)
     if not itemsDB then return {} end
 
+    -- Single pass: string match + lightweight normalization (no GetItemInfo calls)
     local items = {}
     for tsmStr, itemGroupPath in pairs(itemsDB) do
         if type(itemGroupPath) == "string" then
-            -- Match exact group or child groups
             if itemGroupPath == groupPath
                 or itemGroupPath:find(groupPath .. "`", 1, true) == 1 then
-
                 local item = self:_TSMStringToNormalized(tsmStr)
                 if item then
                     table.insert(items, item)
@@ -66,15 +65,18 @@ function Transformer:InputFromTSMGroup(profile, groupPath)
 end
 
 -- Convert a TSM item string ("i:12345", "i:12345::2:1663:2293", "p:1234") to normalized item
+-- Lightweight: only uses GetItemInfoInstant (sync/fast). Enrich fills name/quality later.
 function Transformer:_TSMStringToNormalized(tsmStr)
     if not tsmStr then return nil end
 
     -- Battle pet: "p:speciesID"
     local speciesID = tsmStr:match("^p:(%d+)")
     if speciesID then
-        local petName = "Pet"
-        local ok, name = pcall(C_PetJournal.GetPetInfoBySpeciesID, tonumber(speciesID))
-        if ok and name then petName = name end
+        local petName = "Pet " .. speciesID
+        if C_PetJournal and C_PetJournal.GetPetInfoBySpeciesID then
+            local ok, name = pcall(C_PetJournal.GetPetInfoBySpeciesID, tonumber(speciesID))
+            if ok and type(name) == "string" and name ~= "" then petName = name end
+        end
 
         return {
             itemKey    = "pet:" .. speciesID .. ";q0;",
@@ -108,30 +110,21 @@ function Transformer:_TSMStringToNormalized(tsmStr)
         bonusIDs = table.concat(bonusList, ":")
     end
 
+    -- Only use GetItemInfoInstant (fast, synchronous, no server request)
+    -- Enrich will fill in name and quality later via LookupItemInfo
     local numID = tonumber(itemID)
-    local itemName = "Item " .. itemID
-    local icon, quality
+    local icon
     if numID and numID > 0 then
-        -- C_Item.GetItemInfo returns: name, link, quality, ilvl, minLevel, type, subType, stackCount, equipLoc, texture, ...
-        local ok1, name, _, itemQuality, _, _, _, _, _, _, iconTexture = pcall(C_Item.GetItemInfo, numID)
-        if ok1 then
-            if name then itemName = name end
-            if itemQuality then quality = itemQuality end
-            if iconTexture then icon = iconTexture end
-        end
-        if not icon then
-            -- C_Item.GetItemInfoInstant returns: itemID, type, subType, equipLoc, icon, ...
-            local ok2, _, _, _, _, tex = pcall(C_Item.GetItemInfoInstant, numID)
-            if ok2 and tex then icon = tex end
-        end
+        local ok, _, _, _, _, tex = pcall(C_Item.GetItemInfoInstant, numID)
+        if ok and tex then icon = tex end
     end
 
     local itemKey = ns:MakeItemKey(itemID, bonusIDs, "")
     return {
         itemKey    = itemKey,
         itemID     = itemID,
-        name       = itemName,
-        quality    = quality and QUALITY_NAMES[quality] or "Unknown",
+        name       = "Item " .. itemID,
+        quality    = "Unknown",
         quantity   = 1,
         isBattlePet = false,
         bonusIDs   = bonusIDs,
@@ -389,9 +382,12 @@ end
 
 -- Produce AAA-compatible JSON
 -- Accepts either a flat items array or a {items=..., pets=...} split table
+-- AAA format: {"itemID": goldPrice, ...} where goldPrice is gold as a number.
+-- AAA multiplies by 10000 internally to compare against copper. Decimals OK.
 function Transformer:OutputAAAJSON(input, discount, priceSource)
     discount = discount or 90
     priceSource = priceSource or "DBMarket"
+    local modifier = (100 - discount) / 100
 
     local itemsList, petsList
     if input.items and input.pets then
@@ -403,51 +399,94 @@ function Transformer:OutputAAAJSON(input, discount, priceSource)
         petsList = split.pets
     end
 
-    -- Apply pricing if not already applied
-    if ns.TSM and ns.TSM:IsEnabled() then
-        local needsPrice = false
-        for _, item in ipairs(itemsList) do
-            if not item._priceCopper then needsPrice = true; break end
+    -- TSM API for direct price lookups (bypass IsEnabled gate)
+    local tsmAPI = TSM_API and type(TSM_API) == "table"
+        and type(TSM_API.GetCustomPriceValue) == "function"
+        and TSM_API or nil
+    local tsmKeyFn = ns.TSM and ns.TSM.ItemKeyToTSMString and ns.TSM or nil
+
+    local parseGold = ns.ParseGoldValue and function(v) return ns:ParseGoldValue(v) end
+
+    -- Get TSM price in copper for an item, trying full key then base ID
+    local function getTSMCopper(item)
+        if not tsmAPI then return nil end
+        -- Try full TSM string
+        if tsmKeyFn and item.itemKey and item.itemKey ~= "" then
+            local tsmStr = tsmKeyFn:ItemKeyToTSMString(item.itemKey)
+            if tsmStr then
+                local ok, val = pcall(tsmAPI.GetCustomPriceValue, priceSource, tsmStr)
+                if ok and val and val > 0 then return val end
+            end
         end
-        if needsPrice then
-            local modifier = (100 - discount) / 100
-            itemsList = self:PriceModify(itemsList, priceSource, modifier)
-            petsList = self:PriceModify(petsList, priceSource, modifier)
+        -- Fallback: base item ID
+        local baseID = item.itemKey and item.itemKey:match("^(%d+)") or tonumber(item.itemID)
+        if baseID then
+            local ok, val = pcall(tsmAPI.GetCustomPriceValue, priceSource, "i:" .. tostring(baseID))
+            if ok and val and val > 0 then return val end
         end
+        return nil
+    end
+
+    -- Resolve gold price for AAA output: TSM with discount first, expectedPrice fallback
+    local function resolveAAPrice(item)
+        -- Always try TSM first (applies discount)
+        local copper = getTSMCopper(item)
+        if copper then
+            local gp = (copper / 10000) * modifier
+            return math.floor(gp * 100 + 0.5) / 100
+        end
+        -- Fallback: parse expectedPrice (import data) and apply discount
+        if item.expectedPrice then
+            local gp = tonumber(item.expectedPrice)
+            if not gp and parseGold then
+                gp = parseGold(tostring(item.expectedPrice))
+            end
+            if gp and gp > 0 then
+                gp = gp * modifier
+                return math.floor(gp * 100 + 0.5) / 100
+            end
+        end
+        return nil
+    end
+
+    local function resolveItemID(item)
+        local numID = tonumber(item.itemID)
+        if numID and numID > 0 then return numID end
+        if item.itemKey then
+            local keyID = item.itemKey:match("^(%d+);")
+            numID = tonumber(keyID)
+            if numID and numID > 0 then return numID end
+        end
+        return nil
     end
 
     local itemsMap = {} -- numericID -> goldPrice
     local petsMap = {}  -- speciesID -> goldPrice
+    local unpricedItems, unpricedPets = 0, 0
 
     for _, item in ipairs(itemsList) do
-        -- Skip items with bonus IDs (AAA uses base item IDs only)
-        if item.bonusIDs and item.bonusIDs ~= "" then
-            -- skip
-        else
-            local numID = tostring(tonumber(tostring(item.itemID)))
-            if numID and numID ~= "nil" and item._priceCopper then
-                local goldPrice = item._priceCopper / 10000
-                goldPrice = math.floor(goldPrice * 100 + 0.5) / 100
-                itemsMap[numID] = goldPrice
-            elseif numID and numID ~= "nil" and item.expectedPrice then
-                local price = tonumber(item.expectedPrice)
-                if price and price > 0 then
-                    itemsMap[numID] = price
-                end
+        local numID = resolveItemID(item)
+        if numID then
+            local numIDStr = tostring(numID)
+            local goldPrice = resolveAAPrice(item) or 0
+            if goldPrice == 0 then unpricedItems = unpricedItems + 1 end
+            if not itemsMap[numIDStr] then
+                itemsMap[numIDStr] = goldPrice
+            elseif goldPrice > 0 and (itemsMap[numIDStr] == 0 or goldPrice < itemsMap[numIDStr]) then
+                itemsMap[numIDStr] = goldPrice
             end
         end
     end
 
     for _, pet in ipairs(petsList) do
-        local sid = tostring(pet.speciesID)
-        if sid and pet._priceCopper then
-            local goldPrice = pet._priceCopper / 10000
-            goldPrice = math.floor(goldPrice * 100 + 0.5) / 100
-            petsMap[sid] = goldPrice
-        elseif sid and pet.expectedPrice then
-            local price = tonumber(pet.expectedPrice)
-            if price and price > 0 then
-                petsMap[sid] = price
+        local sid = pet.speciesID and tostring(pet.speciesID)
+        if sid then
+            local goldPrice = resolveAAPrice(pet) or 0
+            if goldPrice == 0 then unpricedPets = unpricedPets + 1 end
+            if not petsMap[sid] then
+                petsMap[sid] = goldPrice
+            elseif goldPrice > 0 and (petsMap[sid] == 0 or goldPrice < petsMap[sid]) then
+                petsMap[sid] = goldPrice
             end
         end
     end
@@ -470,8 +509,7 @@ function Transformer:OutputAAAJSON(input, discount, priceSource)
     for _ in pairs(itemsMap) do itemCount = itemCount + 1 end
     for _ in pairs(petsMap) do petCount = petCount + 1 end
 
-    local output = "// Items:\n" .. formatJSON(itemsMap) .. "\n\n// Pets:\n" .. formatJSON(petsMap)
-    return output, itemCount, petCount
+    return formatJSON(itemsMap), formatJSON(petsMap), itemCount, petCount, unpricedItems, unpricedPets
 end
 
 -- Produce FlippingPal-compatible semicolon CSV
@@ -574,14 +612,14 @@ end
 -- TSM group -> AAA JSON
 function Transformer:PresetTSMToAAA(profile, groupPath, discount, priceSource)
     local items = self:InputFromTSMGroup(profile, groupPath)
-    if #items == 0 then return "", 0, 0 end
+    if #items == 0 then return "", "", 0, 0 end
     return self:OutputAAAJSON(items, discount, priceSource)
 end
 
 -- Inventory -> AAA JSON
 function Transformer:PresetInventoryToAAA(filter, value, discount, priceSource)
     local items = self:InputFromInventory(filter, value)
-    if #items == 0 then return "", 0, 0 end
+    if #items == 0 then return "", "", 0, 0 end
     return self:OutputAAAJSON(items, discount, priceSource)
 end
 
@@ -589,21 +627,122 @@ end
 -- ENRICHMENT
 -- ==========================================
 
--- Enrich items with icon and quality data from WoW API / inventory DB
-function Transformer:Enrich(items)
-    local LookupItemInfo = ns.UI and ns.UI._LookupItemInfo
-    if not LookupItemInfo then return items end
+-- Import categories that indicate battle pets
+local PET_CATEGORIES = { pet = true, companions = true }
 
-    for _, item in ipairs(items) do
-        if not item.icon or not item.quality or item.quality == "" or item.quality == "Unknown" then
-            local icon, quality, resolvedID = LookupItemInfo(item.itemID, item.itemKey, item.name)
-            if icon then item.icon = icon end
-            if quality then item.quality = QUALITY_NAMES[quality] or item.quality end
-            if resolvedID and (not item.itemID or item.itemID == "") then
-                item.itemID = tostring(resolvedID)
+-- Pet name -> speciesID map (built lazily from C_PetJournal)
+local petNameMap
+
+local function GetPetNameMap()
+    if petNameMap then return petNameMap end
+    petNameMap = {}
+    if not C_PetJournal or not C_PetJournal.GetPetInfoBySpeciesID then return petNameMap end
+    for speciesID = 1, 5000 do
+        local ok, name = pcall(C_PetJournal.GetPetInfoBySpeciesID, speciesID)
+        if ok and type(name) == "string" and name ~= "" then
+            petNameMap[name:lower()] = speciesID
+        end
+    end
+    return petNameMap
+end
+
+function Transformer:_GetPetNameMap() return GetPetNameMap() end
+
+-- Per-item enrichment: resolve IDs, detect pets, fill icon/quality
+local function EnrichItem(item, LookupItemInfo, pMap)
+    local numID = tonumber(item.itemID)
+    local needsID = not item.isBattlePet and (not numID or numID <= 0)
+    local needsVisuals = not item.icon or not item.quality
+        or item.quality == "" or item.quality == "Unknown"
+
+    -- 1. Detect battle pets by category + pet name map
+    if not item.isBattlePet and item.category then
+        local cat = item.category:lower()
+        if PET_CATEGORIES[cat] then
+            local sid = pMap[(item.name or ""):lower()]
+            if sid then
+                item.isBattlePet = true
+                item.speciesID = sid
+                item.itemID = "pet:" .. sid
+                item.itemKey = "pet:" .. sid .. ";q0;"
+                needsID = false
+                needsVisuals = false
             end
         end
     end
 
+    -- 2. Try extracting itemID from itemKey format "12345;bonusIDs;modifiers"
+    if needsID and item.itemKey then
+        local keyID = item.itemKey:match("^(%d+);")
+        if keyID then
+            numID = tonumber(keyID)
+            if numID and numID > 0 then
+                item.itemID = tostring(numID)
+                needsID = false
+            end
+        end
+    end
+
+    -- 3. Use LookupItemInfo for remaining ID / icon / quality
+    if (needsID or needsVisuals) and LookupItemInfo then
+        local icon, quality, resolvedID = LookupItemInfo(
+            item.itemID, item.itemKey, item.name)
+        if resolvedID and needsID then
+            item.itemID = tostring(resolvedID)
+        end
+        if icon and not item.icon then item.icon = icon end
+        if quality and (not item.quality or item.quality == ""
+                or item.quality == "Unknown") then
+            item.quality = QUALITY_NAMES[quality] or item.quality
+        end
+    end
+
+    -- 4. Ensure itemKey is populated
+    if not item.itemKey or item.itemKey == "" then
+        if item.isBattlePet and item.speciesID then
+            item.itemKey = "pet:" .. item.speciesID .. ";q0;"
+        elseif item.itemID and item.itemID ~= "" then
+            item.itemKey = ns:MakeItemKey(
+                item.itemID, item.bonusIDs or "", item.modifiers or "")
+        end
+    end
+end
+
+-- Synchronous enrich (for small item sets)
+function Transformer:Enrich(items)
+    local LookupItemInfo = ns.UI and ns.UI._LookupItemInfo
+    local pMap = GetPetNameMap()
+    for _, item in ipairs(items) do
+        EnrichItem(item, LookupItemInfo, pMap)
+    end
     return items
+end
+
+-- Chunked async enrich (for large item sets, keeps UI responsive)
+-- shouldCancel(): return true to abort
+-- onProgress(processed, total): called after each chunk
+-- onComplete(): called when all items are enriched
+function Transformer:EnrichChunked(items, chunkSize, shouldCancel, onProgress, onComplete)
+    local LookupItemInfo = ns.UI and ns.UI._LookupItemInfo
+    local pMap = GetPetNameMap()
+    chunkSize = chunkSize or 50
+    local idx = 1
+    local total = #items
+
+    local function processChunk()
+        if shouldCancel and shouldCancel() then return end
+        local endIdx = math.min(idx + chunkSize - 1, total)
+        for i = idx, endIdx do
+            EnrichItem(items[i], LookupItemInfo, pMap)
+        end
+        idx = endIdx + 1
+        if idx <= total then
+            if onProgress then onProgress(idx - 1, total) end
+            C_Timer.After(0, processChunk)
+        else
+            if onComplete then onComplete() end
+        end
+    end
+
+    processChunk()
 end

@@ -4,6 +4,9 @@ local addonName, ns = ...
 
 local UI = ns.UI
 
+-- Forward declaration (defined after BuildCharactersData)
+local RefreshCharactersTable
+
 -- ==========================================
 -- 3-STATE SETTING DISPLAY HELPERS
 -- ==========================================
@@ -770,7 +773,7 @@ end
 
 -- Lightweight refresh: update table data + global defaults bar without rebuilding config panel.
 -- Call this instead of UI:Refresh() when changing settings inside the config panel.
-local function RefreshCharactersTable()
+function RefreshCharactersTable()
     local charData = BuildCharactersData()
     if UI.charsTable then
         UI.charsTable:SetData(charData)
