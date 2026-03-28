@@ -603,28 +603,38 @@ function Tracker:AutoDepositToWarbank(onComplete)
         if ok and numSlots then
             for slot = 1, numSlots do
                 local ok2, info = pcall(C_Container.GetContainerItemInfo, bagIndex, slot)
-                -- Don't filter by isBound — BtW/WuE items show as bound but
-                -- can move to warbank. The game rejects truly invalid moves.
                 if ok2 and info and info.hyperlink then
-                    local itemID, bonusIDs, modifiers = ns:ParseItemLink(info.hyperlink)
-                    if itemID then
-                        local key = ns:MakeItemKey(itemID, bonusIDs, modifiers)
-                        -- Skip items the current character needs for posting
-                        if not myPostingKeys[key] then
-                            local slotName
-                            for _, task in ipairs(depositTasks) do
-                                if not depositMatched[task] then
-                                    local matched = ns:ItemsMatch(key, nil, task, false, false)
-                                    if not matched then
-                                        if slotName == nil then slotName = Tracker._GetNameFromLink(info.hyperlink) or false end
-                                        if slotName then
-                                            matched = ns:ItemsMatch(key, slotName, task, false, false)
+                    -- Skip soulbound items — BoP (1) and Quest (4) can't go to warbank.
+                    -- BtW/WuE items show as bound but CAN move; only filter true soulbound.
+                    local skipBound = false
+                    if info.isBound then
+                        local okBind, _, _, _, _, _, _, _, _, _, _, _, _, _, bt =
+                            pcall(C_Item.GetItemInfo, info.hyperlink)
+                        if okBind and bt and (bt == 1 or bt == 4) then
+                            skipBound = true
+                        end
+                    end
+                    if not skipBound then
+                        local itemID, bonusIDs, modifiers = ns:ParseItemLink(info.hyperlink)
+                        if itemID then
+                            local key = ns:MakeItemKey(itemID, bonusIDs, modifiers)
+                            -- Skip items the current character needs for posting
+                            if not myPostingKeys[key] then
+                                local slotName
+                                for _, task in ipairs(depositTasks) do
+                                    if not depositMatched[task] then
+                                        local matched = ns:ItemsMatch(key, nil, task, false, false)
+                                        if not matched then
+                                            if slotName == nil then slotName = Tracker._GetNameFromLink(info.hyperlink) or false end
+                                            if slotName then
+                                                matched = ns:ItemsMatch(key, slotName, task, false, false)
+                                            end
                                         end
-                                    end
-                                    if matched then
-                                        depositMatched[task] = true
-                                        table.insert(moves, { bag = bagIndex, slot = slot, name = task.name or "?" })
-                                        break
+                                        if matched then
+                                            depositMatched[task] = true
+                                            table.insert(moves, { bag = bagIndex, slot = slot, name = task.name or "?" })
+                                            break
+                                        end
                                     end
                                 end
                             end
