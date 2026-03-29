@@ -88,6 +88,8 @@ function ns:InitDB()
     db.settings.genCrossRealmListMode = db.settings.genCrossRealmListMode or "separate"  -- "separate"/"integrated"
     db.settings.genIntegratedSortMode = db.settings.genIntegratedSortMode or "mostProfitable"
     db.settings.genCrossRealmRealmFilter = db.settings.genCrossRealmRealmFilter or {}
+    -- Skip deals that have no matching character (suppress "create character" tasks)
+    if db.settings.skipUnassigned == nil then db.settings.skipUnassigned = false end
     -- TSM character detection dismissed list
     db.settings.dismissedTSMChars = db.settings.dismissedTSMChars or {}
     -- Tutorial (first-time interactive walkthrough)
@@ -361,6 +363,48 @@ function ns:GetCharKey()
     local name  = UnitName("player")
     local realm = GetRealmName()
     return name .. "-" .. realm
+end
+
+--------------------------
+-- Character Roles
+--------------------------
+
+-- Role values: "both" (default), "sell", "buy", "none" (hidden)
+
+function ns:GetCharRole(charKey)
+    local charData = ns.db and ns.db.characters and ns.db.characters[charKey]
+    return charData and charData.role or "both"
+end
+
+function ns:SetCharRole(charKey, role)
+    if not ns.db or not ns.db.characters then return end
+    local charData = ns.db.characters[charKey]
+    if not charData then return end
+    charData.role = role
+    -- Keep .ignored in sync for backward compatibility
+    charData.ignored = (role == "none")
+end
+
+function ns:CharCanSell(charKey)
+    local role = self:GetCharRole(charKey)
+    return role == "both" or role == "sell"
+end
+
+function ns:CharCanBuy(charKey)
+    local role = self:GetCharRole(charKey)
+    return role == "both" or role == "buy"
+end
+
+function ns:IsCharHidden(charKey)
+    return self:GetCharRole(charKey) == "none"
+end
+
+-- Check if two roles overlap for shared AH detection.
+-- Characters with overlapping roles on the same AH cluster are duplicates.
+function ns:RolesOverlap(role1, role2)
+    if role1 == "none" or role2 == "none" then return false end
+    if role1 == "both" or role2 == "both" then return true end
+    return role1 == role2  -- sell+sell or buy+buy
 end
 
 --------------------------

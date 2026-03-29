@@ -220,6 +220,12 @@ function UI:CreateSettingsPanel(parent)
         "tsmAutoSkipRejected")
     y = y - h - ITEM_SPACING
 
+    settingsWidgets.skipUnassigned, h = CreateSettingsCheckbox(content, y,
+        "Skip deals with no character",
+        "When generating a to-do list, skip deals that have no matching character on the required realm instead of creating 'new character' tasks. Useful when you only want tasks for realms you already have characters on.",
+        "skipUnassigned")
+    y = y - h - ITEM_SPACING
+
     -- Pull batch size slider
     do
         local row = CreateFrame("Frame", nil, content)

@@ -8,6 +8,32 @@ local UI = ns.UI
 local RefreshCharactersTable
 
 -- ==========================================
+-- CHARACTER ROLE HELPERS
+-- ==========================================
+
+local ROLE_CYCLE = { both = "sell", sell = "buy", buy = "none", none = "both" }
+
+local function CycleRole(current)
+    return ROLE_CYCLE[current] or "both"
+end
+
+local function FormatRoleLabel(role)
+    if role == "sell" then return "|cffffaa00Sell Only|r"
+    elseif role == "buy" then return "|cff00aaffBuy Only|r"
+    elseif role == "none" then return "|cff666666Hidden|r"
+    else return "|cff00ff00Both|r"
+    end
+end
+
+local function FormatRoleDesc(role)
+    if role == "sell" then return "Sell and deposit tasks only"
+    elseif role == "buy" then return "Buy and deposit tasks only"
+    elseif role == "none" then return "Skipped for task routing"
+    else return "Buy, sell, and deposit tasks"
+    end
+end
+
+-- ==========================================
 -- 3-STATE SETTING DISPLAY HELPERS
 -- ==========================================
 
@@ -68,11 +94,11 @@ local function BuildCharactersData()
     local charData = {}
 
     -- Build AH cluster groups: characters whose realms overlap share an AH
-    -- Exclude hidden/ignored characters so they don't cause others to show "Shared AH"
+    -- Exclude hidden characters so they don't cause others to show "Shared AH"
     local clusters = {}  -- array of {realms={}, chars={charKey, ...}}
     for charKey, inv in pairs(ns.db.characters) do
         local realm = charKey:match("%-(.+)$") or ""
-        if realm ~= "" and not inv.ignored then
+        if realm ~= "" and (inv.role or "both") ~= "none" then
             local found = nil
             for _, c in ipairs(clusters) do
                 for _, cr in ipairs(c.realms) do
@@ -94,19 +120,28 @@ local function BuildCharactersData()
     end
 
     -- Build lookup: charKey -> cluster info (for shared AH detection)
+    -- Only flag characters as "Shared AH" when another in the cluster has an overlapping role
     local charCluster = {}  -- charKey -> {clusterIdx, otherChars}
     for ci, c in ipairs(clusters) do
         if #c.chars > 1 then
             for _, ck in ipairs(c.chars) do
-                local others = {}
+                local ckRole = (ns.db.characters[ck] or {}).role or "both"
+                local overlappingOthers = {}
                 for _, ock in ipairs(c.chars) do
-                    if ock ~= ck then table.insert(others, ock) end
+                    if ock ~= ck then
+                        local ockRole = (ns.db.characters[ock] or {}).role or "both"
+                        if ns:RolesOverlap(ckRole, ockRole) then
+                            table.insert(overlappingOthers, ock)
+                        end
+                    end
                 end
-                charCluster[ck] = {
-                    idx = ci,
-                    realms = c.realms,
-                    others = others,
-                }
+                if #overlappingOthers > 0 then
+                    charCluster[ck] = {
+                        idx = ci,
+                        realms = c.realms,
+                        others = overlappingOthers,
+                    }
+                end
             end
         end
     end
@@ -120,7 +155,8 @@ local function BuildCharactersData()
         local name = charKey:match("^(.-)%-") or charKey
         local realm = charKey:match("%-(.+)$") or ""
         local allTasks = ns.TodoList:GetCharacterTasks(charKey)
-        local isHidden = inv.ignored
+        local charRole = inv.role or "both"
+        local isHidden = charRole == "none"
 
         -- Filter tasks by character's realm
         local tasks = {}
@@ -158,14 +194,24 @@ local function BuildCharactersData()
             auctionStr = table.concat(parts, " / ")
         end
 
-        -- Build status string
+        -- Build status string (showing role + shared AH indicator)
         local statusParts = {}
         if isHidden then
             table.insert(statusParts, "|cff666666Hidden|r")
         elseif charCluster[charKey] then
-            table.insert(statusParts, "|cffff8800Shared AH|r")
+            if charRole == "sell" then
+                table.insert(statusParts, "|cffff8800Sell*|r")
+            elseif charRole == "buy" then
+                table.insert(statusParts, "|cffff8800Buy*|r")
+            else
+                table.insert(statusParts, "|cffff8800Both*|r")
+            end
+        elseif charRole == "sell" then
+            table.insert(statusParts, "|cffffaa00Sell|r")
+        elseif charRole == "buy" then
+            table.insert(statusParts, "|cff00aaffBuy|r")
         else
-            table.insert(statusParts, "|cff00ff00Active|r")
+            table.insert(statusParts, "|cff00ff00Both|r")
         end
         local statusStr = table.concat(statusParts, " ")
 
@@ -213,8 +259,10 @@ local function BuildCharactersData()
             _orderPos = orderPos,
             _tooltipText = charKey,
             _tooltipExtra = string.format(
-                "Gold: %s\n%d queue tasks%s\nStatus: %s%s\n\nClick to configure\nShift+Right-click: move up\nCtrl+Right-click: move down",
-                goldStr, #tasks,
+                "Gold: %s\nRole: %s\n%d queue tasks%s\nStatus: %s%s\n\nClick to configure\nShift+Right-click: move up\nCtrl+Right-click: move down",
+                goldStr,
+                charRole == "sell" and "Sell Only" or (charRole == "buy" and "Buy Only" or (isHidden and "Hidden" or "Both")),
+                #tasks,
                 auctionInfo and ("\n" .. auctionInfo.active .. " active, " .. auctionInfo.done .. " done auction(s)") or "",
                 isHidden and "Hidden" or (charCluster[charKey] and "Shared AH" or "Active"),
                 charCluster[charKey] and ("\nAH Cluster: " .. table.concat(charCluster[charKey].realms, ", ") ..
@@ -349,31 +397,44 @@ local function EnsureConfigPanel(tableContainer)
     div1:SetPoint("RIGHT", configPanel, "RIGHT", R_MARGIN, 0)
     div1:SetColorTexture(0.35, 0.35, 0.45, 0.6)
 
-    -- Ignore Character checkbox
-    local ignoreRow = CreateFrame("Frame", nil, configPanel)
-    ignoreRow:SetPoint("TOPLEFT", div1, "BOTTOMLEFT", 0, -6)
-    ignoreRow:SetPoint("RIGHT", configPanel, "RIGHT", R_MARGIN, 0)
-    ignoreRow:SetHeight(22)
+    -- Character Role selector
+    local roleRow = CreateFrame("Frame", nil, configPanel)
+    roleRow:SetPoint("TOPLEFT", div1, "BOTTOMLEFT", 0, -6)
+    roleRow:SetPoint("RIGHT", configPanel, "RIGHT", R_MARGIN, 0)
+    roleRow:SetHeight(20)
 
-    local ignoreCB = CreateFrame("CheckButton", nil, ignoreRow, "UICheckButtonTemplate")
-    ignoreCB:SetSize(22, 22)
-    ignoreCB:SetPoint("TOPLEFT", ignoreRow, "TOPLEFT", 0, 0)
-    ignoreCB.text:SetText("Ignore Character")
-    ignoreCB.text:SetFontObject("GameFontHighlightSmall")
-    configWidgets.ignoreCB = ignoreCB
+    local roleLbl = roleRow:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    roleLbl:SetPoint("LEFT", roleRow, "LEFT", 0, 0)
+    roleLbl:SetText("Role:")
 
-    local ignoreDesc = configPanel:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
-    ignoreDesc:SetPoint("TOPLEFT", ignoreRow, "BOTTOMLEFT", 22, -1)
-    ignoreDesc:SetPoint("RIGHT", configPanel, "RIGHT", R_MARGIN, 0)
-    ignoreDesc:SetJustifyH("LEFT")
-    ignoreDesc:SetWordWrap(true)
-    ignoreDesc:SetTextColor(0.5, 0.5, 0.5)
-    ignoreDesc:SetText("Skip for task routing")
+    local roleBtn = CreateFrame("Button", nil, roleRow, "BackdropTemplate")
+    roleBtn:SetSize(110, 18)
+    roleBtn:SetPoint("RIGHT", roleRow, "RIGHT", 0, 0)
+    roleBtn:SetBackdrop({
+        bgFile   = "Interface\\Tooltips\\UI-Tooltip-Background",
+        edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
+        edgeSize = 8,
+        insets   = {left = 1, right = 1, top = 1, bottom = 1},
+    })
+    roleBtn:SetBackdropColor(0.12, 0.12, 0.15, 1)
+    roleBtn:SetBackdropBorderColor(0.3, 0.3, 0.4, 0.8)
+
+    roleBtn.text = roleBtn:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    roleBtn.text:SetPoint("CENTER")
+    configWidgets.roleBtn = roleBtn
+
+    local roleDesc = configPanel:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+    roleDesc:SetPoint("TOPLEFT", roleRow, "BOTTOMLEFT", 0, -1)
+    roleDesc:SetPoint("RIGHT", configPanel, "RIGHT", R_MARGIN, 0)
+    roleDesc:SetJustifyH("LEFT")
+    roleDesc:SetWordWrap(true)
+    roleDesc:SetTextColor(0.5, 0.5, 0.5)
+    configWidgets.roleDesc = roleDesc
 
     -- Divider
     local div2 = configPanel:CreateTexture(nil, "ARTWORK")
     div2:SetHeight(1)
-    div2:SetPoint("TOPLEFT", ignoreDesc, "BOTTOMLEFT", -22, -6)
+    div2:SetPoint("TOPLEFT", roleDesc, "BOTTOMLEFT", 0, -6)
     div2:SetPoint("RIGHT", configPanel, "RIGHT", R_MARGIN, 0)
     div2:SetColorTexture(0.35, 0.35, 0.45, 0.6)
 
@@ -535,17 +596,37 @@ local function ShowConfigPanel(charKey)
     configWidgets.nameLabel:SetText("|cff" .. classColor .. name .. "|r")
     configWidgets.realmLabel:SetText(realm)
 
-    -- Ignore checkbox
-    configWidgets.ignoreCB:SetChecked(charData.ignored or false)
-    configWidgets.ignoreCB:SetScript("OnClick", function(self)
-        charData.ignored = self:GetChecked()
-        if charData.ignored then
+    -- Role button
+    local role = charData.role or "both"
+    configWidgets.roleBtn.text:SetText(FormatRoleLabel(role))
+    configWidgets.roleDesc:SetText(FormatRoleDesc(role))
+    configWidgets.roleBtn:SetScript("OnClick", function()
+        local currentRole = charData.role or "both"
+        local newRole = CycleRole(currentRole)
+        ns:SetCharRole(charKey, newRole)
+        configWidgets.roleBtn.text:SetText(FormatRoleLabel(newRole))
+        configWidgets.roleDesc:SetText(FormatRoleDesc(newRole))
+        if newRole == "none" then
             ns:Print("Hidden character: " .. charKey .. " (will be skipped for task routing)")
         else
-            ns:Print("Re-enabled character: " .. charKey)
+            local roleNames = { both = "Both", sell = "Sell Only", buy = "Buy Only" }
+            ns:Print("Set role for " .. charKey .. ": " .. (roleNames[newRole] or newRole))
         end
         RefreshCharactersTable()
     end)
+    configWidgets.roleBtn:SetScript("OnEnter", function(self)
+        GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+        GameTooltip:SetText("Character Role", 1, 1, 1)
+        GameTooltip:AddLine(" ")
+        GameTooltip:AddLine("|cff00ff00Both|r - Gets buy, sell, and deposit tasks", 0.8, 0.8, 0.8)
+        GameTooltip:AddLine("|cffffaa00Sell|r - Gets sell and deposit tasks only", 0.8, 0.8, 0.8)
+        GameTooltip:AddLine("|cff00aaffBuy|r - Gets buy and deposit tasks only", 0.8, 0.8, 0.8)
+        GameTooltip:AddLine("|cff666666Hidden|r - Skipped for all task routing", 0.8, 0.8, 0.8)
+        GameTooltip:AddLine(" ")
+        GameTooltip:AddLine("Click to cycle", 0.5, 0.5, 0.5)
+        GameTooltip:Show()
+    end)
+    configWidgets.roleBtn:SetScript("OnLeave", function() GameTooltip:Hide() end)
 
     -- 3-state buttons
     local function SetupTriStateBtn(btn, settingKey)
@@ -783,7 +864,7 @@ function RefreshCharactersTable()
         local charCount, hiddenCount, totalGold = 0, 0, 0
         for ck, ckData in pairs(ns.db.characters or {}) do
             charCount = charCount + 1
-            if ckData.ignored then hiddenCount = hiddenCount + 1 end
+            if (ckData.role or "both") == "none" then hiddenCount = hiddenCount + 1 end
             if ckData.gold then totalGold = totalGold + ckData.gold end
         end
         local parts = { charCount .. " characters" }
@@ -962,21 +1043,14 @@ function UI:RefreshCharactersPage()
             end)
         end
 
-        -- Calculate vertical position (below other tables)
-        local tsmSectionTop
-        if #needData > 0 then
-            local charsHeight = math.max(60, (#charData + 1) * 20 + 22)
-            if charsHeight > 250 then charsHeight = 250 end
-            local needHeight = math.max(40, (#needData + 1) * 20 + 22)
-            tsmSectionTop = -(GLOBALS_H + charsHeight + 10 + needHeight + 10)
-        else
-            local charsHeight = math.max(60, (#charData + 1) * 20 + 22)
-            if charsHeight > 250 then charsHeight = 250 end
-            tsmSectionTop = -(GLOBALS_H + charsHeight + 10)
-        end
+        -- Anchor TSM section from the container BOTTOM to prevent overflow.
+        -- The scroll area is capped to MAX_VISIBLE_ROWS and the label sits above it.
+        local totalContentH = (#detectedChars + 1) * ROW_H + 10
+        local maxScrollH = MAX_VISIBLE_ROWS * ROW_H + 10
+        local tsmScrollH = math.min(totalContentH, maxScrollH)
 
         tdfLabel:ClearAllPoints()
-        tdfLabel:SetPoint("TOPLEFT", tableContainer, "TOPLEFT", 4, tsmSectionTop)
+        tdfLabel:SetPoint("BOTTOMLEFT", tableContainer, "BOTTOMLEFT", 4, tsmScrollH + 2)
         tdfLabel:SetText("Detected from TSM (" .. #detectedChars .. ")")
         tdfLabel:Show()
 
@@ -993,18 +1067,10 @@ function UI:RefreshCharactersPage()
             self.charsTable.scrollFrame:SetPoint("BOTTOM", tdfLabel, "TOP", 0, 4)
         end
 
-        -- Scroll frame fills remaining space, capped to MAX_VISIBLE_ROWS
-        local totalContentH = (#detectedChars + 1) * ROW_H + 10
-        local maxScrollH = MAX_VISIBLE_ROWS * ROW_H + 10
+        -- Scroll frame fills from label bottom to container bottom
         tdfScroll:ClearAllPoints()
-        tdfScroll:SetPoint("TOPLEFT", tableContainer, "TOPLEFT", 0, tsmSectionTop - 16)
-        if totalContentH > maxScrollH then
-            -- Cap height to MAX_VISIBLE_ROWS and let the scroll frame handle overflow
-            tdfScroll:SetPoint("RIGHT", tableContainer, "RIGHT", -22, 0)
-            tdfScroll:SetHeight(maxScrollH)
-        else
-            tdfScroll:SetPoint("BOTTOMRIGHT", tableContainer, "BOTTOMRIGHT", -22, 0)
-        end
+        tdfScroll:SetPoint("TOPLEFT", tdfLabel, "BOTTOMLEFT", -4, -2)
+        tdfScroll:SetPoint("BOTTOMRIGHT", tableContainer, "BOTTOMRIGHT", -22, 0)
         tdfScroll:Show()
         tdfContent:SetWidth(tdfScroll:GetWidth() or 500)
 
@@ -1136,7 +1202,7 @@ function UI:RefreshCharactersPage()
     local totalGold = 0
     for ck, ckData in pairs(ns.db.characters) do
         charCount = charCount + 1
-        if ckData.ignored then hiddenCount = hiddenCount + 1 end
+        if (ckData.role or "both") == "none" then hiddenCount = hiddenCount + 1 end
         if ckData.gold then totalGold = totalGold + ckData.gold end
     end
     local statusParts = {charCount .. " characters"}

@@ -7,12 +7,13 @@ local addonName, ns = ...
 --------------------------
 
 -- Current schema version
-local CURRENT_SCHEMA = 2
+local CURRENT_SCHEMA = 3
 
 -- Schema history:
 -- nil/0  = v0.5.0 (stable release): queue array, separate inventory/characters/hiddenCharacters
 -- 1      = v0.6.0-alpha.1: added todoLists with current/queue, items array
 -- 2      = v0.6.x (this change): consolidated characters, imports map, guilds, steps model
+-- 3      = character roles: ignored boolean → role field (both/sell/buy/none)
 
 local function RunMigrations(db)
     db.schemaVersion = db.schemaVersion or 0
@@ -136,6 +137,18 @@ local function RunMigrations(db)
 
         db.schemaVersion = 2
     end  -- migration 2
+
+    -- Migration 3: Add character role, migrate ignored → role
+    -- Role values: "both" (default), "sell", "buy", "none" (hidden)
+    if db.schemaVersion < 3 then
+        for charKey, charData in pairs(db.characters or {}) do
+            if charData.ignored then
+                charData.role = "none"
+            end
+            -- Characters without .ignored keep role=nil which defaults to "both"
+        end
+        db.schemaVersion = 3
+    end  -- migration 3
 end  -- RunMigrations
 
 -- Expose for DB.lua

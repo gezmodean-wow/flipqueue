@@ -208,13 +208,14 @@ function Tracker:AutoPullFromBank(onComplete)
 
         for i = moveIndex, batchEnd do
             local move = moves[i]
-            -- Check if slot is locked before attempting
-            local okLock, isLocked = pcall(C_Container.GetContainerItemInfo, move.bag, move.slot)
-            if okLock and isLocked and isLocked.isLocked then
-                -- Slot is locked from a previous operation — skip, will retry
+            -- Verify slot still has an item and isn't locked
+            local okLock, slotInfo = pcall(C_Container.GetContainerItemInfo, move.bag, move.slot)
+            if not okLock or not slotInfo then
+                -- Slot is empty or inaccessible — skip
+            elseif slotInfo.isLocked then
                 pullErrors = pullErrors + 1
             else
-                local ok3, err = pcall(C_Container.UseContainerItem, move.bag, move.slot)
+                local ok3 = pcall(C_Container.UseContainerItem, move.bag, move.slot)
                 if ok3 then
                     table.insert(pulledNames, move.name)
                     batchMoved = batchMoved + 1
@@ -606,12 +607,16 @@ function Tracker:AutoDepositToWarbank(onComplete)
                 if ok2 and info and info.hyperlink then
                     -- Skip soulbound items — BoP (1) and Quest (4) can't go to warbank.
                     -- BtW/WuE items show as bound but CAN move; only filter true soulbound.
+                    -- If bind type can't be determined (async GetItemInfo), assume soulbound
+                    -- to avoid stalling on failed warbank deposits.
                     local skipBound = false
                     if info.isBound then
                         local okBind, _, _, _, _, _, _, _, _, _, _, _, _, _, bt =
                             pcall(C_Item.GetItemInfo, info.hyperlink)
-                        if okBind and bt and (bt == 1 or bt == 4) then
-                            skipBound = true
+                        if not okBind or not bt then
+                            skipBound = true  -- unknown bind type, assume soulbound
+                        elseif bt == 1 or bt == 4 then
+                            skipBound = true  -- BoP or Quest
                         end
                     end
                     if not skipBound then
@@ -737,24 +742,25 @@ function Tracker:AutoDepositToWarbank(onComplete)
             local src = moves[i]
             local dest = emptySlots[i]
 
-            -- Check if source slot is locked before attempting
+            -- Verify source slot still has an item (may have shifted since scan)
             local okLock, srcInfo = pcall(C_Container.GetContainerItemInfo, src.bag, src.slot)
-            if okLock and srcInfo and srcInfo.isLocked then
+            if not okLock or not srcInfo then
+                -- Slot is empty or inaccessible — skip
+            elseif srcInfo.isLocked then
                 depositErrors = depositErrors + 1
             else
                 pcall(ClearCursor)
-                local ok1 = pcall(C_Container.PickupContainerItem, src.bag, src.slot)
-                if ok1 then
-                    local ok2 = pcall(C_Container.PickupContainerItem, dest.bag, dest.slot)
-                    if ok2 then
+                pcall(C_Container.PickupContainerItem, src.bag, src.slot)
+                -- Only count as moved if cursor actually holds an item
+                if CursorHasItem() then
+                    pcall(C_Container.PickupContainerItem, dest.bag, dest.slot)
+                    if not CursorHasItem() then
                         table.insert(depositedNames, src.name)
                         batchMoved = batchMoved + 1
                     else
                         pcall(ClearCursor)
                         depositErrors = depositErrors + 1
                     end
-                else
-                    depositErrors = depositErrors + 1
                 end
             end
         end
@@ -802,7 +808,8 @@ function Tracker:AutoDepositToWarbank(onComplete)
                 end
             end)
         else
-            C_Timer.After(0.5, ExecuteNextBatch)
+            -- Nothing moved this batch (empty/stale slots) — proceed immediately
+            C_Timer.After(0, ExecuteNextBatch)
         end
     end
 
@@ -894,12 +901,15 @@ function Tracker:AutoDepositExtraItems()
                                     slot = slot,
                                     name = itemName or ("Item " .. key),
                                 }
-                                -- Check bind type: BoP (1) and Quest (4) can't go to warbank
+                                -- Check bind type: BoP (1) and Quest (4) can't go to warbank.
+                                -- If bind type unknown (async GetItemInfo), assume soulbound.
                                 local isSoulbound = false
                                 if info.isBound then
-                                    local ok3, _, _, _, _, _, _, _, _, _, _, _, _, bindType =
+                                    local ok3, _, _, _, _, _, _, _, _, _, _, _, _, _, bindType =
                                         pcall(C_Item.GetItemInfo, info.hyperlink)
-                                    if ok3 and (bindType == 1 or bindType == 4) then
+                                    if not ok3 or not bindType then
+                                        isSoulbound = true  -- unknown, assume soulbound
+                                    elseif bindType == 1 or bindType == 4 then
                                         isSoulbound = true
                                     end
                                 end
@@ -1057,23 +1067,25 @@ function Tracker:AutoDepositExtraItems()
             local src = moves[i]
             local dest = emptySlots[i]
 
+            -- Verify source slot still has an item (may have shifted since scan)
             local okLock, srcInfo = pcall(C_Container.GetContainerItemInfo, src.bag, src.slot)
-            if okLock and srcInfo and srcInfo.isLocked then
+            if not okLock or not srcInfo then
+                -- Slot is empty or inaccessible — skip
+            elseif srcInfo.isLocked then
                 depositErrors = depositErrors + 1
             else
                 pcall(ClearCursor)
-                local ok1 = pcall(C_Container.PickupContainerItem, src.bag, src.slot)
-                if ok1 then
-                    local ok2 = pcall(C_Container.PickupContainerItem, dest.bag, dest.slot)
-                    if ok2 then
+                pcall(C_Container.PickupContainerItem, src.bag, src.slot)
+                -- Only count as moved if cursor actually holds an item
+                if CursorHasItem() then
+                    pcall(C_Container.PickupContainerItem, dest.bag, dest.slot)
+                    if not CursorHasItem() then
                         table.insert(depositedNames, src.name)
                         batchMoved = batchMoved + 1
                     else
                         pcall(ClearCursor)
                         depositErrors = depositErrors + 1
                     end
-                else
-                    depositErrors = depositErrors + 1
                 end
             end
         end
@@ -1119,7 +1131,8 @@ function Tracker:AutoDepositExtraItems()
                 end
             end)
         else
-            C_Timer.After(0.5, ExecuteNextBatch)
+            -- Nothing moved this batch (empty/stale slots) — proceed immediately
+            C_Timer.After(0, ExecuteNextBatch)
         end
     end
 

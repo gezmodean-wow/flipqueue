@@ -170,7 +170,7 @@ SlashCmdList["FLIPQUEUE"] = function(msg)
                 table.sort(lp)
                 local scanAge = c.inventory and c.inventory.lastScan and (time() - c.inventory.lastScan) or -1
                 L("C|" .. ck .. "|" .. V(c.class) .. "|" .. V(c.level) .. "|g=" .. math.floor((c.gold or 0) / 10000)
-                    .. "|ign=" .. V(c.ignored) .. "|login=" .. (c.lastLogin and date("%m/%d %H:%M", c.lastLogin) or "-")
+                    .. "|role=" .. (c.role or "both") .. "|login=" .. (c.lastLogin and date("%m/%d %H:%M", c.lastLogin) or "-")
                     .. "|items=" .. itemCount .. "/" .. totalQty .. "|scan=" .. (scanAge >= 0 and scanAge .. "s" or "-")
                     .. "|" .. table.concat(lp, ","))
             end

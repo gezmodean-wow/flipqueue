@@ -1,22 +1,32 @@
 -- UI/LogPage.lua
--- Log page: posted items log with filtering and status display
+-- Log page: posted items log with paging to handle large logs
 local addonName, ns = ...
 
 local UI = ns.UI
 
-local function BuildLogData()
-    if not ns.db then return {} end
+local LOG_PAGE_SIZE = 200
+local logPageOffset = 0  -- 0 = most recent page
+
+local function BuildLogData(startIdx, endIdx)
+    if not ns.db or not ns.db.log then return {} end
     local LookupItemInfo = UI._LookupItemInfo
     local QualityColorName = UI._QualityColorName
     local data = {}
 
-    for i, entry in ipairs(ns.db.log) do
+    -- Iterate newest-first within the page range
+    for i = endIdx, startIdx, -1 do
+        local entry = ns.db.log[i]
+        if not entry then break end
+
         local dateStr = ""
         if entry.postedAt then
             dateStr = date("%m/%d %H:%M", entry.postedAt)
         end
 
-        local icon, quality, resolvedID = LookupItemInfo(entry.itemID, entry.itemKey, entry.name)
+        local icon, quality, resolvedID
+        if LookupItemInfo then
+            icon, quality, resolvedID = LookupItemInfo(entry.itemID, entry.itemKey, entry.name)
+        end
         local displayName = entry.name or "?"
         if quality then
             displayName = QualityColorName(displayName, quality)
@@ -34,7 +44,6 @@ local function BuildLogData()
         elseif aStatus == "expired" then
             statusStr = ns.COLORS.RED .. "Expired" .. "|r"
         elseif aStatus == "collected" then
-            -- Distinguish collected-after-sale vs collected-after-expiry
             if entry.saleOutcome == "sold" then
                 statusStr = ns.COLORS.GREEN .. "Sold" .. "|r"
             elseif entry.saleOutcome == "expired" then
@@ -48,12 +57,11 @@ local function BuildLogData()
             statusStr = ns.COLORS.YELLOW .. "Active" .. "|r"
         end
 
-        -- Show post attempt count for items with failed sale history
         if (entry.postAttempts or 0) > 0 then
             statusStr = statusStr .. ns.COLORS.RED .. " (" .. entry.postAttempts .. "x)" .. "|r"
         end
 
-        -- Price display: show sold price if sold, posted price otherwise
+        -- Price display
         local priceStr
         if (aStatus == "sold" or entry.saleOutcome == "sold") and entry.soldPrice and entry.soldPrice > 0 then
             priceStr = ns.COLORS.GREEN .. ns:FormatGold(entry.soldPrice) .. "|r"
@@ -61,12 +69,11 @@ local function BuildLogData()
             priceStr = entry.postedPrice or "?"
         end
 
-        -- Recovered entry indicator
         if entry.isRecovered then
             statusStr = statusStr .. " *"
         end
 
-        -- Tooltip with sale info
+        -- Tooltip
         local tooltipExtra = string.format("Posted: %s\nListed for: %s\nFP suggested: %s",
             dateStr, entry.postedPrice or "?", entry.expectedPrice or "?")
         if entry.isRecovered then
@@ -84,7 +91,6 @@ local function BuildLogData()
             tooltipExtra = tooltipExtra .. "\n" .. ns.COLORS.ORANGE .. entry.failReason .. "|r"
         end
 
-        -- Failed sale tracking details (#71)
         if (entry.postAttempts or 0) > 0 then
             tooltipExtra = tooltipExtra .. "\n\n" .. ns.COLORS.RED ..
                 "Failed sale attempts: " .. entry.postAttempts .. "|r"
@@ -92,7 +98,6 @@ local function BuildLogData()
                 tooltipExtra = tooltipExtra .. "\n" .. ns.COLORS.RED ..
                     "Total AH fees lost: " .. ns:FormatGold(entry.totalFeesSpent) .. "|r"
             end
-            -- Show post history details
             if entry.postHistory and #entry.postHistory > 0 then
                 tooltipExtra = tooltipExtra .. "\n" .. ns.COLORS.GRAY .. "Post history:|r"
                 for hi, attempt in ipairs(entry.postHistory) do
@@ -103,7 +108,6 @@ local function BuildLogData()
                         attemptStr = attemptStr .. " (fee: " .. ns:FormatGold(attempt.fee) .. ")"
                     end
                     tooltipExtra = tooltipExtra .. "\n" .. ns.COLORS.GRAY .. attemptStr .. "|r"
-                    -- TSM price data at time of posting
                     if attempt.tsmMinBuyout or attempt.tsmRegionSaleAvg then
                         local tsmStr = "    TSM:"
                         if attempt.tsmMinBuyout then
@@ -139,22 +143,9 @@ local function BuildLogData()
     return data
 end
 
-function UI:RefreshLogPage()
-    local mainFrame = UI.mainFrame
-    mainFrame.pageTitle:SetText(ns.COLORS.GREEN .. "Posted Items Log" .. "|r")
-    UI._LayoutActionBtns(mainFrame.actionBtns.clearLog)
-    UI._ShowTable(self.logTable)
-
-    local data = BuildLogData()
-    self.logTable:SetRowClickHandler(function(rowData, button)
-        if button == "RightButton" and IsShiftKeyDown() and rowData._logIndex then
-            table.remove(ns.db.log, rowData._logIndex)
-            ns:Print("Removed from log: " .. rowData.name)
-            self:Refresh()
-        end
-    end)
-    self.logTable:SetData(data)
-
+-- Build summary stats from full log (counting only, no API calls — fast even for 8000+)
+local function BuildLogStats()
+    if not ns.db or not ns.db.log then return 0, "" end
     local logCount = #ns.db.log
     local soldCount, activeCount, expiredCount, skippedCount, unsoldCount = 0, 0, 0, 0, 0
     local totalFeesLost = 0
@@ -172,22 +163,103 @@ function UI:RefreshLogPage()
         elseif entry.auctionStatus == "collected" and entry.saleOutcome == "expired" then
             unsoldCount = unsoldCount + 1
         end
-        -- Accumulate total fees lost on failed sales
         if (entry.totalFeesSpent or 0) > 0 then
             totalFeesLost = totalFeesLost + entry.totalFeesSpent
         end
     end
-    local logStatus = logCount .. " logged"
     local parts = {}
     if soldCount > 0 then table.insert(parts, ns.COLORS.GREEN .. soldCount .. " sold|r") end
     if activeCount > 0 then table.insert(parts, ns.COLORS.YELLOW .. activeCount .. " active|r") end
     if expiredCount > 0 then table.insert(parts, ns.COLORS.RED .. expiredCount .. " expired|r") end
     if unsoldCount > 0 then table.insert(parts, ns.COLORS.ORANGE .. unsoldCount .. " unsold|r") end
     if skippedCount > 0 then table.insert(parts, ns.COLORS.ORANGE .. skippedCount .. " skipped|r") end
-    if #parts > 0 then logStatus = logStatus .. " (" .. table.concat(parts, ", ") .. ")" end
+    local statsStr = logCount .. " logged"
+    if #parts > 0 then statsStr = statsStr .. " (" .. table.concat(parts, ", ") .. ")" end
     if totalFeesLost > 0 then
-        logStatus = logStatus .. "  |  " .. ns.COLORS.RED .. "Fees lost: " .. ns:FormatGold(totalFeesLost) .. "|r"
+        statsStr = statsStr .. "  |  " .. ns.COLORS.RED .. "Fees lost: " .. ns:FormatGold(totalFeesLost) .. "|r"
     end
-    logStatus = logStatus .. "  |  Shift+Right-click to remove"
-    mainFrame.statusText:SetText(logStatus)
+    return logCount, statsStr
+end
+
+function UI:RefreshLogPage()
+    local mainFrame = UI.mainFrame
+    mainFrame.pageTitle:SetText(ns.COLORS.GREEN .. "Posted Items Log" .. "|r")
+    UI._LayoutActionBtns(mainFrame.actionBtns.clearLog)
+    UI._ShowTable(self.logTable)
+
+    local total = ns.db and ns.db.log and #ns.db.log or 0
+    local totalPages = math.max(1, math.ceil(total / LOG_PAGE_SIZE))
+
+    -- Clamp page offset
+    if logPageOffset >= totalPages then logPageOffset = totalPages - 1 end
+    if logPageOffset < 0 then logPageOffset = 0 end
+
+    -- Page range: most recent entries first
+    local endIdx = total - logPageOffset * LOG_PAGE_SIZE
+    local startIdx = math.max(1, endIdx - LOG_PAGE_SIZE + 1)
+    if endIdx < 1 then endIdx = 0; startIdx = 1 end
+
+    local data = BuildLogData(startIdx, endIdx)
+
+    self.logTable:SetRowClickHandler(function(rowData, button)
+        if button == "RightButton" and IsShiftKeyDown() and rowData._logIndex then
+            table.remove(ns.db.log, rowData._logIndex)
+            ns:Print("Removed from log: " .. rowData.name)
+            self:Refresh()
+        end
+    end)
+    self.logTable:SetData(data)
+
+    -- Status: stats + page nav
+    local logCount, statsStr = BuildLogStats()
+
+    local pageStr = ""
+    if totalPages > 1 then
+        local curPage = logPageOffset + 1
+        pageStr = "  |  Page " .. curPage .. "/" .. totalPages
+            .. "  (Ctrl+Left/Right to navigate)"
+    end
+    statsStr = statsStr .. pageStr
+    statsStr = statsStr .. "  |  Shift+Right-click to remove"
+    mainFrame.statusText:SetText(statsStr)
+
+    -- Register page navigation keys while log is shown
+    if not self._logPageKeyFrame then
+        local kf = CreateFrame("Frame", nil, mainFrame)
+        kf:EnableKeyboard(true)
+        kf:SetPropagateKeyboardInput(true)
+        kf:SetScript("OnKeyDown", function(_, key)
+            if not IsControlKeyDown() then return end
+            if key == "LEFT" then
+                if logPageOffset < totalPages - 1 then
+                    logPageOffset = logPageOffset + 1
+                    kf:SetPropagateKeyboardInput(false)
+                    C_Timer.After(0, function()
+                        kf:SetPropagateKeyboardInput(true)
+                        UI:RefreshLogPage()
+                    end)
+                end
+            elseif key == "RIGHT" then
+                if logPageOffset > 0 then
+                    logPageOffset = logPageOffset - 1
+                    kf:SetPropagateKeyboardInput(false)
+                    C_Timer.After(0, function()
+                        kf:SetPropagateKeyboardInput(true)
+                        UI:RefreshLogPage()
+                    end)
+                end
+            end
+        end)
+        self._logPageKeyFrame = kf
+    end
+    self._logPageKeyFrame:Show()
+end
+
+-- Hide page nav keys when leaving log page
+local origHideAllActionBtns = UI._HideAllActionBtns
+if origHideAllActionBtns then
+    UI._HideAllActionBtns = function(...)
+        if UI._logPageKeyFrame then UI._logPageKeyFrame:Hide() end
+        return origHideAllActionBtns(...)
+    end
 end

@@ -401,23 +401,59 @@ function TodoList:RefreshLocations()
             end
         end
 
-        -- Update deposit tasks: when this char is the depositor and item is now in warbank
-        if item.status == "pending" and item.depositFrom == charKey
-                and item.source == "unavailable" then
+        -- Update deposit tasks: clear depositFrom when item reaches warbank.
+        -- The warbank is visible from ANY character, so check all deposit tasks,
+        -- not just those assigned to the current character.
+        if item.status == "pending" and item.depositFrom
+                and item.depositFrom ~= "" then
             local inWarbank = IsItemInLookup(item, warbankItemKeys, warbankItemIDs, warbankPetSpecies, warbankItemNames)
-            local inBags = IsItemInLookup(item, bagsItemKeys, bagsItemIDs, bagsPetSpecies, bagsItemNames)
-
             if inWarbank then
                 item.source = "warbank"
                 item.depositFrom = nil
                 item.deferredAt = nil
+                item.blocker = nil
+                item.failReason = nil
                 changed = true
-            elseif inBags then
-                -- Depositor still has it in bags — keep depositFrom but update source
-                item.source = "unavailable"
+            elseif item.depositFrom == charKey then
+                -- Current char is the depositor — check if still in bags
+                local inBags = IsItemInLookup(item, bagsItemKeys, bagsItemIDs, bagsPetSpecies, bagsItemNames)
+                if not inBags and item.source == "unavailable" then
+                    -- Item isn't in bags or warbank — depositor may have sold/deleted it.
+                    -- Clear stale deposit so the item can be re-sourced.
+                    item.depositFrom = nil
+                    item.deferredAt = nil
+                    item.blocker = nil
+                    changed = true
+                end
             end
         end
 
+    end
+
+    -- Orphan detection: sell tasks from cross-realm flips whose buy task was deleted.
+    -- If a sell task has depositFrom set but no corresponding buy task exists for that
+    -- item + depositor, the deposit is orphaned and should be cleared.
+    local buyTaskKeys = {}  -- "itemKey|depositor" -> true
+    for _, item in ipairs(current.tasks) do
+        if item.action == "buy" and item.status == "pending" and item.assignedChar then
+            local bk = (item.itemKey or item.name or "") .. "|" .. item.assignedChar
+            buyTaskKeys[bk] = true
+        end
+    end
+    for _, item in ipairs(current.tasks) do
+        if item.depositFrom and item.depositFrom ~= ""
+                and item.source == "unavailable" and item.action == "sell"
+                and item.dealType == "flip" then
+            local bk = (item.itemKey or item.name or "") .. "|" .. item.depositFrom
+            if not buyTaskKeys[bk] then
+                -- No matching buy task — this deposit is orphaned
+                item.depositFrom = nil
+                item.deferredAt = nil
+                item.blocker = nil
+                item.failReason = nil
+                changed = true
+            end
+        end
     end
 
     -- Reconcile deposit tasks: clear all depositFrom pointing to current char first,
@@ -482,7 +518,7 @@ function TodoList:RefreshLocations()
     -- Step 4 already handled current char's BAG surplus; Step 5 handles bank items.
     local charAvailable = {} -- charKey -> { lname -> qty }
     for ck, charData in pairs(ns.db.characters or {}) do
-        if not charData.ignored
+        if (charData.role or "both") ~= "none"
                 and charData.inventory and charData.inventory.items then
             local byName = {}
             for k, invItem in pairs(charData.inventory.items) do
@@ -794,7 +830,7 @@ local function FindItemHolder(itemKey, itemNumID, excludeChar, consumed, itemNam
     end
 
     for charKey, charData in pairs(ns.db.characters or {}) do
-        if charKey ~= excludeChar and not charData.ignored
+        if charKey ~= excludeChar and (charData.role or "both") ~= "none"
             and charData.inventory and charData.inventory.items then
             -- Exact key
             if HasAvailable(charKey, charData.inventory.items[itemKey]) then
@@ -1369,12 +1405,56 @@ function TodoList:DeleteTask(taskIndex)
     if not tasks or not tasks[taskIndex] then return end
 
     local item = tasks[taskIndex]
-    -- Clean up import reference
-    if item.importSource and item.importKey then
-        ns:ImportRemove(item.importSource, item.importKey)
+
+    -- If deleting a buy task, cascade-delete correlated sell tasks for the same deal.
+    -- Cross-realm flips generate a buy + sell pair; removing the buy orphans the sell.
+    if item.action == "buy" and item.dealType == "flip" then
+        local buyKey = item.itemKey or ""
+        local buyName = item.name and item.name:lower() or ""
+        local buyTarget = item.targetRealm or ""
+        local buyRealm = item.buyRealm or ""
+
+        -- Collect indices of correlated sell tasks (reverse order for safe removal)
+        local toRemove = {}
+        for i, other in ipairs(tasks) do
+            if i ~= taskIndex and other.action == "sell"
+                    and other.dealType == "flip"
+                    and ((buyKey ~= "" and other.itemKey == buyKey)
+                        or (buyName ~= "" and other.name and other.name:lower() == buyName))
+                    and ns:RealmsOverlap(other.targetRealm or "", buyTarget)
+                    and ns:RealmsOverlap(other.buyRealm or "", buyRealm) then
+                table.insert(toRemove, i)
+            end
+        end
+
+        -- Remove sell tasks + buy task together (descending order)
+        table.insert(toRemove, taskIndex)
+        table.sort(toRemove, function(a, b) return a > b end)
+        local removedNames = {}
+        for _, idx in ipairs(toRemove) do
+            local t = tasks[idx]
+            if t then
+                if t.importSource and t.importKey then
+                    ns:ImportRemove(t.importSource, t.importKey)
+                end
+                if t.action == "sell" then
+                    table.insert(removedNames, (t.name or "?") .. " (sell)")
+                end
+                table.remove(tasks, idx)
+            end
+        end
+        if #removedNames > 0 then
+            ns:Print(ns.COLORS.YELLOW .. "Also removed " .. #removedNames
+                .. " correlated sell task(s):|r " .. table.concat(removedNames, ", "))
+        end
+    else
+        -- Clean up import reference
+        if item.importSource and item.importKey then
+            ns:ImportRemove(item.importSource, item.importKey)
+        end
+        table.remove(tasks, taskIndex)
     end
 
-    table.remove(tasks, taskIndex)
     self:CheckAutoComplete()
 end
 
@@ -1419,8 +1499,9 @@ end
 -- TSM Rejection Handling
 --------------------------
 
--- Find an alternate non-ignored character on the same realm for a task.
--- Excludes the given character and any ignored characters.
+-- Find an alternate character on the same realm for a task.
+-- Excludes the given character and hidden characters.
+-- Filters by role: buy tasks need buy/both, sell tasks need sell/both.
 -- Returns charKey or nil.
 function TodoList:FindAlternateCharacter(task, excludeChar)
     if not ns.db or not ns.db.characters then return nil end
@@ -1429,10 +1510,21 @@ function TodoList:FindAlternateCharacter(task, excludeChar)
 
     local candidates = {}
     for charKey, charData in pairs(ns.db.characters) do
-        if charKey ~= excludeChar and not charData.ignored then
-            local charRealm = charKey:match("%-(.+)$")
-            if charRealm and ns:RealmMatches(targetRealm, charRealm) then
-                table.insert(candidates, charKey)
+        if charKey ~= excludeChar then
+            local role = charData.role or "both"
+            if role ~= "none" then
+                local roleOk = true
+                if task.action == "buy" then
+                    roleOk = (role == "both" or role == "buy")
+                else
+                    roleOk = (role == "both" or role == "sell")
+                end
+                if roleOk then
+                    local charRealm = charKey:match("%-(.+)$")
+                    if charRealm and ns:RealmMatches(targetRealm, charRealm) then
+                        table.insert(candidates, charKey)
+                    end
+                end
             end
         end
     end
@@ -1572,11 +1664,17 @@ function TodoList:ReassignUnassignedTasks()
             end
 
             if realm and realm ~= "" then
-                -- Find a non-ignored character on this realm
+                -- Find a character on this realm with matching role
                 for ck, charData in pairs(ns.db.characters or {}) do
                     local charRealm = ck:match("%-(.+)$")
-                    if charRealm and ns:RealmMatches(realm, charRealm)
-                        and not (type(charData) == "table" and charData.ignored) then
+                    local role = type(charData) == "table" and (charData.role or "both") or "both"
+                    local roleOk = role ~= "none"
+                    if roleOk and task.action == "buy" then
+                        roleOk = (role == "both" or role == "buy")
+                    elseif roleOk then
+                        roleOk = (role == "both" or role == "sell")
+                    end
+                    if charRealm and ns:RealmMatches(realm, charRealm) and roleOk then
                         task.assignedChar = ck
                         task.status = "pending"
 

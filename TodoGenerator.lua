@@ -61,9 +61,9 @@ function TodoList:BuildItemPool()
         end
     end
 
-    -- Character inventories (skip hidden/ignored characters)
+    -- Character inventories (skip hidden characters)
     for charKey, charData in pairs(ns.db.characters or {}) do
-        if not charData.ignored and charData.inventory and charData.inventory.items then
+        if (charData.role or "both") ~= "none" and charData.inventory and charData.inventory.items then
             for itemKey, itemData in pairs(charData.inventory.items) do
                 local numID = tonumber(itemData.itemID)
                 local isDNT = numID and ns:IsDoNotTrack(numID)
@@ -240,7 +240,7 @@ function TodoList:GetKnownRealms()
 
     local seen = {}  -- normalizedRealm -> displayRealm
     for charKey, charData in pairs(ns.db.characters) do
-        if not charData.ignored then
+        if (charData.role or "both") ~= "none" then
             local realm = charKey:match("%-(.+)$")
             if realm and realm ~= "" then
                 local normalized = ns:NormalizeRealmKey(realm)
@@ -292,7 +292,7 @@ function TodoList:CountInventoryForDeal(deal)
 
     -- Character inventories
     for charKey, charData in pairs(ns.db.characters or {}) do
-        if not charData.ignored and charData.inventory and charData.inventory.items then
+        if (charData.role or "both") ~= "none" and charData.inventory and charData.inventory.items then
             for key, itemData in pairs(charData.inventory.items) do
                 local matched = ns:ItemsMatch(key, itemData.name, deal, resolvedID or false)
                 if matched then
@@ -338,13 +338,15 @@ local function FindBestAssignment(poolItem, targetRealm, inventory)
 
     local PRIORITY = { bags = 1, reagent = 2, bank = 3, warbank = 4, guildbank = 5 }
 
-    -- Characters on the target realm (skip hidden/ignored)
+    -- Characters on the target realm with sell capability
     local realmChars = {}
     for charKey, charData in pairs(inventory or {}) do
         local charRealm = charKey:match("%-(.+)$")
-        if charRealm and ns:RealmMatches(targetRealm, charRealm)
-            and not (type(charData) == "table" and charData.ignored) then
-            table.insert(realmChars, charKey)
+        if charRealm and ns:RealmMatches(targetRealm, charRealm) then
+            local role = type(charData) == "table" and (charData.role or "both") or "both"
+            if role == "both" or role == "sell" then
+                table.insert(realmChars, charKey)
+            end
         end
     end
 
@@ -952,57 +954,76 @@ function TodoList:GenerateTodoList(source, allocationOrder, opts)
             else
                 -- No character on target realm at all
                 -- Cross-realm: item in inventory but no char on sell realm
-                local taskCrossFields = {}
-                if isCrossRealmFlip then
-                    taskCrossFields = crossRealmFields
-                    taskCrossFields.action = "sell"
-                end
+                if not ns.db.settings.skipUnassigned then
+                    local taskCrossFields = {}
+                    if isCrossRealmFlip then
+                        taskCrossFields = crossRealmFields
+                        taskCrossFields.action = "sell"
+                    end
 
-                table.insert(preview.items, {
-                    itemKey       = poolItem.itemKey,
-                    itemID        = poolItem.itemID,
-                    name          = poolItem.name,
-                    icon          = poolItem.icon,
-                    targetRealm   = deal.targetRealm,
-                    expectedPrice = deal.expectedPrice,
-                    quantity      = math.max(deal.quantity or 1, defaultQty),
-                    assignedChar  = nil,
-                    status        = "unassigned",
-                    source        = nil,
-                    quality       = deal.quality,
-                    sellRate      = deal.sellRate,
-                    noCompetition = deal.noCompetition,
-                    category      = deal.category,
-                    attempts      = 0,
-                    importSource  = source,
-                    importKey     = deal._importKey,
-                    -- Cross-realm flip fields
-                    action       = taskCrossFields.action,
-                    dealType     = taskCrossFields.dealType,
-                    buyRealm     = taskCrossFields.buyRealm,
-                    buyPrice     = taskCrossFields.buyPrice,
-                    profitAmount = taskCrossFields.profitAmount,
-                    profitPct    = taskCrossFields.profitPct,
-                    saleAvg      = taskCrossFields.saleAvg,
-                    steps         = {},
-                    currentStep   = 1,
-                })
+                    table.insert(preview.items, {
+                        itemKey       = poolItem.itemKey,
+                        itemID        = poolItem.itemID,
+                        name          = poolItem.name,
+                        icon          = poolItem.icon,
+                        targetRealm   = deal.targetRealm,
+                        expectedPrice = deal.expectedPrice,
+                        quantity      = math.max(deal.quantity or 1, defaultQty),
+                        assignedChar  = nil,
+                        status        = "unassigned",
+                        source        = nil,
+                        quality       = deal.quality,
+                        sellRate      = deal.sellRate,
+                        noCompetition = deal.noCompetition,
+                        category      = deal.category,
+                        attempts      = 0,
+                        importSource  = source,
+                        importKey     = deal._importKey,
+                        -- Cross-realm flip fields
+                        action       = taskCrossFields.action,
+                        dealType     = taskCrossFields.dealType,
+                        buyRealm     = taskCrossFields.buyRealm,
+                        buyPrice     = taskCrossFields.buyPrice,
+                        profitAmount = taskCrossFields.profitAmount,
+                        profitPct    = taskCrossFields.profitPct,
+                        saleAvg      = taskCrossFields.saleAvg,
+                        steps         = {},
+                        currentStep   = 1,
+                    })
+                end
             end
         else
             -- No pool match — item not in inventory
             if isCrossRealmFlip then
                 -- Cross-realm flip: item NOT in inventory → generate "buy" task
-                -- Assign to a character on the buy realm
+                -- Assign to a character on the buy realm (must have buy role)
                 local buyAssignment = nil
                 for charKey, charData in pairs(ns.db.characters or {}) do
                     local charRealm = charKey:match("%-(.+)$")
+                    local role = type(charData) == "table" and (charData.role or "both") or "both"
                     if charRealm and ns:RealmMatches(deal.buyRealm, charRealm)
-                        and not (type(charData) == "table" and charData.ignored) then
+                        and (role == "both" or role == "buy") then
                         buyAssignment = charKey
                         break
                     end
                 end
 
+                -- Also find a sell-side character
+                local sellAssignment = nil
+                for charKey, charData in pairs(ns.db.characters or {}) do
+                    local charRealm = charKey:match("%-(.+)$")
+                    local role = type(charData) == "table" and (charData.role or "both") or "both"
+                    if charRealm and ns:RealmMatches(deal.targetRealm, charRealm)
+                        and (role == "both" or role == "sell") then
+                        sellAssignment = charKey
+                        break
+                    end
+                end
+
+                -- Skip entire flip if either side is unassigned and setting is on
+                local skipFlip = ns.db.settings.skipUnassigned and (not buyAssignment or not sellAssignment)
+
+                if not skipFlip then
                 local dealQty = math.max(deal.quantity or 1, defaultQty)
                 table.insert(preview.items, {
                     itemKey       = deal.itemKey,
@@ -1039,17 +1060,7 @@ function TodoList:GenerateTodoList(source, allocationOrder, opts)
                     currentStep = 1,
                 })
 
-                -- Also generate the sell-side task (blocked until buy deposits to warbank)
-                local sellAssignment = nil
-                for charKey, charData in pairs(ns.db.characters or {}) do
-                    local charRealm = charKey:match("%-(.+)$")
-                    if charRealm and ns:RealmMatches(deal.targetRealm, charRealm)
-                        and not (type(charData) == "table" and charData.ignored) then
-                        sellAssignment = charKey
-                        break
-                    end
-                end
-
+                -- Generate the sell-side task (blocked until buy deposits to warbank)
                 table.insert(preview.items, {
                     itemKey       = deal.itemKey,
                     itemID        = deal.itemID,
@@ -1087,6 +1098,7 @@ function TodoList:GenerateTodoList(source, allocationOrder, opts)
                     },
                     currentStep = 1,
                 })
+                end -- not skipFlip
             else
                 -- Standard same-realm: item not in inventory
                 table.insert(preview.items, {
