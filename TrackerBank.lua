@@ -556,6 +556,47 @@ function Tracker:AutoWithdrawGold()
 end
 
 --------------------------
+-- Auto-Deposit Earnings
+--------------------------
+
+-- Deposit excess gold to warbank, keeping only AH fees + buffer.
+function Tracker:AutoDepositGold()
+    if not ns.db or not ns.db.settings.autoDepositGold then return end
+    if not C_Bank or not C_Bank.DepositMoney then return end
+
+    local charKey = ns:GetCharKey()
+    local currentRealm = charKey:match("%-(.+)$") or GetRealmName()
+
+    -- Calculate how much gold we need to keep
+    local feesCopper = self:CalculateRequiredGold(charKey, currentRealm)
+    -- Add 10% buffer for rounding + the user's configured buffer
+    local bufferCopper = (ns.db.settings.goldBuffer or 0) * 10000
+    local keepCopper = math.max(10000, math.ceil(feesCopper * 1.1)) + bufferCopper
+
+    local playerCopper = GetMoney()
+    if playerCopper <= keepCopper then return end
+
+    local excessCopper = playerCopper - keepCopper
+    -- Round down to whole gold
+    excessCopper = math.floor(excessCopper / 10000) * 10000
+    if excessCopper <= 0 then return end
+
+    -- Check permission
+    local ok, canDeposit = pcall(C_Bank.CanDepositMoney, Enum.BankType.Account)
+    if not ok or not canDeposit then return end
+
+    local ok2, err = pcall(C_Bank.DepositMoney, Enum.BankType.Account, excessCopper)
+    if ok2 then
+        local depositGold = math.floor(excessCopper / 10000)
+        local keptGold = math.floor(keepCopper / 10000)
+        ns:Print(ns.COLORS.GREEN .. "Deposited " .. depositGold .. "g|r to warbank" ..
+            " (kept " .. keptGold .. "g for fees + buffer)")
+    else
+        ns:PrintDebug("Failed to deposit gold: " .. tostring(err))
+    end
+end
+
+--------------------------
 -- Warbank Auto-Deposit
 --------------------------
 

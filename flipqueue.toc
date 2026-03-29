@@ -30,6 +30,7 @@ Tracker.lua
 TrackerAuctions.lua
 TrackerBank.lua
 TrackerMail.lua
+Sync.lua
 UI\ScrollTable.lua
 UI\Shared.lua
 UI\ExportPopup.lua

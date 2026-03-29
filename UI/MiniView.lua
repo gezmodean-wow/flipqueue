@@ -62,6 +62,10 @@ local titleText = header:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
 titleText:SetPoint("LEFT", titleIcon, "RIGHT", 3, 0)
 titleText:SetText(ns.COLORS.YELLOW .. "FQ" .. ns.COLORS.RESET)
 
+local syncDot = header:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+syncDot:SetPoint("LEFT", titleText, "RIGHT", 4, 0)
+syncDot:Hide()
+
 -- Icon buttons (right side of header)
 local ICON_SIZE = 16
 local ICON_SPACING = 2
@@ -203,6 +207,14 @@ end
 function UI:RefreshMini()
     if not mini:IsShown() then return end
     if not ns.db then return end
+
+    -- Update sync status dot
+    if ns.Sync and ns.Sync.IsLinked and ns.Sync:IsLinked() then
+        syncDot:SetText(ns.Sync:IsConnected() and "|cff00ff00\226\151\143|r" or "|cffff0000\226\151\143|r")
+        syncDot:Show()
+    else
+        syncDot:Hide()
+    end
 
     -- Hide all rows and clean up action buttons
     for _, row in ipairs(miniRows) do
@@ -416,8 +428,9 @@ function UI:RefreshMini()
                     local countLabel = gBuys > 0 and gPosts > 0
                         and (gPosts .. "P+" .. gBuys .. "B")
                         or (gBuys > 0 and (gBuys .. "B") or tostring(#group.items))
+                    local rp = ns.IsRemoteChar and ns:IsRemoteChar(group.charKey) and "|cff8866cc*|r " or ""
                     row.text:SetText(
-                        "|cff" .. cc .. charName .. "|r" ..
+                        rp .. "|cff" .. cc .. charName .. "|r" ..
                         ns.COLORS.GRAY .. " " .. realmShort .. ns.COLORS.RESET ..
                         ns.COLORS.GRAY .. " (" .. countLabel .. ")" .. ns.COLORS.RESET ..
                         ns.COLORS.GREEN .. " ~" .. goldStr .. ns.COLORS.RESET)

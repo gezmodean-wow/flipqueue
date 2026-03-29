@@ -378,6 +378,99 @@ function TSM:DetectCharacters()
 end
 
 --------------------------
+-- Account Detection
+--------------------------
+
+-- Detect WoW accounts from TSM's sync data (_syncOwner).
+-- Groups characters by the unique account ID extracted from the sync key.
+-- Returns: uuidGroups (uuid -> {charKey,...}), primaryUUID (or nil if unavailable)
+function TSM:DetectAccounts()
+    if type(TradeSkillMasterDB) ~= "table" then return nil, nil end
+
+    local syncOwner = TradeSkillMasterDB._syncOwner
+    if not syncOwner then return nil, nil end
+
+    -- Extract UUID from account key: "Faction - Realm - UUID" -> "UUID"
+    local function ExtractUUID(accountKey)
+        return accountKey:match("^.+ %- (.+)$")
+    end
+
+    -- Group characters by account UUID
+    local uuidGroups = {} -- uuid -> array of charKeys
+
+    for charEntry, accountKey in pairs(syncOwner) do
+        -- charEntry format: "CharName - Faction - RealmName"
+        local name, faction, realm = charEntry:match("^(.+) %- (.+) %- (.+)$")
+        if name and realm then
+            local charKey = name .. "-" .. realm
+            local uuid = ExtractUUID(accountKey)
+            if uuid then
+                if not uuidGroups[uuid] then
+                    uuidGroups[uuid] = {}
+                end
+                table.insert(uuidGroups[uuid], charKey)
+            end
+        end
+    end
+
+    -- Sort character lists for consistent display
+    for _, chars in pairs(uuidGroups) do
+        table.sort(chars)
+    end
+
+    -- Find which UUID the current character belongs to
+    local myCharKey = ns:GetCharKey()
+    local primaryUUID = nil
+    for uuid, chars in pairs(uuidGroups) do
+        for _, charKey in ipairs(chars) do
+            if charKey == myCharKey then
+                primaryUUID = uuid
+                break
+            end
+        end
+        if primaryUUID then break end
+    end
+
+    return uuidGroups, primaryUUID
+end
+
+-- Sync detected accounts into ns.db.accounts.primary and ns.db.accounts.linked.
+-- Preserves existing labels on linked accounts.
+function TSM:SyncAccounts()
+    if not ns.db then return false end
+
+    local groups, primaryUUID = self:DetectAccounts()
+    if not groups then return false end
+
+    -- Update primary account
+    if primaryUUID then
+        ns.db.accounts.primary = {
+            syncKey = primaryUUID,
+            characters = groups[primaryUUID] or {},
+        }
+    end
+
+    -- Update linked accounts (preserve user-set labels)
+    local oldLinked = ns.db.accounts.linked or {}
+    local newLinked = {}
+    local idx = 1
+    for uuid, chars in pairs(groups) do
+        if uuid ~= primaryUUID then
+            local existing = oldLinked[uuid]
+            newLinked[uuid] = {
+                label = existing and existing.label or ("Account " .. (idx + 1)),
+                characters = chars,
+                lastSync = time(),
+            }
+            idx = idx + 1
+        end
+    end
+    ns.db.accounts.linked = newLinked
+
+    return true
+end
+
+--------------------------
 -- Cache Management
 --------------------------
 

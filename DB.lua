@@ -27,8 +27,15 @@ function ns:InitDB()
     db.todoLists.upcoming = db.todoLists.upcoming or {}
     db.log          = db.log or {}
     db.doNotTrack   = db.doNotTrack or {}
-    db.accounts     = db.accounts or { external = {} }
+    db.sync         = db.sync or {}
+    db.sync.accountUUID   = db.sync.accountUUID or string.format("%x%x", time(), math.random(0, 0xFFFFFF))
+    db.sync.lastSentSeq   = db.sync.lastSentSeq or 0
+    db.sync.lastRecvSeq   = db.sync.lastRecvSeq or 0
+    db.sync.pendingDeltas = db.sync.pendingDeltas or {}
+    db.accounts     = db.accounts or {}
+    db.accounts.primary  = db.accounts.primary or { syncKey = nil, characters = {} }
     db.accounts.external = db.accounts.external or {}
+    db.accounts.linked   = db.accounts.linked or {}
     db.settings     = db.settings or {
         autoScan         = true,
         autoPullBank     = false,
@@ -74,6 +81,9 @@ function ns:InitDB()
     if db.settings.tsmAutoSkipRejected == nil then db.settings.tsmAutoSkipRejected = true end
     -- Debug messages (off by default)
     if db.settings.debugMessages == nil then db.settings.debugMessages = false end
+    -- Auto-deposit earnings to warbank (off by default)
+    if db.settings.autoDepositGold == nil then db.settings.autoDepositGold = false end
+    db.settings.goldBuffer = db.settings.goldBuffer or 0  -- gold to keep on character (0 = keep nothing extra)
     -- Bank tab selection
     if not db.settings.pullTabs then
         db.settings.pullTabs = { mode = "all" }
@@ -408,6 +418,27 @@ function ns:RolesOverlap(role1, role2)
 end
 
 --------------------------
+-- Account Ownership
+--------------------------
+
+function ns:GetCharAccountLabel(charKey)
+    local charData = ns.db.characters and ns.db.characters[charKey]
+    if not charData or not charData.accountUUID then return nil end
+    if not ns.db.sync or charData.accountUUID == ns.db.sync.accountUUID then return nil end
+    if ns.db.sync.partner and charData.accountUUID == ns.db.sync.partner.accountUUID then
+        return ns.db.sync.partner.label or "Linked Account"
+    end
+    return "Other Account"
+end
+
+function ns:IsRemoteChar(charKey)
+    local charData = ns.db.characters and ns.db.characters[charKey]
+    if not charData or not charData.accountUUID then return false end
+    if not ns.db.sync then return false end
+    return charData.accountUUID ~= ns.db.sync.accountUUID
+end
+
+--------------------------
 -- Do Not Track
 --------------------------
 
@@ -420,11 +451,17 @@ end
 function ns:AddDoNotTrack(itemID, itemName)
     if not ns.db then return end
     ns.db.doNotTrack[tostring(itemID)] = itemName or true
+    if ns.Sync and ns.Sync.IsLinked and ns.Sync:IsLinked() and not ns.Sync._applying then
+        ns.Sync:EmitDelta("DNT+", { itemID = tostring(itemID), name = itemName })
+    end
 end
 
 function ns:RemoveDoNotTrack(itemID)
     if not ns.db then return end
     ns.db.doNotTrack[tostring(itemID)] = nil
+    if ns.Sync and ns.Sync.IsLinked and ns.Sync:IsLinked() and not ns.Sync._applying then
+        ns.Sync:EmitDelta("DNT-", { itemID = tostring(itemID) })
+    end
 end
 
 --------------------------

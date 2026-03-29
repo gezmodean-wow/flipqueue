@@ -753,14 +753,15 @@ function UI:RefreshTodoPage()
                     local charInv = ns.db.characters and ns.db.characters[group.charKey]
                     local cc = charInv and CLASS_COLORS[charInv.class] or "888888"
                     local buyTag = hasBuys and (ns.COLORS.CYAN .. " [BUY]" .. "|r") or ""
+                    local rp = ns.IsRemoteChar and ns:IsRemoteChar(group.charKey) and "|cff8866cc*|r " or ""
                     if group._allDeferred then
                         hdr.bg:SetColorTexture(0.1, 0.1, 0.1, 0.5)
-                        hdr.text:SetText("|cff" .. cc .. group.charName .. "|r" ..
+                        hdr.text:SetText(rp .. "|cff" .. cc .. group.charName .. "|r" ..
                             ns.COLORS.GRAY .. " - " .. group.realm .. "  (" .. countStr .. ")" ..
                             ns.COLORS.RED .. " [no inventory]" .. "|r" .. buyTag)
                     else
                         hdr.bg:SetColorTexture(hasBuys and 0.08 or 0.12, hasBuys and 0.12 or 0.15, hasBuys and 0.18 or 0.2, 0.8)
-                        hdr.text:SetText("|cff" .. cc .. group.charName .. "|r" ..
+                        hdr.text:SetText(rp .. "|cff" .. cc .. group.charName .. "|r" ..
                             ns.COLORS.GRAY .. " - " .. group.realm .. "  (" .. countStr .. ")|r" .. buyTag)
                     end
                 end

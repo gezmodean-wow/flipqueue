@@ -323,7 +323,8 @@ local function BuildNextStepsData()
                 local realm = group.realm or ""
                 local charInv = ns.db.characters and ns.db.characters[group.charKey]
                 local classColor = charInv and CLASS_COLORS[charInv.class] or "888888"
-                local coloredName = "|cff" .. classColor .. name .. "|r"
+                local remotePrefix = ns.IsRemoteChar and ns:IsRemoteChar(group.charKey) and "|cff8866cc*|r " or ""
+                local coloredName = remotePrefix .. "|cff" .. classColor .. name .. "|r"
 
                 -- Check if this character also has deposit tasks
                 local depInfo = depositsByChar[group.charKey]
@@ -379,7 +380,8 @@ local function BuildNextStepsData()
             local realm = charKey:match("%-(.+)$") or ""
             local charInv = ns.db.characters and ns.db.characters[charKey]
             local classColor = charInv and CLASS_COLORS[charInv.class] or "888888"
-            local coloredName = "|cff" .. classColor .. name .. "|r"
+            local remotePrefix = ns.IsRemoteChar and ns:IsRemoteChar(charKey) and "|cff8866cc*|r " or ""
+            local coloredName = remotePrefix .. "|cff" .. classColor .. name .. "|r"
 
             table.insert(data, {
                 action    = ns.COLORS.CYAN .. "Deposit" .. "|r",
@@ -406,7 +408,8 @@ local function BuildNextStepsData()
             local realm = charKey:match("%-(.+)$") or ""
             local charInv = ns.db.characters[charKey]
             local classColor = charInv and CLASS_COLORS[charInv.class] or "888888"
-            local coloredName = "|cff" .. classColor .. name .. "|r"
+            local remotePrefix = ns.IsRemoteChar and ns:IsRemoteChar(charKey) and "|cff8866cc*|r " or ""
+            local coloredName = remotePrefix .. "|cff" .. classColor .. name .. "|r"
 
             table.insert(data, {
                 action    = ns.COLORS.YELLOW .. "Check Mail" .. "|r",
@@ -433,7 +436,8 @@ local function BuildNextStepsData()
                 local realm = charKey:match("%-(.+)$") or ""
                 local charInv = ns.db.characters[charKey]
                 local classColor = charInv and CLASS_COLORS[charInv.class] or "888888"
-                local coloredName = "|cff" .. classColor .. name .. "|r"
+                local remotePrefix = ns.IsRemoteChar and ns:IsRemoteChar(charKey) and "|cff8866cc*|r " or ""
+                local coloredName = remotePrefix .. "|cff" .. classColor .. name .. "|r"
 
                 local h = math.floor(info.soonest / 3600)
                 local m = math.floor((info.soonest % 3600) / 60)

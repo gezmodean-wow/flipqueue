@@ -230,6 +230,8 @@ frame:SetScript("OnEvent", function(self, event)
                 -- Withdraw gold FIRST while all pulled items are still in bags
                 -- (deposit operations move items out, which breaks vendor price lookup)
                 Tracker:AutoWithdrawGold()
+                -- Deposit excess earnings back to warbank
+                Tracker:AutoDepositGold()
                 -- Then deposit task items, chaining extras after completion
                 Tracker:AutoDepositToWarbank(function()
                     Tracker:AutoDepositExtraItems()

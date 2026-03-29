@@ -1151,6 +1151,10 @@ function Import:Save(items, source)
         ns:Print(ns.COLORS.GRAY .. "Merged " .. deduped .. " connected-realm duplicates.|r")
     end
 
+    if ns.Sync and ns.Sync.IsLinked and ns.Sync:IsLinked() and not ns.Sync._applying then
+        ns.Sync:EmitDelta("IMP", { source = source, deals = srcMap })
+    end
+
     return added
 end
 
@@ -1277,6 +1281,9 @@ function Import:SaveChunked(items, source, chunkSize, onProgress, onComplete)
         else
             if deduped > 0 then
                 ns:Print(ns.COLORS.GRAY .. "Merged " .. deduped .. " connected-realm duplicates.|r")
+            end
+            if ns.Sync and ns.Sync.IsLinked and ns.Sync:IsLinked() and not ns.Sync._applying then
+                ns.Sync:EmitDelta("IMP", { source = source, deals = srcMap })
             end
             if onComplete then onComplete(added) end
         end

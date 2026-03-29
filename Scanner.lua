@@ -249,6 +249,12 @@ function Scanner:ScanCurrentCharacter()
     ns:PrintDebug("Scanned " .. count .. " unique items on " .. charKey)
 
     EnrichDealsFromInventory(allItems)
+
+    -- Emit sync delta
+    if ns.Sync and ns.Sync.IsLinked and ns.Sync:IsLinked() and not ns.Sync._applying then
+        local charKey = ns:GetCharKey()
+        ns.Sync:EmitDelta("CHAR", { charKey = charKey, charData = ns.db.characters[charKey] })
+    end
 end
 
 function Scanner:ScanBank()
@@ -287,6 +293,12 @@ function Scanner:ScanBank()
     ns:PrintDebug("Bank scanned: " .. count .. " unique items.")
 
     EnrichDealsFromInventory(bankItems)
+
+    -- Emit sync delta
+    if ns.Sync and ns.Sync.IsLinked and ns.Sync:IsLinked() and not ns.Sync._applying then
+        local charKey = ns:GetCharKey()
+        ns.Sync:EmitDelta("CHAR", { charKey = charKey, charData = ns.db.characters[charKey] })
+    end
 end
 
 function Scanner:ScanWarbank()
@@ -324,6 +336,11 @@ function Scanner:ScanWarbank()
     ns:PrintDebug("Warbank scanned: " .. count .. " unique items.")
 
     EnrichDealsFromInventory(items)
+
+    -- Emit sync delta
+    if ns.Sync and ns.Sync.IsLinked and ns.Sync:IsLinked() and not ns.Sync._applying then
+        ns.Sync:EmitDelta("WB", ns.db.warbank)
+    end
 end
 
 --------------------------
@@ -476,6 +493,10 @@ local function UpdateCharacterMeta()
     char.class = select(2, UnitClass("player"))
     char.level = UnitLevel("player")
     char.guild = GetGuildInfo("player")
+    -- Tag character with this account's UUID for multi-account sync
+    if ns.db.sync and ns.db.sync.accountUUID then
+        char.accountUUID = ns.db.sync.accountUUID
+    end
     -- Register guild even if guild bank hasn't been scanned yet
     if char.guild then
         ns.db.guilds = ns.db.guilds or {}
@@ -522,6 +543,11 @@ frame:SetScript("OnEvent", function(self, event, ...)
         -- Start periodic expiry checker
         if ns.Tracker and ns.Tracker.StartExpiryTicker then
             ns.Tracker:StartExpiryTicker()
+        end
+
+        -- Initialize multi-account sync
+        if ns.Sync and ns.Sync.Init then
+            ns.Sync:Init()
         end
 
         if ns.db.settings.autoScan then

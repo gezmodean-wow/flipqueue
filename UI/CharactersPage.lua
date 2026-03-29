@@ -167,9 +167,14 @@ local function BuildCharactersData()
         end
 
         local classColor = CLASS_COLORS[inv.class] or "888888"
+        local isRemote = ns.IsRemoteChar and ns:IsRemoteChar(charKey)
+        local acctLabel = ns.GetCharAccountLabel and ns:GetCharAccountLabel(charKey)
         local coloredName = "|cff" .. classColor .. name .. "|r"
         if isHidden then
             coloredName = "|cff666666" .. name .. "|r"
+        end
+        if isRemote and acctLabel then
+            coloredName = "|cff8866cc[" .. acctLabel .. "]|r " .. coloredName
         end
 
         local goldCopper = inv.gold or 0
@@ -217,7 +222,9 @@ local function BuildCharactersData()
 
         -- Row color
         local rowColor = nil
-        if isHidden then
+        if isRemote then
+            rowColor = {0.4, 0.3, 0.6, 0.1}
+        elseif isHidden then
             rowColor = {0.3, 0.3, 0.3, 0.1}
         elseif auctionInfo and auctionInfo.done > 0 then
             rowColor = {0.3, 1.0, 0.3, 0.1}

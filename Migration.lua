@@ -7,7 +7,7 @@ local addonName, ns = ...
 --------------------------
 
 -- Current schema version
-local CURRENT_SCHEMA = 3
+local CURRENT_SCHEMA = 4
 
 -- Schema history:
 -- nil/0  = v0.5.0 (stable release): queue array, separate inventory/characters/hiddenCharacters
@@ -149,6 +149,51 @@ local function RunMigrations(db)
         end
         db.schemaVersion = 3
     end  -- migration 3
+
+    -- Migration 4: Multi-account sync support
+    -- Add taskUUID + _syncMeta to existing tasks, accountUUID to characters, db.sync structure
+    if db.schemaVersion < 4 then
+        -- Generate a persistent account UUID if one doesn't exist
+        if not db.sync or not db.sync.accountUUID then
+            db.sync = db.sync or {}
+            -- Simple UUID: timestamp + random hex
+            db.sync.accountUUID = string.format("%x%x", time(), math.random(0, 0xFFFFFF))
+        end
+
+        -- Tag existing characters with this account's UUID
+        for charKey, charData in pairs(db.characters or {}) do
+            if not charData.accountUUID then
+                charData.accountUUID = db.sync.accountUUID
+            end
+        end
+
+        -- Add taskUUID and _syncMeta to existing todo tasks
+        local function MigrateTasks(tasks)
+            if not tasks then return end
+            for _, task in ipairs(tasks) do
+                if not task.taskUUID then
+                    task.taskUUID = string.format("%x%x%x", time(), math.random(0, 0xFFFF), math.random(0, 0xFFFF))
+                end
+                if not task._syncMeta then
+                    task._syncMeta = {
+                        lastModifiedBy = db.sync.accountUUID,
+                        lastModifiedAt = time(),
+                    }
+                end
+            end
+        end
+
+        if db.todoLists then
+            if db.todoLists.active and db.todoLists.active.tasks then
+                MigrateTasks(db.todoLists.active.tasks)
+            end
+            for _, list in ipairs(db.todoLists.upcoming or {}) do
+                MigrateTasks(list.tasks)
+            end
+        end
+
+        db.schemaVersion = 4
+    end  -- migration 4
 end  -- RunMigrations
 
 -- Expose for DB.lua

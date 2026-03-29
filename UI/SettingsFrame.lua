@@ -145,7 +145,7 @@ function UI:CreateSettingsPanel(parent)
 
     local content = CreateFrame("Frame", nil, scroll)
     content:SetWidth(scroll:GetWidth())
-    content:SetHeight(800)
+    content:SetHeight(1200)
     scroll:SetScrollChild(content)
 
     scroll:SetScript("OnSizeChanged", function(sf, w)
@@ -211,6 +211,52 @@ function UI:CreateSettingsPanel(parent)
         descText:SetText("Maximum gold to withdraw per bank visit. 0 = no limit.")
 
         settingsWidgets.maxWithdrawBox = box
+    end
+    y = y - 52 - ITEM_SPACING
+
+    settingsWidgets.autoDepositGold, h = CreateSettingsCheckbox(content, y,
+        "Auto-deposit earnings to warbank",
+        "When you open the bank, deposit excess gold back to the warbank. Keeps enough for AH fees plus a configurable buffer.",
+        "autoDepositGold")
+    y = y - h - ITEM_SPACING
+
+    -- Gold buffer input
+    do
+        local row = CreateFrame("Frame", nil, content)
+        row:SetPoint("TOPLEFT", content, "TOPLEFT", LEFT_MARGIN, y)
+        row:SetPoint("RIGHT", content, "RIGHT", RIGHT_MARGIN, 0)
+        row:SetHeight(52)
+
+        local title = row:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+        title:SetPoint("TOPLEFT", row, "TOPLEFT", 0, 0)
+        title:SetText("Gold buffer to keep on character")
+
+        local box = CreateFrame("EditBox", nil, row, "InputBoxTemplate")
+        box:SetSize(100, 20)
+        box:SetPoint("TOPLEFT", title, "BOTTOMLEFT", 4, -4)
+        box:SetAutoFocus(false)
+        box:SetMaxLetters(10)
+        box:SetNumeric(true)
+        box:SetScript("OnEscapePressed", function(self) self:ClearFocus() end)
+        box:SetScript("OnEnterPressed", function(self)
+            local val = tonumber(self:GetText()) or 0
+            if ns.db then ns.db.settings.goldBuffer = val end
+            self:ClearFocus()
+        end)
+        box:SetScript("OnEditFocusLost", function(self)
+            local val = tonumber(self:GetText()) or 0
+            if ns.db then ns.db.settings.goldBuffer = val end
+        end)
+
+        local descText = row:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+        descText:SetPoint("TOPLEFT", box, "BOTTOMLEFT", -4, -4)
+        descText:SetPoint("RIGHT", row, "RIGHT", 0, 0)
+        descText:SetJustifyH("LEFT")
+        descText:SetWordWrap(true)
+        descText:SetTextColor(DESC_COLOR[1], DESC_COLOR[2], DESC_COLOR[3])
+        descText:SetText("Extra gold (beyond AH fees) to keep on character. 0 = keep only fees.")
+
+        settingsWidgets.goldBufferBox = box
     end
     y = y - 52 - ITEM_SPACING
 
@@ -583,101 +629,342 @@ function UI:CreateSettingsPanel(parent)
     ------------------------------------------------
     y = y - CreateSectionHeader(content, y, "Multi-Account")
 
-    local extDesc = content:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
-    extDesc:SetPoint("TOPLEFT", content, "TOPLEFT", LEFT_MARGIN, y)
-    extDesc:SetPoint("RIGHT", content, "RIGHT", RIGHT_MARGIN, 0)
+    -- Everything in this section uses a lower container
+    local lower = CreateFrame("Frame", nil, content)
+    lower:SetPoint("TOPLEFT", content, "TOPLEFT", 0, y - SECTION_SPACING)
+    lower:SetPoint("RIGHT", content, "RIGHT", 0, 0)
+    settingsWidgets.lowerSection = lower
+    settingsWidgets.contentFrame = content
+    settingsWidgets.baseY = math.abs(y) -- y consumed above this point
+
+    local ly = 0
+
+    -- Real-Time Sync
+    local syncLabel = lower:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+    syncLabel:SetPoint("TOPLEFT", lower, "TOPLEFT", LEFT_MARGIN, ly)
+    syncLabel:SetTextColor(0.9, 0.8, 0.5)
+    syncLabel:SetText("Real-Time Sync")
+    ly = ly - 18
+
+    -- Sync status display
+    settingsWidgets.syncStatusText = lower:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    settingsWidgets.syncStatusText:SetPoint("TOPLEFT", lower, "TOPLEFT", LEFT_MARGIN, ly)
+    settingsWidgets.syncStatusText:SetPoint("RIGHT", lower, "RIGHT", RIGHT_MARGIN, 0)
+    settingsWidgets.syncStatusText:SetJustifyH("LEFT")
+    settingsWidgets.syncStatusText:SetWordWrap(true)
+    ly = ly - 28
+
+    -- Link panel: editbox + button
+    local linkLabel = lower:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    linkLabel:SetPoint("TOPLEFT", lower, "TOPLEFT", LEFT_MARGIN, ly)
+    linkLabel:SetText("Partner character (Name-Realm):")
+    ly = ly - 16
+
+    settingsWidgets.linkCharBox = CreateFrame("EditBox", nil, lower, "InputBoxTemplate")
+    settingsWidgets.linkCharBox:SetSize(200, 20)
+    settingsWidgets.linkCharBox:SetPoint("TOPLEFT", lower, "TOPLEFT", LEFT_MARGIN + 4, ly)
+    settingsWidgets.linkCharBox:SetAutoFocus(false)
+    settingsWidgets.linkCharBox:SetMaxLetters(60)
+    settingsWidgets.linkCharBox:SetText("")
+    settingsWidgets.linkCharBox:SetScript("OnEscapePressed", function(self) self:ClearFocus() end)
+    settingsWidgets.linkCharBox:SetScript("OnEnterPressed", function(self)
+        local target = self:GetText():match("^%s*(.-)%s*$")
+        if target ~= "" and ns.Sync then
+            ns.Sync:RequestPair(target)
+        end
+        self:ClearFocus()
+    end)
+    ly = ly - 24
+
+    -- Send Link Request button
+    do
+        local btn = CreateFrame("Button", nil, lower, "BackdropTemplate")
+        btn:SetSize(150, 24)
+        btn:SetPoint("TOPLEFT", lower, "TOPLEFT", LEFT_MARGIN, ly)
+        btn:SetBackdrop({
+            bgFile = "Interface\\Tooltips\\UI-Tooltip-Background",
+            edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
+            edgeSize = 10,
+            insets = {left = 2, right = 2, top = 2, bottom = 2},
+        })
+        btn:SetBackdropColor(0.15, 0.15, 0.2, 1)
+        btn:SetBackdropBorderColor(0.3, 0.3, 0.4, 0.8)
+        btn.text = btn:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+        btn.text:SetPoint("CENTER")
+        btn.text:SetText("Send Link Request")
+        btn:SetScript("OnEnter", function(self) self:SetBackdropColor(0.25, 0.25, 0.35, 1) end)
+        btn:SetScript("OnLeave", function(self) self:SetBackdropColor(0.15, 0.15, 0.2, 1) end)
+        btn:SetScript("OnClick", function()
+            local target = settingsWidgets.linkCharBox and settingsWidgets.linkCharBox:GetText():match("^%s*(.-)%s*$")
+            if target and target ~= "" and ns.Sync then
+                ns.Sync:RequestPair(target)
+            else
+                ns:Print(ns.COLORS.RED .. "Enter a character name first.|r")
+            end
+        end)
+        settingsWidgets.linkBtn = btn
+    end
+    ly = ly - 28 - ITEM_SPACING
+
+    -- Incoming pair request display
+    settingsWidgets.pairRequestText = lower:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    settingsWidgets.pairRequestText:SetPoint("TOPLEFT", lower, "TOPLEFT", LEFT_MARGIN, ly)
+    settingsWidgets.pairRequestText:SetPoint("RIGHT", lower, "RIGHT", RIGHT_MARGIN, 0)
+    settingsWidgets.pairRequestText:SetJustifyH("LEFT")
+    ly = ly - 16
+
+    -- Accept / Deny buttons (shown when there's a pending request)
+    do
+        local acceptBtn = CreateFrame("Button", nil, lower, "BackdropTemplate")
+        acceptBtn:SetSize(80, 22)
+        acceptBtn:SetPoint("TOPLEFT", lower, "TOPLEFT", LEFT_MARGIN, ly)
+        acceptBtn:SetBackdrop({
+            bgFile = "Interface\\Tooltips\\UI-Tooltip-Background",
+            edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
+            edgeSize = 10,
+            insets = {left = 2, right = 2, top = 2, bottom = 2},
+        })
+        acceptBtn:SetBackdropColor(0.1, 0.3, 0.1, 1)
+        acceptBtn:SetBackdropBorderColor(0.2, 0.5, 0.2, 0.8)
+        acceptBtn.text = acceptBtn:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+        acceptBtn.text:SetPoint("CENTER")
+        acceptBtn.text:SetText("Accept")
+        acceptBtn:SetScript("OnClick", function()
+            if ns.Sync then
+                local from = ns.Sync:GetPendingPairFrom()
+                if from then ns.Sync:AcceptPair(from) end
+            end
+            UI:RefreshSettings()
+        end)
+        settingsWidgets.pairAcceptBtn = acceptBtn
+
+        local denyBtn = CreateFrame("Button", nil, lower, "BackdropTemplate")
+        denyBtn:SetSize(80, 22)
+        denyBtn:SetPoint("LEFT", acceptBtn, "RIGHT", 6, 0)
+        denyBtn:SetBackdrop({
+            bgFile = "Interface\\Tooltips\\UI-Tooltip-Background",
+            edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
+            edgeSize = 10,
+            insets = {left = 2, right = 2, top = 2, bottom = 2},
+        })
+        denyBtn:SetBackdropColor(0.3, 0.1, 0.1, 1)
+        denyBtn:SetBackdropBorderColor(0.5, 0.2, 0.2, 0.8)
+        denyBtn.text = denyBtn:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+        denyBtn.text:SetPoint("CENTER")
+        denyBtn.text:SetText("Deny")
+        denyBtn:SetScript("OnClick", function()
+            if ns.Sync then ns.Sync:DenyPair() end
+            UI:RefreshSettings()
+        end)
+        settingsWidgets.pairDenyBtn = denyBtn
+    end
+    ly = ly - 26 - ITEM_SPACING
+
+    -- Unlink + Force Re-sync buttons
+    do
+        local unlinkBtn = CreateFrame("Button", nil, lower, "BackdropTemplate")
+        unlinkBtn:SetSize(90, 22)
+        unlinkBtn:SetPoint("TOPLEFT", lower, "TOPLEFT", LEFT_MARGIN, ly)
+        unlinkBtn:SetBackdrop({
+            bgFile = "Interface\\Tooltips\\UI-Tooltip-Background",
+            edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
+            edgeSize = 10,
+            insets = {left = 2, right = 2, top = 2, bottom = 2},
+        })
+        unlinkBtn:SetBackdropColor(0.15, 0.15, 0.2, 1)
+        unlinkBtn:SetBackdropBorderColor(0.3, 0.3, 0.4, 0.8)
+        unlinkBtn.text = unlinkBtn:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+        unlinkBtn.text:SetPoint("CENTER")
+        unlinkBtn.text:SetText("Unlink")
+        unlinkBtn:SetScript("OnEnter", function(self) self:SetBackdropColor(0.25, 0.25, 0.35, 1) end)
+        unlinkBtn:SetScript("OnLeave", function(self) self:SetBackdropColor(0.15, 0.15, 0.2, 1) end)
+        unlinkBtn:SetScript("OnClick", function()
+            if ns.Sync then ns.Sync:Unlink() end
+            UI:RefreshSettings()
+        end)
+        settingsWidgets.unlinkBtn = unlinkBtn
+
+        local resyncBtn = CreateFrame("Button", nil, lower, "BackdropTemplate")
+        resyncBtn:SetSize(110, 22)
+        resyncBtn:SetPoint("LEFT", unlinkBtn, "RIGHT", 6, 0)
+        resyncBtn:SetBackdrop({
+            bgFile = "Interface\\Tooltips\\UI-Tooltip-Background",
+            edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
+            edgeSize = 10,
+            insets = {left = 2, right = 2, top = 2, bottom = 2},
+        })
+        resyncBtn:SetBackdropColor(0.15, 0.15, 0.2, 1)
+        resyncBtn:SetBackdropBorderColor(0.3, 0.3, 0.4, 0.8)
+        resyncBtn.text = resyncBtn:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+        resyncBtn.text:SetPoint("CENTER")
+        resyncBtn.text:SetText("Force Re-sync")
+        resyncBtn:SetScript("OnEnter", function(self) self:SetBackdropColor(0.25, 0.25, 0.35, 1) end)
+        resyncBtn:SetScript("OnLeave", function(self) self:SetBackdropColor(0.15, 0.15, 0.2, 1) end)
+        resyncBtn:SetScript("OnClick", function()
+            if ns.Sync and ns.Sync:IsLinked() then
+                ns.Sync:RequestFullSync()
+                ns:Print("Full sync requested.")
+            end
+        end)
+        settingsWidgets.resyncBtn = resyncBtn
+    end
+    ly = ly - 26 - SECTION_SPACING
+
+    -- External Accounts (manual entry)
+    local extSubLabel = lower:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+    extSubLabel:SetPoint("TOPLEFT", lower, "TOPLEFT", LEFT_MARGIN, ly)
+    extSubLabel:SetTextColor(0.9, 0.8, 0.5)
+    extSubLabel:SetText("External Accounts")
+    ly = ly - 18
+
+    local extDesc = lower:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+    extDesc:SetPoint("TOPLEFT", lower, "TOPLEFT", LEFT_MARGIN, ly)
+    extDesc:SetPoint("RIGHT", lower, "RIGHT", RIGHT_MARGIN, 0)
     extDesc:SetJustifyH("LEFT")
     extDesc:SetWordWrap(true)
     extDesc:SetTextColor(DESC_COLOR[1], DESC_COLOR[2], DESC_COLOR[3])
-    extDesc:SetText("Add realms from other WoW accounts that share AH access via connected realms. These realms will be excluded from 'Create char' suggestions in Next Steps.")
-    y = y - 32
+    extDesc:SetText("Manually add realms from other WoW accounts. These realms will be excluded from 'Create char' suggestions in Next Steps.")
+    ly = ly - 32
 
     -- Label input
-    local lblLabel = content:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-    lblLabel:SetPoint("TOPLEFT", content, "TOPLEFT", LEFT_MARGIN, y)
+    local lblLabel = lower:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    lblLabel:SetPoint("TOPLEFT", lower, "TOPLEFT", LEFT_MARGIN, ly)
     lblLabel:SetText("Account label:")
-    y = y - 16
+    ly = ly - 16
 
-    local lblBox = CreateFrame("EditBox", nil, content, "InputBoxTemplate")
+    local lblBox = CreateFrame("EditBox", nil, lower, "InputBoxTemplate")
     lblBox:SetSize(170, 20)
-    lblBox:SetPoint("TOPLEFT", content, "TOPLEFT", LEFT_MARGIN + 4, y)
+    lblBox:SetPoint("TOPLEFT", lower, "TOPLEFT", LEFT_MARGIN + 4, ly)
     lblBox:SetAutoFocus(false)
     lblBox:SetMaxLetters(30)
     lblBox:SetText("")
-    y = y - 24
+    ly = ly - 24
 
     -- Realms input
-    local rlmLabel = content:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-    rlmLabel:SetPoint("TOPLEFT", content, "TOPLEFT", LEFT_MARGIN, y)
+    local rlmLabel = lower:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    rlmLabel:SetPoint("TOPLEFT", lower, "TOPLEFT", LEFT_MARGIN, ly)
     rlmLabel:SetText("Realms (comma-separated):")
-    y = y - 16
+    ly = ly - 16
 
-    local rlmBox = CreateFrame("EditBox", nil, content, "InputBoxTemplate")
+    local rlmBox = CreateFrame("EditBox", nil, lower, "InputBoxTemplate")
     rlmBox:SetSize(280, 20)
-    rlmBox:SetPoint("TOPLEFT", content, "TOPLEFT", LEFT_MARGIN + 4, y)
+    rlmBox:SetPoint("TOPLEFT", lower, "TOPLEFT", LEFT_MARGIN + 4, ly)
     rlmBox:SetAutoFocus(false)
     rlmBox:SetMaxLetters(200)
     rlmBox:SetText("")
-    y = y - 26
+    ly = ly - 26
 
     -- Add button
-    local addAcctBtn
-    addAcctBtn, h = CreateSettingsButton(content, y, "Add External Account", "", 160, function()
-        if not ns.db then return end
-        local label = lblBox:GetText():match("^%s*(.-)%s*$")
-        local realmsStr = rlmBox:GetText():match("^%s*(.-)%s*$")
-        if label == "" or realmsStr == "" then
-            ns:Print(ns.COLORS.RED .. "Both label and realms are required.|r")
-            return
-        end
-        local realms = {}
-        for r in realmsStr:gmatch("([^,]+)") do
-            local trimmed = r:match("^%s*(.-)%s*$")
-            if trimmed ~= "" then
-                table.insert(realms, trimmed)
+    do
+        local row = CreateFrame("Frame", nil, lower)
+        row:SetPoint("TOPLEFT", lower, "TOPLEFT", LEFT_MARGIN, ly)
+        row:SetPoint("RIGHT", lower, "RIGHT", RIGHT_MARGIN, 0)
+        row:SetHeight(28)
+
+        local btn = CreateFrame("Button", nil, row, "BackdropTemplate")
+        btn:SetSize(160, 24)
+        btn:SetPoint("TOPLEFT", row, "TOPLEFT", 0, 0)
+        btn:SetBackdrop({
+            bgFile = "Interface\\Tooltips\\UI-Tooltip-Background",
+            edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
+            edgeSize = 10,
+            insets = {left = 2, right = 2, top = 2, bottom = 2},
+        })
+        btn:SetBackdropColor(0.15, 0.15, 0.2, 1)
+        btn:SetBackdropBorderColor(0.3, 0.3, 0.4, 0.8)
+        btn.text = btn:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+        btn.text:SetPoint("CENTER")
+        btn.text:SetText("Add External Account")
+        btn:SetScript("OnEnter", function(self) self:SetBackdropColor(0.25, 0.25, 0.35, 1) end)
+        btn:SetScript("OnLeave", function(self) self:SetBackdropColor(0.15, 0.15, 0.2, 1) end)
+        btn:SetScript("OnClick", function()
+            if not ns.db then return end
+            local label = lblBox:GetText():match("^%s*(.-)%s*$")
+            local realmsStr = rlmBox:GetText():match("^%s*(.-)%s*$")
+            if label == "" or realmsStr == "" then
+                ns:Print(ns.COLORS.RED .. "Both label and realms are required.|r")
+                return
             end
-        end
-        if #realms == 0 then
-            ns:Print(ns.COLORS.RED .. "No valid realm names found.|r")
-            return
-        end
-        table.insert(ns.db.accounts.external, {label = label, realms = realms})
-        ns:Print(ns.COLORS.GREEN .. "Added external account:|r " .. label .. " (" .. #realms .. " realms)")
-        lblBox:SetText("")
-        rlmBox:SetText("")
-        UI:RefreshSettings()
-        UI:Refresh()
-    end)
-    y = y - h - ITEM_SPACING
-
-    -- List existing external accounts
-    settingsWidgets.extAccountList = content:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-    settingsWidgets.extAccountList:SetPoint("TOPLEFT", content, "TOPLEFT", LEFT_MARGIN, y)
-    settingsWidgets.extAccountList:SetPoint("RIGHT", content, "RIGHT", RIGHT_MARGIN, 0)
-    settingsWidgets.extAccountList:SetJustifyH("LEFT")
-    settingsWidgets.extAccountList:SetWordWrap(true)
-    y = y - 20
-
-    settingsWidgets.removeExtBtn, h = CreateSettingsButton(content, y,
-        "Remove Last Account", "", 160, function()
-        if ns.db and #ns.db.accounts.external > 0 then
-            local removed = table.remove(ns.db.accounts.external)
-            ns:Print("Removed external account: " .. removed.label)
+            local realms = {}
+            for r in realmsStr:gmatch("([^,]+)") do
+                local trimmed = r:match("^%s*(.-)%s*$")
+                if trimmed ~= "" then
+                    table.insert(realms, trimmed)
+                end
+            end
+            if #realms == 0 then
+                ns:Print(ns.COLORS.RED .. "No valid realm names found.|r")
+                return
+            end
+            table.insert(ns.db.accounts.external, {label = label, realms = realms})
+            ns:Print(ns.COLORS.GREEN .. "Added external account:|r " .. label .. " (" .. #realms .. " realms)")
+            lblBox:SetText("")
+            rlmBox:SetText("")
             UI:RefreshSettings()
             UI:Refresh()
-        end
-    end)
-    y = y - h - SECTION_SPACING
+        end)
+    end
+    ly = ly - 28 - ITEM_SPACING
+
+    -- List existing external accounts
+    settingsWidgets.extAccountList = lower:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    settingsWidgets.extAccountList:SetPoint("TOPLEFT", lower, "TOPLEFT", LEFT_MARGIN, ly)
+    settingsWidgets.extAccountList:SetPoint("RIGHT", lower, "RIGHT", RIGHT_MARGIN, 0)
+    settingsWidgets.extAccountList:SetJustifyH("LEFT")
+    settingsWidgets.extAccountList:SetWordWrap(true)
+    ly = ly - 20
+
+    do
+        local row = CreateFrame("Frame", nil, lower)
+        row:SetPoint("TOPLEFT", lower, "TOPLEFT", LEFT_MARGIN, ly)
+        row:SetPoint("RIGHT", lower, "RIGHT", RIGHT_MARGIN, 0)
+        row:SetHeight(28)
+
+        local btn = CreateFrame("Button", nil, row, "BackdropTemplate")
+        btn:SetSize(160, 24)
+        btn:SetPoint("TOPLEFT", row, "TOPLEFT", 0, 0)
+        btn:SetBackdrop({
+            bgFile = "Interface\\Tooltips\\UI-Tooltip-Background",
+            edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
+            edgeSize = 10,
+            insets = {left = 2, right = 2, top = 2, bottom = 2},
+        })
+        btn:SetBackdropColor(0.15, 0.15, 0.2, 1)
+        btn:SetBackdropBorderColor(0.3, 0.3, 0.4, 0.8)
+        btn.text = btn:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+        btn.text:SetPoint("CENTER")
+        btn.text:SetText("Remove Last Account")
+        btn:SetScript("OnEnter", function(self) self:SetBackdropColor(0.25, 0.25, 0.35, 1) end)
+        btn:SetScript("OnLeave", function(self) self:SetBackdropColor(0.15, 0.15, 0.2, 1) end)
+        btn:SetScript("OnClick", function()
+            if ns.db and #ns.db.accounts.external > 0 then
+                local removed = table.remove(ns.db.accounts.external)
+                ns:Print("Removed external account: " .. removed.label)
+                UI:RefreshSettings()
+                UI:Refresh()
+            end
+        end)
+    end
+    ly = ly - 28 - SECTION_SPACING
 
     ------------------------------------------------
-    -- Credits
+    -- Tutorial
     ------------------------------------------------
-    y = y - CreateSectionHeader(content, y, "Tutorial")
-    y = y - ITEM_SPACING
+    -- Divider
+    local tutDivider = lower:CreateTexture(nil, "ARTWORK")
+    tutDivider:SetHeight(1)
+    tutDivider:SetPoint("TOPLEFT", lower, "TOPLEFT", LEFT_MARGIN, ly)
+    tutDivider:SetPoint("RIGHT", lower, "RIGHT", RIGHT_MARGIN, 0)
+    tutDivider:SetColorTexture(0.35, 0.35, 0.45, 0.6)
+    local tutHeader = lower:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+    tutHeader:SetPoint("TOPLEFT", lower, "TOPLEFT", LEFT_MARGIN, ly - 6)
+    tutHeader:SetTextColor(0.9, 0.8, 0.3)
+    tutHeader:SetText("Tutorial")
+    ly = ly - 22 - ITEM_SPACING
 
-    local tutorialBtn = CreateFrame("Button", nil, content, "BackdropTemplate")
+    local tutorialBtn = CreateFrame("Button", nil, lower, "BackdropTemplate")
     tutorialBtn:SetSize(180, 26)
-    tutorialBtn:SetPoint("TOPLEFT", content, "TOPLEFT", LEFT_MARGIN, y)
+    tutorialBtn:SetPoint("TOPLEFT", lower, "TOPLEFT", LEFT_MARGIN, ly)
     tutorialBtn:SetBackdrop({
         bgFile = "Interface\\Tooltips\\UI-Tooltip-Background",
         edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
@@ -704,59 +991,75 @@ function UI:CreateSettingsPanel(parent)
         UI:Refresh()
     end)
 
-    local tutDesc = content:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    local tutDesc = lower:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
     tutDesc:SetPoint("LEFT", tutorialBtn, "RIGHT", 8, 0)
     tutDesc:SetTextColor(DESC_COLOR[1], DESC_COLOR[2], DESC_COLOR[3])
     tutDesc:SetText("Walk through the first-time setup again")
-    y = y - 30 - SECTION_SPACING
+    ly = ly - 30 - SECTION_SPACING
 
-    y = y - CreateSectionHeader(content, y, "Credits")
+    ------------------------------------------------
+    -- Credits
+    ------------------------------------------------
+    local credDivider = lower:CreateTexture(nil, "ARTWORK")
+    credDivider:SetHeight(1)
+    credDivider:SetPoint("TOPLEFT", lower, "TOPLEFT", LEFT_MARGIN, ly)
+    credDivider:SetPoint("RIGHT", lower, "RIGHT", RIGHT_MARGIN, 0)
+    credDivider:SetColorTexture(0.35, 0.35, 0.45, 0.6)
+    local credHeader = lower:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+    credHeader:SetPoint("TOPLEFT", lower, "TOPLEFT", LEFT_MARGIN, ly - 6)
+    credHeader:SetTextColor(0.9, 0.8, 0.3)
+    credHeader:SetText("Credits")
+    ly = ly - 22
 
     -- Banner logo
-    local banner = content:CreateTexture(nil, "ARTWORK")
+    local banner = lower:CreateTexture(nil, "ARTWORK")
     banner:SetSize(340, 86)
-    banner:SetPoint("TOP", content, "TOP", 0, y)
+    banner:SetPoint("TOP", lower, "TOP", 0, ly)
     banner:SetTexture("Interface\\AddOns\\flipqueue\\Art\\flipqueue-banner")
-    y = y - 92
+    ly = ly - 92
 
     -- Version
-    local ver = content:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-    ver:SetPoint("TOP", content, "TOP", 0, y)
+    local ver = lower:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+    ver:SetPoint("TOP", lower, "TOP", 0, ly)
     ver:SetTextColor(0.8, 0.75, 0.5)
     ver:SetText("v" .. ns.VERSION)
-    y = y - 20
+    ly = ly - 20
 
     -- Credits text
-    local function AddCreditLine(yOff, label, value)
-        local line = content:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-        line:SetPoint("TOP", content, "TOP", 0, yOff)
+    local function AddCreditLine(parent, yOff, label, value)
+        local line = parent:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+        line:SetPoint("TOP", parent, "TOP", 0, yOff)
         line:SetJustifyH("CENTER")
         line:SetText(ns.COLORS.YELLOW .. label .. "|r  " .. value)
         return 14
     end
 
-    y = y - 4
-    y = y - AddCreditLine(y, "Developed by", "Gezmodean & Claude")
-    y = y - 4
-    y = y - AddCreditLine(y, "Additional support by", "Berick")
-    y = y - 4
-    y = y - AddCreditLine(y, "Additional testing by", "KittyKiller, Niduin, Artificer Skills")
-    y = y - 12
+    ly = ly - 4
+    ly = ly - AddCreditLine(lower, ly, "Developed by", "Gezmodean & Claude")
+    ly = ly - 4
+    ly = ly - AddCreditLine(lower, ly, "Additional support by", "Berick")
+    ly = ly - 4
+    ly = ly - AddCreditLine(lower, ly, "Additional testing by", "KittyKiller, Niduin, Artificer Skills")
+    ly = ly - 12
 
-    local thanksLabel = content:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-    thanksLabel:SetPoint("TOP", content, "TOP", 0, y)
+    local thanksLabel = lower:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    thanksLabel:SetPoint("TOP", lower, "TOP", 0, ly)
     thanksLabel:SetJustifyH("CENTER")
     thanksLabel:SetTextColor(DESC_COLOR[1], DESC_COLOR[2], DESC_COLOR[3])
     thanksLabel:SetText("Special thanks to")
-    y = y - 14
+    ly = ly - 14
 
-    local thanksNames = content:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-    thanksNames:SetPoint("TOP", content, "TOP", 0, y)
+    local thanksNames = lower:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    thanksNames:SetPoint("TOP", lower, "TOP", 0, ly)
     thanksNames:SetJustifyH("CENTER")
     thanksNames:SetText("FlippingPal  |  TradeSkillMaster  |  Auctionator  |  Epos")
-    y = y - 24
+    ly = ly - 24
 
-    content:SetHeight(math.abs(y) + 10)
+    lower:SetHeight(math.abs(ly) + 10)
+    settingsWidgets.lowerSectionHeight = math.abs(ly) + 10
+
+    -- Content height: upper fixed section + SECTION_SPACING + lower container
+    content:SetHeight(math.abs(y) + SECTION_SPACING + math.abs(ly) + 40)
 
     settingsPanel = scroll
     return settingsPanel
@@ -788,6 +1091,13 @@ function UI:RefreshSettings()
     if settingsWidgets.maxWithdrawBox then
         local val = ns.db.settings.maxWithdrawGold or 0
         settingsWidgets.maxWithdrawBox:SetText(tostring(val))
+    end
+    if settingsWidgets.autoDepositGold then
+        settingsWidgets.autoDepositGold:SetChecked(ns.db.settings.autoDepositGold)
+    end
+    if settingsWidgets.goldBufferBox then
+        local val = ns.db.settings.goldBuffer or 0
+        settingsWidgets.goldBufferBox:SetText(tostring(val))
     end
     if settingsWidgets.tsmAutoSkip then
         settingsWidgets.tsmAutoSkip:SetChecked(ns.db.settings.tsmAutoSkipRejected)
@@ -834,6 +1144,55 @@ function UI:RefreshSettings()
         end
     end
     -- Bank tab selection moved to Characters page config panel
+
+    -- Sync status
+    if settingsWidgets.syncStatusText then
+        local syncText
+        if ns.Sync and ns.Sync:IsLinked() then
+            local partner = ns.db.sync.partner.characterName or "?"
+            local statusColor = ns.Sync:IsConnected() and ns.COLORS.GREEN or ns.COLORS.RED
+            local statusLabel = ns.Sync:IsConnected() and "Online" or "Offline"
+            syncText = "Linked to " .. ns.COLORS.CYAN .. partner .. "|r (" .. statusColor .. statusLabel .. "|r)"
+            local pending = ns.Sync:GetPendingCount()
+            if pending > 0 then
+                syncText = syncText .. "\n" .. ns.COLORS.YELLOW .. pending .. " changes queued|r"
+            end
+            local lastSync = ns.db.sync.partner.lastFullSync or 0
+            if lastSync > 0 then
+                syncText = syncText .. "\nLast sync: " .. ns:FormatRelativeTime(lastSync)
+            end
+        else
+            syncText = ns.COLORS.GRAY .. "Not linked. Enter a partner character name to connect.|r"
+        end
+        settingsWidgets.syncStatusText:SetText(syncText)
+    end
+
+    -- Pair request display
+    if settingsWidgets.pairRequestText then
+        if ns.Sync and ns.Sync:HasPendingPairRequest() then
+            local from = ns.Sync:GetPendingPairFrom()
+            settingsWidgets.pairRequestText:SetText(ns.COLORS.CYAN .. (from or "?") .. "|r wants to link.")
+            if settingsWidgets.pairAcceptBtn then settingsWidgets.pairAcceptBtn:Show() end
+            if settingsWidgets.pairDenyBtn then settingsWidgets.pairDenyBtn:Show() end
+        else
+            settingsWidgets.pairRequestText:SetText("")
+            if settingsWidgets.pairAcceptBtn then settingsWidgets.pairAcceptBtn:Hide() end
+            if settingsWidgets.pairDenyBtn then settingsWidgets.pairDenyBtn:Hide() end
+        end
+    end
+
+    -- Show/hide link vs unlink controls
+    if settingsWidgets.linkBtn then
+        local linked = ns.Sync and ns.Sync:IsLinked()
+        settingsWidgets.linkBtn:SetShown(not linked)
+        if settingsWidgets.linkCharBox then settingsWidgets.linkCharBox:SetShown(not linked) end
+    end
+    if settingsWidgets.unlinkBtn then
+        settingsWidgets.unlinkBtn:SetShown(ns.Sync and ns.Sync:IsLinked())
+    end
+    if settingsWidgets.resyncBtn then
+        settingsWidgets.resyncBtn:SetShown(ns.Sync and ns.Sync:IsLinked())
+    end
 
     if settingsWidgets.extAccountList then
         if ns.db.accounts.external and #ns.db.accounts.external > 0 then

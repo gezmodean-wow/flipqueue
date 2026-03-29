@@ -61,6 +61,11 @@ end
 function TodoList:ClearCurrent()
     if not ns.db or not ns.db.todoLists then return end
     ns.db.todoLists.active = nil
+
+    if ns.Sync and ns.Sync.IsLinked and ns.Sync:IsLinked() and not ns.Sync._applying then
+        ns.Sync:EmitDelta("TDCLEAR", {})
+    end
+
     -- Auto-promote next queued list if available
     if self:AdvanceQueue() then
         local promoted = ns.db.todoLists.active
@@ -592,10 +597,18 @@ function TodoList:UpdateTaskStatus(taskIndex, status, reason)
         return
     end
 
-    local item = ns.db.todoLists.active.tasks[taskIndex]
+    local tasks = ns.db.todoLists.active.tasks
+    local item = tasks and tasks[taskIndex]
     if item then
         item.status = status
         if reason then item.failReason = reason end
+    end
+
+    if ns.Sync and ns.Sync.IsLinked and ns.Sync:IsLinked() and not ns.Sync._applying then
+        local task = tasks and tasks[taskIndex]
+        if task and task.taskUUID then
+            ns.Sync:EmitDelta("TDSTATUS", { taskUUID = task.taskUUID, status = task.status, failReason = task.failReason })
+        end
     end
 end
 
@@ -607,6 +620,8 @@ function TodoList:MoveTaskToLog(taskIndex, postedPrice, expirySeconds, postedQua
 
     local item = ns.db.todoLists.active.tasks[taskIndex]
     if not item then return end
+
+    local taskUUID = item.taskUUID
 
     local taskQty = item.quantity or 1
     local moveQty = postedQuantity or taskQty
@@ -696,6 +711,14 @@ function TodoList:MoveTaskToLog(taskIndex, postedPrice, expirySeconds, postedQua
             ns:ImportRemove(item.importSource, item.importKey)
         end
     end
+
+    if ns.Sync and ns.Sync.IsLinked and ns.Sync:IsLinked() and not ns.Sync._applying then
+        if taskUUID then
+            local logEntry = ns.db.log[#ns.db.log]
+            ns.Sync:EmitDelta("TDLOG", { taskUUID = taskUUID, logEntry = logEntry })
+        end
+    end
+
     self:CheckAutoComplete()
 end
 
@@ -1393,6 +1416,14 @@ end
 -- Skip a task (TSM below threshold, user skip, etc.)
 function TodoList:SkipTask(taskIndex, reason)
     self:UpdateTaskStatus(taskIndex, "skipped", reason)
+
+    if ns.Sync and ns.Sync.IsLinked and ns.Sync:IsLinked() and not ns.Sync._applying then
+        local task = (ns.db.todoLists.active and ns.db.todoLists.active.tasks) and ns.db.todoLists.active.tasks[taskIndex]
+        if task and task.taskUUID then
+            ns.Sync:EmitDelta("TDSKIP", { taskUUID = task.taskUUID, reason = reason })
+        end
+    end
+
     self:CheckAutoComplete()
 end
 
@@ -1405,6 +1436,7 @@ function TodoList:DeleteTask(taskIndex)
     if not tasks or not tasks[taskIndex] then return end
 
     local item = tasks[taskIndex]
+    local deletedUUID = item.taskUUID
 
     -- If deleting a buy task, cascade-delete correlated sell tasks for the same deal.
     -- Cross-realm flips generate a buy + sell pair; removing the buy orphans the sell.
@@ -1453,6 +1485,12 @@ function TodoList:DeleteTask(taskIndex)
             ns:ImportRemove(item.importSource, item.importKey)
         end
         table.remove(tasks, taskIndex)
+    end
+
+    if ns.Sync and ns.Sync.IsLinked and ns.Sync:IsLinked() and not ns.Sync._applying then
+        if deletedUUID then
+            ns.Sync:EmitDelta("TDDEL", { taskUUID = deletedUUID })
+        end
     end
 
     self:CheckAutoComplete()

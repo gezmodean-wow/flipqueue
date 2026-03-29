@@ -78,7 +78,8 @@ local function BuildFullInventoryData()
         if charData.inventory and charData.inventory.items then
             local charName = charKey:match("^(.-)%-") or charKey
             local classColor = CLASS_COLORS[charData.class] or "888888"
-            local coloredOwner = "|cff" .. classColor .. charName .. "|r"
+            local acctTag = ns:IsRemoteChar(charKey) and "|cff8866cc[2]|r " or ""
+            local coloredOwner = acctTag .. "|cff" .. classColor .. charName .. "|r"
 
             for key, itemData in pairs(charData.inventory.items) do
                 -- Filter out bound/untradeable
@@ -107,7 +108,8 @@ local function BuildFullInventoryData()
                         local postedName = postedCharKey:match("^(.-)%-") or postedCharKey
                         local postedCharData = ns.db.characters[postedCharKey]
                         local postedClassColor = postedCharData and CLASS_COLORS[postedCharData.class] or "888888"
-                        displayOwner = "|cff" .. postedClassColor .. postedName .. "|r"
+                        local postedAcctTag = ns:IsRemoteChar(postedCharKey) and "|cff8866cc[2]|r " or ""
+                        displayOwner = postedAcctTag .. "|cff" .. postedClassColor .. postedName .. "|r"
                         displayLocation = "Auction House"
                     end
 
@@ -155,7 +157,8 @@ local function BuildFullInventoryData()
                     local postedName = postedCharKey:match("^(.-)%-") or postedCharKey
                     local postedCharData = ns.db.characters[postedCharKey]
                     local postedClassColor = postedCharData and CLASS_COLORS[postedCharData.class] or "888888"
-                    displayOwner = "|cff" .. postedClassColor .. postedName .. "|r"
+                    local postedAcctTag = ns:IsRemoteChar(postedCharKey) and "|cff8866cc[2]|r " or ""
+                    displayOwner = postedAcctTag .. "|cff" .. postedClassColor .. postedName .. "|r"
                     displayLocation = "Auction House"
                 end
 
@@ -203,7 +206,8 @@ local function BuildFullInventoryData()
                         local postedName = postedCharKey:match("^(.-)%-") or postedCharKey
                         local postedCharData = ns.db.characters[postedCharKey]
                         local postedClassColor = postedCharData and CLASS_COLORS[postedCharData.class] or "888888"
-                        displayOwner = "|cff" .. postedClassColor .. postedName .. "|r"
+                        local postedAcctTag = ns:IsRemoteChar(postedCharKey) and "|cff8866cc[2]|r " or ""
+                        displayOwner = postedAcctTag .. "|cff" .. postedClassColor .. postedName .. "|r"
                         displayLocation = "Auction House"
                     end
 

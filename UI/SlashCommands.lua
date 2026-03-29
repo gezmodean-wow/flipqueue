@@ -305,6 +305,27 @@ SlashCmdList["FLIPQUEUE"] = function(msg)
         UI.mainFrame:Show()
         UI:Refresh()
 
+    elseif msg:sub(1, 5) == "link " then
+        local target = msg:sub(6):match("^%s*(.-)%s*$")
+        if target ~= "" and ns.Sync then
+            ns.Sync:RequestPair(target)
+        else
+            ns:Print("Usage: /fq link CharName-Realm")
+        end
+
+    elseif msg == "unlink" then
+        if ns.Sync then
+            ns.Sync:Unlink()
+        end
+
+    elseif msg == "sync" then
+        if ns.Sync and ns.Sync:IsLinked() then
+            ns.Sync:RequestFullSync()
+            ns:Print("Full sync requested.")
+        else
+            ns:Print("Not linked. Use Settings > Multi-Account to link.")
+        end
+
     elseif msg == "help" then
         ns:Print("Commands:")
         print("  /fq - Toggle main window")
@@ -328,6 +349,9 @@ SlashCmdList["FLIPQUEUE"] = function(msg)
         print("  /fq debug - Toggle debug messages")
         print("  /fq tutorial - Show the first-time tutorial")
         print("  /fq settings - Open settings panel")
+        print("  /fq link <Char-Realm> - Link to another account for sync")
+        print("  /fq unlink - Disconnect sync link")
+        print("  /fq sync - Force full re-sync with linked account")
         print("  /fq dnt add <name> - Add item to Do Not Track")
         print("  /fq dnt remove <name> - Remove from Do Not Track")
         print("")

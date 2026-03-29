@@ -884,6 +884,14 @@ function UI:Refresh()
     end
     table.insert(summaryParts, ns.COLORS.YELLOW .. "Deals: " .. pending .. "|r")
     table.insert(summaryParts, ns.COLORS.GRAY .. "Log: " .. logCount .. "|r")
+    if ns.Sync and ns.Sync.IsLinked and ns.Sync:IsLinked() then
+        if ns.Sync:IsConnected() then
+            table.insert(summaryParts, "|cff00ff00Sync: Online|r")
+        else
+            local qc = ns.Sync:GetPendingCount()
+            table.insert(summaryParts, "|cffff0000Sync: Offline" .. (qc > 0 and (" (" .. qc .. " queued)") or "") .. "|r")
+        end
+    end
     mainFrame.summary:SetText(table.concat(summaryParts, "  "))
 
     -- Update nav badges
