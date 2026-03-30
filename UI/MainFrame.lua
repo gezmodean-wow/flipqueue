@@ -26,9 +26,9 @@ mainFrame:SetFrameStrata("HIGH")
 mainFrame:SetClampedToScreen(true)
 mainFrame:SetResizable(true)
 if mainFrame.SetResizeBounds then
-    mainFrame:SetResizeBounds(600, 400, 1200, 900)
+    mainFrame:SetResizeBounds(720, 450, 1200, 900)
 else
-    mainFrame:SetMinResize(600, 400)
+    mainFrame:SetMinResize(720, 450)
     mainFrame:SetMaxResize(1200, 900)
 end
 
@@ -198,6 +198,7 @@ local NAV_ITEMS = {
     {key = "auctionator", label = "Auctionator",   icon = "Interface\\Icons\\INV_Misc_Note_01"},
     {key = "sep"},
     {key = "log",        label = "Log",            icon = "Interface\\Icons\\INV_Misc_Book_09"},
+    {key = "debug",      label = "Task Debug",     icon = "Interface\\Icons\\INV_Misc_Wrench_01"},
     {key = "settings",   label = "Settings",       icon = "Interface\\Icons\\INV_Gizmo_02"},
 }
 
@@ -639,6 +640,9 @@ statusBg:SetColorTexture(0.1, 0.1, 0.15, 1)
 
 mainFrame.statusText = statusBar:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
 mainFrame.statusText:SetPoint("LEFT", statusBar, "LEFT", 6, 0)
+mainFrame.statusText:SetPoint("RIGHT", statusBar, "RIGHT", -6, 0)
+mainFrame.statusText:SetJustifyH("LEFT")
+mainFrame.statusText:SetWordWrap(false)
 
 -- Table container (between action bar and status bar)
 local tableContainer = CreateFrame("Frame", nil, contentArea)
@@ -817,6 +821,7 @@ local function HideAllTables()
     if UI._listSelectorBar then UI._listSelectorBar:Hide() end
     if UI._charConfigPanel then UI._charConfigPanel:Hide() end
     if UI._globalDefaultsBar then UI._globalDefaultsBar:Hide() end
+    if UI._debugPage then UI._debugPage:Hide() end
 end
 
 local function ShowTable(tbl)
@@ -973,6 +978,9 @@ function UI:Refresh()
     elseif self.currentPage == "transform" then
         self:RefreshTransformPage()
 
+    elseif self.currentPage == "debug" then
+        self:RefreshDebugPage()
+
     elseif self.currentPage == "tsm" then
         mainFrame.pageTitle:SetText("TSM Integration")
         HideAllActionBtns()
@@ -1048,9 +1056,13 @@ UI._ShowTable = ShowTable
 UI._RegisterTable = RegisterTable
 
 mainFrame:SetScript("OnShow", function()
-    -- Restore saved size
+    -- Restore saved size (clamp to new minimums)
     if ns.db and ns.db.settings.frameWidth and ns.db.settings.frameHeight then
-        mainFrame:SetSize(ns.db.settings.frameWidth, ns.db.settings.frameHeight)
+        local w = math.max(720, ns.db.settings.frameWidth)
+        local h = math.max(450, ns.db.settings.frameHeight)
+        mainFrame:SetSize(w, h)
+        ns.db.settings.frameWidth = w
+        ns.db.settings.frameHeight = h
     end
     -- Restore saved sidebar width
     if ns.db and ns.db.settings.sidebarWidth then

@@ -141,22 +141,6 @@ frame:SetScript("OnEvent", function(self, event)
         Tracker._pendingCancels = 0
         SnapshotBags()
 
-        -- Mark expired/cancelled auctions as collected (user is at the AH)
-        if ns.db then
-            local charKey = ns:GetCharKey()
-            local cleared = 0
-            for _, entry in ipairs(ns.db.log) do
-                if (entry.auctionStatus == "expired" or entry.auctionStatus == "cancelled")
-                        and entry.charKey == charKey then
-                    entry.auctionStatus = "collected"
-                    cleared = cleared + 1
-                end
-            end
-            if cleared > 0 then
-                ns:Print(ns.COLORS.GREEN .. "Collected " .. cleared .. " expired/cancelled auction(s).|r")
-            end
-        end
-
         -- Refresh task steps (items pulled from bank may now be ready to post)
         if ns.TodoList and ns.TodoList.RefreshTaskSteps then
             ns.TodoList:RefreshTaskSteps()
@@ -180,7 +164,7 @@ frame:SetScript("OnEvent", function(self, event)
             C_AuctionHouse.QueryOwnedAuctions({})
         end
 
-        -- Refresh UI to clear "Check Mail" tasks
+        -- Refresh UI after AH opens (task steps may have changed)
         if ns.UI then
             if ns.UI.RefreshMini then ns.UI:RefreshMini() end
             if ns.UI.Refresh then ns.UI:Refresh() end
@@ -225,6 +209,11 @@ frame:SetScript("OnEvent", function(self, event)
                 if ns.TodoList.RefreshLocations then ns.TodoList:RefreshLocations() end
                 if ns.TodoList.RefreshTaskSteps then ns.TodoList:RefreshTaskSteps() end
             end
+            -- Refresh UI immediately so deposit tasks appear even without AH open
+            if ns.UI then
+                if ns.UI.mainFrame and ns.UI.mainFrame:IsShown() then ns.UI:Refresh() end
+                if ns.UI.RefreshMini then ns.UI:RefreshMini() end
+            end
             -- Pull completes async, then chain deposit + gold + task refresh
             Tracker:AutoPullFromBank(function()
                 -- Withdraw gold FIRST while all pulled items are still in bags
@@ -235,6 +224,11 @@ frame:SetScript("OnEvent", function(self, event)
                 -- Then deposit task items, chaining extras after completion
                 Tracker:AutoDepositToWarbank(function()
                     Tracker:AutoDepositExtraItems()
+                    -- Final UI refresh after all bank operations complete
+                    if ns.UI then
+                        if ns.UI.mainFrame and ns.UI.mainFrame:IsShown() then ns.UI:Refresh() end
+                        if ns.UI.RefreshMini then ns.UI:RefreshMini() end
+                    end
                 end)
                 -- Refresh task steps (items may now be in bags after pull/deposit)
                 if ns.TodoList and ns.TodoList.RefreshTaskSteps then

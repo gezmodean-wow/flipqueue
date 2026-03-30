@@ -439,9 +439,13 @@ end
 -- SECTION 4: TRACK SELECTION PANEL
 -- ==========================================
 
+local CARD_MAX_WIDTH = 260
+local CARD_HEIGHT = 120
+local CARD_GAP = 20
+
 local function CreateTrackCard(parent, title, subtitle, iconPath)
     local card = CreateFrame("Button", nil, parent, "BackdropTemplate")
-    card:SetSize(260, 120)
+    card:SetSize(CARD_MAX_WIDTH, CARD_HEIGHT)
     card:SetBackdrop({
         bgFile = "Interface\\Tooltips\\UI-Tooltip-Background",
         edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
@@ -582,6 +586,15 @@ function UI:RefreshGeneratorPage(pending)
         gf.trackSelectPanel.crossrealmCard:SetScript("OnClick", function()
             SaveWizardState("crossrealm", 1)
             UI:Refresh()
+        end)
+
+        -- Responsive card sizing: shrink cards to fit available width
+        gf.trackSelectPanel:SetScript("OnSizeChanged", function(self, w)
+            local availW = w - 40 -- padding
+            local cardW = math.min(CARD_MAX_WIDTH, math.floor((availW - CARD_GAP) / 2))
+            cardW = math.max(160, cardW) -- minimum card width
+            self.inventoryCard:SetWidth(cardW)
+            self.crossrealmCard:SetWidth(cardW)
         end)
 
         -- ---- NAV BUTTONS (Back / Next) ----

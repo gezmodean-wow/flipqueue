@@ -107,6 +107,11 @@ function ns:InitDB()
 
     ns.db = db
 
+    -- Build realm lookup tables from RealmData
+    if ns.BuildRealmLookup then
+        ns:BuildRealmLookup()
+    end
+
     -- Run data cleanup
     ns:CleanupLegacyData()
 end

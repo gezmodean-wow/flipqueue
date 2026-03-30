@@ -461,17 +461,9 @@ function TodoList:RefreshLocations()
         end
     end
 
-    -- Reconcile deposit tasks: clear all depositFrom pointing to current char first,
-    -- then re-assign based on actual bag surplus. This ensures quantity is respected.
-    -- Step 1: Clear all depositFrom == charKey (will re-assign below if surplus exists)
-    for _, item in ipairs(current.tasks) do
-        if item.status == "pending" and item.depositFrom == charKey
-                and item.assignedChar ~= charKey then
-            item.depositFrom = nil
-            item.source = "unavailable"
-            changed = true
-        end
-    end
+    -- Reconcile deposit tasks: preserve existing assignments when surplus still
+    -- supports them, only clear when items are no longer available.
+    -- This ensures deposit state survives logout/login cycles.
 
     -- Step 2: Count how many of each item the current char needs for their own tasks
     local ownNeeded = {} -- lowercase name -> qty needed by current char
@@ -494,7 +486,26 @@ function TodoList:RefreshLocations()
         end
     end
 
-    -- Step 4: Assign deposit tasks from surplus, one per task until exhausted
+    -- Step 1 (reordered): Validate existing depositFrom == charKey assignments.
+    -- Keep if surplus still supports them; clear only when items are gone.
+    for _, item in ipairs(current.tasks) do
+        if item.status == "pending" and item.depositFrom == charKey
+                and item.assignedChar ~= charKey then
+            local lname = (item.name or ""):lower()
+            local qty = item.quantity or 1
+            if lname ~= "" and surplusByName[lname] and surplusByName[lname] >= qty then
+                -- Still have surplus — keep existing deposit assignment
+                surplusByName[lname] = surplusByName[lname] - qty
+            else
+                -- No longer have surplus of this item — clear assignment
+                item.depositFrom = nil
+                item.source = "unavailable"
+                changed = true
+            end
+        end
+    end
+
+    -- Step 4: Assign NEW deposit tasks from remaining surplus
     for _, item in ipairs(current.tasks) do
         if item.status == "pending" and item.assignedChar ~= charKey
                 and item.assignedChar and not item.depositFrom then

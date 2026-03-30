@@ -190,33 +190,73 @@ function ns:NormalizeAccents(str)
 end
 
 -- Check if a target realm string matches a given realm name
--- Supports linked realm clusters like "Aegwynn, Lightninghoof, Maelstrom"
+-- Uses connected realm group table for exact matching (no substring matching)
+-- Supports comma-separated connected realm lists from FlippingPal
 -- Accent-insensitive: "Confrérie du Thorium" matches "Confrerie du Thorium"
--- Bidirectional: "Aggra" matches "Aggra (Português)" and vice versa
 function ns:RealmMatches(targetRealm, realmName)
     if not targetRealm or targetRealm == "" then return true end
     if not realmName or realmName == "" then return false end
-    local t = ns:NormalizeAccents(targetRealm)
-    local r = ns:NormalizeAccents(realmName)
-    return t:find(r, 1, true) ~= nil or r:find(t, 1, true) ~= nil
+
+    local rNorm = ns:NormalizeRealmKey(realmName)
+    local rGroup = ns.REALM_LOOKUP and ns.REALM_LOOKUP[rNorm]
+
+    -- Check each realm name in the target (may be comma-separated)
+    for name in targetRealm:gmatch("([^,]+)") do
+        name = strtrim(name)
+        if #name >= 3 and not name:find("^%.+$") then
+            local tNorm = ns:NormalizeRealmKey(name)
+            -- Exact normalized name match
+            if tNorm == rNorm then return true end
+            -- Connected realm group match (same AH)
+            if rGroup then
+                local tGroup = ns.REALM_LOOKUP[tNorm]
+                if tGroup and tGroup == rGroup then return true end
+            end
+        end
+    end
+
+    return false
 end
 
 -- Check if two realm strings refer to the same connected AH
 -- e.g., "Kalecgos, Lightninghoof, Maelstrom" overlaps with "Lightninghoof"
--- Accent-insensitive for EU realm names
+-- Uses connected realm group table for exact matching
 function ns:RealmsOverlap(realm1, realm2)
     local r1 = realm1 or ""
     local r2 = realm2 or ""
     if r1 == "" and r2 == "" then return true end
     if r1 == "" or r2 == "" then return false end
-    local r2norm = ns:NormalizeAccents(r2)
-    for name in r1:gmatch("([^,]+)") do
+
+    -- Split r2 into individual names and collect their group IDs
+    local r2names = {} -- normalized name -> true
+    local r2groups = {} -- groupID -> true
+    for name in r2:gmatch("([^,]+)") do
         name = strtrim(name)
-        -- Skip short fragments (e.g., "..." from FP website formatting)
-        if #name >= 3 and not name:find("^%.+$") and r2norm:find(ns:NormalizeAccents(name), 1, true) then
-            return true
+        if #name >= 3 and not name:find("^%.+$") then
+            local norm = ns:NormalizeRealmKey(name)
+            r2names[norm] = true
+            if ns.REALM_LOOKUP then
+                local gid = ns.REALM_LOOKUP[norm]
+                if gid then r2groups[gid] = true end
+            end
         end
     end
+
+    -- Check each name in r1 against r2's names and groups
+    for name in r1:gmatch("([^,]+)") do
+        name = strtrim(name)
+        if #name >= 3 and not name:find("^%.+$") then
+            local norm = ns:NormalizeRealmKey(name)
+            -- Exact name match
+            if r2names[norm] then return true end
+            -- Group match
+            if ns.REALM_LOOKUP then
+                local gid = ns.REALM_LOOKUP[norm]
+                if gid and r2groups[gid] then return true end
+            end
+        end
+    end
+
     return false
 end
 

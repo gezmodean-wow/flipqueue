@@ -17,6 +17,7 @@ Libs\LibDataBroker-1.1\LibDataBroker-1.1.lua
 Libs\LibDBIcon-1.0\LibDBIcon-1.0.lua
 
 Core.lua
+RealmData.lua
 Migration.lua
 DB.lua
 TSM.lua
@@ -51,5 +52,6 @@ UI\ImportPage.lua
 UI\ExportPage.lua
 UI\TransformPage.lua
 UI\GeneratorPage.lua
+UI\DebugPage.lua
 UI\TutorialPage.lua
 UI\SlashCommands.lua
