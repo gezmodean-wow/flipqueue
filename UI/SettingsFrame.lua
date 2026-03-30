@@ -657,7 +657,7 @@ function UI:CreateSettingsPanel(parent)
     -- Link panel: editbox + button
     local linkLabel = lower:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
     linkLabel:SetPoint("TOPLEFT", lower, "TOPLEFT", LEFT_MARGIN, ly)
-    linkLabel:SetText("Partner character (Name-Realm):")
+    linkLabel:SetText("BNet friend's character (Name):")
     ly = ly - 16
 
     settingsWidgets.linkCharBox = CreateFrame("EditBox", nil, lower, "InputBoxTemplate")
@@ -731,8 +731,8 @@ function UI:CreateSettingsPanel(parent)
         acceptBtn.text:SetText("Accept")
         acceptBtn:SetScript("OnClick", function()
             if ns.Sync then
-                local from = ns.Sync:GetPendingPairFrom()
-                if from then ns.Sync:AcceptPair(from) end
+                local _, senderGAID = ns.Sync:GetPendingPairFrom()
+                if senderGAID then ns.Sync:AcceptPair(senderGAID) end
             end
             UI:RefreshSettings()
         end)
@@ -753,7 +753,10 @@ function UI:CreateSettingsPanel(parent)
         denyBtn.text:SetPoint("CENTER")
         denyBtn.text:SetText("Deny")
         denyBtn:SetScript("OnClick", function()
-            if ns.Sync then ns.Sync:DenyPair() end
+            if ns.Sync then
+                local _, senderGAID = ns.Sync:GetPendingPairFrom()
+                ns.Sync:DenyPair(senderGAID)
+            end
             UI:RefreshSettings()
         end)
         settingsWidgets.pairDenyBtn = denyBtn
@@ -1145,24 +1148,29 @@ function UI:RefreshSettings()
     end
     -- Bank tab selection moved to Characters page config panel
 
-    -- Sync status
+    -- Sync status (multi-partner)
     if settingsWidgets.syncStatusText then
         local syncText
         if ns.Sync and ns.Sync:IsLinked() then
-            local partner = ns.db.sync.partner.characterName or "?"
-            local statusColor = ns.Sync:IsConnected() and ns.COLORS.GREEN or ns.COLORS.RED
-            local statusLabel = ns.Sync:IsConnected() and "Online" or "Offline"
-            syncText = "Linked to " .. ns.COLORS.CYAN .. partner .. "|r (" .. statusColor .. statusLabel .. "|r)"
-            local pending = ns.Sync:GetPendingCount()
-            if pending > 0 then
-                syncText = syncText .. "\n" .. ns.COLORS.YELLOW .. pending .. " changes queued|r"
+            local lines = {}
+            for uuid, partner in pairs(ns.Sync:GetPartners()) do
+                local pState = ns.Sync:GetPartnerState(uuid)
+                local statusColor = (pState == "connected" or pState == "syncing") and ns.COLORS.GREEN or ns.COLORS.RED
+                local statusLabel = (pState == "connected" or pState == "syncing") and "Online" or "Offline"
+                local line = ns.COLORS.CYAN .. (partner.label or "Account") .. "|r (" .. statusColor .. statusLabel .. "|r)"
+                local pending = ns.Sync:GetPendingCount(uuid)
+                if pending > 0 then
+                    line = line .. " " .. ns.COLORS.YELLOW .. pending .. " queued|r"
+                end
+                local lastSync = partner.lastFullSync or 0
+                if lastSync > 0 then
+                    line = line .. " | Last sync: " .. ns:FormatRelativeTime(lastSync)
+                end
+                table.insert(lines, line)
             end
-            local lastSync = ns.db.sync.partner.lastFullSync or 0
-            if lastSync > 0 then
-                syncText = syncText .. "\nLast sync: " .. ns:FormatRelativeTime(lastSync)
-            end
+            syncText = table.concat(lines, "\n")
         else
-            syncText = ns.COLORS.GRAY .. "Not linked. Enter a partner character name to connect.|r"
+            syncText = ns.COLORS.GRAY .. "Not linked. Enter a BNet friend's character name to connect.|r"
         end
         settingsWidgets.syncStatusText:SetText(syncText)
     end
@@ -1181,12 +1189,7 @@ function UI:RefreshSettings()
         end
     end
 
-    -- Show/hide link vs unlink controls
-    if settingsWidgets.linkBtn then
-        local linked = ns.Sync and ns.Sync:IsLinked()
-        settingsWidgets.linkBtn:SetShown(not linked)
-        if settingsWidgets.linkCharBox then settingsWidgets.linkCharBox:SetShown(not linked) end
-    end
+    -- Link controls always visible (can add more partners); unlink/resync when linked
     if settingsWidgets.unlinkBtn then
         settingsWidgets.unlinkBtn:SetShown(ns.Sync and ns.Sync:IsLinked())
     end

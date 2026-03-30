@@ -7,7 +7,7 @@ local addonName, ns = ...
 --------------------------
 
 -- Current schema version
-local CURRENT_SCHEMA = 4
+local CURRENT_SCHEMA = 5
 
 -- Schema history:
 -- nil/0  = v0.5.0 (stable release): queue array, separate inventory/characters/hiddenCharacters
@@ -194,6 +194,38 @@ local function RunMigrations(db)
 
         db.schemaVersion = 4
     end  -- migration 4
+
+    -- Migration 5: Multi-partner sync (partner → partners, BNet transport)
+    -- Converts single db.sync.partner to db.sync.partners[uuid] table,
+    -- moves per-partner fields (lastRecvSeq, pendingDeltas) into partner entry.
+    if db.schemaVersion < 5 then
+        db.sync = db.sync or {}
+
+        if db.sync.partner then
+            local partnerUUID = db.sync.partner.accountUUID
+            if partnerUUID then
+                db.sync.partners = db.sync.partners or {}
+                db.sync.partners[partnerUUID] = {
+                    bnetAccountID = nil, -- populated on next BNet connect
+                    label = db.sync.partner.label or "Linked Account",
+                    lastSeen = db.sync.partner.lastSeen or 0,
+                    lastFullSync = db.sync.partner.lastFullSync or 0,
+                    lastRecvSeq = db.sync.lastRecvSeq or 0,
+                    pendingDeltas = db.sync.pendingDeltas or {},
+                }
+            end
+            db.sync.partner = nil
+        end
+
+        -- Ensure partners table exists (fresh installs or unlinked users)
+        db.sync.partners = db.sync.partners or {}
+
+        -- Remove old global fields (now per-partner)
+        db.sync.lastRecvSeq = nil
+        db.sync.pendingDeltas = nil
+
+        db.schemaVersion = 5
+    end  -- migration 5
 end  -- RunMigrations
 
 -- Expose for DB.lua

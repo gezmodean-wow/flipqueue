@@ -30,8 +30,7 @@ function ns:InitDB()
     db.sync         = db.sync or {}
     db.sync.accountUUID   = db.sync.accountUUID or string.format("%x%x", time(), math.random(0, 0xFFFFFF))
     db.sync.lastSentSeq   = db.sync.lastSentSeq or 0
-    db.sync.lastRecvSeq   = db.sync.lastRecvSeq or 0
-    db.sync.pendingDeltas = db.sync.pendingDeltas or {}
+    db.sync.partners      = db.sync.partners or {}
     db.accounts     = db.accounts or {}
     db.accounts.primary  = db.accounts.primary or { syncKey = nil, characters = {} }
     db.accounts.external = db.accounts.external or {}
@@ -430,8 +429,9 @@ function ns:GetCharAccountLabel(charKey)
     local charData = ns.db.characters and ns.db.characters[charKey]
     if not charData or not charData.accountUUID then return nil end
     if not ns.db.sync or charData.accountUUID == ns.db.sync.accountUUID then return nil end
-    if ns.db.sync.partner and charData.accountUUID == ns.db.sync.partner.accountUUID then
-        return ns.db.sync.partner.label or "Linked Account"
+    local partners = ns.db.sync.partners
+    if partners and partners[charData.accountUUID] then
+        return partners[charData.accountUUID].label or "Linked Account"
     end
     return "Other Account"
 end
