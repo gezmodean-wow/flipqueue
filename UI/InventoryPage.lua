@@ -246,6 +246,13 @@ function UI:RefreshInventoryPage()
 
     local data = BuildFullInventoryData()
     self.inventoryTable:SetRowClickHandler(function(rowData, button)
+        if button == "LeftButton" then
+            UI._researchTargetItemKey = rowData._itemKey
+            UI._researchTargetItemName = rowData._itemName
+            UI.currentPage = "research"
+            UI:Refresh()
+            return
+        end
         if button == "RightButton" then
             local statusKey = rowData._statusKey
             if statusKey == "Unknown" or statusKey == "Unassigned" or statusKey == "Check Mail" then

@@ -189,6 +189,7 @@ local NAV_ITEMS = {
     {key = "section", label = "DATA"},
     {key = "inventory",  label = "Inventory",      icon = "Interface\\Icons\\INV_Misc_Bag_07"},
     {key = "characters", label = "Characters",     icon = "Interface\\Icons\\Achievement_GuildPerk_EverybodysFriend"},
+    {key = "research",   label = "Item Research",  icon = "Interface\\Icons\\INV_Misc_SpyGlass_03"},
     -- Guild bank page disabled: Blizzard API returns unreliable item data
     -- {key = "guilds",     label = "Guilds",          icon = "Interface\\Icons\\INV_Misc_Tabard_ClutchofTheConclave"},
     {key = "section", label = "TOOLS"},
@@ -805,6 +806,7 @@ local function HideAllTables()
     if UI._charConfigPanel then UI._charConfigPanel:Hide() end
     if UI._globalDefaultsBar then UI._globalDefaultsBar:Hide() end
     if UI._debugPage then UI._debugPage:Hide() end
+    if UI._researchPage then UI._researchPage:Hide() end
 end
 
 local function ShowTable(tbl)
@@ -948,6 +950,9 @@ function UI:Refresh()
 
     elseif self.currentPage == "characters" then
         self:RefreshCharactersPage()
+
+    elseif self.currentPage == "research" then
+        self:RefreshResearchPage()
 
     elseif self.currentPage == "guilds" then
         self:RefreshGuildsPage()

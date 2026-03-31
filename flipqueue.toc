@@ -21,6 +21,7 @@ RealmData.lua
 Migration.lua
 DB.lua
 TSM.lua
+TSMRealms.lua
 Scanner.lua
 Import.lua
 Export.lua
@@ -32,6 +33,7 @@ TrackerAuctions.lua
 TrackerBank.lua
 TrackerMail.lua
 Sync.lua
+ItemResearch.lua
 UI\ScrollTable.lua
 UI\Shared.lua
 UI\ExportPopup.lua
@@ -50,6 +52,7 @@ UI\GuildsPage.lua
 UI\LogPage.lua
 UI\ExportPage.lua
 UI\TransformPage.lua
+UI\ResearchPage.lua
 UI\GeneratorPage.lua
 UI\DebugPage.lua
 UI\TutorialPage.lua
