@@ -90,7 +90,7 @@ Designed to work alongside [FlippingPal.com](https://flippingpal.com), [TradeSki
 
 ```
 /fq              Toggle main window
-/fq import       Open import page
+/fq import       Open transform page
 /fq log          Show auction log
 /fq inv          Show full inventory
 /fq scan         Rescan current character's bags

@@ -239,6 +239,54 @@ function Transformer:InputFromInventory(filter, value)
     return items
 end
 
+-- Read items from a to-do list (active or queued)
+-- listIndex: nil = active list, 1..N = queued list index
+-- actionFilter: "all" (default), "buy", "sell"
+function Transformer:InputFromTodoList(listIndex, actionFilter)
+    if not ns.db or not ns.db.todoLists then return {} end
+    actionFilter = actionFilter or "all"
+
+    local list
+    if not listIndex then
+        list = ns.db.todoLists.active
+    else
+        local q = ns.db.todoLists.upcoming
+        if q and q[listIndex] then
+            list = q[listIndex]
+        end
+    end
+
+    if not list or not list.tasks then return {} end
+
+    local items = {}
+    for _, task in ipairs(list.tasks) do
+        if actionFilter == "all"
+            or (actionFilter == "buy" and task.action == "buy")
+            or (actionFilter == "sell" and task.action == "sell") then
+
+            local speciesID = tostring(task.itemID or ""):match("^pet:(%d+)")
+            table.insert(items, {
+                itemKey       = task.itemKey or "",
+                itemID        = task.itemID or "",
+                name          = task.name or "",
+                quality       = task.quality or "",
+                quantity      = task.quantity or 1,
+                expectedPrice = task.expectedPrice or task.buyPrice or "",
+                targetRealm   = task.targetRealm or "",
+                isBattlePet   = speciesID ~= nil,
+                speciesID     = speciesID and tonumber(speciesID) or nil,
+                bonusIDs      = task.bonusIDs or "",
+                modifiers     = task.modifiers or "",
+                ilvl          = task.ilvl,
+                _todoAction   = task.action,
+                _todoStatus   = task.status,
+            })
+        end
+    end
+
+    return items
+end
+
 -- Read items from an Auctionator shopping list
 function Transformer:InputFromAuctionatorList(name)
     if not name or name == "" then return {} end

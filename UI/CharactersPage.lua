@@ -1228,3 +1228,11 @@ function UI:RefreshCharactersPage()
         ShowConfigPanel(configPanel._charKey)
     end
 end
+
+-- Register layout callback for container resize
+UI:RegisterPageLayout("characters", function()
+    -- The tsmDetectedScroll has OnSizeChanged, but sync content width defensively
+    if UI._tsmDetectedScroll and UI._tsmDetectedContent then
+        UI._tsmDetectedContent:SetWidth(UI._tsmDetectedScroll:GetWidth())
+    end
+end)

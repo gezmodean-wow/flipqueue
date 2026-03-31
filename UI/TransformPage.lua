@@ -9,7 +9,7 @@ local tableContainer = UI.tableContainer
 -- STATE
 -- ==========================================
 
-local sourceMode = "imports"     -- "tsm", "imports", "inventory", "auctionator"
+local sourceMode = "todo"        -- "tsm", "todo", "paste", "inventory", "auctionator"
 local sourceValue = ""           -- group path, source name, charKey, list name
 local inventoryFilter = "all"    -- "all", "bags", "bank", "warbank"
 local outputFormat = "aaa"       -- "aaa", "csv", "tsmgroup", "auctionator"
@@ -106,11 +106,14 @@ end
 local srcTSMBtn = CreateToggleBtn("TSM Group", transformPage)
 srcTSMBtn:SetPoint("LEFT", srcLabel, "RIGHT", 6, 0)
 
-local srcImportsBtn = CreateToggleBtn("Imports", transformPage)
-srcImportsBtn:SetPoint("LEFT", srcTSMBtn, "RIGHT", 4, 0)
+local srcTodoBtn = CreateToggleBtn("To-Do", transformPage)
+srcTodoBtn:SetPoint("LEFT", srcTSMBtn, "RIGHT", 4, 0)
+
+local srcPasteBtn = CreateToggleBtn("Paste", transformPage)
+srcPasteBtn:SetPoint("LEFT", srcTodoBtn, "RIGHT", 4, 0)
 
 local srcInvBtn = CreateToggleBtn("Inventory", transformPage)
-srcInvBtn:SetPoint("LEFT", srcImportsBtn, "RIGHT", 4, 0)
+srcInvBtn:SetPoint("LEFT", srcPasteBtn, "RIGHT", 4, 0)
 
 local srcAuctBtn = CreateToggleBtn("Auctionator", transformPage)
 srcAuctBtn:SetPoint("LEFT", srcInvBtn, "RIGHT", 4, 0)
@@ -196,6 +199,102 @@ auctListScroll:SetScript("OnSizeChanged", function(sf, w)
     auctListContent:SetWidth(w)
 end)
 local auctListRows = {}
+
+-- To-Do list picker
+local todoListFrame = CreateFrame("Frame", nil, transformPage)
+todoListFrame:SetPoint("TOPLEFT", transformPage, "TOPLEFT", 4, -28)
+todoListFrame:SetPoint("RIGHT", transformPage, "RIGHT", -4, 0)
+todoListFrame:SetHeight(80)
+todoListFrame:Hide()
+
+local todoFilterLabel = todoListFrame:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+todoFilterLabel:SetPoint("TOPLEFT", todoListFrame, "TOPLEFT", 4, 0)
+todoFilterLabel:SetText("Tasks:")
+todoFilterLabel:SetTextColor(0.6, 0.6, 0.6)
+
+local todoActionFilter = "all"  -- "all", "buy", "sell"
+local todoFilterBtns = {}
+local todoFilterNames = {"all", "buy", "sell"}
+local todoFilterLabels = {all = "All", buy = "Buy", sell = "Sell"}
+
+local prevTodoFilterBtn
+for _, mode in ipairs(todoFilterNames) do
+    local btn = CreateToggleBtn(todoFilterLabels[mode], todoListFrame)
+    if prevTodoFilterBtn then
+        btn:SetPoint("LEFT", prevTodoFilterBtn, "RIGHT", 4, 0)
+    else
+        btn:SetPoint("LEFT", todoFilterLabel, "RIGHT", 6, 0)
+    end
+    local capturedMode = mode
+    btn:SetScript("OnClick", function()
+        todoActionFilter = capturedMode
+        for m, b in pairs(todoFilterBtns) do
+            b._active = (todoActionFilter == m)
+            if todoActionFilter == m then
+                b:SetBackdropColor(0.2, 0.4, 0.2, 1)
+            else
+                b:SetBackdropColor(0.15, 0.15, 0.2, 1)
+            end
+        end
+    end)
+    todoFilterBtns[mode] = btn
+    prevTodoFilterBtn = btn
+end
+
+local todoListScroll = CreateFrame("ScrollFrame", nil, todoListFrame, "UIPanelScrollFrameTemplate")
+todoListScroll:SetPoint("TOPLEFT", todoListFrame, "TOPLEFT", 0, -18)
+todoListScroll:SetPoint("BOTTOMRIGHT", todoListFrame, "BOTTOMRIGHT", -16, 0)
+
+local todoListContent = CreateFrame("Frame", nil, todoListScroll)
+todoListContent:SetWidth(1)
+todoListContent:SetHeight(1)
+todoListScroll:SetScrollChild(todoListContent)
+todoListScroll:SetScript("OnSizeChanged", function(sf, w)
+    todoListContent:SetWidth(w)
+end)
+local todoListRows = {}
+local todoSelectedIndex = nil  -- nil = active, 1..N = queued index
+
+-- Paste (raw data) area
+local pasteFrame = CreateFrame("Frame", nil, transformPage)
+pasteFrame:SetPoint("TOPLEFT", transformPage, "TOPLEFT", 4, -28)
+pasteFrame:SetPoint("RIGHT", transformPage, "RIGHT", -4, 0)
+pasteFrame:SetHeight(90)
+pasteFrame:Hide()
+
+local pasteInstr = pasteFrame:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+pasteInstr:SetPoint("TOPLEFT", pasteFrame, "TOPLEFT", 4, 0)
+pasteInstr:SetText("Paste data below (auto-detects format: FP, CSV, TSM, Auctionator, item names)")
+pasteInstr:SetTextColor(0.6, 0.6, 0.6)
+
+local pasteEditBg = CreateFrame("Frame", nil, pasteFrame, "BackdropTemplate")
+pasteEditBg:SetPoint("TOPLEFT", pasteFrame, "TOPLEFT", 0, -14)
+pasteEditBg:SetPoint("BOTTOMRIGHT", pasteFrame, "BOTTOMRIGHT", 0, 0)
+pasteEditBg:SetBackdrop({
+    bgFile = "Interface\\Tooltips\\UI-Tooltip-Background",
+    edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
+    edgeSize = 10,
+    insets = {left = 2, right = 2, top = 2, bottom = 2},
+})
+pasteEditBg:SetBackdropColor(0.08, 0.08, 0.12, 1)
+pasteEditBg:SetBackdropBorderColor(0.3, 0.3, 0.4, 0.8)
+
+local pasteScroll = CreateFrame("ScrollFrame", nil, pasteEditBg, "UIPanelScrollFrameTemplate")
+pasteScroll:SetPoint("TOPLEFT", pasteEditBg, "TOPLEFT", 6, -4)
+pasteScroll:SetPoint("BOTTOMRIGHT", pasteEditBg, "BOTTOMRIGHT", -22, 4)
+
+local pasteEdit = CreateFrame("EditBox", nil, pasteScroll)
+pasteEdit:SetMultiLine(true)
+pasteEdit:SetAutoFocus(false)
+pasteEdit:SetFontObject("ChatFontNormal")
+pasteEdit:SetWidth(400)
+pasteScroll:SetScrollChild(pasteEdit)
+pasteScroll:SetScript("OnSizeChanged", function(sf, w)
+    pasteEdit:SetWidth(w)
+end)
+pasteEdit:SetScript("OnEscapePressed", function() pasteEdit:ClearFocus() end)
+
+local pastedItems = {}  -- parsed items from paste
 
 -- Source status text
 local srcStatus = transformPage:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
@@ -380,7 +479,7 @@ end
 -- ==========================================
 
 local function UpdateSourceButtons()
-    local modes = {tsm = srcTSMBtn, imports = srcImportsBtn, inventory = srcInvBtn, auctionator = srcAuctBtn}
+    local modes = {tsm = srcTSMBtn, todo = srcTodoBtn, paste = srcPasteBtn, inventory = srcInvBtn, auctionator = srcAuctBtn}
     for mode, btn in pairs(modes) do
         btn._active = (sourceMode == mode)
         if sourceMode == mode then
@@ -392,6 +491,8 @@ local function UpdateSourceButtons()
 
     -- Hide all source-specific UIs
     tsmTreeFrame:Hide()
+    todoListFrame:Hide()
+    pasteFrame:Hide()
     auctListFrame:Hide()
     invFilterLabel:Hide()
     for _, btn in pairs(invFilterBtns) do btn:Hide() end
@@ -416,13 +517,120 @@ local function UpdateSourceButtons()
             srcStatus:SetText(ns.COLORS.GRAY .. "TSM not available|r")
         end
 
-    elseif sourceMode == "imports" then
-        local count = ns:ImportGetCount("fpScanner")
-        srcStatus:ClearAllPoints()
-        srcStatus:SetPoint("TOPLEFT", transformPage, "TOPLEFT", 8, -30)
-        srcStatus:SetText(count > 0
-            and (ns.COLORS.YELLOW .. count .. " deals|r in imports")
-            or (ns.COLORS.GRAY .. "No imports — use Import page first|r"))
+    elseif sourceMode == "todo" then
+        todoListFrame:Show()
+
+        -- Update filter button visuals
+        for m, btn in pairs(todoFilterBtns) do
+            btn._active = (todoActionFilter == m)
+            if todoActionFilter == m then
+                btn:SetBackdropColor(0.2, 0.4, 0.2, 1)
+            else
+                btn:SetBackdropColor(0.15, 0.15, 0.2, 1)
+            end
+        end
+
+        -- Build list of available to-do lists
+        local entries = {}  -- { label, index (nil=active, 1..N=queued), taskCount }
+        local TL = ns.TodoList
+        if TL then
+            local active = TL:GetCurrentList()
+            if active and active.tasks and #active.tasks > 0 then
+                local label = (active.name and active.name ~= "") and active.name or "Active List"
+                table.insert(entries, {
+                    label = "|cff00ff00[Active]|r " .. label,
+                    index = nil,
+                    taskCount = #active.tasks,
+                })
+            end
+            local queued = TL:GetQueuedLists()
+            for qi, qList in ipairs(queued) do
+                if qList.tasks and #qList.tasks > 0 then
+                    local label = (qList.name and qList.name ~= "") and qList.name or ("Queued #" .. qi)
+                    table.insert(entries, {
+                        label = ns.COLORS.YELLOW .. "[Queued]|r " .. label,
+                        index = qi,
+                        taskCount = #qList.tasks,
+                    })
+                end
+            end
+        end
+
+        if #entries > 0 then
+            local listHeight = math.min(80, math.max(20, #entries * 18 + 4))
+            todoListFrame:SetHeight(listHeight + 18)  -- +18 for filter row
+            todoListContent:SetWidth(todoListScroll:GetWidth() or 200)
+
+            local todoY = 0
+            for idx, entry in ipairs(entries) do
+                local row = todoListRows[idx]
+                if not row then
+                    row = CreateFrame("Button", nil, todoListContent)
+                    row:SetHeight(18)
+                    row.bg = row:CreateTexture(nil, "BACKGROUND")
+                    row.bg:SetAllPoints()
+                    row.label = row:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+                    row.label:SetPoint("LEFT", row, "LEFT", 6, 0)
+                    row.label:SetPoint("RIGHT", row, "RIGHT", -40, 0)
+                    row.label:SetJustifyH("LEFT")
+                    row.count = row:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+                    row.count:SetPoint("RIGHT", row, "RIGHT", -6, 0)
+                    row.count:SetJustifyH("RIGHT")
+                    row:EnableMouse(true)
+                    todoListRows[idx] = row
+                end
+                row:ClearAllPoints()
+                row:SetPoint("TOPLEFT", todoListContent, "TOPLEFT", 0, -todoY)
+                row:SetPoint("RIGHT", todoListContent, "RIGHT", 0, 0)
+
+                local isSelected = (todoSelectedIndex == entry.index)
+                if isSelected then
+                    row.bg:SetColorTexture(0.2, 0.35, 0.5, 0.6)
+                    row.label:SetText("|cffffffff" .. entry.label .. "|r")
+                else
+                    row.bg:SetColorTexture(0, 0, 0, 0)
+                    row.label:SetText(entry.label)
+                end
+                row.count:SetText(ns.COLORS.GRAY .. entry.taskCount .. " tasks|r")
+
+                local capturedIndex = entry.index
+                row:SetScript("OnClick", function()
+                    todoSelectedIndex = capturedIndex
+                    UpdateSourceButtons()
+                end)
+                row:SetScript("OnEnter", function(self)
+                    if not isSelected then self.bg:SetColorTexture(1, 1, 1, 0.05) end
+                end)
+                row:SetScript("OnLeave", function(self)
+                    if todoSelectedIndex ~= capturedIndex then self.bg:SetColorTexture(0, 0, 0, 0) end
+                end)
+
+                row:Show()
+                todoY = todoY + 18
+            end
+            for i = #entries + 1, #todoListRows do
+                todoListRows[i]:Hide()
+            end
+            todoListContent:SetHeight(math.max(1, todoY))
+
+            -- Auto-select active list if nothing selected yet
+            if todoSelectedIndex == nil and entries[1] then
+                todoSelectedIndex = entries[1].index
+            end
+        else
+            todoListFrame:SetHeight(18)
+            srcStatus:ClearAllPoints()
+            srcStatus:SetPoint("TOPLEFT", todoListFrame, "BOTTOMLEFT", 4, -2)
+            srcStatus:SetText(ns.COLORS.GRAY .. "No to-do lists with tasks|r")
+        end
+
+    elseif sourceMode == "paste" then
+        pasteFrame:Show()
+        if #pastedItems > 0 then
+            srcStatus:ClearAllPoints()
+            srcStatus:SetPoint("TOPLEFT", pasteFrame, "BOTTOMLEFT", 4, -2)
+            srcStatus:SetText(ns.COLORS.YELLOW .. #pastedItems .. " items|r parsed from pasted data")
+        end
 
     elseif sourceMode == "inventory" then
         configArea:Show()
@@ -535,6 +743,16 @@ local function RepositionLayout()
         if srcStatus:GetText() ~= "" then
             configBottom = configBottom - 14
         end
+    elseif sourceMode == "todo" and todoListFrame:IsShown() then
+        configBottom = configBottom - todoListFrame:GetHeight() - 4
+        if srcStatus:GetText() ~= "" then
+            configBottom = configBottom - 14
+        end
+    elseif sourceMode == "paste" and pasteFrame:IsShown() then
+        configBottom = configBottom - pasteFrame:GetHeight() - 4
+        if srcStatus:GetText() ~= "" then
+            configBottom = configBottom - 14
+        end
     elseif sourceMode == "auctionator" and auctListFrame:IsShown() then
         configBottom = configBottom - auctListFrame:GetHeight() - 4
     elseif sourceMode == "inventory" and configArea:IsShown() then
@@ -634,8 +852,18 @@ local function LoadItems()
         if profile and sourceValue ~= "" then
             return T:InputFromTSMGroup(profile, sourceValue)
         end
-    elseif sourceMode == "imports" then
-        return T:InputFromImports("fpScanner")
+    elseif sourceMode == "todo" then
+        return T:InputFromTodoList(todoSelectedIndex, todoActionFilter)
+    elseif sourceMode == "paste" then
+        -- Parse fresh from the edit box text
+        if ns.Import and ns.Import.Parse then
+            local text = pasteEdit:GetText()
+            if text and text ~= "" then
+                pastedItems = ns.Import:Parse(text)
+                return pastedItems
+            end
+        end
+        return {}
     elseif sourceMode == "inventory" then
         return T:InputFromInventory(inventoryFilter)
     elseif sourceMode == "auctionator" then
@@ -1085,7 +1313,15 @@ local function SetSource(mode)
 end
 
 srcTSMBtn:SetScript("OnClick", function() SetSource("tsm") end)
-srcImportsBtn:SetScript("OnClick", function() SetSource("imports") end)
+srcTodoBtn:SetScript("OnClick", function()
+    todoSelectedIndex = nil  -- default to active list
+    pastedItems = {}
+    SetSource("todo")
+end)
+srcPasteBtn:SetScript("OnClick", function()
+    pastedItems = {}
+    SetSource("paste")
+end)
 srcInvBtn:SetScript("OnClick", function() SetSource("inventory") end)
 srcAuctBtn:SetScript("OnClick", function() SetSource("auctionator") end)
 
@@ -1110,6 +1346,13 @@ transformBtn:SetScript("OnClick", function() DoTransform() end)
 -- ==========================================
 
 UI._transformPage = transformPage
+
+-- Register layout callback for container resize
+UI:RegisterPageLayout("transform", function()
+    if transformPage:IsShown() then
+        RepositionLayout()
+    end
+end)
 
 -- ==========================================
 -- REFRESH (entry point from page navigation)

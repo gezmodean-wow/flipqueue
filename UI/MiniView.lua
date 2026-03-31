@@ -113,9 +113,9 @@ local scanBtn = CreateIconButton(header, "Interface\\Buttons\\UI-RefreshButton",
 end)
 scanBtn:SetPoint("RIGHT", mainBtn, "LEFT", -ICON_SPACING, 0)
 
--- Import button
-local importBtn = CreateIconButton(header, "Interface\\Buttons\\UI-GuildButton-MOTD-Up", "Import", function()
-    UI.currentPage = "import"
+-- Transform button (was Import)
+local importBtn = CreateIconButton(header, "Interface\\Buttons\\UI-GuildButton-MOTD-Up", "Transform", function()
+    UI.currentPage = "transform"
     UI.mainFrame:Show()
     UI:Refresh()
 end)

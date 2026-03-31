@@ -202,6 +202,27 @@ local NAV_ITEMS = {
     {key = "settings",   label = "Settings",       icon = "Interface\\Icons\\INV_Gizmo_02"},
 }
 
+-- Scrollable nav container — prevents overflow when the frame is short
+local sidebarScroll = CreateFrame("ScrollFrame", nil, sidebar)
+sidebarScroll:SetPoint("TOPLEFT", sidebar, "TOPLEFT", 0, 0)
+sidebarScroll:SetPoint("BOTTOMRIGHT", sidebar, "BOTTOMRIGHT", 0, 0)
+sidebarScroll:EnableMouseWheel(true)
+sidebarScroll:SetScript("OnMouseWheel", function(self, delta)
+    local cur = self:GetVerticalScroll()
+    local maxScroll = self:GetVerticalScrollRange()
+    self:SetVerticalScroll(math.max(0, math.min(cur - delta * 30, maxScroll)))
+end)
+
+local sidebarContent = CreateFrame("Frame", nil, sidebarScroll)
+sidebarContent:SetWidth(sidebar:GetWidth())
+sidebarContent:SetHeight(1) -- updated after building nav
+sidebarScroll:SetScrollChild(sidebarContent)
+
+-- Keep content width in sync with sidebar width (sidebar resize drag)
+sidebar:SetScript("OnSizeChanged", function(_, w)
+    sidebarContent:SetWidth(w)
+end)
+
 local navButtons = {}
 UI._navButtons = navButtons  -- expose for tutorial highlighting
 local navY = -8
@@ -210,30 +231,30 @@ for _, nav in ipairs(NAV_ITEMS) do
     if nav.key == "section" then
         -- Section header: small gray uppercase text + thin divider
         navY = navY - 2
-        local sep = sidebar:CreateTexture(nil, "ARTWORK")
+        local sep = sidebarContent:CreateTexture(nil, "ARTWORK")
         sep:SetHeight(1)
-        sep:SetPoint("TOPLEFT", sidebar, "TOPLEFT", 6, navY)
-        sep:SetPoint("TOPRIGHT", sidebar, "TOPRIGHT", -6, navY)
+        sep:SetPoint("TOPLEFT", sidebarContent, "TOPLEFT", 6, navY)
+        sep:SetPoint("TOPRIGHT", sidebarContent, "TOPRIGHT", -6, navY)
         sep:SetColorTexture(0.3, 0.3, 0.4, 0.4)
         navY = navY - 10
 
-        local sectionLabel = sidebar:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
-        sectionLabel:SetPoint("TOPLEFT", sidebar, "TOPLEFT", 8, navY)
+        local sectionLabel = sidebarContent:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+        sectionLabel:SetPoint("TOPLEFT", sidebarContent, "TOPLEFT", 8, navY)
         sectionLabel:SetText(nav.label)
         sectionLabel:SetTextColor(0.45, 0.45, 0.5)
         navY = navY - 12
     elseif nav.key:find("^sep") then
-        local sep = sidebar:CreateTexture(nil, "ARTWORK")
+        local sep = sidebarContent:CreateTexture(nil, "ARTWORK")
         sep:SetHeight(1)
-        sep:SetPoint("TOPLEFT", sidebar, "TOPLEFT", 6, navY - 4)
-        sep:SetPoint("TOPRIGHT", sidebar, "TOPRIGHT", -6, navY - 4)
+        sep:SetPoint("TOPLEFT", sidebarContent, "TOPLEFT", 6, navY - 4)
+        sep:SetPoint("TOPRIGHT", sidebarContent, "TOPRIGHT", -6, navY - 4)
         sep:SetColorTexture(0.3, 0.3, 0.4, 0.5)
         navY = navY - 10
     else
-        local btn = CreateFrame("Button", nil, sidebar)
+        local btn = CreateFrame("Button", nil, sidebarContent)
         btn:SetHeight(28)
-        btn:SetPoint("TOPLEFT", sidebar, "TOPLEFT", 4, navY)
-        btn:SetPoint("RIGHT", sidebar, "RIGHT", -4, 0)
+        btn:SetPoint("TOPLEFT", sidebarContent, "TOPLEFT", 4, navY)
+        btn:SetPoint("RIGHT", sidebarContent, "RIGHT", -4, 0)
 
         btn.bg = btn:CreateTexture(nil, "BACKGROUND")
         btn.bg:SetAllPoints()
@@ -274,6 +295,9 @@ for _, nav in ipairs(NAV_ITEMS) do
         navY = navY - 30
     end
 end
+
+-- Set final content height so scroll range is correct
+sidebarContent:SetHeight(math.abs(navY) + 8)
 
 
 local function UpdateNavHighlights()
@@ -495,69 +519,6 @@ mainFrame.actionBtns.auctBuyList = CreateActionBtn("Buy List", "Create Auctionat
     end
 end)
 
-mainFrame.actionBtns.importFromFP = CreateActionBtn("Import from FP", "Switch to Import page to paste FlippingPal data", function()
-    UI.currentPage = "import"
-    UI:Refresh()
-end)
-
-mainFrame.actionBtns.importPreview = CreateActionBtn("Preview", "Parse and preview import results", function()
-    local text = UI._importEdit:GetText()
-    if text and text ~= "" then
-        local items = ns.Import:Parse(text)
-        if #items > 0 then
-            UI._importPreviewClear()
-            -- Re-parse to get fresh preview
-            local previewItems = ns.Import:Parse(text)
-            -- Store preview data via a direct approach
-            UI._importSetPreview(previewItems, ns.Import:PreviewAdd(previewItems))
-            UI:RefreshImportPreview()
-        else
-            UI._importStatus:SetText(ns.COLORS.RED .. "No items found in pasted data.|r")
-        end
-    end
-end)
-
-mainFrame.actionBtns.importDo = CreateActionBtn("Import", "Import previewed items to queue", function()
-    local previewData = UI._importPreviewData()
-    if previewData and #previewData > 0 then
-        local added = ns.Import:Save(previewData)
-        ns:Print("Imported " .. added .. " new items (" .. #previewData .. " parsed, duplicates merged).")
-        UI._importEdit:SetText("")
-        UI._importPreviewClear()
-        UI.importPreviewTable:SetData({})
-        UI._importStatus:SetText(ns.COLORS.GREEN .. added .. " items imported!|r")
-        if UI._tryAutoGenerateTodo then UI._tryAutoGenerateTodo() end
-        UI:Refresh()
-        UI:RefreshMini()
-    else
-        -- No preview data — try direct parse
-        local text = UI._importEdit:GetText()
-        if text and text ~= "" then
-            local items = ns.Import:Parse(text)
-            if #items > 0 then
-                local added = ns.Import:Save(items)
-                ns:Print("Imported " .. added .. " new items (" .. #items .. " parsed, duplicates merged).")
-                UI._importEdit:SetText("")
-                UI._importPreviewClear()
-                UI.importPreviewTable:SetData({})
-                UI._importStatus:SetText(ns.COLORS.GREEN .. added .. " items imported!|r")
-                if UI._tryAutoGenerateTodo then UI._tryAutoGenerateTodo() end
-                UI:Refresh()
-                UI:RefreshMini()
-            else
-                UI._importStatus:SetText(ns.COLORS.RED .. "No items found in pasted data.|r")
-            end
-        end
-    end
-end)
-
-mainFrame.actionBtns.importClear = CreateActionBtn("Clear", "Clear import text and preview", function()
-    UI._importEdit:SetText("")
-    UI._importPreviewClear()
-    UI.importPreviewTable:SetData({})
-    UI._importStatus:SetText("")
-    UI._importEdit:SetFocus(true)
-end)
 
 -- Helper: perform export with current filter and format settings
 local function DoFilteredExport(getItemsFn, source)
@@ -650,6 +611,29 @@ tableContainer:SetPoint("TOPLEFT", actionBar, "BOTTOMLEFT", 0, -1)
 tableContainer:SetPoint("BOTTOMRIGHT", statusBar, "TOPRIGHT", 0, 0)
 
 UI.tableContainer = tableContainer
+
+-- ==========================================
+-- PAGE LAYOUT SYSTEM
+-- ==========================================
+-- Pages with custom layouts register a callback that gets called
+-- whenever the container resizes (main frame drag, sidebar drag, etc.)
+
+local pageLayoutCallbacks = {}
+
+function UI:RegisterPageLayout(pageName, layoutFn)
+    pageLayoutCallbacks[pageName] = layoutFn
+end
+
+-- Debounce: avoid layout thrash during drag resize
+local layoutTimer
+tableContainer:SetScript("OnSizeChanged", function()
+    if layoutTimer then layoutTimer:Cancel() end
+    layoutTimer = C_Timer.NewTimer(0.02, function()
+        layoutTimer = nil
+        local cb = pageLayoutCallbacks[UI.currentPage]
+        if cb then cb() end
+    end)
+end)
 
 -- ==========================================
 -- SCROLL TABLES (one per page)
@@ -805,7 +789,6 @@ local function HideAllTables()
     UI:HideSettingsPage()
     if UI.HideTSMPage then UI:HideTSMPage() end
     if UI.HideAuctionatorPage then UI:HideAuctionatorPage() end
-    if UI._importPage then UI._importPage:Hide() end
     if UI._exportPage then UI._exportPage:Hide() end
     if UI._transformPage then UI._transformPage:Hide() end
     if UI._genInfoFrame then UI._genInfoFrame:Hide() end
@@ -968,9 +951,6 @@ function UI:Refresh()
 
     elseif self.currentPage == "guilds" then
         self:RefreshGuildsPage()
-
-    elseif self.currentPage == "import" then
-        self:RefreshImportPage()
 
     elseif self.currentPage == "export" then
         self:RefreshExportPage()

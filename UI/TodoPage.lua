@@ -457,6 +457,9 @@ function UI:RefreshTodoPage()
             local scrollChild = CreateFrame("Frame", nil, scroll)
             scrollChild:SetWidth(scroll:GetWidth())
             scroll:SetScrollChild(scrollChild)
+            scroll:SetScript("OnSizeChanged", function(sf, w)
+                scrollChild:SetWidth(w)
+            end)
             self._charTasksScroll = scroll
             self._charTasksScrollChild = scrollChild
             -- Style the scrollbar to be subtle
@@ -1136,3 +1139,12 @@ function UI:RefreshTodoPage()
         mainFrame.statusText:SetText(statusStr .. "  |  " .. #nextData .. " next steps  |  Hover for actions")
     end
 end
+
+-- Register layout callback for container resize
+UI:RegisterPageLayout("todo", function()
+    -- The todoOverviewScroll and postSummaryFrame have their own OnSizeChanged handlers.
+    -- Just sync the charTasksScrollChild width if it exists.
+    if UI._charTasksScrollChild and UI._charTasksScroll then
+        UI._charTasksScrollChild:SetWidth(UI._charTasksScroll:GetWidth())
+    end
+end)

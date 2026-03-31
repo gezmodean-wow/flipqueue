@@ -68,10 +68,9 @@ filterTSMBtn:SetPoint("LEFT", filterAllBtn, "RIGHT", 4, 0)
 local filterAuctBtn = CreateExportToggle("Auctionator List", exportPage)
 filterAuctBtn:SetPoint("LEFT", filterTSMBtn, "RIGHT", 4, 0)
 
--- Filter value input (hidden text box)
+-- Filter value input (hidden text box — repositioned dynamically in UpdateFilterButtons)
 local filterValueBox = CreateFrame("EditBox", nil, exportPage, "InputBoxTemplate")
 filterValueBox:SetSize(200, 20)
-filterValueBox:SetPoint("TOPLEFT", exportPage, "TOPLEFT", 52, -48)
 filterValueBox:SetAutoFocus(false)
 filterValueBox:SetMaxLetters(200)
 filterValueBox:Hide()
@@ -87,7 +86,6 @@ filterValueLabel:SetText("")
 
 -- TSM Group Tree for export filter
 local exportTreeFrame = CreateFrame("Frame", nil, exportPage)
-exportTreeFrame:SetPoint("TOPLEFT", exportPage, "TOPLEFT", 4, -48)
 exportTreeFrame:SetPoint("RIGHT", exportPage, "RIGHT", -4, 0)
 exportTreeFrame:SetHeight(150)
 exportTreeFrame:Hide()
@@ -105,7 +103,6 @@ end
 
 -- Auctionator list picker for export filter
 local exportAuctFrame = CreateFrame("Frame", nil, exportPage)
-exportAuctFrame:SetPoint("TOPLEFT", exportPage, "TOPLEFT", 4, -48)
 exportAuctFrame:SetPoint("RIGHT", exportPage, "RIGHT", -4, 0)
 exportAuctFrame:SetHeight(80)
 exportAuctFrame:Hide()
@@ -207,10 +204,8 @@ local function UpdateFormatButtons()
 
     if fmt == "aaa" then
         aaaRow:Show()
-        exportFilterStatus:SetPoint("TOPLEFT", exportPage, "TOPLEFT", 8, -92)
     else
         aaaRow:Hide()
-        exportFilterStatus:SetPoint("TOPLEFT", exportPage, "TOPLEFT", 8, -70)
     end
 end
 
@@ -229,9 +224,15 @@ local function UpdateFilterButtons()
     exportAuctFrame:Hide()
     for _, row in ipairs(exportAuctRows) do row:Hide() end
 
+    -- Filter config area starts below AAA row if shown, else below filter row
+    local filterConfigY = aaaRow:IsShown() and -70 or -48
+
     if mode == "tsmgroup" then
         if exportGroupTree and ns.TSM and ns.TSM:IsEnabled() then
             local profile = ns.TSM:GetSelectedProfile()
+            exportTreeFrame:ClearAllPoints()
+            exportTreeFrame:SetPoint("TOPLEFT", exportPage, "TOPLEFT", 4, filterConfigY)
+            exportTreeFrame:SetPoint("RIGHT", exportPage, "RIGHT", -4, 0)
             exportTreeFrame:Show()
             if profile and exportGroupTree._profile ~= profile then
                 exportGroupTree:SetProfile(profile)
@@ -242,6 +243,8 @@ local function UpdateFilterButtons()
                 filterValueLabel:SetText(ns.COLORS.YELLOW .. "Group: " .. val:gsub("`", " > ") .. "|r")
             end
         else
+            filterValueBox:ClearAllPoints()
+            filterValueBox:SetPoint("TOPLEFT", exportPage, "TOPLEFT", 52, filterConfigY)
             filterValueBox:Show()
             filterValueBox:SetText(ns.Export:GetFilterValue())
             filterValueLabel:SetText("TSM group path")
@@ -251,6 +254,9 @@ local function UpdateFilterButtons()
         local auctAvailable = #listNames > 0 or type(AUCTIONATOR_SHOPPING_LISTS) == "table"
 
         if auctAvailable then
+            exportAuctFrame:ClearAllPoints()
+            exportAuctFrame:SetPoint("TOPLEFT", exportPage, "TOPLEFT", 4, filterConfigY)
+            exportAuctFrame:SetPoint("RIGHT", exportPage, "RIGHT", -4, 0)
             exportAuctFrame:Show()
             local listHeight = math.min(80, math.max(20, #listNames * 18 + 4))
             exportAuctFrame:SetHeight(listHeight)
@@ -303,6 +309,8 @@ local function UpdateFilterButtons()
             end
             exportAuctContent:SetHeight(math.max(1, auctY))
         else
+            filterValueBox:ClearAllPoints()
+            filterValueBox:SetPoint("TOPLEFT", exportPage, "TOPLEFT", 52, filterConfigY)
             filterValueBox:Show()
             filterValueBox:SetText(ns.Export:GetFilterValue())
             filterValueLabel:SetText("Shopping list name")
@@ -323,23 +331,26 @@ local function UpdateFilterButtons()
         end
     end
 
-    -- Reposition export scroll
-    local scrollTop = -90
+    -- Reposition export scroll dynamically based on visible controls
+    local controlsBottom = filterConfigY
     if mode == "tsmgroup" and exportTreeFrame:IsShown() then
-        local treeH = exportTreeFrame:GetHeight()
-        scrollTop = -48 - treeH - 24
+        controlsBottom = controlsBottom - exportTreeFrame:GetHeight() - 4
         if filterValueLabel:GetText() and filterValueLabel:GetText() ~= "" then
-            scrollTop = scrollTop - 16
+            controlsBottom = controlsBottom - 16
         end
     elseif mode == "auctionator" and exportAuctFrame:IsShown() then
-        scrollTop = -48 - exportAuctFrame:GetHeight() - 12
+        controlsBottom = controlsBottom - exportAuctFrame:GetHeight() - 4
     end
-    scrollTop = math.min(scrollTop, -90)
+    -- Ensure minimum gap below the filter row
+    controlsBottom = math.min(controlsBottom, -72)
+
+    exportFilterStatus:ClearAllPoints()
+    exportFilterStatus:SetPoint("TOPLEFT", exportPage, "TOPLEFT", 8, controlsBottom)
+
+    local scrollTop = controlsBottom - 16
     exportScroll:ClearAllPoints()
     exportScroll:SetPoint("TOPLEFT", exportPage, "TOPLEFT", 4, scrollTop)
     exportScroll:SetPoint("BOTTOMRIGHT", exportPage, "BOTTOMRIGHT", -24, 34)
-    exportFilterStatus:ClearAllPoints()
-    exportFilterStatus:SetPoint("TOPLEFT", exportPage, "TOPLEFT", 8, scrollTop + 16)
 end
 
 -- Wire button clicks
@@ -376,6 +387,13 @@ UI._updateExportToggles = function()
     UpdateFormatButtons()
     UpdateFilterButtons()
 end
+
+-- Register layout callback for container resize
+UI:RegisterPageLayout("export", function()
+    if exportPage:IsShown() then
+        UpdateFilterButtons()
+    end
+end)
 
 -- ==========================================
 -- REFRESH

@@ -11,7 +11,7 @@ SlashCmdList["FLIPQUEUE"] = function(msg)
     msg = (msg or ""):lower():trim()
 
     if msg == "import" then
-        UI.currentPage = "import"
+        UI.currentPage = "transform"
         UI.mainFrame:Show()
         UI:Refresh()
 
@@ -329,7 +329,7 @@ SlashCmdList["FLIPQUEUE"] = function(msg)
     elseif msg == "help" then
         ns:Print("Commands:")
         print("  /fq - Toggle main window")
-        print("  /fq import - Open import page")
+        print("  /fq import - Open transform page")
         print("  /fq log - Show posted items log")
         print("  /fq queue - Open To-Do Generator")
         print("  /fq inv - Open full inventory page")

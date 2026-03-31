@@ -1188,7 +1188,6 @@ function UI:RefreshGeneratorPage(pending)
         cr1.statusLabel:SetTextColor(0.5, 0.5, 0.5)
         cr1.statusLabel:SetText("")
 
-        -- Import button removed — use the Import page tab instead
 
         cr1._lastLen = 0
         cr1._previewData = nil
@@ -4002,3 +4001,26 @@ function UI:RefreshGeneratorPage(pending)
     -- Fallback
     mainFrame.statusText:SetText(pending .. " deals  |  To-Do Generator")
 end
+
+-- Register layout callback for container resize.
+-- The generator frame uses SetAllPoints + internal OnSizeChanged handlers,
+-- so we only need to sync scroll child widths that might not have fired yet.
+UI:RegisterPageLayout("generator", function()
+    local gf = UI._genFrame
+    if not gf or not gf:IsShown() then return end
+    -- poolScroll, genScroll, etc. have their own OnSizeChanged handlers.
+    -- Force a sync on poolContent/genContent widths (defensive).
+    local stepPool = UI._wizardTrack == "crossrealm" and gf.crStepContainers or gf.stepContainers
+    local sc = stepPool and stepPool[UI._wizardStep or 0]
+    if sc then
+        if sc.poolScroll and sc.poolContent then
+            sc.poolContent:SetWidth(sc.poolScroll:GetWidth())
+        end
+        if sc.genScroll and sc.genContent then
+            sc.genContent:SetWidth(sc.genScroll:GetWidth())
+        end
+        if sc.editScroll and sc.editBox then
+            sc.editBox:SetWidth(sc.editScroll:GetWidth())
+        end
+    end
+end)
