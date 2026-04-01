@@ -13,6 +13,7 @@ local IMPORT_TYPE_LABELS = {
     fpCrossRealm = "Cross-Realm Flip",
     tsm          = "TSM Import",
     auctionator  = "Auctionator Import",
+    dealFinder   = "Deal Finder",
 }
 
 --------------------------
@@ -28,22 +29,35 @@ function TodoList:BuildItemPool()
 
     local pool = {}
     local keyIndex = {} -- itemKey -> pool array index
+    local idIndex  = {} -- numericID -> pool array index (dedup variants)
 
     local function AddToPool(itemKey, itemData, source, location, quantity)
         if quantity <= 0 then return end
 
         local idx = keyIndex[itemKey]
         if not idx then
-            idx = #pool + 1
-            pool[idx] = {
-                itemKey       = itemKey,
-                itemID        = itemData.itemID or itemKey:match("^(%d+)"),
-                name          = itemData.name or "Unknown",
-                icon          = itemData.icon,
-                sources       = {},
-                totalQuantity = 0,
-            }
-            keyIndex[itemKey] = idx
+            -- Try numeric ID dedup (same base item, different bonus IDs)
+            local numID = tonumber(itemData.itemID) or tonumber(itemKey:match("^(%d+)"))
+            if numID and idIndex[numID] then
+                idx = idIndex[numID]
+                keyIndex[itemKey] = idx
+                -- Prefer the key with bonus IDs
+                if itemKey:find(";.+;") and not pool[idx].itemKey:find(";.+;") then
+                    pool[idx].itemKey = itemKey
+                end
+            else
+                idx = #pool + 1
+                pool[idx] = {
+                    itemKey       = itemKey,
+                    itemID        = itemData.itemID or itemKey:match("^(%d+)"),
+                    name          = itemData.name or "Unknown",
+                    icon          = itemData.icon,
+                    sources       = {},
+                    totalQuantity = 0,
+                }
+                keyIndex[itemKey] = idx
+                if numID then idIndex[numID] = idx end
+            end
         end
 
         table.insert(pool[idx].sources, {

@@ -23,6 +23,7 @@ function ns:InitDB()
     db.imports.fpScanner    = db.imports.fpScanner or {}
     db.imports.fpCrossRealm = db.imports.fpCrossRealm or {}
     db.imports.tsm          = db.imports.tsm or {}
+    db.imports.dealFinder   = db.imports.dealFinder or {}
     db.todoLists    = db.todoLists or {}
     db.todoLists.upcoming = db.todoLists.upcoming or {}
     db.log          = db.log or {}
@@ -97,6 +98,14 @@ function ns:InitDB()
     db.settings.genCrossRealmListMode = db.settings.genCrossRealmListMode or "separate"  -- "separate"/"integrated"
     db.settings.genIntegratedSortMode = db.settings.genIntegratedSortMode or "mostProfitable"
     db.settings.genCrossRealmRealmFilter = db.settings.genCrossRealmRealmFilter or {}
+    -- Deal Finder defaults
+    db.settings.dfMinPrice     = db.settings.dfMinPrice or 500000     -- 50g in copper
+    db.settings.dfMinSellRate  = db.settings.dfMinSellRate or 0.05    -- 5%
+    db.settings.dfMinProfit    = db.settings.dfMinProfit or 100000    -- 10g in copper
+    db.settings.dfMinProfitPct = db.settings.dfMinProfitPct or 5      -- 5%
+    db.settings.dfOutlierMultiplier = db.settings.dfOutlierMultiplier or 1.5
+    if db.settings.dfIgnoreOutliers == nil then db.settings.dfIgnoreOutliers = false end
+    db.settings.dfPriorityOrder = db.settings.dfPriorityOrder or {"profit", "noCompetition", "previousSales"}
     -- Skip deals that have no matching character (suppress "create character" tasks)
     if db.settings.skipUnassigned == nil then db.settings.skipUnassigned = false end
     -- TSM character detection dismissed list

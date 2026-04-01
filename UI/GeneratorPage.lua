@@ -566,12 +566,21 @@ function UI:RefreshGeneratorPage(pending)
         gf.trackSelectPanel.title:SetText("How would you like to generate your To-Do list?")
         gf.trackSelectPanel.title:SetTextColor(0.9, 0.9, 0.9)
 
+        gf.trackSelectPanel.dealFinderCard = CreateTrackCard(
+            gf.trackSelectPanel,
+            "Deal Finder",
+            "Find deals from TSM + personal data",
+            "Interface\\Icons\\INV_Misc_Coin_01")
+        gf.trackSelectPanel.dealFinderCard:SetScript("OnClick", function()
+            UI.currentPage = "deals"
+            UI:Refresh()
+        end)
+
         gf.trackSelectPanel.inventoryCard = CreateTrackCard(
             gf.trackSelectPanel,
-            "Inventory Scan",
-            "I have items to sell",
+            "FP: Inventory Scan",
+            "Import FlippingPal inventory scan",
             "Interface\\Icons\\INV_Misc_Bag_07")
-        gf.trackSelectPanel.inventoryCard:SetPoint("RIGHT", gf.trackSelectPanel, "CENTER", -10, 0)
         gf.trackSelectPanel.inventoryCard:SetScript("OnClick", function()
             SaveWizardState("inventory", 1)
             UI:Refresh()
@@ -579,22 +588,32 @@ function UI:RefreshGeneratorPage(pending)
 
         gf.trackSelectPanel.crossrealmCard = CreateTrackCard(
             gf.trackSelectPanel,
-            "Cross-Realm Import",
-            "I want to buy and flip across realms",
+            "FP: Cross-Realm",
+            "Import FlippingPal cross-realm flips",
             "Interface\\Icons\\INV_Misc_Map_01")
-        gf.trackSelectPanel.crossrealmCard:SetPoint("LEFT", gf.trackSelectPanel, "CENTER", 10, 0)
         gf.trackSelectPanel.crossrealmCard:SetScript("OnClick", function()
             SaveWizardState("crossrealm", 1)
             UI:Refresh()
         end)
 
-        -- Responsive card sizing: shrink cards to fit available width
+        -- Responsive card sizing: 3 cards in a row
         gf.trackSelectPanel:SetScript("OnSizeChanged", function(self, w)
-            local availW = w - 40 -- padding
-            local cardW = math.min(CARD_MAX_WIDTH, math.floor((availW - CARD_GAP) / 2))
-            cardW = math.max(160, cardW) -- minimum card width
+            local availW = w - 40
+            local cardW = math.min(CARD_MAX_WIDTH, math.floor((availW - CARD_GAP * 2) / 3))
+            cardW = math.max(140, cardW)
+            self.dealFinderCard:SetWidth(cardW)
             self.inventoryCard:SetWidth(cardW)
             self.crossrealmCard:SetWidth(cardW)
+
+            -- Position cards centered
+            local totalW3 = cardW * 3 + CARD_GAP * 2
+            local startX = (w - totalW3) / 2
+            self.dealFinderCard:ClearAllPoints()
+            self.dealFinderCard:SetPoint("LEFT", self, "LEFT", startX, 0)
+            self.inventoryCard:ClearAllPoints()
+            self.inventoryCard:SetPoint("LEFT", self.dealFinderCard, "RIGHT", CARD_GAP, 0)
+            self.crossrealmCard:ClearAllPoints()
+            self.crossrealmCard:SetPoint("LEFT", self.inventoryCard, "RIGHT", CARD_GAP, 0)
         end)
 
         -- ---- NAV BUTTONS (Back / Next) ----

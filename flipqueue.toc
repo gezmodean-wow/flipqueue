@@ -34,6 +34,7 @@ TrackerBank.lua
 TrackerMail.lua
 Sync.lua
 ItemResearch.lua
+DealFinder.lua
 UI\ScrollTable.lua
 UI\Shared.lua
 UI\ExportPopup.lua
@@ -52,6 +53,9 @@ UI\GuildsPage.lua
 UI\LogPage.lua
 UI\ExportPage.lua
 UI\TransformPage.lua
+UI\AllocWidget.lua
+UI\DealFinderPage.lua
+UI\DealFinderDetail.lua
 UI\ResearchPage.lua
 UI\GeneratorPage.lua
 UI\DebugPage.lua

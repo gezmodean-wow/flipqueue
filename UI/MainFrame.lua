@@ -193,6 +193,7 @@ local NAV_ITEMS = {
     -- Guild bank page disabled: Blizzard API returns unreliable item data
     -- {key = "guilds",     label = "Guilds",          icon = "Interface\\Icons\\INV_Misc_Tabard_ClutchofTheConclave"},
     {key = "section", label = "TOOLS"},
+    {key = "deals",     label = "Deal Finder",   icon = "Interface\\Icons\\INV_Misc_Coin_01"},
     {key = "transform", label = "Transform",     icon = "Interface\\Icons\\Trade_Engineering"},
     {key = "section", label = "INTEGRATIONS"},
     {key = "tsm",        label = "TSM",            icon = "Interface\\Icons\\INV_Misc_Coin_17"},
@@ -807,6 +808,7 @@ local function HideAllTables()
     if UI._globalDefaultsBar then UI._globalDefaultsBar:Hide() end
     if UI._debugPage then UI._debugPage:Hide() end
     if UI._researchPage then UI._researchPage:Hide() end
+    if UI._dealFinderPage then UI._dealFinderPage:Hide() end
 end
 
 local function ShowTable(tbl)
@@ -959,6 +961,9 @@ function UI:Refresh()
 
     elseif self.currentPage == "export" then
         self:RefreshExportPage()
+
+    elseif self.currentPage == "deals" then
+        self:RefreshDealFinderPage()
 
     elseif self.currentPage == "transform" then
         self:RefreshTransformPage()
