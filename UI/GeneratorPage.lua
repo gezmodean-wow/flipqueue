@@ -56,7 +56,11 @@ end
 local function AutoGenerate()
     if not ns.TodoList then return end
     local allocationOrder = UI:GetGenAllocationOrder()
-    UI._generatorPreview = ns.TodoList:GenerateTodoList("fpScanner", allocationOrder)
+    UI._generatorPreview = ns.TodoList:GenerateTodoList("fpScanner", allocationOrder, {
+        filterMode = UI._genFilterMode,
+        filterValue = UI._genFilterValue,
+        excludedItems = UI._genExcludedItems,
+    })
 end
 
 -- Accessors that read/write DB settings (with fallback defaults for before InitDB runs)
@@ -879,27 +883,17 @@ function UI:RefreshGeneratorPage(pending)
         -- Click anywhere on the background to focus the EditBox
         s2.editBg:SetScript("OnMouseDown", function() s2.editBox:SetFocus() end)
 
-        -- Preview table
-        s2.previewTable = UI:CreateScrollTable(s2, {
-            {key = "status",   label = "Status",  width = 52,  align = "CENTER", sortable = true},
-            {key = "name",     label = "Item",    width = 160, sortable = true},
-            {key = "realm",    label = "Realm",   width = 110, sortable = true},
-            {key = "price",    label = "Price",   width = 70,  sortable = true},
-            {key = "qty",      label = "Qty",     width = 30,  align = "CENTER", sortable = true},
-            {key = "reason",   label = "Reason",  width = 128, sortable = true},
-        })
-        s2.previewTable:SetSort("status", true)
-        if UI._RegisterTable then UI._RegisterTable(s2.previewTable) end
+        -- Grouped preview scroll (replaces flat table)
+        s2.previewScroll = CreateFrame("ScrollFrame", "FlipQueueGenImportPreview", s2, "UIPanelScrollFrameTemplate")
+        s2.previewScroll:SetPoint("TOPLEFT", s2.editBg, "BOTTOMLEFT", 0, -4)
+        s2.previewScroll:SetPoint("BOTTOMRIGHT", s2, "BOTTOMRIGHT", -22, 40)
+        s2.previewScroll:Hide()
 
-        s2.previewTable.headerFrame:SetParent(s2)
-        s2.previewTable.headerFrame:ClearAllPoints()
-        s2.previewTable.headerFrame:SetPoint("TOPLEFT", s2.editBg, "BOTTOMLEFT", 0, -4)
-        s2.previewTable.headerFrame:SetPoint("TOPRIGHT", s2.editBg, "BOTTOMRIGHT", 0, -4)
-
-        s2.previewTable.scrollFrame:SetParent(s2)
-        s2.previewTable.scrollFrame:ClearAllPoints()
-        s2.previewTable.scrollFrame:SetPoint("TOPLEFT", s2.previewTable.headerFrame, "BOTTOMLEFT", 0, 0)
-        s2.previewTable.scrollFrame:SetPoint("BOTTOMRIGHT", s2, "BOTTOMRIGHT", -22, 40)
+        s2.previewContent = CreateFrame("Frame", nil, s2.previewScroll)
+        s2.previewContent:SetWidth(s2.previewScroll:GetWidth() or 500)
+        s2.previewScroll:SetScrollChild(s2.previewContent)
+        s2.previewScroll:SetScript("OnSizeChanged", function(sf, w) s2.previewContent:SetWidth(w) end)
+        s2.previewRows = {}
 
         s2.statusLabel = s2:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
         s2.statusLabel:SetPoint("LEFT", s2, "BOTTOMLEFT", 8, 22)
@@ -949,7 +943,8 @@ function UI:RefreshGeneratorPage(pending)
                         s2.editBox:SetText("")
                         s2._previewData = nil
                         s2._previewResults = nil
-                        s2.previewTable:SetData({})
+                        s2.previewScroll:Hide()
+                        for _, r in ipairs(s2.previewRows) do r:Hide() end
                         s2.statusLabel:SetText(ns.COLORS.GREEN .. added .. " deals imported!|r")
                         s2._lastLen = 0
                         -- Auto-advance to step 3 (generate) after auto-import
@@ -961,81 +956,165 @@ function UI:RefreshGeneratorPage(pending)
                         s2._previewData = items
                         s2._previewResults = ns.Import:PreviewAdd(items)
 
-                        -- Build preview table data
-                        local data = {}
-                        local newCount, dupCount, updateCount = 0, 0, 0
+                        -- Group deals by item name, tracking dupe status
+                        local itemGroups = {}  -- name -> { deals = {}, dupeCount = 0 }
+                        local itemOrder = {}
+                        local dealCount, dupeCount = 0, 0
                         for _, result in ipairs(s2._previewResults) do
                             local item = result.item
-                            local st = result._importStatus
-                            local dupeReason = result._dupeReason
-                            local statusStr, statusSort
-                            if st == "new" then
-                                statusStr = ns.COLORS.GREEN .. "New" .. "|r"
-                                statusSort = "1new"
-                                newCount = newCount + 1
-                            elseif st == "update" then
-                                statusStr = ns.COLORS.YELLOW .. "Update" .. "|r"
-                                statusSort = "2update"
-                                updateCount = updateCount + 1
-                            elseif st == "duplicate" then
-                                statusStr = ns.COLORS.GRAY .. "Dupe" .. "|r"
-                                statusSort = "3dupe"
-                                dupCount = dupCount + 1
-                            else
-                                statusStr = st or "?"
-                                statusSort = "4" .. (st or "")
+                            local name = item.name or "?"
+                            if not itemGroups[name] then
+                                itemGroups[name] = {
+                                    deals = {},
+                                    dupeCount = 0,
+                                    quality = item.quality,
+                                    itemID = item.itemID,
+                                    itemKey = item.itemKey,
+                                    ilvl = item.ilvl,
+                                }
+                                table.insert(itemOrder, name)
                             end
-
-                            local displayName = item.name or "?"
-                            local qColor = item.quality and IMPORT_QUALITY_COLORS[item.quality]
-                            if qColor then
-                                displayName = "|cff" .. qColor .. displayName .. "|r"
+                            local isDupe = result._importStatus == "duplicate"
+                            if isDupe then
+                                dupeCount = dupeCount + 1
+                                itemGroups[name].dupeCount = itemGroups[name].dupeCount + 1
                             end
-
-                            local isCrossRealm = (item.dealType == "flip" or item.dealType == "buy")
-                                and item.buyRealm and item.buyRealm ~= ""
-                            if isCrossRealm then
-                                displayName = ns.COLORS.CYAN .. "[XR] " .. "|r" .. displayName
-                            end
-
-                            local reasonStr = ""
-                            if dupeReason then
-                                if st == "duplicate" then
-                                    reasonStr = ns.COLORS.GRAY .. dupeReason .. "|r"
-                                elseif st == "update" then
-                                    reasonStr = ns.COLORS.YELLOW .. dupeReason .. "|r"
-                                end
-                            end
-                            if isCrossRealm and item.buyRealm and reasonStr == "" then
-                                reasonStr = ns.COLORS.CYAN .. "buy@" .. item.buyRealm .. "|r"
-                            end
-
-                            local priceDisplay = item.expectedPrice or ""
-                            if isCrossRealm and item.buyPrice then
-                                priceDisplay = item.buyPrice
-                            end
-
-                            table.insert(data, {
-                                status   = statusStr,
-                                name     = displayName,
-                                realm    = item.targetRealm or "",
-                                price    = priceDisplay,
-                                qty      = item.quantity or 1,
-                                reason   = reasonStr,
-                                _sortStatus = statusSort,
-                                _tooltipText = item.name,
-                                _rowColor = isCrossRealm and {0.1, 0.3, 0.5, 0.08} or nil,
+                            dealCount = dealCount + 1
+                            table.insert(itemGroups[name].deals, {
+                                realm = item.targetRealm or "",
+                                price = item.expectedPrice or "",
+                                isDupe = isDupe,
+                                dupeReason = result._dupeReason,
                             })
                         end
 
-                        s2.previewTable:SetData(data)
-                        s2.previewTable.headerFrame:Show()
-                        s2.previewTable.scrollFrame:Show()
+                        -- Find filtered inventory items with no deals
+                        local pool = ns.TodoList and ns.TodoList:GetFilteredItemPool(
+                            UI._genFilterMode, UI._genFilterValue, UI._genExcludedItems) or {}
+                        local noDeals = {}
+                        for _, p in ipairs(pool) do
+                            local pName = (p.name or ""):lower()
+                            local found = false
+                            for _, item in ipairs(items) do
+                                if (item.name or ""):lower() == pName then found = true; break end
+                                local pNumID = tonumber(p.itemID)
+                                local iNumID = tonumber(item.itemID)
+                                if pNumID and pNumID > 0 and pNumID == iNumID then found = true; break end
+                            end
+                            if not found then
+                                table.insert(noDeals, p)
+                            end
+                        end
 
+                        -- Build grouped scroll content
+                        for _, row in ipairs(s2.previewRows) do row:Hide() end
+                        local pvRowIdx = 0
+                        local pvY = 0
+                        local ROW_H = 16
+                        local HDR_H = 20
+
+                        local function GetOrCreatePvRow(h)
+                            pvRowIdx = pvRowIdx + 1
+                            local row = s2.previewRows[pvRowIdx]
+                            if not row then
+                                row = CreateFrame("Frame", nil, s2.previewContent)
+                                row.bg = row:CreateTexture(nil, "BACKGROUND")
+                                row.bg:SetAllPoints()
+                                row.left = row:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+                                row.left:SetPoint("LEFT", row, "LEFT", 6, 0)
+                                row.left:SetJustifyH("LEFT")
+                                row.right = row:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+                                row.right:SetPoint("RIGHT", row, "RIGHT", -4, 0)
+                                row.right:SetJustifyH("RIGHT")
+                                row.left:SetPoint("RIGHT", row.right, "LEFT", -4, 0)
+                                s2.previewRows[pvRowIdx] = row
+                            end
+                            row:SetHeight(h)
+                            row:ClearAllPoints()
+                            row:SetPoint("TOPLEFT", s2.previewContent, "TOPLEFT", 0, -pvY)
+                            row:SetPoint("RIGHT", s2.previewContent, "RIGHT", 0, 0)
+                            row.left:SetText("")
+                            row.right:SetText("")
+                            row:Show()
+                            return row
+                        end
+
+                        -- Render item groups
+                        for _, name in ipairs(itemOrder) do
+                            local grp = itemGroups[name]
+                            -- Find inventory qty for this item
+                            local invQty = 0
+                            for _, p in ipairs(pool) do
+                                if (p.name or ""):lower() == name:lower() then
+                                    invQty = invQty + (p.totalQuantity or 1)
+                                end
+                            end
+
+                            local qColor = grp.quality and IMPORT_QUALITY_COLORS[grp.quality]
+                            local coloredName = qColor and ("|cff" .. qColor .. name .. "|r") or name
+                            local hdr = GetOrCreatePvRow(HDR_H)
+                            hdr.bg:SetColorTexture(0.12, 0.15, 0.2, 0.8)
+                            local invStr = invQty > 0 and (ns.COLORS.GREEN .. invQty .. " in stock|r") or (ns.COLORS.RED .. "not in inventory|r")
+                            hdr.left:SetText(coloredName)
+                            hdr.right:SetText(#grp.deals .. " deal(s)  |  " .. invStr)
+                            pvY = pvY + HDR_H
+
+                            -- Sort deals: non-dupe first, then by price (descending)
+                            table.sort(grp.deals, function(a, b)
+                                if a.isDupe ~= b.isDupe then return not a.isDupe end
+                                return (a.price or "") > (b.price or "")
+                            end)
+
+                            for di, deal in ipairs(grp.deals) do
+                                local row = GetOrCreatePvRow(ROW_H)
+                                if deal.isDupe then
+                                    row.bg:SetColorTexture(0.06, 0.06, 0.06, 0.4)
+                                    row.left:SetText("    " .. ns.COLORS.GRAY .. deal.realm .. "|r")
+                                    row.right:SetText(ns.COLORS.GRAY .. deal.price .. "  (dupe: " .. (deal.dupeReason or "") .. ")|r")
+                                elseif di <= invQty then
+                                    -- Within stock: would be allocated
+                                    row.bg:SetColorTexture(0.05, 0.1, 0.05, 0.4)
+                                    row.left:SetText("    " .. ns.COLORS.GREEN .. deal.realm .. "|r")
+                                    row.right:SetText(ns.COLORS.GREEN .. deal.price .. "|r")
+                                else
+                                    -- Overflow: more deals than stock
+                                    row.bg:SetColorTexture(0.06, 0.06, 0.06, 0.4)
+                                    row.left:SetText("    " .. ns.COLORS.GRAY .. deal.realm .. "|r")
+                                    row.right:SetText(ns.COLORS.GRAY .. deal.price .. "  (extra)|r")
+                                end
+                                pvY = pvY + ROW_H
+                            end
+                            pvY = pvY + 2
+                        end
+
+                        -- No-deals section
+                        if #noDeals > 0 then
+                            pvY = pvY + 4
+                            local ndHdr = GetOrCreatePvRow(HDR_H)
+                            ndHdr.bg:SetColorTexture(0.12, 0.06, 0.06, 0.8)
+                            ndHdr.left:SetText(ns.COLORS.RED .. #noDeals .. " inventory items with no deals|r")
+                            ndHdr.right:SetText("")
+                            pvY = pvY + HDR_H
+
+                            for ni, nd in ipairs(noDeals) do
+                                local row = GetOrCreatePvRow(ROW_H)
+                                row.bg:SetColorTexture(0.08, 0.04, 0.04, ni % 2 == 0 and 0.4 or 0.3)
+                                row.left:SetText("    " .. ns.COLORS.GRAY .. (nd.name or "?") .. "|r")
+                                local qtyStr = (nd.totalQuantity or 1) > 1 and ("x" .. nd.totalQuantity) or ""
+                                row.right:SetText(ns.COLORS.GRAY .. qtyStr .. "|r")
+                                pvY = pvY + ROW_H
+                            end
+                        end
+
+                        s2.previewContent:SetHeight(math.max(1, pvY))
+                        s2.previewScroll:Show()
+
+                        local uniqueItems = #itemOrder
                         local parts = {}
-                        if newCount > 0 then table.insert(parts, ns.COLORS.GREEN .. newCount .. " new|r") end
-                        if updateCount > 0 then table.insert(parts, ns.COLORS.YELLOW .. updateCount .. " updates|r") end
-                        if dupCount > 0 then table.insert(parts, ns.COLORS.GRAY .. dupCount .. " dupes|r") end
+                        table.insert(parts, ns.COLORS.GREEN .. (dealCount - dupeCount) .. " deals|r")
+                        table.insert(parts, uniqueItems .. " items")
+                        if dupeCount > 0 then table.insert(parts, ns.COLORS.GRAY .. dupeCount .. " dupes|r") end
+                        if #noDeals > 0 then table.insert(parts, ns.COLORS.RED .. #noDeals .. " no deals|r") end
                         s2.statusLabel:SetText(table.concat(parts, "  ") .. "  -- click Import & Next to continue")
                         -- Refresh to show the Next button now that preview data exists
                         UI:Refresh()
@@ -1994,7 +2073,8 @@ function UI:RefreshGeneratorPage(pending)
                         s2._previewData = nil
                         s2._previewResults = nil
                         s2._lastLen = 0
-                        s2.previewTable:SetData({})
+                        s2.previewScroll:Hide()
+                        for _, r in ipairs(s2.previewRows) do r:Hide() end
                     end
                 end
                 SaveWizardState(wizTrack, wizStep + 1)
@@ -2312,10 +2392,9 @@ function UI:RefreshGeneratorPage(pending)
         -- Restore checkbox state
         s2.autoImportCheck:SetChecked(ns.db.settings.importAutoImport or false)
 
-        -- Show preview table if we have data
+        -- Show preview if we have data
         if s2._previewData then
-            s2.previewTable.headerFrame:Show()
-            s2.previewTable.scrollFrame:Show()
+            s2.previewScroll:Show()
         end
 
         s2.editBox:SetFocus(true)

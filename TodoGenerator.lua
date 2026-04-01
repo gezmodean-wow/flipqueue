@@ -707,7 +707,14 @@ function TodoList:GenerateTodoList(source, allocationOrder, opts)
     end
     allocationOrder = allocationOrder or {"gold"}
 
-    local pool = self:BuildItemPool()
+    -- Use filtered pool if filter options provided, otherwise full pool
+    local pool
+    if opts.filterMode or opts.excludedItems then
+        pool = self:GetFilteredItemPool(
+            opts.filterMode, opts.filterValue, opts.excludedItems)
+    else
+        pool = self:BuildItemPool()
+    end
 
     -- Collect deals from import source
     local deals = {}
