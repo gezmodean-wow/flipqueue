@@ -53,11 +53,14 @@ function ns:MakeItemKey(itemID, bonusIDs, modifiers)
     return string.format("%s;%s;%s", tostring(itemID), bonusIDs or "", modifiers or "")
 end
 
--- Normalize key for imports map: "itemKey|realm" or "name|realm"
-function ns:MakeImportKey(itemKey, itemName, targetRealm)
+-- Normalize key for imports map: "itemKey:iLvl|realm" or "name|realm"
+-- ilvl is included so that same-item variants with different ilvls (different
+-- bonus tiers) are treated as independent deals when FP doesn't export bonusIDs.
+function ns:MakeImportKey(itemKey, itemName, targetRealm, ilvl)
     local base = itemKey or itemName or ""
     local realm = ns:NormalizeRealmKey(targetRealm or "")
-    return base:lower() .. "|" .. realm
+    local ilvlSuffix = (ilvl and ilvl > 0) and (":i" .. ilvl) or ""
+    return base:lower() .. ilvlSuffix .. "|" .. realm
 end
 
 -- Parse item link to extract itemID, bonusIDs, modifiers

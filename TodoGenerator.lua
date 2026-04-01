@@ -734,6 +734,7 @@ function TodoList:GenerateTodoList(source, allocationOrder, opts)
         source    = source,
         importType = IMPORT_TYPE_LABELS[source] or source,
         items     = {},
+        rejected  = {},  -- TSM-rejected deals (shown separately for visibility)
     }
 
     if #deals == 0 then
@@ -791,6 +792,7 @@ function TodoList:GenerateTodoList(source, allocationOrder, opts)
 
     local sellQtyMode = ns.db.settings.sellQtyMode or "tsm"
     local tsmEnabled = sellQtyMode == "tsm" and ns.TSM and ns.TSM.IsEnabled and ns.TSM:IsEnabled()
+    local tsmSkipOnGenerate = ns.db.settings.tsmSkipOnGenerate ~= false
     local defaultQty = ns.db.settings.defaultSellQty or 1
 
     for _, deal in ipairs(deals) do
@@ -843,18 +845,22 @@ function TodoList:GenerateTodoList(source, allocationOrder, opts)
                 qty = math.min(qty, poolRemaining[poolIdx])
 
                 if qty > 0 then
-                    -- Check TSM threshold — skip items TSM would reject
+                    -- Check TSM threshold for this deal
                     local itemStatus = "pending"
                     local failReason = nil
+                    local tsmRejected = false
                     if tsmEnabled then
                         local belowThreshold, ahMin, threshold, opName = ns.TSM:IsBelowThreshold(poolItem.itemKey)
                         if not belowThreshold and deal.itemKey ~= poolItem.itemKey then
                             belowThreshold = ns.TSM:IsBelowThreshold(deal.itemKey)
                         end
                         if belowThreshold then
-                            itemStatus = "skipped"
+                            tsmRejected = true
                             local threshStr = threshold and ns.TSM:FormatCopper(threshold) or "?"
                             failReason = "TSM: below min price (" .. threshStr .. ")" .. (opName and (" [" .. opName .. "]") or "")
+                            if tsmSkipOnGenerate then
+                                itemStatus = "skipped"
+                            end
                         end
                     end
 
@@ -865,7 +871,7 @@ function TodoList:GenerateTodoList(source, allocationOrder, opts)
                         taskCrossFields.action = "sell"
                     end
 
-                    table.insert(preview.items, {
+                    local taskEntry = {
                         itemKey       = poolItem.itemKey,
                         itemID        = poolItem.itemID,
                         name          = poolItem.name,
@@ -902,8 +908,18 @@ function TodoList:GenerateTodoList(source, allocationOrder, opts)
                             return s
                         end)(),
                         currentStep = 1,
-                    })
-                    poolRemaining[poolIdx] = poolRemaining[poolIdx] - qty
+                    }
+
+                    if itemStatus == "skipped" then
+                        -- TSM-rejected at generation: goes to rejected list,
+                        -- does not consume inventory
+                        table.insert(preview.rejected, taskEntry)
+                    else
+                        -- Pending task (may still have failReason as a warning
+                        -- if tsmSkipOnGenerate is off but TSM flagged it)
+                        table.insert(preview.items, taskEntry)
+                        poolRemaining[poolIdx] = poolRemaining[poolIdx] - qty
+                    end
                 end
             elseif assignment then
                 -- Character exists on realm but item not in their bags/bank/warbank

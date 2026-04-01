@@ -260,9 +260,15 @@ function UI:CreateSettingsPanel(parent)
     end
     y = y - 52 - ITEM_SPACING
 
+    settingsWidgets.tsmSkipOnGenerate, h = CreateSettingsCheckbox(content, y,
+        "TSM: Skip deals on generation",
+        "When generating a to-do list, reject deals that TSM says are below min price. Rejected deals appear in a separate list so you can review them and optionally keep individual tasks. Uncheck to include all deals regardless of TSM thresholds.",
+        "tsmSkipOnGenerate")
+    y = y - h - ITEM_SPACING
+
     settingsWidgets.tsmAutoSkip, h = CreateSettingsCheckbox(content, y,
-        "Auto-handle TSM rejections",
-        "When you open the AH, automatically skip or reassign to-do items that TSM would reject (below min price). Reassigns to another character on the same realm if available, otherwise skips with reason.",
+        "TSM: Auto-handle at the AH",
+        "When you open the AH, automatically skip or reassign tasks that TSM would reject (below min price or already posted). Reassigns to another character on the same realm if available, otherwise skips with reason.",
         "tsmAutoSkipRejected")
     y = y - h - ITEM_SPACING
 
@@ -1101,6 +1107,9 @@ function UI:RefreshSettings()
     if settingsWidgets.goldBufferBox then
         local val = ns.db.settings.goldBuffer or 0
         settingsWidgets.goldBufferBox:SetText(tostring(val))
+    end
+    if settingsWidgets.tsmSkipOnGenerate then
+        settingsWidgets.tsmSkipOnGenerate:SetChecked(ns.db.settings.tsmSkipOnGenerate)
     end
     if settingsWidgets.tsmAutoSkip then
         settingsWidgets.tsmAutoSkip:SetChecked(ns.db.settings.tsmAutoSkipRejected)

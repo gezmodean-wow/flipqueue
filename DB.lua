@@ -77,8 +77,11 @@ function ns:InitDB()
     -- Import auto-generate and auto-import (off by default)
     if db.settings.importAutoGenerate == nil then db.settings.importAutoGenerate = false end
     if db.settings.importAutoImport == nil then db.settings.importAutoImport = false end
-    -- TSM rejection handling (on by default when TSM is enabled)
+    -- TSM rejection handling
     if db.settings.tsmAutoSkipRejected == nil then db.settings.tsmAutoSkipRejected = true end
+    -- TSM generation-time filtering: skip deals below TSM min price during todo generation
+    -- Skipped deals still appear in results but don't consume inventory
+    if db.settings.tsmSkipOnGenerate == nil then db.settings.tsmSkipOnGenerate = true end
     -- Debug messages (off by default)
     if db.settings.debugMessages == nil then db.settings.debugMessages = false end
     -- Auto-deposit earnings to warbank (off by default)

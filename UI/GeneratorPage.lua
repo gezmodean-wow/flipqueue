@@ -118,13 +118,13 @@ local function BuildGeneratorPreviewData(todoList)
             statusStr = ns.COLORS.ORANGE .. "No char" .. "|r"
             sortStatus = 2
         elseif item.status == "missing" then
-            statusStr = ns.COLORS.RED .. "Missing" .. "|r"
+            statusStr = ns.COLORS.GRAY .. "No stock" .. "|r"
             sortStatus = 3
         elseif item.status == "posted" then
             statusStr = ns.COLORS.GRAY .. "Posted" .. "|r"
             sortStatus = 4
         elseif item.status == "skipped" then
-            statusStr = ns.COLORS.ORANGE .. "Skipped" .. "|r"
+            statusStr = ns.COLORS.ORANGE .. (item.failReason or "Skipped") .. "|r"
             sortStatus = 5
         else
             statusStr = item.status or "?"
@@ -165,7 +165,7 @@ local function BuildGeneratorPreviewData(todoList)
 
         local rowColor = nil
         if item.status == "missing" then
-            rowColor = {0.8, 0.2, 0.2, 0.08}
+            rowColor = {0.4, 0.4, 0.4, 0.08}
         elseif item.status == "unassigned" then
             rowColor = {0.8, 0.5, 0.1, 0.08}
         elseif isBuyTask then
@@ -917,22 +917,10 @@ function UI:RefreshGeneratorPage(pending)
             if ns.db then ns.db.settings.importAutoImport = self:GetChecked() end
         end)
 
-        -- Import button
-        s2.importBtn = CreateHeaderBtn(s2, "Import", "Import pasted data into deals", function()
-            if s2._previewData and #s2._previewData > 0 then
-                local added = ns.Import:Save(s2._previewData)
-                ns:Print("Imported " .. added .. " new items (" .. #s2._previewData .. " parsed, duplicates merged).")
-                s2.editBox:SetText("")
-                s2._previewData = nil
-                s2._previewResults = nil
-                s2._lastLen = 0
-                s2.previewTable:SetData({})
-                s2.statusLabel:SetText(ns.COLORS.GREEN .. added .. " items imported!|r")
-                UI:Refresh()
-                if UI.RefreshMini then UI:RefreshMini() end
-            end
-        end)
+        -- Import button (hidden — Next button handles import now)
+        s2.importBtn = CreateHeaderBtn(s2, "Import", "Import pasted data into deals", function() end)
         s2.importBtn:SetPoint("LEFT", s2.statusLabel, "RIGHT", 10, 0)
+        s2.importBtn:Hide()
 
         -- State for paste detection
         s2._lastLen = 0
@@ -956,13 +944,16 @@ function UI:RefreshGeneratorPage(pending)
                 if #items > 0 then
                     if s2.autoImportCheck:GetChecked() then
                         local added = ns.Import:Save(items)
-                        ns:Print("Imported " .. added .. " new items (" .. #items .. " parsed, duplicates merged).")
+                        ns:Print("Imported " .. added .. " new deals (" .. #items .. " parsed, duplicates merged).")
                         s2.editBox:SetText("")
                         s2._previewData = nil
                         s2._previewResults = nil
                         s2.previewTable:SetData({})
-                        s2.statusLabel:SetText(ns.COLORS.GREEN .. added .. " items imported!|r")
+                        s2.statusLabel:SetText(ns.COLORS.GREEN .. added .. " deals imported!|r")
                         s2._lastLen = 0
+                        -- Auto-advance to step 3 (generate) after auto-import
+                        SaveWizardState(UI._wizardTrack, 3)
+                        AutoGenerate()
                         UI:Refresh()
                         if UI.RefreshMini then UI:RefreshMini() end
                     else
@@ -1044,7 +1035,9 @@ function UI:RefreshGeneratorPage(pending)
                         if newCount > 0 then table.insert(parts, ns.COLORS.GREEN .. newCount .. " new|r") end
                         if updateCount > 0 then table.insert(parts, ns.COLORS.YELLOW .. updateCount .. " updates|r") end
                         if dupCount > 0 then table.insert(parts, ns.COLORS.GRAY .. dupCount .. " dupes|r") end
-                        s2.statusLabel:SetText(table.concat(parts, "  ") .. "  -- click Import to confirm")
+                        s2.statusLabel:SetText(table.concat(parts, "  ") .. "  -- click Import & Next to continue")
+                        -- Refresh to show the Next button now that preview data exists
+                        UI:Refresh()
                     end
                 else
                     s2.statusLabel:SetText(ns.COLORS.RED .. "No items found in pasted data.|r")
@@ -1968,27 +1961,50 @@ function UI:RefreshGeneratorPage(pending)
     end)
 
     if wizStep < 3 then
-        gf.nextBtn:Show()
-        gf.nextBtn.text:SetText("Next")
-        gf.nextBtn:SetScript("OnClick", function()
-            -- Cross-realm step 1→2: save parsed deals to DB before advancing
-            if wizTrack == "crossrealm" and wizStep == 1 then
-                local cr1 = gf.crStepContainers[1]
-                if cr1._previewData and #cr1._previewData > 0 then
-                    local added = ns.Import:Save(cr1._previewData, "fpCrossRealm")
-                    ns:PrintDebug("Cross-realm import: saved " .. added .. " deals to DB.")
-                    cr1._previewData = nil
-                    cr1._previewResults = nil
+        -- Step 2 (import): Next is hidden until paste data is ready;
+        -- auto-import skips this entirely. Other steps show Next normally.
+        local showNext = true
+        if wizStep == 2 and wizTrack == "inventory" then
+            local s2 = gf.stepContainers[2]
+            showNext = s2 and s2._previewData and #s2._previewData > 0
+        end
+
+        if showNext then
+            gf.nextBtn:Show()
+            gf.nextBtn.text:SetText(wizStep == 2 and "Import & Next" or "Next")
+            gf.nextBtn:SetScript("OnClick", function()
+                -- Cross-realm step 1→2: save parsed deals to DB before advancing
+                if wizTrack == "crossrealm" and wizStep == 1 then
+                    local cr1 = gf.crStepContainers[1]
+                    if cr1._previewData and #cr1._previewData > 0 then
+                        local added = ns.Import:Save(cr1._previewData, "fpCrossRealm")
+                        ns:PrintDebug("Cross-realm import: saved " .. added .. " deals to DB.")
+                        cr1._previewData = nil
+                        cr1._previewResults = nil
+                    end
                 end
-            end
-            SaveWizardState(wizTrack, wizStep + 1)
-            -- Auto-generate on entering step 3 (inventory track)
-            -- Cross-realm auto-generates on every step 3 render
-            if wizStep + 1 == 3 and wizTrack ~= "crossrealm" then
-                AutoGenerate()
-            end
-            UI:Refresh()
-        end)
+                -- Inventory step 2: import pasted data before advancing
+                if wizTrack == "inventory" and wizStep == 2 then
+                    local s2 = gf.stepContainers[2]
+                    if s2 and s2._previewData and #s2._previewData > 0 then
+                        local added = ns.Import:Save(s2._previewData)
+                        ns:Print("Imported " .. added .. " new deals (" .. #s2._previewData .. " parsed, duplicates merged).")
+                        s2.editBox:SetText("")
+                        s2._previewData = nil
+                        s2._previewResults = nil
+                        s2._lastLen = 0
+                        s2.previewTable:SetData({})
+                    end
+                end
+                SaveWizardState(wizTrack, wizStep + 1)
+                if wizStep + 1 == 3 and wizTrack ~= "crossrealm" then
+                    AutoGenerate()
+                end
+                UI:Refresh()
+            end)
+        else
+            gf.nextBtn:Hide()
+        end
     end
 
     -- Save button + name field (step 3 only, shown by track-specific logic below)
@@ -2172,7 +2188,9 @@ function UI:RefreshGeneratorPage(pending)
         -- Item count label
         s1.countLabel:ClearAllPoints()
         s1.countLabel:SetPoint("TOPLEFT", s1, "TOPLEFT", 6, filterControlsBottom)
-        s1.countLabel:SetText(ns.COLORS.GRAY .. #filteredPool .. " items in pool|r")
+        local totalItemQty = 0
+        for _, p in ipairs(filteredPool) do totalItemQty = totalItemQty + (p.totalQuantity or 1) end
+        s1.countLabel:SetText(ns.COLORS.GRAY .. #filteredPool .. " unique item types, " .. totalItemQty .. " total items|r")
 
         -- Pool scroll area
         s1.poolScroll:ClearAllPoints()
@@ -2273,7 +2291,9 @@ function UI:RefreshGeneratorPage(pending)
         -- Status bar
         local excludeCount = 0
         for _ in pairs(UI._genExcludedItems) do excludeCount = excludeCount + 1 end
-        local statusParts = {#filteredPool .. " pool items"}
+        local totalPoolQty = 0
+        for _, p in ipairs(filteredPool) do totalPoolQty = totalPoolQty + (p.totalQuantity or 1) end
+        local statusParts = {#filteredPool .. " unique item types, " .. totalPoolQty .. " total items"}
         if excludeCount > 0 then
             table.insert(statusParts, excludeCount .. " excluded")
         end
@@ -2553,9 +2573,7 @@ function UI:RefreshGeneratorPage(pending)
         rightY = rightY - 22
 
         -- Import FP Data button
-        s3.importBtn:ClearAllPoints()
-        s3.importBtn:SetPoint("TOPLEFT", s3, "TOPLEFT", sortBtnX + 10, rightY + 22)
-        s3.importBtn:Show()
+        s3.importBtn:Hide()
 
         -- Auto-generate on step 3 entry (always keep preview up-to-date)
         if not UI._generatorPreview and ns:ImportGetCount("fpScanner") > 0 then
@@ -2579,9 +2597,13 @@ function UI:RefreshGeneratorPage(pending)
             for _, g in ipairs(displayGroups) do
                 if g.charKey then assignedCount = assignedCount + #g.items end
             end
+            local rejCount = previewSource and previewSource.rejected and #previewSource.rejected or 0
             local statusText = ns.COLORS.GRAY .. assignedCount .. " tasks across " .. #displayGroups .. " group(s)"
             if missingCount > 0 then
-                statusText = statusText .. "  |  " .. ns.COLORS.RED .. missingCount .. " not in inventory|r"
+                statusText = statusText .. "  |  " .. ns.COLORS.GRAY .. missingCount .. " need more stock|r"
+            end
+            if rejCount > 0 then
+                statusText = statusText .. "  |  " .. ns.COLORS.ORANGE .. rejCount .. " TSM rejected|r"
             end
             statusText = statusText .. "|r"
             s3.statusLabel:SetText(statusText)
@@ -2742,8 +2764,8 @@ function UI:RefreshGeneratorPage(pending)
                 if isUnassigned then
                     row.rightText:SetText(ns.COLORS.GRAY .. priceStr .. "|r")
                 elseif item.status == "missing" then
-                    row.rightText:SetText(ns.COLORS.RED .. "missing|r")
-                    row.bg:SetColorTexture(0.15, 0.05, 0.05, 0.4)
+                    row.rightText:SetText(ns.COLORS.GRAY .. "no stock|r")
+                    row.bg:SetColorTexture(0.08, 0.08, 0.08, 0.4)
                 else
                     row.rightText:SetText(priceStr)
                 end
@@ -2752,7 +2774,7 @@ function UI:RefreshGeneratorPage(pending)
                 if isUnassigned then
                     restoreBg = {0.1, 0.06, 0.06, 0.4}
                 elseif item.status == "missing" then
-                    restoreBg = {0.15, 0.05, 0.05, 0.4}
+                    restoreBg = {0.08, 0.08, 0.08, 0.4}
                 else
                     restoreBg = {ii % 2 == 0 and 0.08 or 0.06, ii % 2 == 0 and 0.08 or 0.06, ii % 2 == 0 and 0.12 or 0.1, 0.6}
                 end
@@ -2788,6 +2810,120 @@ function UI:RefreshGeneratorPage(pending)
 
             genY = genY + 2
         end
+
+        -- Rejected-by-TSM section (shown below main list)
+        local rejectedItems = previewSource and previewSource.rejected
+        if rejectedItems and #rejectedItems > 0 then
+            genY = genY + 6
+
+            -- Section header
+            local rejHdr = GetOrCreateGenRow(HDR_ROW_H)
+            rejHdr.bg:SetColorTexture(0.2, 0.12, 0.02, 0.8)
+            rejHdr.nameText:ClearAllPoints()
+            rejHdr.nameText:SetPoint("LEFT", rejHdr, "LEFT", 6, 0)
+            rejHdr.nameText:SetPoint("RIGHT", rejHdr.rightText, "LEFT", -4, 0)
+            rejHdr.nameText:SetText(
+                ns.COLORS.ORANGE .. "TSM Rejected" .. "|r" ..
+                ns.COLORS.GRAY .. "  (" .. #rejectedItems .. " deals — click to keep)" .. "|r")
+            rejHdr.rightText:SetText("")
+            local rejHdrBg = {0.2, 0.12, 0.02, 0.8}
+            rejHdr:SetScript("OnEnter", function(self)
+                self.bg:SetColorTexture(0.25, 0.15, 0.04, 0.9)
+            end)
+            rejHdr:SetScript("OnLeave", function(self)
+                self.bg:SetColorTexture(unpack(rejHdrBg))
+            end)
+            genY = genY + HDR_ROW_H
+
+            for ri, rejItem in ipairs(rejectedItems) do
+                local row = GetOrCreateGenRow(GEN_ROW_H)
+                row.bg:SetColorTexture(0.12, 0.08, 0.02, ri % 2 == 0 and 0.5 or 0.35)
+
+                local lookupIcon, quality, resolvedID
+                pcall(function()
+                    lookupIcon, quality, resolvedID = LookupItemInfo(rejItem.itemID, rejItem.itemKey, rejItem.name)
+                end)
+                local itemIcon = rejItem.icon or lookupIcon
+                if itemIcon then
+                    row.icon:SetTexture(itemIcon)
+                    row.icon:ClearAllPoints()
+                    row.icon:SetPoint("LEFT", row, "LEFT", 14, 0)
+                    row.icon:SetDesaturated(true)
+                    row.icon:SetAlpha(0.6)
+                    row.icon:Show()
+                    row.nameText:ClearAllPoints()
+                    row.nameText:SetPoint("LEFT", row.icon, "RIGHT", 3, 0)
+                    row.nameText:SetPoint("RIGHT", row.rightText, "LEFT", -4, 0)
+                else
+                    row.nameText:ClearAllPoints()
+                    row.nameText:SetPoint("LEFT", row, "LEFT", 16, 0)
+                    row.nameText:SetPoint("RIGHT", row.rightText, "LEFT", -4, 0)
+                end
+
+                local displayName = rejItem.name or "?"
+                if quality and QualityColorName then
+                    displayName = QualityColorName(displayName, quality)
+                elseif rejItem.quality and rejItem.quality ~= "" and QualityColorName then
+                    displayName = QualityColorName(displayName, rejItem.quality)
+                end
+                local qtyStr = (rejItem.quantity or 1) > 1 and (" x" .. (rejItem.quantity or 1)) or ""
+                row.nameText:SetText(ns.COLORS.ORANGE .. displayName .. qtyStr .. "|r")
+
+                -- Show reason + realm on the right
+                local reasonShort = rejItem.failReason or "rejected"
+                local realmShort = rejItem.targetRealm or ""
+                if #realmShort > 20 then
+                    realmShort = realmShort:match("^([^,]+)") or realmShort:sub(1, 20)
+                end
+                row.rightText:SetText(ns.COLORS.GRAY .. realmShort .. "  " .. ns.COLORS.ORANGE .. reasonShort .. "|r")
+
+                -- Click to keep: move from rejected to items
+                local capturedIdx = ri
+                local capturedPreview = previewSource
+                local restoreBgRej = {0.12, 0.08, 0.02, ri % 2 == 0 and 0.5 or 0.35}
+                row:SetScript("OnClick", function()
+                    if capturedPreview and capturedPreview.rejected then
+                        local kept = table.remove(capturedPreview.rejected, capturedIdx)
+                        if kept then
+                            kept.status = "pending"
+                            kept.failReason = kept.failReason and ("(overridden) " .. kept.failReason) or nil
+                            table.insert(capturedPreview.items, kept)
+                            UI:Refresh()
+                        end
+                    end
+                end)
+                row:SetScript("OnEnter", function(self)
+                    self.bg:SetColorTexture(0.2, 0.15, 0.04, 0.7)
+                    GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+                    local tipID = resolvedID or tonumber(rejItem.itemID)
+                    if tipID and tipID > 0 then
+                        GameTooltip:SetItemByID(tipID)
+                    else
+                        GameTooltip:SetText(rejItem.name or "?", 1, 0.8, 0)
+                    end
+                    GameTooltip:AddLine(" ")
+                    GameTooltip:AddLine("Realm: " .. (rejItem.targetRealm or "?"), 0.7, 0.7, 0.7)
+                    if rejItem.expectedPrice then
+                        GameTooltip:AddLine("Price: " .. rejItem.expectedPrice, 0.7, 0.7, 0.7)
+                    end
+                    if rejItem.failReason then
+                        GameTooltip:AddLine(rejItem.failReason, 1, 0.5, 0)
+                    end
+                    GameTooltip:AddLine(" ")
+                    GameTooltip:AddLine("Click to keep this deal", 0, 1, 0)
+                    GameTooltip:Show()
+                end)
+                row:SetScript("OnLeave", function(self)
+                    self.bg:SetColorTexture(unpack(restoreBgRej))
+                    GameTooltip:Hide()
+                end)
+
+                genY = genY + GEN_ROW_H
+            end
+
+            genY = genY + 2
+        end
+
         s3.genContent:SetHeight(math.max(1, genY))
 
         -- Save button with name field (inventory track)
@@ -2825,7 +2961,11 @@ function UI:RefreshGeneratorPage(pending)
 
         if UI._generatorPreview then
             local pvItems = UI._generatorPreview.items or UI._generatorPreview.tasks or {}
+            local pvRejected = UI._generatorPreview.rejected or {}
             table.insert(genStatusParts, #pvItems .. " tasks")
+            if #pvRejected > 0 then
+                table.insert(genStatusParts, ns.COLORS.ORANGE .. #pvRejected .. " TSM rejected|r")
+            end
             table.insert(genStatusParts, "Enter a name and click Save")
         elseif currentList then
             local counts = ns.TodoList:GetStatusCounts()

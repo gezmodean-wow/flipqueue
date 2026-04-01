@@ -957,65 +957,43 @@ end
 --------------------------
 
 -- Preview what ImportSave would do without modifying the imports.
--- Returns items annotated with _importStatus: "new", "duplicate", "update"
+-- Save() replaces the entire source, so we only check for duplicates
+-- within the current paste batch — not against previously saved data.
+-- Returns items annotated with _importStatus: "new", "duplicate"
 function Import:PreviewAdd(items, source)
     if not ns.db or not ns.db.imports then return {} end
 
-    source = source or "fpScanner"
-    local srcMap = ns.db.imports[source] or {}
-
     local results = {}
-    local batchAdded = {} -- normalized key -> true
+    local batchMap = {} -- normalized key -> item (simulates Save's dedup)
 
     for _, item in ipairs(items) do
         local status = "new"
         local dupeReason = nil
-        local key = ns:MakeImportKey(item.itemKey, item.name, item.targetRealm)
+        local key = ns:MakeImportKey(item.itemKey, item.name, item.targetRealm, item.ilvl)
 
-        local existing = srcMap[key]
-        if existing then
-            -- Check if import would update any fields
-            local wouldUpdate = false
-            if item.expectedPrice and item.expectedPrice ~= "" then
-                if (not existing.expectedPrice or existing.expectedPrice == "") then
-                    wouldUpdate = true
-                elseif existing.expectedPrice ~= item.expectedPrice then
-                    wouldUpdate = true
-                end
-            end
-            status = wouldUpdate and "update" or "duplicate"
-            dupeReason = "same realm"
+        -- Exact key match within this batch
+        if batchMap[key] then
+            status = "duplicate"
+            dupeReason = "same item & realm in paste"
         else
-            -- Check connected realms in existing imports
+            -- Connected realm match within this batch
             local itemName = (item.name or ""):lower()
-            for existKey, existItem in pairs(srcMap) do
+            for existKey, existItem in pairs(batchMap) do
                 local keyMatch = existItem.itemKey == item.itemKey
                 local nameMatch = itemName ~= "" and existItem.name
                     and existItem.name:lower() == itemName
-                if (keyMatch or nameMatch) and ns:RealmsOverlap(existItem.targetRealm, item.targetRealm) then
-                    local wouldUpdate = false
-                    if item.expectedPrice and item.expectedPrice ~= "" then
-                        if (not existItem.expectedPrice or existItem.expectedPrice == "") then
-                            wouldUpdate = true
-                        elseif existItem.expectedPrice ~= item.expectedPrice then
-                            wouldUpdate = true
-                        end
-                    end
-                    status = wouldUpdate and "update" or "duplicate"
+                local ilvlConflict = (item.ilvl or 0) > 0 and (existItem.ilvl or 0) > 0
+                    and item.ilvl ~= existItem.ilvl
+                if (keyMatch or nameMatch) and not ilvlConflict and ns:RealmsOverlap(existItem.targetRealm, item.targetRealm) then
+                    status = "duplicate"
                     dupeReason = "connected realm: " .. (existItem.targetRealm or "?")
                     break
                 end
             end
         end
 
-        -- Check within this batch
         if status == "new" then
-            if batchAdded[key] then
-                status = "duplicate"
-                dupeReason = "duplicate in paste"
-            else
-                batchAdded[key] = true
-            end
+            batchMap[key] = item
         end
 
         table.insert(results, {
@@ -1084,7 +1062,7 @@ function Import:Save(items, source)
     local deduped = 0
 
     for _, item in ipairs(items) do
-        local key = ns:MakeImportKey(item.itemKey, item.name, item.targetRealm)
+        local key = ns:MakeImportKey(item.itemKey, item.name, item.targetRealm, item.ilvl)
         local existing = srcMap[key]
 
         if existing then
@@ -1104,7 +1082,10 @@ function Import:Save(items, source)
                 local keyMatch = existItem.itemKey == item.itemKey
                 local nameMatch = itemName ~= "" and existItem.name
                     and existItem.name:lower() == itemName
-                if (keyMatch or nameMatch) and ns:RealmsOverlap(existItem.targetRealm, item.targetRealm) then
+                -- Different ilvl = different variant, not a duplicate
+                local ilvlConflict = (item.ilvl or 0) > 0 and (existItem.ilvl or 0) > 0
+                    and item.ilvl ~= existItem.ilvl
+                if (keyMatch or nameMatch) and not ilvlConflict and ns:RealmsOverlap(existItem.targetRealm, item.targetRealm) then
                     if item.expectedPrice and item.expectedPrice ~= "" then
                         existItem.expectedPrice = item.expectedPrice
                     end
@@ -1213,7 +1194,7 @@ function Import:SaveChunked(items, source, chunkSize, onProgress, onComplete)
         local chunkEnd = math.min(idx + chunkSize - 1, total)
         for i = idx, chunkEnd do
             local item = items[i]
-            local key = ns:MakeImportKey(item.itemKey, item.name, item.targetRealm)
+            local key = ns:MakeImportKey(item.itemKey, item.name, item.targetRealm, item.ilvl)
             local existing = srcMap[key]
 
             if existing then
@@ -1231,7 +1212,9 @@ function Import:SaveChunked(items, source, chunkSize, onProgress, onComplete)
                     local keyMatch = existItem.itemKey == item.itemKey
                     local nameMatch = itemName ~= "" and existItem.name
                         and existItem.name:lower() == itemName
-                    if (keyMatch or nameMatch) and ns:RealmsOverlap(existItem.targetRealm, item.targetRealm) then
+                    local ilvlConflict = (item.ilvl or 0) > 0 and (existItem.ilvl or 0) > 0
+                        and item.ilvl ~= existItem.ilvl
+                    if (keyMatch or nameMatch) and not ilvlConflict and ns:RealmsOverlap(existItem.targetRealm, item.targetRealm) then
                         if item.expectedPrice and item.expectedPrice ~= "" then
                             existItem.expectedPrice = item.expectedPrice
                         end
