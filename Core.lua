@@ -53,6 +53,44 @@ function ns:MakeItemKey(itemID, bonusIDs, modifiers)
     return string.format("%s;%s;%s", tostring(itemID), bonusIDs or "", modifiers or "")
 end
 
+-- Convert an itemKey ("itemID;bonusIDs;modifiers") to a WoW item string
+-- suitable for GameTooltip:SetHyperlink(). Returns nil for pets or invalid keys.
+function ns:ItemKeyToItemString(itemKey)
+    if not itemKey or itemKey == "" then return nil end
+    if itemKey:find("^pet:") then return nil end -- pets use battlepet: links
+
+    local idStr, bonusStr, modStr = strsplit(";", itemKey)
+    local numID = tonumber(idStr)
+    if not numID or numID <= 0 then return nil end
+
+    -- Build item:id::::::::::::[numBonuses:b1:b2:...][::modType:modValue]
+    -- WoW item string positions: item:id:enchant:gem1:gem2:gem3:gem4:suffix:uniqueID:level:specID:modType:numBonuses:bonus1:bonus2:...
+    local parts = {"item", idStr, "", "", "", "", "", "", "", "", "", ""}
+    -- Bonus IDs
+    if bonusStr and bonusStr ~= "" then
+        local bonuses = {strsplit(":", bonusStr)}
+        table.insert(parts, tostring(#bonuses))
+        for _, b in ipairs(bonuses) do
+            table.insert(parts, b)
+        end
+    else
+        table.insert(parts, "0")
+    end
+    -- Modifiers (e.g., "9=85" → modifier type 9, value 85)
+    if modStr and modStr ~= "" then
+        local mods = {strsplit(":", modStr)}
+        table.insert(parts, tostring(#mods))
+        for _, m in ipairs(mods) do
+            local k, v = m:match("^(%d+)=(%d+)$")
+            if k and v then
+                table.insert(parts, k)
+                table.insert(parts, v)
+            end
+        end
+    end
+    return table.concat(parts, ":")
+end
+
 -- Normalize key for imports map: "itemKey:iLvl|realm" or "name|realm"
 -- ilvl is included so that same-item variants with different ilvls (different
 -- bonus tiers) are treated as independent deals when FP doesn't export bonusIDs.

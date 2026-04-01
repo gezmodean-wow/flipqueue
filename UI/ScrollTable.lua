@@ -609,12 +609,13 @@ function ScrollTableMixin:Render()
         end
 
         -- Tooltip
-        if rowData._tooltipItemID or rowData._tooltipText then
+        if rowData._tooltipItemID or rowData._tooltipItemString or rowData._tooltipText then
             row._onEnter = function()
                 GameTooltip:SetOwner(row, "ANCHOR_RIGHT")
-                local numID = tonumber(rowData._tooltipItemID)
-                if numID and numID > 0 then
-                    GameTooltip:SetItemByID(numID)
+                if rowData._tooltipItemString then
+                    GameTooltip:SetHyperlink(rowData._tooltipItemString)
+                elseif tonumber(rowData._tooltipItemID) and tonumber(rowData._tooltipItemID) > 0 then
+                    GameTooltip:SetItemByID(tonumber(rowData._tooltipItemID))
                 elseif rowData._tooltipText then
                     GameTooltip:SetText(rowData._tooltipText, 1, 1, 1)
                     if rowData._tooltipExtra then

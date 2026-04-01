@@ -205,6 +205,7 @@ local function BuildGeneratorPreviewData(todoList)
             _sortStatus = sortStatus,
             _rowColor = rowColor,
             _tooltipItemID = resolvedID or tonumber(item.itemID),
+            _tooltipItemString = item.itemKey and ns:ItemKeyToItemString(item.itemKey) or nil,
             _tooltipText = item.name or "?",
             _tooltipExtra = tooltipExtra,
         })
@@ -2593,14 +2594,22 @@ function UI:RefreshGeneratorPage(pending)
         s3.statusLabel:ClearAllPoints()
         s3.statusLabel:SetPoint("TOPLEFT", s3, "TOPLEFT", 6, rightY)
         if previewItems then
-            local assignedCount = 0
+            local actionableCount = 0
+            local charGroups = 0
             for _, g in ipairs(displayGroups) do
-                if g.charKey then assignedCount = assignedCount + #g.items end
+                if g.charKey then
+                    charGroups = charGroups + 1
+                    for _, it in ipairs(g.items) do
+                        if it.status ~= "missing" then
+                            actionableCount = actionableCount + 1
+                        end
+                    end
+                end
             end
             local rejCount = previewSource and previewSource.rejected and #previewSource.rejected or 0
-            local statusText = ns.COLORS.GRAY .. assignedCount .. " tasks across " .. #displayGroups .. " group(s)"
+            local statusText = ns.COLORS.GRAY .. actionableCount .. " tasks across " .. charGroups .. " realm(s)"
             if missingCount > 0 then
-                statusText = statusText .. "  |  " .. ns.COLORS.GRAY .. missingCount .. " need more stock|r"
+                statusText = statusText .. "  |  " .. missingCount .. " need more stock"
             end
             if rejCount > 0 then
                 statusText = statusText .. "  |  " .. ns.COLORS.ORANGE .. rejCount .. " TSM rejected|r"
@@ -2781,10 +2790,13 @@ function UI:RefreshGeneratorPage(pending)
 
                 local capturedItem = item
                 local capturedID = resolvedID or tonumber(item.itemID)
+                local capturedItemStr = item.itemKey and ns:ItemKeyToItemString(item.itemKey) or nil
                 row:SetScript("OnEnter", function(self)
                     self.bg:SetColorTexture(1, 1, 1, 0.08)
                     GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
-                    if capturedID and capturedID > 0 then
+                    if capturedItemStr then
+                        GameTooltip:SetHyperlink(capturedItemStr)
+                    elseif capturedID and capturedID > 0 then
                         GameTooltip:SetItemByID(capturedID)
                     else
                         GameTooltip:SetText(capturedItem.name or "?", 1, 1, 1)
@@ -2962,7 +2974,13 @@ function UI:RefreshGeneratorPage(pending)
         if UI._generatorPreview then
             local pvItems = UI._generatorPreview.items or UI._generatorPreview.tasks or {}
             local pvRejected = UI._generatorPreview.rejected or {}
-            table.insert(genStatusParts, #pvItems .. " tasks")
+            local actionable = 0
+            for _, it in ipairs(pvItems) do
+                if it.status ~= "missing" and it.status ~= "unassigned" then
+                    actionable = actionable + 1
+                end
+            end
+            table.insert(genStatusParts, actionable .. " tasks")
             if #pvRejected > 0 then
                 table.insert(genStatusParts, ns.COLORS.ORANGE .. #pvRejected .. " TSM rejected|r")
             end
