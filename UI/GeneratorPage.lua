@@ -2608,9 +2608,6 @@ function UI:RefreshGeneratorPage(pending)
             end
             local rejCount = previewSource and previewSource.rejected and #previewSource.rejected or 0
             local statusText = ns.COLORS.GRAY .. actionableCount .. " tasks across " .. charGroups .. " realm(s)"
-            if missingCount > 0 then
-                statusText = statusText .. "  |  " .. missingCount .. " need more stock"
-            end
             if rejCount > 0 then
                 statusText = statusText .. "  |  " .. ns.COLORS.ORANGE .. rejCount .. " TSM rejected|r"
             end

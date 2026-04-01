@@ -1130,28 +1130,9 @@ function TodoList:GenerateTodoList(source, allocationOrder, opts)
                 })
                 end -- not skipFlip
             else
-                -- Standard same-realm: item not in inventory
-                table.insert(preview.items, {
-                    itemKey       = deal.itemKey,
-                    itemID        = deal.itemID,
-                    name          = deal.name,
-                    icon          = deal.icon,
-                    targetRealm   = deal.targetRealm,
-                    expectedPrice = deal.expectedPrice,
-                    quantity      = math.max(deal.quantity or 1, defaultQty),
-                    assignedChar  = nil,
-                    status        = "missing",
-                    source        = nil,
-                    quality       = deal.quality,
-                    sellRate      = deal.sellRate,
-                    noCompetition = deal.noCompetition,
-                    category      = deal.category,
-                    attempts      = 0,
-                    importSource  = source,
-                    importKey     = deal._importKey,
-                    steps         = {},
-                    currentStep   = 1,
-                })
+                -- No pool match: all inventory for this item is allocated to
+                -- higher-priority deals. Skip silently — this is expected overflow,
+                -- not missing inventory.
             end
         end
     end
