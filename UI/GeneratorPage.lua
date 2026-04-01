@@ -2607,9 +2607,17 @@ function UI:RefreshGeneratorPage(pending)
                 end
             end
             local rejCount = previewSource and previewSource.rejected and #previewSource.rejected or 0
+            local ovCount = previewSource and previewSource.overflow and #previewSource.overflow or 0
+            local ndCount = previewSource and previewSource.noDeals and #previewSource.noDeals or 0
             local statusText = ns.COLORS.GRAY .. actionableCount .. " tasks across " .. charGroups .. " realm(s)"
             if rejCount > 0 then
                 statusText = statusText .. "  |  " .. ns.COLORS.ORANGE .. rejCount .. " TSM rejected|r"
+            end
+            if ovCount > 0 then
+                statusText = statusText .. "  |  " .. ns.COLORS.GRAY .. ovCount .. " extra deals"
+            end
+            if ndCount > 0 then
+                statusText = statusText .. "  |  " .. ns.COLORS.RED .. ndCount .. " no deals|r"
             end
             statusText = statusText .. "|r"
             s3.statusLabel:SetText(statusText)
@@ -2933,6 +2941,98 @@ function UI:RefreshGeneratorPage(pending)
             genY = genY + 2
         end
 
+        -- Overflow section: deals that exceeded available stock
+        local overflowItems = previewSource and previewSource.overflow
+        if overflowItems and #overflowItems > 0 then
+            genY = genY + 6
+            local ovHdr = GetOrCreateGenRow(HDR_ROW_H)
+            ovHdr.bg:SetColorTexture(0.1, 0.1, 0.1, 0.8)
+            ovHdr.nameText:ClearAllPoints()
+            ovHdr.nameText:SetPoint("LEFT", ovHdr, "LEFT", 6, 0)
+            ovHdr.nameText:SetPoint("RIGHT", ovHdr.rightText, "LEFT", -4, 0)
+            ovHdr.nameText:SetText(
+                ns.COLORS.GRAY .. #overflowItems .. " extra deals" .. "|r" ..
+                ns.COLORS.GRAY .. "  (all stock allocated to higher-priority deals above)" .. "|r")
+            ovHdr.rightText:SetText("")
+            genY = genY + HDR_ROW_H
+
+            -- Group overflow by item name for compact display
+            local ovByName = {}
+            local ovOrder = {}
+            for _, ov in ipairs(overflowItems) do
+                local n = ov.name or "?"
+                if not ovByName[n] then
+                    ovByName[n] = { count = 0, item = ov }
+                    table.insert(ovOrder, n)
+                end
+                ovByName[n].count = ovByName[n].count + 1
+            end
+            for oi, name in ipairs(ovOrder) do
+                local entry = ovByName[name]
+                local row = GetOrCreateGenRow(GEN_ROW_H)
+                row.bg:SetColorTexture(0.06, 0.06, 0.06, oi % 2 == 0 and 0.5 or 0.35)
+                row.nameText:ClearAllPoints()
+                row.nameText:SetPoint("LEFT", row, "LEFT", 16, 0)
+                row.nameText:SetPoint("RIGHT", row.rightText, "LEFT", -4, 0)
+                row.nameText:SetText(ns.COLORS.GRAY .. name .. "|r")
+                row.rightText:SetText(ns.COLORS.GRAY .. entry.count .. " extra deal(s)|r")
+                genY = genY + GEN_ROW_H
+            end
+            genY = genY + 2
+        end
+
+        -- No-deals section: inventory items with zero matching deals
+        local noDeals = previewSource and previewSource.noDeals
+        if noDeals and #noDeals > 0 then
+            genY = genY + 6
+            local ndHdr = GetOrCreateGenRow(HDR_ROW_H)
+            ndHdr.bg:SetColorTexture(0.12, 0.06, 0.06, 0.8)
+            ndHdr.nameText:ClearAllPoints()
+            ndHdr.nameText:SetPoint("LEFT", ndHdr, "LEFT", 6, 0)
+            ndHdr.nameText:SetPoint("RIGHT", ndHdr.rightText, "LEFT", -4, 0)
+            ndHdr.nameText:SetText(
+                ns.COLORS.RED .. #noDeals .. " items with no deals" .. "|r" ..
+                ns.COLORS.GRAY .. "  (no matching deals found in imported data)" .. "|r")
+            ndHdr.rightText:SetText("")
+            genY = genY + HDR_ROW_H
+
+            for ni, ndItem in ipairs(noDeals) do
+                local row = GetOrCreateGenRow(GEN_ROW_H)
+                row.bg:SetColorTexture(0.08, 0.04, 0.04, ni % 2 == 0 and 0.5 or 0.35)
+
+                local lookupIcon, quality
+                pcall(function()
+                    lookupIcon, quality = LookupItemInfo(ndItem.itemID, ndItem.itemKey, ndItem.name)
+                end)
+                local itemIcon = ndItem.icon or lookupIcon
+                if itemIcon then
+                    row.icon:SetTexture(itemIcon)
+                    row.icon:ClearAllPoints()
+                    row.icon:SetPoint("LEFT", row, "LEFT", 14, 0)
+                    row.icon:SetDesaturated(true)
+                    row.icon:SetAlpha(0.5)
+                    row.icon:Show()
+                    row.nameText:ClearAllPoints()
+                    row.nameText:SetPoint("LEFT", row.icon, "RIGHT", 3, 0)
+                    row.nameText:SetPoint("RIGHT", row.rightText, "LEFT", -4, 0)
+                else
+                    row.nameText:ClearAllPoints()
+                    row.nameText:SetPoint("LEFT", row, "LEFT", 16, 0)
+                    row.nameText:SetPoint("RIGHT", row.rightText, "LEFT", -4, 0)
+                end
+
+                local displayName = ndItem.name or "?"
+                if quality and QualityColorName then
+                    displayName = QualityColorName(displayName, quality)
+                end
+                row.nameText:SetText(displayName)
+                local qtyStr = (ndItem.totalQuantity or 1) > 1 and ("x" .. ndItem.totalQuantity) or ""
+                row.rightText:SetText(ns.COLORS.GRAY .. qtyStr .. "|r")
+                genY = genY + GEN_ROW_H
+            end
+            genY = genY + 2
+        end
+
         s3.genContent:SetHeight(math.max(1, genY))
 
         -- Save button with name field (inventory track)
@@ -2971,6 +3071,8 @@ function UI:RefreshGeneratorPage(pending)
         if UI._generatorPreview then
             local pvItems = UI._generatorPreview.items or UI._generatorPreview.tasks or {}
             local pvRejected = UI._generatorPreview.rejected or {}
+            local pvOverflow = UI._generatorPreview.overflow or {}
+            local pvNoDeals = UI._generatorPreview.noDeals or {}
             local actionable = 0
             for _, it in ipairs(pvItems) do
                 if it.status ~= "missing" and it.status ~= "unassigned" then
@@ -2980,6 +3082,12 @@ function UI:RefreshGeneratorPage(pending)
             table.insert(genStatusParts, actionable .. " tasks")
             if #pvRejected > 0 then
                 table.insert(genStatusParts, ns.COLORS.ORANGE .. #pvRejected .. " TSM rejected|r")
+            end
+            if #pvOverflow > 0 then
+                table.insert(genStatusParts, ns.COLORS.GRAY .. #pvOverflow .. " extra|r")
+            end
+            if #pvNoDeals > 0 then
+                table.insert(genStatusParts, ns.COLORS.RED .. #pvNoDeals .. " no deals|r")
             end
             table.insert(genStatusParts, "Enter a name and click Save")
         elseif currentList then

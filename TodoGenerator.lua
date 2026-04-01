@@ -735,6 +735,8 @@ function TodoList:GenerateTodoList(source, allocationOrder, opts)
         importType = IMPORT_TYPE_LABELS[source] or source,
         items     = {},
         rejected  = {},  -- TSM-rejected deals (shown separately for visibility)
+        overflow  = {},  -- deals that exceeded available stock (more deals than items)
+        noDeals   = {},  -- inventory items that had zero matching deals
     }
 
     if #deals == 0 then
@@ -1131,9 +1133,48 @@ function TodoList:GenerateTodoList(source, allocationOrder, opts)
                 end -- not skipFlip
             else
                 -- No pool match: all inventory for this item is allocated to
-                -- higher-priority deals. Skip silently — this is expected overflow,
-                -- not missing inventory.
+                -- higher-priority deals. Track as overflow for transparency.
+                table.insert(preview.overflow, {
+                    itemKey       = deal.itemKey,
+                    itemID        = deal.itemID,
+                    name          = deal.name,
+                    targetRealm   = deal.targetRealm,
+                    expectedPrice = deal.expectedPrice,
+                    quality       = deal.quality,
+                    icon          = deal.icon,
+                })
             end
+        end
+    end
+
+    -- Detect inventory items that had zero matching deals
+    -- Track which pool indices were touched by any deal (allocated, skipped, or overflow)
+    local poolTouched = {}
+    for _, item in ipairs(preview.items) do
+        for idx, p in ipairs(pool) do
+            if p.itemKey == item.itemKey then poolTouched[idx] = true; break end
+        end
+    end
+    for _, item in ipairs(preview.rejected) do
+        for idx, p in ipairs(pool) do
+            if p.itemKey == item.itemKey then poolTouched[idx] = true; break end
+        end
+    end
+    for _, item in ipairs(preview.overflow) do
+        for idx, p in ipairs(pool) do
+            if p.itemKey == item.itemKey or p.itemID == item.itemID then poolTouched[idx] = true; break end
+        end
+    end
+    for idx, p in ipairs(pool) do
+        if not poolTouched[idx] then
+            table.insert(preview.noDeals, {
+                itemKey       = p.itemKey,
+                itemID        = p.itemID,
+                name          = p.name,
+                icon          = p.icon,
+                quality       = p.quality,
+                totalQuantity = p.totalQuantity,
+            })
         end
     end
 
