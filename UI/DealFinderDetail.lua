@@ -459,7 +459,7 @@ function UI:RenderDealFinderResearch(parent, group)
     local C = ns.COLORS or {}
     local y = -4
 
-    -- Helper: simple text row
+    -- Helper: text row
     local function Row(text, indent, font)
         local f = Acquire(parent)
         f:SetHeight(INFO_H); f:SetPoint("TOPLEFT", parent, "TOPLEFT", indent or 8, y)
@@ -470,7 +470,18 @@ function UI:RenderDealFinderResearch(parent, group)
         y = y - INFO_H
     end
 
-    -- Helper: table row with positioned columns (clipped to prevent overflow)
+    -- Helper: section header
+    local function SecHdr(title)
+        local h = Acquire(parent)
+        h:SetHeight(18); h:SetPoint("TOPLEFT", parent, "TOPLEFT", 0, y)
+        h:SetPoint("RIGHT", parent, "RIGHT", 0, 0)
+        Bg(h):SetColorTexture(0.1, 0.1, 0.15, 0.8)
+        Lbl(h, "t", "GameFontNormal"):SetPoint("LEFT", 8, 0)
+        h._labels.t:SetText(title)
+        y = y - 20
+    end
+
+    -- Helper: table row with positioned columns
     local function TblRow(data, font, bgCol)
         local f = Acquire(parent)
         f:SetHeight(INFO_H); f:SetPoint("TOPLEFT", parent, "TOPLEFT", 8, y)
@@ -486,8 +497,38 @@ function UI:RenderDealFinderResearch(parent, group)
         y = y - INFO_H
     end
 
+    -- Fetch full research record from ItemResearch (same data as Research page)
+    local record
+    if ns.ItemResearch and ns.ItemResearch.GetItemResearch then
+        local ok, res = pcall(ns.ItemResearch.GetItemResearch, ns.ItemResearch, group.itemKey, group.name)
+        if ok and res then record = res end
+    end
+
     -------------------------------------------------------
-    -- TSM Regional Data (always shown)
+    -- Summary badges (inventory, active, sold, failed)
+    -------------------------------------------------------
+    local badges = {}
+    if record then
+        if (record.totalInventory or 0) > 0 then
+            table.insert(badges, (C.GREEN or "") .. record.totalInventory .. " in inventory|r")
+        end
+        if record.activeAuctions and #record.activeAuctions > 0 then
+            table.insert(badges, (C.YELLOW or "") .. #record.activeAuctions .. " active auctions|r")
+        end
+        if record.salesSummary and record.salesSummary.count > 0 then
+            table.insert(badges, (C.CYAN or "") .. record.salesSummary.count .. " sold|r")
+        end
+        if record.failureSummary then
+            local fc = (record.failureSummary.expiredCount or 0) + (record.failureSummary.cancelledCount or 0)
+            if fc > 0 then table.insert(badges, (C.RED or "") .. fc .. " failed|r") end
+        end
+    end
+    if #badges > 0 then
+        Row(table.concat(badges, "  ·  "))
+    end
+
+    -------------------------------------------------------
+    -- TSM Regional Data
     -------------------------------------------------------
     local regParts = {}
     if group.regionMarketAvg and group.regionMarketAvg > 0 then table.insert(regParts, "Market: " .. G(group.regionMarketAvg)) end
@@ -495,61 +536,23 @@ function UI:RenderDealFinderResearch(parent, group)
     if group.regionSaleRate then
         local pct = group.regionSaleRate * 100
         local col = pct >= 10 and (C.GREEN or "") or pct >= 5 and (C.YELLOW or "") or (C.RED or "")
-        table.insert(regParts, "Sale Rate: " .. col .. string.format("%.1f%%", pct) .. "|r")
+        table.insert(regParts, "Rate: " .. col .. string.format("%.1f%%", pct) .. "|r")
     end
     if group.regionSoldPerDay and group.regionSoldPerDay > 0 then
         table.insert(regParts, "Sold/Day: " .. string.format("%.1f", group.regionSoldPerDay))
     end
     if group.smartAvgBuy and group.smartAvgBuy > 0 then
-        table.insert(regParts, "Avg Buy: " .. G(group.smartAvgBuy))
+        table.insert(regParts, "Buy: " .. G(group.smartAvgBuy))
     end
     if #regParts > 0 then
         Row("|cffaaaaaaRegional:|r " .. table.concat(regParts, "  ·  "))
-    end
-
-    -------------------------------------------------------
-    -- Personal activity (sales + posted + failed)
-    -------------------------------------------------------
-    local ps = group.personalSales or {}
-    local hasActivity = (ps.sold and ps.sold > 0) or (ps.failed and ps.failed > 0) or (ps.posted and ps.posted > 0)
-    if hasActivity then
-        local parts = {}
-        if (ps.sold or 0) > 0 then table.insert(parts, (C.GREEN or "") .. ps.sold .. " sold|r") end
-        if (ps.failed or 0) > 0 then table.insert(parts, (C.RED or "") .. ps.failed .. " failed|r") end
-        if (ps.posted or 0) > 0 then table.insert(parts, (C.YELLOW or "") .. ps.posted .. " active/posted|r") end
-        if ps.avgPrice and ps.avgPrice > 0 then table.insert(parts, "avg " .. G(ps.avgPrice)) end
-        if (ps.sold or 0) + (ps.failed or 0) > 0 then
-            table.insert(parts, string.format("%.0f%% success", (ps.successRate or 0) * 100))
-        end
-        Row("|cffaaaaaaHistory:|r " .. table.concat(parts, "  ·  "))
-        if ps.byRealm then
-            for rn, rd in pairs(ps.byRealm) do
-                local rParts = {}
-                if (rd.count or 0) > 0 then table.insert(rParts, (C.GREEN or "") .. rd.count .. "s|r") end
-                if (rd.failed or 0) > 0 then table.insert(rParts, (C.RED or "") .. rd.failed .. "f|r") end
-                if (rd.posted or 0) > 0 then table.insert(rParts, (C.YELLOW or "") .. rd.posted .. "p|r") end
-                if (rd.avg or 0) > 0 then table.insert(rParts, "avg " .. G(rd.avg)) end
-                Row("  " .. rn .. ": " .. table.concat(rParts, " "), 16, "GameFontDisableSmall")
-            end
-        end
-    else
-        Row("|cffaaaaaaHistory:|r |cff666666No auction activity in log|r")
     end
     y = y - 2
 
     -------------------------------------------------------
     -- Per-Realm Comparison Table
     -------------------------------------------------------
-    local secHdr = Acquire(parent)
-    secHdr:SetHeight(20); secHdr:SetPoint("TOPLEFT", parent, "TOPLEFT", 0, y)
-    secHdr:SetPoint("RIGHT", parent, "RIGHT", 0, 0)
-    Bg(secHdr):SetColorTexture(0.1, 0.1, 0.15, 0.8)
-    local secLbl = Lbl(secHdr, "t", "GameFontNormal")
-    secLbl:SetPoint("LEFT", 8, 0)
-    secLbl:SetText("Realm Comparison")
-    y = y - 22  -- full clearance below section header
-
-    -- Column headers (separate row with its own background)
+    SecHdr("Realm Comparison")
     local colHdrF = Acquire(parent)
     colHdrF:SetHeight(INFO_H); colHdrF:SetPoint("TOPLEFT", parent, "TOPLEFT", 8, y)
     colHdrF:SetPoint("RIGHT", parent, "RIGHT", -8, 0)
@@ -563,75 +566,110 @@ function UI:RenderDealFinderResearch(parent, group)
     end
     y = y - INFO_H
 
-    -- Data rows
     for ri, realm in ipairs(group.realms) do
         local rn = realm.realmName or "?"
         if #rn > 13 then rn = rn:sub(1, 11) .. ".." end
-
-        -- Show real profit if buy cost known, otherwise vs market
         local sp = realm.realProfitPct or realm.profitPct
         local spreadStr = ""
         if sp and sp ~= 0 then
             local col = sp > 0 and (C.GREEN or "") or (C.RED or "")
             spreadStr = col .. (sp > 0 and "+" or "") .. sp .. "%|r"
         end
-
-        -- Personal sold count for this realm
-        local soldStr = "-"
-        if realm.personalCount and realm.personalCount > 0 then
-            soldStr = (C.GREEN or "") .. realm.personalCount .. "|r"
-        end
-
+        local soldStr = (realm.personalCount and realm.personalCount > 0)
+            and ((C.GREEN or "") .. realm.personalCount .. "|r") or "-"
         TblRow({
-            name   = rn,
-            tsm    = G(realm.tsmPrice),
-            blend  = G(realm.blendedPrice),
-            ah     = tostring(realm.numAuctions or 0),
-            sold   = soldStr,
-            src    = (realm.dataQuality == "perRealm") and "Realm" or "|cffaa6666Rgn|r",
+            name = rn, tsm = G(realm.tsmPrice), blend = G(realm.blendedPrice),
+            ah = tostring(realm.numAuctions or 0), sold = soldStr,
+            src = (realm.dataQuality == "perRealm") and "Realm" or "|cffaa6666Rgn|r",
             spread = spreadStr,
         }, nil, ri % 2 == 0 and {0.06, 0.06, 0.08, 0.3} or nil)
     end
-    y = y - 2
+    y = y - 4
 
     -------------------------------------------------------
-    -- Compact market analysis + item details
+    -- Inventory (from research record)
     -------------------------------------------------------
-    local minP, maxP, totalAH, ncCount, olCount = nil, nil, 0, 0, 0
-    for _, r in ipairs(group.realms) do
-        local p = r.blendedPrice or 0
-        if p > 0 then
-            if not minP or p < minP then minP = p end
-            if not maxP or p > maxP then maxP = p end
+    if record and record.inventory and #record.inventory > 0 then
+        SecHdr("Inventory (" .. (record.totalInventory or 0) .. ")")
+        for i, inv in ipairs(record.inventory) do
+            local owner = inv.charKey or inv.owner or "?"
+            local name = owner:match("^(.-)%-") or owner
+            local loc = inv.location or ""
+            local qty = inv.quantity or 0
+            Row("  " .. name .. "  |cffaaaaaa" .. loc .. "|r  x" .. qty, 12,
+                i % 2 == 0 and "GameFontHighlightSmall" or "GameFontDisableSmall")
         end
-        totalAH = totalAH + (r.numAuctions or 0)
-        if r.noCompetition then ncCount = ncCount + 1 end
-        if r.isOutlier then olCount = olCount + 1 end
-    end
-    local nR = #group.realms
-    local maParts = {}
-    if minP and maxP then table.insert(maParts, "Range: " .. G(minP) .. "–" .. G(maxP)) end
-    if nR > 0 then table.insert(maParts, "Avg AH: " .. string.format("%.0f", totalAH / nR)) end
-    if ncCount > 0 then table.insert(maParts, (C.GREEN or "") .. ncCount .. " NC|r") end
-    if olCount > 0 then table.insert(maParts, (C.RED or "") .. olCount .. " outlier|r") end
-    if #maParts > 0 then
-        Row("|cff888888" .. table.concat(maParts, "  ·  ") .. "|r", 8, "GameFontDisableSmall")
+        y = y - 2
     end
 
-    -- Item variant details (ilvl, bonus, modifiers, buy cost)
+    -------------------------------------------------------
+    -- Active Auctions (from research record)
+    -------------------------------------------------------
+    if record and record.activeAuctions and #record.activeAuctions > 0 then
+        SecHdr("Active Auctions (" .. #record.activeAuctions .. ")")
+        for i, aa in ipairs(record.activeAuctions) do
+            local realm = aa.targetRealm or "?"
+            local price = aa.postedPrice or aa.expectedPrice or ""
+            if type(price) == "number" then price = G(price) end
+            local seller = aa.charKey and (aa.charKey:match("^(.-)%-") or aa.charKey) or ""
+            Row("  " .. realm .. "  " .. tostring(price) .. "  |cffaaaaaa" .. seller .. "|r", 12,
+                i % 2 == 0 and "GameFontHighlightSmall" or "GameFontDisableSmall")
+        end
+        y = y - 2
+    end
+
+    -------------------------------------------------------
+    -- Failed Sales (from research record)
+    -------------------------------------------------------
+    if record and record.failures and #record.failures > 0 then
+        local fs = record.failureSummary or {}
+        local fLabel = (fs.expiredCount or 0) .. " expired"
+        if (fs.cancelledCount or 0) > 0 then fLabel = fLabel .. ", " .. fs.cancelledCount .. " cancelled" end
+        SecHdr("Failed Sales (" .. fLabel .. ")")
+        local shown = math.min(#record.failures, 10)
+        for i = 1, shown do
+            local fail = record.failures[i]
+            local realm = fail.targetRealm or "?"
+            local price = fail.postedPrice or ""
+            if type(price) == "number" then price = G(price) end
+            local status = fail.auctionStatus or fail.saleOutcome or "?"
+            local statusCol = status == "expired" and (C.RED or "") or (C.ORANGE or "")
+            Row("  " .. realm .. "  " .. tostring(price) .. "  " .. statusCol .. status .. "|r", 12, "GameFontDisableSmall")
+        end
+        if #record.failures > shown then
+            Row("  |cff888888..." .. (#record.failures - shown) .. " more|r", 12, "GameFontDisableSmall")
+        end
+        y = y - 2
+    end
+
+    -------------------------------------------------------
+    -- Recent Sales (from research record)
+    -------------------------------------------------------
+    if record and record.sales and #record.sales > 0 then
+        local ss = record.salesSummary or {}
+        SecHdr("Sales (" .. (ss.count or #record.sales) .. " total, avg " .. G(ss.avgPrice) .. ")")
+        local shown = math.min(#record.sales, 10)
+        for i = 1, shown do
+            local sale = record.sales[i]
+            local realm = sale.targetRealm or "?"
+            local price = sale.soldPrice or sale.postedPrice or ""
+            if type(price) == "number" then price = G(price) end
+            local seller = sale.charKey and (sale.charKey:match("^(.-)%-") or sale.charKey) or ""
+            Row("  " .. realm .. "  " .. (C.GREEN or "") .. tostring(price) .. "|r  |cffaaaaaa" .. seller .. "|r", 12, "GameFontDisableSmall")
+        end
+        y = y - 2
+    end
+
+    -------------------------------------------------------
+    -- Item details footer
+    -------------------------------------------------------
     local detParts = {}
     if group._ilvl and group._ilvl > 0 then table.insert(detParts, "iLvl: " .. group._ilvl) end
     if group.bonusIDs and group.bonusIDs ~= "" then table.insert(detParts, "Bonus: " .. group.bonusIDs) end
     if group.modifiers and group.modifiers ~= "" then table.insert(detParts, "Mods: " .. group.modifiers) end
-    if group.smartAvgBuy and group.smartAvgBuy > 0 then table.insert(detParts, "Avg Buy: " .. G(group.smartAvgBuy)) end
     if #detParts > 0 then
         table.insert(detParts, 1, "Key: " .. (group.itemKey or "-"))
         Row("|cff888888" .. table.concat(detParts, " · ") .. "|r", 8, "GameFontDisableSmall")
-    end
-
-    local baseline = group.regionMarketAvg or group.regionSaleAvg or 0
-    if baseline > 0 then
-        Row("|cff555555Spread = (realm × 0.95) − market " .. G(baseline) .. "|r", 8, "GameFontDisableSmall")
     end
 
     parent:SetHeight(math.abs(y) + 10)
