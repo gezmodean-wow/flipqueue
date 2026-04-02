@@ -76,8 +76,9 @@ end
 -- Tracks both sold and failed (expired/cancelled) entries for success rate.
 -- Returns: { itemKey = { _sold=N, _failed=N, realmNorm = { total, count, failed } } }
 local function BuildPersonalSalesIndex()
-    local index = {}
-    if not ns.db or not ns.db.log then return index end
+    local index = {}     -- itemKey -> data
+    local nameIndex = {} -- lowercase name -> data (fallback for key mismatches)
+    if not ns.db or not ns.db.log then return index, nameIndex end
 
     for _, entry in ipairs(ns.db.log) do
         local key = entry.itemKey
@@ -85,6 +86,15 @@ local function BuildPersonalSalesIndex()
 
         if key then
             if not index[key] then index[key] = { _sold = 0, _failed = 0 } end
+            -- Also index by name for fallback matching
+            local entryName = entry.name and entry.name:lower() or nil
+            if entryName and not nameIndex[entryName] then
+                nameIndex[entryName] = index[key]
+            elseif entryName and nameIndex[entryName] ~= index[key] then
+                -- Multiple keys for same name — merge into the name entry
+                -- (happens when collected vs active log entries have different keys)
+                nameIndex[entryName] = nameIndex[entryName] or index[key]
+            end
             local isSold = (entry.auctionStatus == "sold" or entry.saleOutcome == "sold")
             local isFailed = (entry.auctionStatus == "expired" or entry.auctionStatus == "cancelled"
                 or entry.saleOutcome == "expired" or entry.saleOutcome == "cancelled")
@@ -116,12 +126,40 @@ local function BuildPersonalSalesIndex()
         end
     end
 
-    return index
+    return index, nameIndex
+end
+
+-- Resolve sales index entry: exact key → base ID fallback → pet fallback → name fallback
+local function ResolveSalesData(salesIndex, nameIndex, itemKey, itemName)
+    -- 1. Exact key match
+    if salesIndex[itemKey] then return salesIndex[itemKey] end
+
+    -- 2. Try without bonus/modifier suffix (e.g., "12345;;" matches "12345;bonus;mod")
+    local baseKey = itemKey:match("^([^;]+)") .. ";;"
+    if baseKey ~= itemKey and salesIndex[baseKey] then return salesIndex[baseKey] end
+
+    -- 3. Pet fallback: try species variants
+    local speciesID = itemKey:match("^(pet:%d+)")
+    if speciesID then
+        local fallback = salesIndex[speciesID .. ";;"]
+        if fallback then return fallback end
+        for k, v in pairs(salesIndex) do
+            if k:match("^" .. speciesID) then return v end
+        end
+    end
+
+    -- 4. Name-based fallback
+    if nameIndex and itemName then
+        local data = nameIndex[itemName:lower()]
+        if data then return data end
+    end
+
+    return nil
 end
 
 -- Get personal sales summary for an item across all realms.
-local function GetPersonalSummary(salesIndex, itemKey)
-    local data = salesIndex[itemKey]
+local function GetPersonalSummary(salesIndex, nameIndex, itemKey, itemName)
+    local data = ResolveSalesData(salesIndex, nameIndex, itemKey, itemName)
     if not data then return { sold = 0, failed = 0, successRate = 0, avgPrice = 0, byRealm = {} } end
 
     local totalCopper, totalSold = 0, 0
@@ -148,8 +186,8 @@ local function GetPersonalSummary(salesIndex, itemKey)
     }
 end
 
-local function GetPersonalForRealm(salesIndex, itemKey, targetRealm)
-    local data = salesIndex[itemKey]
+local function GetPersonalForRealm(salesIndex, nameIndex, itemKey, itemName, targetRealm)
+    local data = ResolveSalesData(salesIndex, nameIndex, itemKey, itemName)
     if not data then return nil, 0 end
     local realmNorm = ns:NormalizeRealmKey(targetRealm)
     local r = data[realmNorm]
@@ -253,7 +291,7 @@ function DealFinder:ScanChunked(pool, onProgress, onComplete)
     for _ in pairs(sellRealms) do realmCount = realmCount + 1 end
 
     local hasRealmData = ns.TSMRealms and ns.TSMRealms:IsLoaded()
-    local salesIndex = BuildPersonalSalesIndex()
+    local salesIndex, salesNameIndex = BuildPersonalSalesIndex()
 
     local itemGroups = {}
     local total = #pool
@@ -283,6 +321,8 @@ function DealFinder:ScanChunked(pool, onProgress, onComplete)
             local regionSaleRate = ns.TSM:GetPrice(itemKey, "DBRegionSaleRate")
             local regionSaleAvg = ns.TSM:GetPrice(itemKey, "DBRegionSaleAvg")
             local regionMarketAvg = ns.TSM:GetPrice(itemKey, "DBRegionMarketAvg")
+            local regionSoldPerDay = ns.TSM:GetPrice(itemKey, "DBRegionSoldPerDay")
+            local smartAvgBuy = ns.TSM:GetPrice(itemKey, "SmartAvgBuy")
 
             -- Normalize sale rate (TSM returns decimal, e.g. 0.25 = 25%)
             -- Safety: if somehow > 1, treat as percentage
@@ -291,11 +331,19 @@ function DealFinder:ScanChunked(pool, onProgress, onComplete)
                 saleRate = regionSaleRate > 1 and (regionSaleRate / 100) or regionSaleRate
             end
 
-            local personalSummary = GetPersonalSummary(salesIndex, itemKey)
+            local personalSummary = GetPersonalSummary(salesIndex, salesNameIndex, itemKey, poolItem.name)
 
-            local baseID = itemKey:match("^(%d+)")
-            local bonusStr = itemKey:match("^%d+;([^;]*)")
-            local modStr = itemKey:match("^%d+;[^;]*;(.*)$")
+            -- Extract base ID, bonus, modifiers (handle pet:SPECIESID format)
+            local baseID, bonusStr, modStr
+            if itemKey:match("^pet:") then
+                baseID = itemKey:match("^(pet:%d+)")
+                bonusStr = itemKey:match("^pet:%d+;([^;]*)")
+                modStr = itemKey:match("^pet:%d+;[^;]*;(.*)$")
+            else
+                baseID = itemKey:match("^(%d+)")
+                bonusStr = itemKey:match("^%d+;([^;]*)")
+                modStr = itemKey:match("^%d+;[^;]*;(.*)$")
+            end
 
             -- Build realm options for this item
             local realmOptions = {}
@@ -315,7 +363,7 @@ function DealFinder:ScanChunked(pool, onProgress, onComplete)
                 end
 
                 if tsmPrice and tsmPrice > 0 then
-                    local personalAvg, personalCount = GetPersonalForRealm(salesIndex, itemKey, targetRealm)
+                    local personalAvg, personalCount = GetPersonalForRealm(salesIndex, salesNameIndex, itemKey, poolItem.name, targetRealm)
                     local blendedPrice = BlendPrice(tsmPrice, personalAvg, personalCount)
 
                     if blendedPrice >= minPrice then
@@ -330,6 +378,13 @@ function DealFinder:ScanChunked(pool, onProgress, onComplete)
 
                         local isOutlier = self:IsOutlier(blendedPrice, regionMarketAvg, outlierMult)
 
+                        -- Real profit based on cost basis (SmartAvgBuy)
+                        local realProfit, realProfitPct
+                        if smartAvgBuy and smartAvgBuy > 0 then
+                            realProfit = math.floor(blendedPrice * 0.95) - smartAvgBuy
+                            realProfitPct = math.floor((blendedPrice * 0.95 - smartAvgBuy) / smartAvgBuy * 100)
+                        end
+
                         table.insert(realmOptions, {
                             realmName     = targetRealm,
                             tsmPrice      = tsmPrice,
@@ -339,6 +394,8 @@ function DealFinder:ScanChunked(pool, onProgress, onComplete)
                             numAuctions   = numAuctions or 0,
                             profit        = profit,
                             profitPct     = profitPct,
+                            realProfit    = realProfit,
+                            realProfitPct = realProfitPct,
                             isOutlier     = isOutlier,
                             noCompetition = (not numAuctions or numAuctions == 0),
                             hasPreviousSales = (personalCount or 0) > 0,
@@ -359,6 +416,7 @@ function DealFinder:ScanChunked(pool, onProgress, onComplete)
                     name           = poolItem.name,
                     icon           = poolItem.icon,
                     quality        = "",
+                    ilvl           = poolItem.ilvl,
                     quantity       = poolItem.totalQuantity,
                     bonusIDs       = bonusStr or "",
                     modifiers      = modStr or "",
@@ -366,6 +424,8 @@ function DealFinder:ScanChunked(pool, onProgress, onComplete)
                     regionMarketAvg = regionMarketAvg,
                     regionSaleRate  = saleRate,
                     regionSaleAvg   = regionSaleAvg,
+                    regionSoldPerDay = regionSoldPerDay,
+                    smartAvgBuy     = smartAvgBuy,
                     personalSales   = personalSummary,
                     realms          = realmOptions,
                     selectedRealm   = 1,

@@ -52,6 +52,7 @@ function TodoList:BuildItemPool()
                     itemID        = itemData.itemID or itemKey:match("^(%d+)"),
                     name          = itemData.name or "Unknown",
                     icon          = itemData.icon,
+                    ilvl          = itemData.ilvl,
                     sources       = {},
                     totalQuantity = 0,
                 }
@@ -69,6 +70,9 @@ function TodoList:BuildItemPool()
 
         if itemData.icon and not pool[idx].icon then
             pool[idx].icon = itemData.icon
+        end
+        if itemData.ilvl and itemData.ilvl > 0 and (not pool[idx].ilvl or pool[idx].ilvl == 0) then
+            pool[idx].ilvl = itemData.ilvl
         end
         if itemData.name and pool[idx].name == "Unknown" then
             pool[idx].name = itemData.name

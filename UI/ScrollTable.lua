@@ -88,6 +88,21 @@ function ScrollTableMixin:CreateHeader(parent)
             end)
         end
 
+        -- Header tooltip (e.g., legend for Info column)
+        if col.headerTooltip then
+            local tip = col.headerTooltip
+            btn:SetScript("OnEnter", function(s)
+                s.highlight:Show()
+                GameTooltip:SetOwner(s, "ANCHOR_BOTTOM")
+                GameTooltip:SetText(tip, nil, nil, nil, nil, true)
+                GameTooltip:Show()
+            end)
+            btn:SetScript("OnLeave", function(s)
+                s.highlight:Hide()
+                GameTooltip:Hide()
+            end)
+        end
+
         self.headerButtons[i] = btn
         xOffset = xOffset + col.width
     end
@@ -548,13 +563,13 @@ function ScrollTableMixin:Render()
                     C_Timer.After(0.1, function()
                         if not self._actionBtnHovered and not self:IsMouseOver() then
                             self.bg:SetColorTexture(c[1], c[2], c[3], baseAlpha)
-                            GameTooltip:Hide()
+                            GameTooltip:Hide(); if BattlePetTooltip then BattlePetTooltip:Hide() end
                             UI.HideTaskActionBtns(self)
                         end
                     end)
                 else
                     self.bg:SetColorTexture(c[1], c[2], c[3], baseAlpha)
-                    GameTooltip:Hide()
+                    GameTooltip:Hide(); if BattlePetTooltip then BattlePetTooltip:Hide() end
                 end
             end)
         else
@@ -571,13 +586,13 @@ function ScrollTableMixin:Render()
                     C_Timer.After(0.1, function()
                         if not self._actionBtnHovered and not self:IsMouseOver() then
                             self.bg:SetColorTexture(1, 1, 1, defaultAlpha)
-                            GameTooltip:Hide()
+                            GameTooltip:Hide(); if BattlePetTooltip then BattlePetTooltip:Hide() end
                             UI.HideTaskActionBtns(self)
                         end
                     end)
                 else
                     self.bg:SetColorTexture(1, 1, 1, defaultAlpha)
-                    GameTooltip:Hide()
+                    GameTooltip:Hide(); if BattlePetTooltip then BattlePetTooltip:Hide() end
                 end
             end)
         end
@@ -608,15 +623,23 @@ function ScrollTableMixin:Render()
             row.cells[1]:SetPoint("LEFT", row._cellClips[1], "LEFT", COL_PADDING, 0)
         end
 
-        -- Tooltip
-        if rowData._tooltipItemID or rowData._tooltipItemString or rowData._tooltipText then
+        -- Tooltip (with battle pet support)
+        if rowData._tooltipPetSpecies or rowData._tooltipItemID or rowData._tooltipItemString or rowData._tooltipText then
             row._onEnter = function()
-                GameTooltip:SetOwner(row, "ANCHOR_RIGHT")
-                if rowData._tooltipItemString then
+                if rowData._tooltipPetSpecies and BattlePetToolTip_Show then
+                    BattlePetToolTip_Show(rowData._tooltipPetSpecies, 25, rowData._tooltipPetQuality or 3, 0, 0, 0)
+                    if BattlePetTooltip then
+                        BattlePetTooltip:ClearAllPoints()
+                        BattlePetTooltip:SetPoint("TOPLEFT", row, "TOPRIGHT")
+                    end
+                elseif rowData._tooltipItemString then
+                    GameTooltip:SetOwner(row, "ANCHOR_RIGHT")
                     GameTooltip:SetHyperlink(rowData._tooltipItemString)
                 elseif tonumber(rowData._tooltipItemID) and tonumber(rowData._tooltipItemID) > 0 then
+                    GameTooltip:SetOwner(row, "ANCHOR_RIGHT")
                     GameTooltip:SetItemByID(tonumber(rowData._tooltipItemID))
                 elseif rowData._tooltipText then
+                    GameTooltip:SetOwner(row, "ANCHOR_RIGHT")
                     GameTooltip:SetText(rowData._tooltipText, 1, 1, 1)
                     if rowData._tooltipExtra then
                         GameTooltip:AddLine(rowData._tooltipExtra, 0.7, 0.7, 0.7, true)

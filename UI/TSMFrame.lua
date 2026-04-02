@@ -365,7 +365,71 @@ function UI:CreateTSMPanel(parent)
         "TSM price source for the AH Price column. Default: DBMinBuyout",
         "tsmPriceSource", 220,
         function(val) return ns.TSM:IsValidPriceSource(val) end)
-    y = y - h - SECTION_SPACING
+    y = y - h - ITEM_SPACING
+
+    -- Deal Finder price source dropdown
+    local dfPriceLabel = content:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+    dfPriceLabel:SetPoint("TOPLEFT", content, "TOPLEFT", 0, y)
+    dfPriceLabel:SetText("Deal Finder price display:")
+    dfPriceLabel:SetTextColor(0.8, 0.8, 0.8)
+    y = y - 16
+
+    local dfPriceDesc = content:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+    dfPriceDesc:SetPoint("TOPLEFT", content, "TOPLEFT", 0, y)
+    dfPriceDesc:SetText("Price shown on configurable columns in Deal Finder and To-Do preview.")
+    y = y - 14
+
+    local DF_PRICE_OPTIONS = {
+        { key = "deal",              label = "Deal Price (blended)" },
+        { key = "DBMinBuyout",       label = "Min Buyout" },
+        { key = "DBMarket",          label = "Market" },
+        { key = "DBRegionMarketAvg", label = "Regional Market Avg" },
+        { key = "DBRegionSaleAvg",   label = "Regional Sale Avg" },
+    }
+
+    local dfPriceBtns = {}
+    local function SetDfPrice(key)
+        if ns.db then ns.db.settings.dfPriceSource = key end
+        for _, b in ipairs(dfPriceBtns) do
+            local active = (b._dfKey == key)
+            b._active = active
+            b:SetBackdropColor(active and 0.2 or 0.15, active and 0.4 or 0.15, active and 0.2 or 0.2, 1)
+            b.text:SetTextColor(active and 1 or 0.6, active and 1 or 0.6, active and 1 or 0.6)
+        end
+    end
+
+    local btnX = 0
+    for _, opt in ipairs(DF_PRICE_OPTIONS) do
+        local btn = CreateFrame("Button", nil, content, "BackdropTemplate")
+        btn:SetHeight(18)
+        btn:SetBackdrop({
+            bgFile = "Interface\\Tooltips\\UI-Tooltip-Background",
+            edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
+            edgeSize = 10, insets = { left = 2, right = 2, top = 2, bottom = 2 },
+        })
+        btn:SetBackdropColor(0.15, 0.15, 0.2, 1)
+        btn:SetBackdropBorderColor(0.3, 0.3, 0.4, 0.8)
+        btn.text = btn:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+        btn.text:SetPoint("CENTER"); btn.text:SetText(opt.label)
+        btn:SetWidth(btn.text:GetStringWidth() + 14)
+        btn:SetPoint("TOPLEFT", content, "TOPLEFT", btnX, y)
+        btn._dfKey = opt.key
+        btn:SetScript("OnClick", function() SetDfPrice(opt.key) end)
+        btn:SetScript("OnEnter", function(s) if not s._active then s:SetBackdropColor(0.2, 0.2, 0.3, 1) end end)
+        btn:SetScript("OnLeave", function(s)
+            if s._active then s:SetBackdropColor(0.2, 0.4, 0.2, 1)
+            else s:SetBackdropColor(0.15, 0.15, 0.2, 1) end
+        end)
+        table.insert(dfPriceBtns, btn)
+        btnX = btnX + btn:GetWidth() + 4
+        -- Wrap to next line if too wide
+        if btnX > 380 then
+            btnX = 0
+            y = y - 22
+        end
+    end
+    tsmWidgets._dfPriceBtns = dfPriceBtns
+    y = y - 22 - SECTION_SPACING
 
     ------------------------------------------------
     -- Display Options
@@ -553,6 +617,16 @@ function UI:RefreshTSMPage()
     end
     if tsmWidgets.priceSource then
         tsmWidgets.priceSource:SetText(ns.db.settings.tsmPriceSource or "")
+    end
+    -- Deal Finder price source buttons
+    if tsmWidgets._dfPriceBtns then
+        local cur = ns.db.settings.dfPriceSource or "deal"
+        for _, b in ipairs(tsmWidgets._dfPriceBtns) do
+            local active = (b._dfKey == cur)
+            b._active = active
+            b:SetBackdropColor(active and 0.2 or 0.15, active and 0.4 or 0.15, active and 0.2 or 0.2, 1)
+            b.text:SetTextColor(active and 1 or 0.6, active and 1 or 0.6, active and 1 or 0.6)
+        end
     end
 
     -- Checkboxes

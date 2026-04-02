@@ -166,7 +166,10 @@ function Tracker:CheckOwnedAuctions()
     local now = time()
     for aIdx, auction in ipairs(owned) do
         if not consumed[aIdx] then
-            local auctionID = tostring(auction.itemKey.itemID)
+            -- For battle pets, use pet:speciesID format to match inventory keys
+            local speciesID = auction.itemKey.battlePetSpeciesID
+            local isPet = speciesID and speciesID > 0
+            local auctionID = isPet and ("pet:" .. speciesID) or tostring(auction.itemKey.itemID)
             local accounted = accountedFor[auctionID] or 0
 
             if accounted > 0 then
@@ -174,7 +177,9 @@ function Tracker:CheckOwnedAuctions()
                 accountedFor[auctionID] = accounted - 1
             else
                 -- Orphaned auction: not in todo list or log
-                local auctionKey = auctionID .. ";;"
+                local auctionKey = isPet
+                    and ("pet:" .. speciesID .. ";;")
+                    or (auctionID .. ";;")
                 local auctionName = auctionNames[aIdx] or ("Item " .. auctionID)
                 local expirySec = auction.timeLeftSeconds
                 local estPostedAt = expirySec and (now - (172800 - expirySec)) or now

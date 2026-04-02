@@ -52,7 +52,9 @@ local function GetItemStatus(key, itemData, hasKnownLocation)
                 return "Posted", ns.COLORS.YELLOW .. "Posted" .. "|r",
                     ahRealm ~= "" and ("AH: " .. ahRealm) or nil, entry.charKey
             elseif entry.auctionStatus == "expired" then
-                return "Check Mail", ns.COLORS.ORANGE .. "Check Mail" .. "|r", nil, nil
+                local ahRealm = entry.targetRealm or ""
+                return "Check Mail", ns.COLORS.ORANGE .. "Check Mail" .. "|r",
+                    ahRealm ~= "" and ("Mail: " .. ahRealm) or nil, entry.charKey
             end
         end
     end
@@ -101,20 +103,33 @@ local function BuildFullInventoryData()
 
                     local statusKey, statusStr, targetRealm, postedCharKey = GetItemStatus(key, itemData, hasKnownLocation)
 
-                    -- For posted items, override owner and location from the log entry
+                    -- For posted/expired items, override owner and location from the log entry
                     local displayOwner = coloredOwner
                     local displayLocation = table.concat(locParts, ", ")
-                    if statusKey == "Posted" and postedCharKey then
+                    if (statusKey == "Posted" or statusKey == "Check Mail") and postedCharKey then
                         local postedName = postedCharKey:match("^(.-)%-") or postedCharKey
                         local postedCharData = ns.db.characters[postedCharKey]
                         local postedClassColor = postedCharData and CLASS_COLORS[postedCharData.class] or "888888"
                         local postedAcctTag = ns:IsRemoteChar(postedCharKey) and "|cff8866cc[2]|r " or ""
                         displayOwner = postedAcctTag .. "|cff" .. postedClassColor .. postedName .. "|r"
-                        displayLocation = "Auction House"
+                        displayLocation = statusKey == "Posted" and "Auction House" or "Mailbox"
+                    end
+
+                    -- Prefer scanner-captured ilvl (accurate). Fallback to GetItemInfo
+                    -- base ilvl ONLY for items without bonus IDs (where base = actual ilvl).
+                    local itemIlvl = itemData.ilvl
+                    if (not itemIlvl or itemIlvl == 0) and invResolvedID then
+                        local bp = key:match("^[^;]+;([^;]*)") or ""
+                        local mp = key:match(";([^;]*)$") or ""
+                        if bp == "" and mp == "" then
+                            local okI, _, _, _, bi = pcall(C_Item.GetItemInfo, invResolvedID)
+                            if okI and bi and bi > 0 then itemIlvl = bi end
+                        end
                     end
 
                     table.insert(data, {
                         name        = invDisplayName,
+                        ilvl        = (itemIlvl and itemIlvl > 0) and itemIlvl or "",
                         qty         = itemData.quantity,
                         owner       = displayOwner,
                         location    = displayLocation,
@@ -130,6 +145,7 @@ local function BuildFullInventoryData()
                         _sortStatus = statusKey == "Assigned" and 1 or statusKey == "Posted" and 2
                             or statusKey == "Check Mail" and 3 or statusKey == "Unassigned" and 4
                             or statusKey == "Unknown" and 5 or 6,
+                        _sortIlvl   = itemIlvl or 0,
                         _charKey    = charKey,
                     })
                 end
@@ -150,20 +166,31 @@ local function BuildFullInventoryData()
                 -- Warbank always has a known location
                 local statusKey, statusStr, targetRealm, postedCharKey = GetItemStatus(key, itemData, true)
 
-                -- For posted items, override owner and location from the log entry
+                -- For posted/expired items, override owner and location from the log entry
                 local displayOwner = ns.COLORS.YELLOW .. "Warbank" .. "|r"
                 local displayLocation = "warbank"
-                if statusKey == "Posted" and postedCharKey then
+                if (statusKey == "Posted" or statusKey == "Check Mail") and postedCharKey then
                     local postedName = postedCharKey:match("^(.-)%-") or postedCharKey
                     local postedCharData = ns.db.characters[postedCharKey]
                     local postedClassColor = postedCharData and CLASS_COLORS[postedCharData.class] or "888888"
                     local postedAcctTag = ns:IsRemoteChar(postedCharKey) and "|cff8866cc[2]|r " or ""
                     displayOwner = postedAcctTag .. "|cff" .. postedClassColor .. postedName .. "|r"
-                    displayLocation = "Auction House"
+                    displayLocation = statusKey == "Posted" and "Auction House" or "Mailbox"
+                end
+
+                local wbIlvl = itemData.ilvl
+                if (not wbIlvl or wbIlvl == 0) and wbResolvedID then
+                    local bp = key:match("^[^;]+;([^;]*)") or ""
+                    local mp = key:match(";([^;]*)$") or ""
+                    if bp == "" and mp == "" then
+                        local okI, _, _, _, bi = pcall(C_Item.GetItemInfo, wbResolvedID)
+                        if okI and bi and bi > 0 then wbIlvl = bi end
+                    end
                 end
 
                 table.insert(data, {
                     name        = wbDisplayName,
+                    ilvl        = (wbIlvl and wbIlvl > 0) and wbIlvl or "",
                     qty         = itemData.quantity,
                     owner       = displayOwner,
                     location    = displayLocation,
@@ -179,6 +206,7 @@ local function BuildFullInventoryData()
                     _sortStatus = statusKey == "Assigned" and 1 or statusKey == "Posted" and 2
                         or statusKey == "Check Mail" and 3 or statusKey == "Unassigned" and 4
                         or statusKey == "Unknown" and 5 or 6,
+                    _sortIlvl   = wbIlvl or 0,
                     _charKey    = "Warbank",
                 })
             end

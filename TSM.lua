@@ -320,7 +320,11 @@ end
 
 function TSM:IsValidPriceSource(str)
     if not self:IsAvailable() or not str or str == "" then return false end
-    local ok, result = pcall(TSM_API.IsCustomPriceValid, TSM_API, str)
+    -- Try without self first (TSM4+ API), fall back to with self
+    local ok, result = pcall(TSM_API.IsCustomPriceValid, str)
+    if not ok then
+        ok, result = pcall(TSM_API.IsCustomPriceValid, TSM_API, str)
+    end
     return ok and result
 end
 

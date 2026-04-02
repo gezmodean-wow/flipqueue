@@ -27,9 +27,17 @@ end
 
 local function ExtractNumericID(itemKey)
     if not itemKey then return nil end
+    -- Handle pet:SPECIESID format
+    if itemKey:match("^pet:") then
+        local n = tonumber(itemKey:match("^pet:(%d+)"))
+        return (n and n > 0) and n or nil
+    end
     local n = tonumber(itemKey:match("^(%d+);"))
     return (n and n > 0) and n or nil
 end
+
+-- Pet cage item ID (82800) — used to detect orphaned pet log entries
+local PET_CAGE_ID = 82800
 
 local function ItemMatches(entryKey, entryName, targetKey, targetID, targetName)
     if entryKey and entryKey ~= "" and entryKey == targetKey then return true end
@@ -64,6 +72,8 @@ function ItemResearch:BuildItemIndex()
     local map = {}      -- itemKey -> entry (exact key match)
     local idMap = {}     -- numericID -> entry (fallback for dedup)
 
+    local nameMap = {}   -- lowercase name -> entry (for pet cage dedup)
+
     local function Ensure(itemKey, itemID, name, icon, quality)
         if not itemKey or itemKey == "" then
             if itemID and itemID ~= "" then
@@ -75,16 +85,27 @@ function ItemResearch:BuildItemIndex()
             end
         end
 
+        -- Pet cage dedup: log entries with "82800;;" are pets — match by name
+        local numID = ExtractNumericID(itemKey)
+        local isCageEntry = (numID == PET_CAGE_ID)
+        if isCageEntry and name and name ~= "" then
+            local nameKey = name:lower()
+            if nameMap[nameKey] then
+                local entry = nameMap[nameKey]
+                map[itemKey] = entry
+                -- Don't overwrite the pet: key with the cage key
+                return entry
+            end
+        end
+
         -- Check exact key first
         local entry = map[itemKey]
         if entry then
             -- Merge into existing exact match
         else
             -- Check numeric ID fallback for dedup (e.g., "12345;;" and "12345;bonus;")
-            local numID = ExtractNumericID(itemKey)
-            if numID and idMap[numID] then
+            if numID and not isCageEntry and idMap[numID] then
                 entry = idMap[numID]
-                -- Also register this key variant so future exact lookups find it
                 map[itemKey] = entry
                 -- Prefer the key with bonus IDs (more specific)
                 if itemKey:find(";.+;") and not entry.itemKey:find(";.+;") then
@@ -93,17 +114,18 @@ function ItemResearch:BuildItemIndex()
             else
                 entry = {
                     itemKey = itemKey,
-                    itemID = itemID or numID or "",
+                    itemID = itemID or (not isCageEntry and numID) or "",
                     name = name or "",
                     icon = icon,
                     quality = quality,
+                    ilvl = nil,  -- resolved below
                     totalQty = 0,
                     hasInventory = false,
                     hasLog = false,
                     hasDeals = false,
                 }
                 map[itemKey] = entry
-                if numID then idMap[numID] = entry end
+                if numID and not isCageEntry then idMap[numID] = entry end
             end
         end
 
@@ -113,7 +135,14 @@ function ItemResearch:BuildItemIndex()
         if not entry.icon and icon then entry.icon = icon end
         if not entry.quality and quality then entry.quality = quality end
         if not entry.itemID or entry.itemID == "" then
-            entry.itemID = itemID or ExtractNumericID(itemKey) or ""
+            entry.itemID = itemID or (not isCageEntry and ExtractNumericID(itemKey)) or ""
+        end
+        -- Register name for pet dedup (prefer pet: entries over cage entries)
+        if name and name ~= "" then
+            local nameKey = name:lower()
+            if not nameMap[nameKey] or (not isCageEntry and itemKey:match("^pet:")) then
+                nameMap[nameKey] = entry
+            end
         end
         return entry
     end
@@ -171,6 +200,29 @@ function ItemResearch:BuildItemIndex()
     for _, deal in pairs(ns.db.imports and ns.db.imports.fpCrossRealm or {}) do
         local e = Ensure(deal.itemKey, deal.itemID, deal.name, deal.icon, deal.quality)
         if e then e.hasDeals = true end
+    end
+
+    -- 7. Deal Finder deals
+    for _, deal in pairs(ns.db.imports and ns.db.imports.dealFinder or {}) do
+        local e = Ensure(deal.itemKey, deal.itemID, deal.name, deal.icon, deal.quality)
+        if e then e.hasDeals = true end
+    end
+
+    -- Fallback ilvl: only use GetItemInfo for items WITHOUT bonus IDs (base = actual).
+    -- Items with bonuses show blank ilvl until rescanned by the scanner.
+    for _, entry in pairs(map) do
+        if not entry.ilvl or entry.ilvl == 0 then
+            local ek = entry.itemKey or ""
+            local bp = ek:match("^[^;]+;([^;]*)") or ""
+            local mp = ek:match(";([^;]*)$") or ""
+            if bp == "" and mp == "" then
+                local nid = tonumber(tostring(entry.itemID):match("^(%d+)"))
+                if nid and nid > 0 and nid ~= PET_CAGE_ID then
+                    local ok, _, _, _, ilvl = pcall(C_Item.GetItemInfo, nid)
+                    if ok and ilvl and ilvl > 0 then entry.ilvl = ilvl end
+                end
+            end
+        end
     end
 
     -- Convert to sorted array (deduplicate since multiple keys can map to same entry)

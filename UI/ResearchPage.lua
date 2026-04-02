@@ -133,9 +133,11 @@ end
 
 -- Item list table
 local ITEM_LIST_COLUMNS = {
-    { key = "name",    label = "Item",    width = 170, sortable = true },
-    { key = "qty",     label = "Qty",     width = 35,  align = "CENTER", sortable = true },
-    { key = "sources", label = "Info",    width = 55,  align = "CENTER", sortable = true },
+    { key = "name",    label = "Item",    width = 140, sortable = true },
+    { key = "ilvl",    label = "iLvl",    width = 32,  align = "CENTER", sortable = true },
+    { key = "qty",     label = "Qty",     width = 30,  align = "CENTER", sortable = true },
+    { key = "sources", label = "Info",    width = 55,  align = "CENTER", sortable = true,
+      headerTooltip = "|cff00ff00I|r = Inventory  |  |cff00ffffL|r = Log/Sales  |  |cffff8000D|r = Deal Data" },
 }
 
 local itemListTable = UI:CreateScrollTable(leftPanel, ITEM_LIST_COLUMNS)
@@ -938,15 +940,31 @@ local function BuildItemListData(index)
 
                 local isSelected = (selectedItemKey and item.itemKey == selectedItemKey) or false
 
+                -- Pet tooltip support: detect pet:SPECIESID in itemID or itemKey
+                local petSpecies, petQuality
+                local idStr = tostring(item.itemID or "")
+                local keyStr = tostring(item.itemKey or "")
+                if idStr:match("^pet:(%d+)") then
+                    petSpecies = tonumber(idStr:match("^pet:(%d+)"))
+                    petQuality = tonumber((item.bonusIDs or keyStr):match("q(%d+)")) or 3
+                elseif keyStr:match("^pet:(%d+)") then
+                    petSpecies = tonumber(keyStr:match("^pet:(%d+)"))
+                    petQuality = tonumber(keyStr:match("q(%d+)")) or 3
+                end
+
                 table.insert(data, {
                     name = displayName,
+                    ilvl = (item.ilvl and item.ilvl > 0) and item.ilvl or "",
                     qty = item.totalQty > 0 and item.totalQty or "",
                     sources = table.concat(badges, " "),
                     _icon = item.icon,
-                    _tooltipItemID = item.itemID,
+                    _tooltipItemID = not petSpecies and item.itemID or nil,
+                    _tooltipPetSpecies = petSpecies,
+                    _tooltipPetQuality = petQuality,
                     _itemKey = item.itemKey,
                     _itemName = item.name,
                     _sortName = (item.name or ""):lower(),
+                    _sortIlvl = item.ilvl or 0,
                     _rowColor = isSelected and { 0.2, 0.4, 0.2, 0.4 } or nil,
                 })
             end

@@ -69,13 +69,25 @@ local function ScanContainers(bagIndices, captureBindInfo)
                 if itemID then
                     local key = ns:MakeItemKey(itemID, bonusIDs, modifiers)
                     if not items[key] then
-                        local itemName
+                        local itemName, ilvl
                         -- Battle pets: C_Item.GetItemInfo returns nil, extract name from link
                         if info.hyperlink:find("|Hbattlepet:") then
                             itemName = info.hyperlink:match("|h%[(.-)%]|h")
+                            ilvl = 0  -- pets don't have ilvl
                         else
                             local okName, n = pcall(C_Item.GetItemInfo, info.hyperlink)
                             itemName = okName and n or nil
+                            ilvl = 0
+                            -- GetDetailedItemLevelInfo (global) returns effective ilvl with bonuses
+                            if GetDetailedItemLevelInfo then
+                                local okIlvl, result = pcall(GetDetailedItemLevelInfo, info.hyperlink)
+                                if okIlvl and result then ilvl = tonumber(result) or 0 end
+                            end
+
+                            -- Debug ilvl capture (enable with /fq debug)
+                            if ns.db and ns.db.settings and ns.db.settings.debug and (bonusIDs ~= "" or modifiers ~= "") then
+                                ns:Print("|cffaaaaaaiLvl|r " .. (itemName or "?") .. " [" .. (bonusIDs or "") .. "] → " .. ilvl)
+                            end
                         end
                         items[key] = {
                             itemID    = itemID,
@@ -84,6 +96,7 @@ local function ScanContainers(bagIndices, captureBindInfo)
                             modifiers = modifiers,
                             quantity  = 0,
                             icon      = info.iconFileID,
+                            ilvl      = ilvl or 0,
                         }
                         if captureBindInfo then
                             -- Battle pets (caged) are always tradeable
@@ -115,10 +128,14 @@ local function MergeItems(target, source, location)
                 modifiers = data.modifiers,
                 quantity  = 0,
                 icon      = data.icon,
+                ilvl      = data.ilvl,
                 locations = {},
                 bindType  = data.bindType,
                 isBound   = data.isBound,
             }
+        end
+        if data.ilvl and data.ilvl > 0 and (not target[key].ilvl or target[key].ilvl == 0) then
+            target[key].ilvl = data.ilvl
         end
         target[key].quantity = target[key].quantity + data.quantity
         target[key].locations[location] = (target[key].locations[location] or 0) + data.quantity
@@ -226,6 +243,7 @@ function Scanner:ScanCurrentCharacter()
                         modifiers = prevItem.modifiers,
                         quantity  = 0,
                         icon      = prevItem.icon,
+                        ilvl      = prevItem.ilvl,
                         locations = {},
                         bindType  = prevItem.bindType,
                         isBound   = prevItem.isBound,
@@ -321,6 +339,7 @@ function Scanner:ScanWarbank()
             modifiers = data.modifiers,
             quantity  = data.quantity,
             icon      = data.icon,
+            ilvl      = data.ilvl,
             bindType  = data.bindType,
             isBound   = data.isBound,
         }

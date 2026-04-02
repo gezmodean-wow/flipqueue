@@ -59,8 +59,9 @@ function ns:InitDB()
     -- TSM integration defaults
     if db.settings.tsmEnabled == nil then db.settings.tsmEnabled = false end
     db.settings.tsmProfile         = db.settings.tsmProfile or ""
-    db.settings.tsmMinPriceSource  = db.settings.tsmMinPriceSource or "70% DBMarket"
+    db.settings.tsmMinPriceSource  = db.settings.tsmMinPriceSource or "70% DBRegionMarketAvg"
     db.settings.tsmPriceSource     = db.settings.tsmPriceSource or "DBMinBuyout"
+    db.settings.dfPriceSource      = db.settings.dfPriceSource or "deal"  -- deal, DBMinBuyout, DBMarket, DBRegionMarketAvg, DBRegionSaleAvg
     if db.settings.tsmShowColumns == nil then db.settings.tsmShowColumns = false end
     if db.settings.tsmAutoUpdatePrice == nil then db.settings.tsmAutoUpdatePrice = false end
     db.settings.tsmPriceMaxAge     = db.settings.tsmPriceMaxAge or 3600

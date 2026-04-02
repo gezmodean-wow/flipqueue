@@ -104,6 +104,12 @@ local verText = titleBar:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall"
 verText:SetPoint("LEFT", titleText, "RIGHT", 6, 0)
 verText:SetText("v" .. ns.VERSION)
 
+-- Current character display
+local charLabel = titleBar:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+charLabel:SetPoint("RIGHT", titleBar, "RIGHT", -28, 0)
+charLabel:SetJustifyH("RIGHT")
+mainFrame._charLabel = charLabel
+
 -- Close button
 local closeBtn = CreateFrame("Button", nil, titleBar)
 closeBtn:SetSize(18, 18)
@@ -694,11 +700,12 @@ UI.logTable:SetSort("date", false)
 
 -- Inventory columns (full tradeable inventory)
 UI.inventoryTable = UI:CreateScrollTable(tableContainer, {
-    {key = "name",        label = "Item",         width = 180, sortable = true},
-    {key = "qty",         label = "Qty",          width = 40,  align = "CENTER", sortable = true},
-    {key = "owner",       label = "Owner",        width = 100, sortable = true},
-    {key = "location",    label = "Location",     width = 80,  sortable = true},
-    {key = "status",      label = "Status",       width = 70,  align = "CENTER", sortable = true},
+    {key = "name",        label = "Item",         width = 150, sortable = true},
+    {key = "ilvl",        label = "iLvl",         width = 35,  align = "CENTER", sortable = true},
+    {key = "qty",         label = "Qty",          width = 35,  align = "CENTER", sortable = true},
+    {key = "owner",       label = "Owner",        width = 90,  sortable = true},
+    {key = "location",    label = "Location",     width = 70,  sortable = true},
+    {key = "status",      label = "Status",       width = 65,  align = "CENTER", sortable = true},
     {key = "targetRealm", label = "Target Realm", width = 100, sortable = true},
 })
 UI.inventoryTable:SetSort("name", true)
@@ -844,6 +851,17 @@ end
 function UI:Refresh()
     if not mainFrame:IsShown() then return end
     if not ns.db then return end
+
+    -- Update character label in title bar
+    if mainFrame._charLabel then
+        local charKey = ns:GetCharKey()
+        if charKey then
+            local name, realm = charKey:match("^(.-)%-(.+)$")
+            local charData = ns.db.characters and ns.db.characters[charKey]
+            local classColor = charData and UI._CLASS_COLORS and UI._CLASS_COLORS[charData.class] or "aaaaaa"
+            mainFrame._charLabel:SetText("|cff" .. classColor .. (name or charKey) .. "|r |cff888888" .. (realm or "") .. "|r")
+        end
+    end
 
     -- Ensure TSM columns match current settings
     self:UpdateTSMColumns()

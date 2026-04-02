@@ -232,6 +232,8 @@ function UI:RefreshMini()
 
     local charKey = ns:GetCharKey()
     local myRealm = charKey:match("%-(.+)$") or ""
+    local charName = charKey:match("^(.-)%-") or charKey
+    local fqTitle = ns.COLORS.YELLOW .. "FQ" .. ns.COLORS.RESET .. " |cff888888" .. charName .. "-" .. myRealm .. "|r"
 
     -- Build bag lookup: item IDs, pet species, and names
     local bagsItemIDs = {}
@@ -325,10 +327,10 @@ function UI:RefreshMini()
     if #tasks == 0 then
         local todoPending = useTodoList and ns.TodoList:GetPendingCount() or 0
         if #preCharTasks > 0 then
-            titleText:SetText(ns.COLORS.YELLOW .. "FQ" .. ns.COLORS.RESET ..
+            titleText:SetText(fqTitle ..
                 ns.COLORS.YELLOW .. " - " .. #preCharTasks .. " task(s)" .. ns.COLORS.RESET)
         elseif todoPending > 0 then
-            titleText:SetText(ns.COLORS.YELLOW .. "FQ" .. ns.COLORS.RESET ..
+            titleText:SetText(fqTitle ..
                 ns.COLORS.GRAY .. " - " .. todoPending .. " on other chars" .. ns.COLORS.RESET)
 
             -- Show grouped summary of the to-do list (top 5 chars + up to 2 create char)
@@ -530,14 +532,14 @@ function UI:RefreshMini()
                 end
             end
         else
-            titleText:SetText(ns.COLORS.YELLOW .. "FQ" .. ns.COLORS.RESET ..
+            titleText:SetText(fqTitle ..
                 ns.COLORS.GRAY .. " - nothing to do" .. ns.COLORS.RESET)
         end
     else
         local titleParts = {}
         if postCount > 0 then table.insert(titleParts, postCount .. " to post") end
         if buyCount > 0 then table.insert(titleParts, buyCount .. " to buy") end
-        titleText:SetText(ns.COLORS.YELLOW .. "FQ" .. ns.COLORS.RESET ..
+        titleText:SetText(fqTitle ..
             ns.COLORS.GREEN .. " - " .. table.concat(titleParts, ", ") .. ns.COLORS.RESET)
 
         for _, task in ipairs(tasks) do
