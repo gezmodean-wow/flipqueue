@@ -18,9 +18,6 @@ function Tracker:AutoPullFromBank(onComplete)
 
     local charKey = ns:GetCharKey()
     local currentRealm = charKey:match("%-(.+)$") or GetRealmName()
-    local sellQtyMode = ns.db.settings.sellQtyMode or "tsm"
-    local tsmEnabled = sellQtyMode == "tsm" and ns.TSM and ns.TSM:IsEnabled()
-    local defaultQty = ns.db.settings.defaultSellQty or 1
 
     -- Build needed list from the active to-do list
     local needed = {} -- item -> qty still needed from bank
@@ -32,14 +29,9 @@ function Tracker:AutoPullFromBank(onComplete)
             if item.action == "buy" then
                 -- Buy tasks are purchased from AH, not pulled from bank
             elseif ns:RealmMatches(item.targetRealm or "", currentRealm) then
-                local targetQty = math.max(item.quantity or 1, defaultQty)
-                if tsmEnabled then
-                    local op = ns.TSM:GetItemAuctioningOp(item.itemKey)
-                    if op and op.postCap then
-                        local tsmQty = tonumber(op.postCap)
-                        if tsmQty and tsmQty > 0 then targetQty = tsmQty end
-                    end
-                end
+                -- Use the task's own quantity — it already accounts for TSM postCap
+                -- and available inventory from when the to-do list was generated
+                local targetQty = item.quantity or 1
                 local inBags = Tracker._CountInBags(item)
                 local stillNeeded = targetQty - inBags
                 if stillNeeded > 0 then

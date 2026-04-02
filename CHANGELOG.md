@@ -1,5 +1,18 @@
 # Changelog
 
+## v0.9.7
+
+### Bug Fixes
+- **FP website "Name" header parsed as item**: When FP paste lacks a "/" separator, the column header "Name" was misidentified as an item — now filtered out along with other known header words
+- **TSM skip blocks post detection**: Items marked "skipped" by TSM threshold on AH open were invisible to post detection and owned auction matching — posts for skipped items are now detected and the skip is cleaned up automatically
+- **Bank over-pull**: Auto-pull recalculated quantity from TSM postCap independently of the task, pulling e.g. 6 when the task needed 1 — now uses the task's own quantity directly
+- **Deal Finder quantity set to total inventory**: Per-realm deals stored the full inventory count as quantity, causing over-allocation for items without TSM groups (especially pets) — now stores 1 as baseline, with actual post qty determined by TSM postCap / defaultSellQty during generation
+- **Mini view missing quantity**: Mini view task rows now show "x3" etc. when quantity > 1, matching the To-Do page display
+
+### Debug
+- **Generation debug logging**: When debug messages are enabled, the to-do generator now logs reasons for dropped deals: no pool match, no character assignment, pool exhausted, and TSM threshold skip
+- **Deal Finder debug logging**: Logs items skipped during scan (no TSM key, no market data, below min price)
+
 ## v0.7.0
 
 ### Bug Fixes

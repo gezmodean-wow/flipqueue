@@ -324,6 +324,11 @@ function DealFinder:ScanChunked(pool, onProgress, onComplete)
             local itemKey = poolItem.itemKey
             local tsmStr = ns.TSM:ItemKeyToTSMString(itemKey)
 
+            if not tsmStr and ns.db.settings.debugMessages then
+                ns:PrintDebug("DealFinder SKIP (no TSM key): " .. (poolItem.name or "?") ..
+                    " key=" .. (itemKey or "?"))
+            end
+
             if tsmStr then
 
             local allRealmPrices = {}
@@ -417,6 +422,17 @@ function DealFinder:ScanChunked(pool, onProgress, onComplete)
                         })
                     end
                 end
+            end
+
+            if #realmOptions == 0 and ns.db.settings.debugMessages then
+                local reason = "no pricing"
+                if regionMarketAvg and regionMarketAvg > 0 then
+                    reason = "all realms below min " .. ns:FormatGold(minPrice)
+                elseif not regionMarketAvg or regionMarketAvg == 0 then
+                    reason = "no TSM market data"
+                end
+                ns:PrintDebug("DealFinder SKIP (" .. reason .. "): " ..
+                    (poolItem.name or "?") .. " key=" .. (itemKey or "?"))
             end
 
             if #realmOptions > 0 then
@@ -530,7 +546,7 @@ function DealFinder:SaveSelectedToImports(itemGroups)
                         ilvl          = 0,
                         bonusIDs      = group.bonusIDs,
                         modifiers     = group.modifiers,
-                        quantity      = group.quantity,
+                        quantity      = 1,  -- per-deal baseline; actual post qty set by TSM postCap / defaultSellQty during generation
                         targetRealm   = realm.realmName,
                         expectedPrice = ns:FormatGold(realm.blendedPrice),
                         sellRate      = group.regionSaleRate or 0,

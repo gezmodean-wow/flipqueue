@@ -244,6 +244,19 @@ function Import:ParseFPWebsite(text)
         i = i + 1
     end
 
+    -- Filter out FP website header words that can be misidentified as item names
+    -- (happens when the "/" separator is missing from the paste)
+    local FP_HEADER_WORDS = { ["Name"] = true, ["Item"] = true, ["Item Name"] = true }
+    do
+        local filtered = {}
+        for _, block in ipairs(itemBlocks) do
+            if not FP_HEADER_WORDS[allLines[block.nameIdx]] then
+                table.insert(filtered, block)
+            end
+        end
+        itemBlocks = filtered
+    end
+
     -- Process each item block
     for idx, block in ipairs(itemBlocks) do
         local fullName = allLines[block.nameIdx]

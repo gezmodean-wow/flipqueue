@@ -98,7 +98,8 @@ function Tracker:CheckOwnedAuctions()
         if todoList and todoList.tasks then
             local charKey = ns:GetCharKey()
             for taskIdx, todoItem in ipairs(todoList.tasks) do
-                if todoItem.status == "pending" and todoItem.assignedChar == charKey
+                if (todoItem.status == "pending" or todoItem.status == "skipped")
+                    and todoItem.assignedChar == charKey
                     and ns:RealmMatches(todoItem.targetRealm or "", currentRealm) then
                     local remainingQty = todoItem.quantity or 1
                     local totalMatched = 0
@@ -124,6 +125,20 @@ function Tracker:CheckOwnedAuctions()
                     end
 
                     if totalMatched > 0 then
+                        -- Clean up TSM skip if user posted anyway
+                        if todoItem.status == "skipped" then
+                            for i = #ns.db.log, 1, -1 do
+                                local entry = ns.db.log[i]
+                                if entry.auctionStatus == "skipped"
+                                    and entry.itemKey == todoItem.itemKey
+                                    and entry.charKey == charKey then
+                                    table.remove(ns.db.log, i)
+                                    break
+                                end
+                            end
+                            todoItem.status = "pending"
+                            ns:Print(ns.COLORS.CYAN .. "Override:|r " .. (todoItem.name or "?") .. " listed despite TSM skip")
+                        end
                         ns:PrintDebug("Listed: " .. (todoItem.name or "?") .. " x" .. totalMatched .. " — marking done")
                         ns.TodoList:MoveTaskToLog(taskIdx, nil, firstExpiry, totalMatched)
                     end

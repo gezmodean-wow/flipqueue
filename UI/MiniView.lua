@@ -300,6 +300,7 @@ function UI:RefreshMini()
                     realm    = isBuyTask and task.item.buyRealm or task.item.targetRealm,
                     icon     = task.item.icon,
                     source   = task.item.source,
+                    quantity = task.item.quantity or 1,
                     inBags   = inBags,
                     _taskIdx = task.taskIndex,
                     _isTodo  = true,
@@ -588,7 +589,8 @@ function UI:RefreshMini()
             end
 
             local namePrefix = task._isBuy and (ns.COLORS.CYAN .. "[BUY] " .. ns.COLORS.RESET) or ""
-            row.text:SetText(statusIcon .. namePrefix .. ns.COLORS.WHITE .. task.name .. ns.COLORS.RESET .. statusTag .. priceStr)
+            local qtyStr = (task.quantity or 1) > 1 and (" x" .. (task.quantity or 1)) or ""
+            row.text:SetText(statusIcon .. namePrefix .. ns.COLORS.WHITE .. task.name .. qtyStr .. ns.COLORS.RESET .. statusTag .. priceStr)
 
             -- Action buttons (complete/skip/delete) on mouseover
             local capturedTask = task

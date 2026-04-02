@@ -663,7 +663,7 @@ function UI:CreateSettingsPanel(parent)
     -- Link panel: editbox + button
     local linkLabel = lower:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
     linkLabel:SetPoint("TOPLEFT", lower, "TOPLEFT", LEFT_MARGIN, ly)
-    linkLabel:SetText("BNet friend's character (Name):")
+    linkLabel:SetText("BNet friend's character (Name or Name-Realm):")
     ly = ly - 16
 
     settingsWidgets.linkCharBox = CreateFrame("EditBox", nil, lower, "InputBoxTemplate")
@@ -817,7 +817,92 @@ function UI:CreateSettingsPanel(parent)
         end)
         settingsWidgets.resyncBtn = resyncBtn
     end
-    ly = ly - 26 - SECTION_SPACING
+    ly = ly - 26 - ITEM_SPACING
+
+    -- Sync Debug Log (collapsible)
+    do
+        local toggleBtn = CreateFrame("Button", nil, lower, "BackdropTemplate")
+        toggleBtn:SetSize(130, 20)
+        toggleBtn:SetPoint("TOPLEFT", lower, "TOPLEFT", LEFT_MARGIN, ly)
+        toggleBtn:SetBackdrop({
+            bgFile = "Interface\\Tooltips\\UI-Tooltip-Background",
+            edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
+            edgeSize = 10,
+            insets = {left = 2, right = 2, top = 2, bottom = 2},
+        })
+        toggleBtn:SetBackdropColor(0.1, 0.1, 0.15, 1)
+        toggleBtn:SetBackdropBorderColor(0.3, 0.3, 0.4, 0.8)
+        toggleBtn.text = toggleBtn:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+        toggleBtn.text:SetPoint("CENTER")
+        toggleBtn.text:SetText("Show Sync Log")
+        toggleBtn:SetScript("OnEnter", function(self) self:SetBackdropColor(0.2, 0.2, 0.25, 1) end)
+        toggleBtn:SetScript("OnLeave", function(self) self:SetBackdropColor(0.1, 0.1, 0.15, 1) end)
+
+        ly = ly - 24
+
+        local logFrame = CreateFrame("Frame", nil, lower, "BackdropTemplate")
+        logFrame:SetPoint("TOPLEFT", lower, "TOPLEFT", LEFT_MARGIN, ly)
+        logFrame:SetPoint("RIGHT", lower, "RIGHT", RIGHT_MARGIN, 0)
+        logFrame:SetHeight(180)
+        logFrame:SetBackdrop({
+            bgFile = "Interface\\Tooltips\\UI-Tooltip-Background",
+            edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
+            edgeSize = 10,
+            insets = {left = 2, right = 2, top = 2, bottom = 2},
+        })
+        logFrame:SetBackdropColor(0.05, 0.05, 0.08, 0.9)
+        logFrame:SetBackdropBorderColor(0.25, 0.25, 0.35, 0.8)
+        logFrame:Hide()
+
+        -- Scrollable text inside
+        local scroll = CreateFrame("ScrollFrame", nil, logFrame, "UIPanelScrollFrameTemplate")
+        scroll:SetPoint("TOPLEFT", 6, -6)
+        scroll:SetPoint("BOTTOMRIGHT", -28, 6)
+
+        local logText = CreateFrame("EditBox", nil, scroll)
+        logText:SetMultiLine(true)
+        logText:SetAutoFocus(false)
+        logText:SetFontObject(GameFontHighlightSmall)
+        logText:SetWidth(scroll:GetWidth() or 350)
+        logText:SetScript("OnEscapePressed", function(self) self:ClearFocus() end)
+        logText:EnableMouse(true)
+        logText:SetScript("OnMouseUp", function(self) self:ClearFocus() end)
+        scroll:SetScrollChild(logText)
+
+        settingsWidgets.syncLogFrame = logFrame
+        settingsWidgets.syncLogText = logText
+        settingsWidgets.syncLogScroll = scroll
+
+        local logVisible = false
+        toggleBtn:SetScript("OnClick", function()
+            logVisible = not logVisible
+            if logVisible then
+                logFrame:Show()
+                toggleBtn.text:SetText("Hide Sync Log")
+                UI:RefreshSyncLog()
+            else
+                logFrame:Hide()
+                toggleBtn.text:SetText("Show Sync Log")
+            end
+        end)
+        settingsWidgets.syncLogToggle = toggleBtn
+
+        -- Auto-refresh timer when log is visible
+        local logRefreshTicker = nil
+        logFrame:SetScript("OnShow", function()
+            logRefreshTicker = C_Timer.NewTicker(2, function()
+                if logFrame:IsShown() then
+                    UI:RefreshSyncLog()
+                end
+            end)
+        end)
+        logFrame:SetScript("OnHide", function()
+            if logRefreshTicker then logRefreshTicker:Cancel(); logRefreshTicker = nil end
+        end)
+
+        ly = ly - 4 -- collapsed height
+    end
+    ly = ly - SECTION_SPACING
 
     -- External Accounts (manual entry)
     local extSubLabel = lower:CreateFontString(nil, "OVERLAY", "GameFontNormal")
@@ -1217,6 +1302,35 @@ function UI:RefreshSettings()
             settingsWidgets.extAccountList:SetText("|cff888888No external accounts configured.|r")
         end
     end
+end
+
+function UI:RefreshSyncLog()
+    if not settingsWidgets.syncLogText then return end
+    if not ns.Sync or not ns.Sync.GetSyncLog then return end
+
+    local log = ns.Sync:GetSyncLog()
+    if #log == 0 then
+        settingsWidgets.syncLogText:SetText("|cff888888No sync events yet.|r")
+        return
+    end
+
+    local lines = {}
+    -- Show most recent entries at the bottom (natural chat order)
+    local start = math.max(1, #log - 99) -- last 100 entries
+    for i = start, #log do
+        local entry = log[i]
+        local ts = date("%H:%M:%S", entry.t)
+        lines[#lines + 1] = "|cff888888" .. ts .. "|r |cff66aaff" .. entry.event .. "|r " .. (entry.detail or "")
+    end
+    settingsWidgets.syncLogText:SetText(table.concat(lines, "\n"))
+
+    -- Auto-scroll to bottom
+    C_Timer.After(0, function()
+        if settingsWidgets.syncLogScroll then
+            local max = settingsWidgets.syncLogScroll:GetVerticalScrollRange()
+            settingsWidgets.syncLogScroll:SetVerticalScroll(max)
+        end
+    end)
 end
 
 -- Legacy ShowSettings opens the main window to settings page

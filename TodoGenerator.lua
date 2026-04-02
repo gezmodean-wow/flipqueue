@@ -808,6 +808,11 @@ function TodoList:GenerateTodoList(source, allocationOrder, opts)
     local tsmSkipOnGenerate = ns.db.settings.tsmSkipOnGenerate ~= false
     local defaultQty = ns.db.settings.defaultSellQty or 1
 
+    local debugGen = ns.db.settings.debugMessages
+    if debugGen then
+        ns:PrintDebug("Generate: " .. #deals .. " deals, " .. #pool .. " pool items, source=" .. source)
+    end
+
     for _, deal in ipairs(deals) do
         local isCrossRealmFlip = (deal.dealType == "flip" or deal.dealType == "buy")
             and deal.buyRealm and deal.buyRealm ~= ""
@@ -828,10 +833,20 @@ function TodoList:GenerateTodoList(source, allocationOrder, opts)
 
         local poolIdx = FindPoolMatch(pool, deal, poolRemaining)
 
+        if not poolIdx and debugGen then
+            ns:PrintDebug("  NO POOL MATCH: " .. (deal.name or "?") ..
+                " key=" .. (deal.itemKey or "?") .. " id=" .. tostring(deal.itemID or ""))
+        end
+
         if poolIdx then
             local poolItem = pool[poolIdx]
             local assignment = FindBestAssignment(
                 poolItem, deal.targetRealm, ns.db.characters)
+
+            if debugGen and not assignment then
+                ns:PrintDebug("  NO ASSIGNMENT: " .. (deal.name or "?") ..
+                    " realm=" .. (deal.targetRealm or "?") .. " (no chars on realm)")
+            end
 
             if assignment and assignment.location then
                 -- Post quantity: defaultSellQty as base, TSM postCap overrides
@@ -857,6 +872,10 @@ function TodoList:GenerateTodoList(source, allocationOrder, opts)
                 end
                 qty = math.min(qty, poolRemaining[poolIdx])
 
+                if qty <= 0 and debugGen then
+                    ns:PrintDebug("  POOL EXHAUSTED: " .. (deal.name or "?") ..
+                        " on " .. (deal.targetRealm or "?") .. " (no stock remaining)")
+                end
                 if qty > 0 then
                     -- Check TSM threshold for this deal
                     local itemStatus = "pending"
@@ -873,6 +892,9 @@ function TodoList:GenerateTodoList(source, allocationOrder, opts)
                             failReason = "TSM: below min price (" .. threshStr .. ")" .. (opName and (" [" .. opName .. "]") or "")
                             if tsmSkipOnGenerate then
                                 itemStatus = "skipped"
+                                if debugGen then
+                                    ns:PrintDebug("  TSM SKIP: " .. (deal.name or "?") .. " — " .. failReason)
+                                end
                             end
                         end
                     end

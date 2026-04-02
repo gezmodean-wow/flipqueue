@@ -75,7 +75,8 @@ local function SnapshotBags()
         local todoList = ns.TodoList:GetCurrentList()
         if todoList and todoList.tasks then
             for taskIdx, todoItem in ipairs(todoList.tasks) do
-                if todoItem.status == "pending" and todoItem.assignedChar == charKey
+                if (todoItem.status == "pending" or todoItem.status == "skipped")
+                    and todoItem.assignedChar == charKey
                     and ns:RealmMatches(todoItem.targetRealm or "", currentRealm) then
                     preTodoSnapshot[taskIdx] = {
                         todoItem = todoItem,
@@ -92,7 +93,7 @@ local function CheckForPosts()
 
     local todoPosted = {}
     for taskIdx, snap in pairs(preTodoSnapshot) do
-        if snap.todoItem.status == "pending" then
+        if snap.todoItem.status == "pending" or snap.todoItem.status == "skipped" then
             local curQty = CountInBags(snap.todoItem)
             if curQty < snap.qty then
                 -- Cap count at task's own quantity to prevent inflation
@@ -105,6 +106,20 @@ local function CheckForPosts()
 
     table.sort(todoPosted, function(a, b) return a.taskIdx > b.taskIdx end)
     for _, p in ipairs(todoPosted) do
+        -- If task was TSM-skipped but user posted anyway, clean up the skip
+        if p.item.status == "skipped" then
+            for i = #ns.db.log, 1, -1 do
+                local entry = ns.db.log[i]
+                if entry.auctionStatus == "skipped"
+                    and entry.itemKey == p.item.itemKey
+                    and entry.charKey == (p.item.assignedChar or ns:GetCharKey()) then
+                    table.remove(ns.db.log, i)
+                    break
+                end
+            end
+            p.item.status = "pending"
+            ns:Print(ns.COLORS.CYAN .. "Override:|r " .. (p.item.name or "?") .. " posted despite TSM skip")
+        end
         local taskQty = p.item.quantity or 1
         if p.count < taskQty then
             ns:Print(ns.COLORS.GREEN .. "Posted:|r " .. p.item.name .. " (x" .. p.count .. " of " .. taskQty .. ")")
