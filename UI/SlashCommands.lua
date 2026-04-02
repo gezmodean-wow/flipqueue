@@ -105,6 +105,50 @@ SlashCmdList["FLIPQUEUE"] = function(msg)
             ns:PrintError("Item not found in Do Not Track list: " .. itemName)
         end
 
+    elseif msg == "purge-remote" then
+        if ns.db and ns.db.characters then
+            local myUUID = ns.db.sync and ns.db.sync.accountUUID or nil
+            local validPartners = {}
+            if ns.db.sync and ns.db.sync.partners then
+                for uuid in pairs(ns.db.sync.partners) do validPartners[uuid] = true end
+            end
+
+            -- Build set of characters we've actually logged into (have local scan data)
+            local myCharKey = ns:GetCharKey()
+
+            local removed = {}
+            for charKey, charData in pairs(ns.db.characters) do
+                local dominated = false
+                -- Case 1: has foreign accountUUID
+                if charData.accountUUID and charData.accountUUID ~= myUUID and not validPartners[charData.accountUUID] then
+                    dominated = true
+                end
+                -- Case 2: no accountUUID but never locally scanned (no inventory.lastScan)
+                -- and not the current character
+                if not dominated and not charData.accountUUID then
+                    local hasScan = charData.inventory and charData.inventory.lastScan and charData.inventory.lastScan > 0
+                    if not hasScan and charKey ~= myCharKey then
+                        dominated = true
+                    end
+                end
+                if dominated then
+                    table.insert(removed, charKey)
+                    ns.db.characters[charKey] = nil
+                end
+            end
+
+            if #removed > 0 then
+                table.sort(removed)
+                ns:Print(ns.COLORS.GREEN .. "Purged " .. #removed .. " foreign/unscanned characters:|r")
+                for _, ck in ipairs(removed) do
+                    ns:Print("  " .. ns.COLORS.RED .. ck .. "|r")
+                end
+            else
+                ns:Print(ns.COLORS.GREEN .. "No foreign characters found.|r")
+            end
+            UI:Refresh()
+        end
+
     elseif msg == "mini" then
         UI:ToggleMini()
 

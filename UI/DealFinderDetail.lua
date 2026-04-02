@@ -33,6 +33,10 @@ local function Acquire(parent)
     f:SetScript("OnEnter", nil)
     f:SetScript("OnLeave", nil)
     f:EnableMouse(false)
+    -- Clear stale background from previous render
+    if f._bg then f._bg:Hide() end
+    -- Hide all stale labels
+    for _, lbl in pairs(f._labels) do lbl:Hide() end
     f:Show()
     return f
 end
@@ -132,10 +136,10 @@ function UI:RenderDealFinderHeader(headerFrame, group)
     local C = ns.COLORS or {}
 
     -- Item icon + name + ilvl
-    local iconStr = group.icon and ("|T" .. group.icon .. ":20:20:0:0|t ") or ""
+    local iconStr = group.icon and ("|T" .. group.icon .. ":16:16:0:0|t ") or ""
     local ilvlStr = (group._ilvl and group._ilvl > 0) and ("  |cff888888iLvl " .. group._ilvl .. "|r") or ""
-    local nameLbl = Lbl(headerFrame, "name", "GameFontNormalLarge")
-    nameLbl:SetPoint("TOPLEFT", headerFrame, "TOPLEFT", 8, -6)
+    local nameLbl = Lbl(headerFrame, "name", "GameFontNormal")
+    nameLbl:SetPoint("TOPLEFT", headerFrame, "TOPLEFT", 8, -4)
     nameLbl:SetText(iconStr .. QCN(group.name, group.quality) .. ilvlStr)
 
     -- Item tooltip on hover (pet-aware)
@@ -173,14 +177,14 @@ function UI:RenderDealFinderHeader(headerFrame, group)
         headerFrame._sep:SetColorTexture(0.3, 0.3, 0.4, 0.3)
     end
     headerFrame._sep:ClearAllPoints()
-    headerFrame._sep:SetPoint("TOPLEFT", headerFrame, "TOPLEFT", 8, -26)
+    headerFrame._sep:SetPoint("TOPLEFT", headerFrame, "TOPLEFT", 8, -22)
     headerFrame._sep:SetPoint("RIGHT", headerFrame, "RIGHT", -8, 0)
     headerFrame._sep:Show()
 
-    -- Key metrics dashboard (2 rows, more breathing room)
+    -- Key metrics dashboard (2 rows)
     local ps = group.personalSales or {}
-    local L1, V1 = -30, -44   -- Row 1: market context
-    local L2, V2 = -58, -72   -- Row 2: personal / cost
+    local L1, V1 = -26, -38   -- Row 1: market context
+    local L2, V2 = -52, -64   -- Row 2: personal / cost
 
     -- Helper to place a stat
     local function Stat(key, x, ly, vy, label, value)
@@ -234,11 +238,15 @@ function UI:RenderDealFinderHeader(headerFrame, group)
     Stat("r2b", 150, L2, V2, "MY SELL PRICE", sellStr)
 
     local salesStr = "|cff666666None|r"
-    if ps.sold and ps.sold > 0 then
-        local rate = string.format("%.0f%%", (ps.successRate or 0) * 100)
-        salesStr = (C.GREEN or "") .. ps.sold .. "|r / " .. (C.RED or "") .. (ps.failed or 0) .. "|r  (" .. rate .. ")"
+    local hasAny = (ps.sold or 0) + (ps.failed or 0) + (ps.posted or 0) > 0
+    if hasAny then
+        local bits = {}
+        if (ps.sold or 0) > 0 then table.insert(bits, (C.GREEN or "") .. ps.sold .. "s|r") end
+        if (ps.failed or 0) > 0 then table.insert(bits, (C.RED or "") .. ps.failed .. "f|r") end
+        if (ps.posted or 0) > 0 then table.insert(bits, (C.YELLOW or "") .. ps.posted .. "p|r") end
+        salesStr = table.concat(bits, "/")
     end
-    Stat("r2c", 290, L2, V2, "SOLD / FAILED", salesStr)
+    Stat("r2c", 290, L2, V2, "SOLD/FAIL/POST", salesStr)
 
     local invParts = {}
     if group.sources then
@@ -253,7 +261,7 @@ function UI:RenderDealFinderHeader(headerFrame, group)
 
     -- Outlier warning
     local warn = Lbl(headerFrame, "outlier", "GameFontDisableSmall")
-    warn:SetPoint("TOPLEFT", headerFrame, "TOPLEFT", 10, -88)
+    warn:SetPoint("TOPLEFT", headerFrame, "TOPLEFT", 10, -78)
     local outlierMult = ns.db and ns.db.settings.dfOutlierMultiplier or 1.5
     local hasOutlier = false
     for _, r in ipairs(group.realms) do
@@ -435,17 +443,17 @@ end
 --     Sets parent height automatically.
 -----------------------------------------------------------------
 
--- Column layout for per-realm comparison table (fits ~380px)
+-- Column layout for per-realm comparison table
 local RCOL = {
     {x = 2,   w = 88,  k = "name",   align = "LEFT"},
     {x = 92,  w = 58,  k = "tsm",    align = "RIGHT"},
-    {x = 154, w = 68,  k = "pers",   align = "RIGHT"},
-    {x = 226, w = 58,  k = "blend",  align = "RIGHT"},
-    {x = 288, w = 24,  k = "ah",     align = "RIGHT"},
-    {x = 316, w = 36,  k = "src",    align = "LEFT"},
-    {x = 356, w = 44,  k = "spread", align = "RIGHT"},
+    {x = 154, w = 58,  k = "blend",  align = "RIGHT"},
+    {x = 216, w = 24,  k = "ah",     align = "RIGHT"},
+    {x = 244, w = 32,  k = "sold",   align = "RIGHT"},
+    {x = 280, w = 36,  k = "src",    align = "LEFT"},
+    {x = 320, w = 44,  k = "spread", align = "RIGHT"},
 }
-local RCOL_LABELS = {name="Realm", tsm="TSM", pers="Personal", blend="Blended", ah="AH", src="Data", spread="vs Mkt"}
+local RCOL_LABELS = {name="Realm", tsm="TSM", blend="Blended", ah="AH", sold="Sold", src="Data", spread="vs Mkt"}
 
 function UI:RenderDealFinderResearch(parent, group)
     local C = ns.COLORS or {}
@@ -479,31 +487,53 @@ function UI:RenderDealFinderResearch(parent, group)
     end
 
     -------------------------------------------------------
-    -- Compact summary: sales + regional on one line
+    -- TSM Regional Data (always shown)
     -------------------------------------------------------
-    local ps = group.personalSales
-    local saleParts = {}
-    if ps and ps.sold and ps.sold > 0 then
-        table.insert(saleParts, (C.GREEN or "") .. ps.sold .. " sold|r/" .. (C.RED or "") .. (ps.failed or 0) .. "f|r")
-        table.insert(saleParts, string.format("%.0f%%", (ps.successRate or 0) * 100))
-        table.insert(saleParts, "avg " .. G(ps.avgPrice))
-    end
     local regParts = {}
-    if group.regionMarketAvg and group.regionMarketAvg > 0 then table.insert(regParts, "Mkt " .. G(group.regionMarketAvg)) end
-    if group.regionSaleAvg and group.regionSaleAvg > 0 then table.insert(regParts, "Sale " .. G(group.regionSaleAvg)) end
-    if group.regionSaleRate then table.insert(regParts, "Rate " .. string.format("%.1f%%", group.regionSaleRate * 100)) end
+    if group.regionMarketAvg and group.regionMarketAvg > 0 then table.insert(regParts, "Market: " .. G(group.regionMarketAvg)) end
+    if group.regionSaleAvg and group.regionSaleAvg > 0 then table.insert(regParts, "Sale Avg: " .. G(group.regionSaleAvg)) end
+    if group.regionSaleRate then
+        local pct = group.regionSaleRate * 100
+        local col = pct >= 10 and (C.GREEN or "") or pct >= 5 and (C.YELLOW or "") or (C.RED or "")
+        table.insert(regParts, "Sale Rate: " .. col .. string.format("%.1f%%", pct) .. "|r")
+    end
+    if group.regionSoldPerDay and group.regionSoldPerDay > 0 then
+        table.insert(regParts, "Sold/Day: " .. string.format("%.1f", group.regionSoldPerDay))
+    end
+    if group.smartAvgBuy and group.smartAvgBuy > 0 then
+        table.insert(regParts, "Avg Buy: " .. G(group.smartAvgBuy))
+    end
+    if #regParts > 0 then
+        Row("|cffaaaaaaRegional:|r " .. table.concat(regParts, "  ·  "))
+    end
 
-    Row("|cffaaaaaaSales:|r " .. (#saleParts > 0 and table.concat(saleParts, " · ") or "|cff666666None|r")
-        .. "     |cffaaaaaaRegional:|r " .. (#regParts > 0 and table.concat(regParts, " · ") or "|cff666666None|r"))
-
-    -- Per-realm sales (compact, one line)
-    if ps and ps.sold and ps.sold > 0 and ps.byRealm then
-        local bits = {}
-        for rn, rd in pairs(ps.byRealm) do
-            local fs = (rd.failed and rd.failed > 0) and ("/" .. rd.failed .. "f") or ""
-            table.insert(bits, rn .. ": " .. rd.count .. "s" .. fs .. " @" .. G(rd.avg))
+    -------------------------------------------------------
+    -- Personal activity (sales + posted + failed)
+    -------------------------------------------------------
+    local ps = group.personalSales or {}
+    local hasActivity = (ps.sold and ps.sold > 0) or (ps.failed and ps.failed > 0) or (ps.posted and ps.posted > 0)
+    if hasActivity then
+        local parts = {}
+        if (ps.sold or 0) > 0 then table.insert(parts, (C.GREEN or "") .. ps.sold .. " sold|r") end
+        if (ps.failed or 0) > 0 then table.insert(parts, (C.RED or "") .. ps.failed .. " failed|r") end
+        if (ps.posted or 0) > 0 then table.insert(parts, (C.YELLOW or "") .. ps.posted .. " active/posted|r") end
+        if ps.avgPrice and ps.avgPrice > 0 then table.insert(parts, "avg " .. G(ps.avgPrice)) end
+        if (ps.sold or 0) + (ps.failed or 0) > 0 then
+            table.insert(parts, string.format("%.0f%% success", (ps.successRate or 0) * 100))
         end
-        Row("|cff888888" .. table.concat(bits, "  ·  ") .. "|r", 12, "GameFontDisableSmall")
+        Row("|cffaaaaaaHistory:|r " .. table.concat(parts, "  ·  "))
+        if ps.byRealm then
+            for rn, rd in pairs(ps.byRealm) do
+                local rParts = {}
+                if (rd.count or 0) > 0 then table.insert(rParts, (C.GREEN or "") .. rd.count .. "s|r") end
+                if (rd.failed or 0) > 0 then table.insert(rParts, (C.RED or "") .. rd.failed .. "f|r") end
+                if (rd.posted or 0) > 0 then table.insert(rParts, (C.YELLOW or "") .. rd.posted .. "p|r") end
+                if (rd.avg or 0) > 0 then table.insert(rParts, "avg " .. G(rd.avg)) end
+                Row("  " .. rn .. ": " .. table.concat(rParts, " "), 16, "GameFontDisableSmall")
+            end
+        end
+    else
+        Row("|cffaaaaaaHistory:|r |cff666666No auction activity in log|r")
     end
     y = y - 2
 
@@ -538,22 +568,26 @@ function UI:RenderDealFinderResearch(parent, group)
         local rn = realm.realmName or "?"
         if #rn > 13 then rn = rn:sub(1, 11) .. ".." end
 
-        local persStr = (realm.personalAvg and realm.personalAvg > 0)
-            and (G(realm.personalAvg) .. "(" .. (realm.personalCount or 0) .. ")")
-            or "-"
-
+        -- Show real profit if buy cost known, otherwise vs market
+        local sp = realm.realProfitPct or realm.profitPct
         local spreadStr = ""
-        if realm.profitPct and realm.profitPct ~= 0 then
-            local col = realm.profitPct > 0 and (C.GREEN or "") or (C.RED or "")
-            spreadStr = col .. (realm.profitPct > 0 and "+" or "") .. realm.profitPct .. "%|r"
+        if sp and sp ~= 0 then
+            local col = sp > 0 and (C.GREEN or "") or (C.RED or "")
+            spreadStr = col .. (sp > 0 and "+" or "") .. sp .. "%|r"
+        end
+
+        -- Personal sold count for this realm
+        local soldStr = "-"
+        if realm.personalCount and realm.personalCount > 0 then
+            soldStr = (C.GREEN or "") .. realm.personalCount .. "|r"
         end
 
         TblRow({
             name   = rn,
             tsm    = G(realm.tsmPrice),
-            pers   = persStr,
             blend  = G(realm.blendedPrice),
             ah     = tostring(realm.numAuctions or 0),
+            sold   = soldStr,
             src    = (realm.dataQuality == "perRealm") and "Realm" or "|cffaa6666Rgn|r",
             spread = spreadStr,
         }, nil, ri % 2 == 0 and {0.06, 0.06, 0.08, 0.3} or nil)

@@ -58,6 +58,10 @@ local sendTicker = nil
 local lastPongRecv = {}        -- [accountUUID] = timestamp
 local missedPings = {}         -- [accountUUID] = count
 local pendingPairRequests = {} -- [senderGameAccountID] = { uuid, bnetAccountID, charName }
+local friendRetryTimer = nil   -- delayed retry for BN_FRIEND_INFO_CHANGED timing
+local reconnectTicker = nil    -- periodic probe for disconnected partners
+local syncLog = {}             -- ring buffer of recent sync events for debugging
+local SYNC_LOG_MAX = 200
 
 --------------------------
 -- Init
@@ -97,6 +101,28 @@ function Sync:Init()
     retryTicker = C_Timer.NewTicker(RETRY_INTERVAL, function()
         self:RetryUnacked()
     end)
+
+    -- Periodic reconnect probe for disconnected partners (every 30s)
+    reconnectTicker = C_Timer.NewTicker(30, function()
+        self:ProbeDisconnectedPartners()
+    end)
+end
+
+-- Append an entry to the sync debug log (ring buffer).
+function Sync:Log(event, detail)
+    syncLog[#syncLog + 1] = {
+        t = time(),
+        event = event,
+        detail = detail or "",
+    }
+    while #syncLog > SYNC_LOG_MAX do
+        table.remove(syncLog, 1)
+    end
+end
+
+-- Return the sync debug log for the UI.
+function Sync:GetSyncLog()
+    return syncLog
 end
 
 -- Send a probe ping to all stored partners to see who's online
@@ -106,6 +132,25 @@ function Sync:ProbePartners()
         if partner.bnetAccountID then
             local gameAccountID = self:GetGameAccountID(partner.bnetAccountID)
             if gameAccountID then
+                self:Log("PROBE", (partner.label or uuid) .. " → gameAccountID " .. gameAccountID)
+                local pingMsg = OP_PING .. SEP .. (ns.db.sync.accountUUID or "")
+                self:Enqueue(pingMsg, gameAccountID, PRIORITY[OP_PING])
+            else
+                self:Log("PROBE", (partner.label or uuid) .. " → not in WoW")
+            end
+        end
+    end
+end
+
+-- Probe only disconnected partners — called periodically to catch missed events.
+function Sync:ProbeDisconnectedPartners()
+    if not ns.db or not ns.db.sync or not ns.db.sync.partners then return end
+    for uuid, partner in pairs(ns.db.sync.partners) do
+        local pState = partnerStates[uuid] or "disconnected"
+        if pState == "disconnected" and partner.bnetAccountID then
+            local gameAccountID = self:GetGameAccountID(partner.bnetAccountID)
+            if gameAccountID then
+                self:Log("RECONNECT_PROBE", (partner.label or uuid) .. " found online, sending ping")
                 local pingMsg = OP_PING .. SEP .. (ns.db.sync.accountUUID or "")
                 self:Enqueue(pingMsg, gameAccountID, PRIORITY[OP_PING])
             end
@@ -117,26 +162,88 @@ end
 -- BNet Lookup
 --------------------------
 
--- Find a BNet friend by character name. Returns bnetAccountID, gameAccountID or nil.
+-- Normalize a realm name for comparison: lowercase, strip spaces/hyphens.
+local function NormalizeRealm(realm)
+    if not realm or realm == "" then return "" end
+    return realm:lower():gsub("[%s%-]", "")
+end
+
+-- Find a BNet friend by character name (and optional realm).
+-- Returns bnetAccountID, gameAccountID, status, extra.
+-- On success: bnetAccountID, gameAccountID, "found", { battleTag, charName, realmName }
+-- On failure: nil, nil, status, extra
+--   "offline"      – name (and realm if given) matched a BNet friend but they're not in WoW
+--   "ambiguous"    – multiple online friends share that name; extra = list of Name-Realm strings
+--   "not_found"    – no BNet friend has that character name
 function Sync:FindBNetByCharName(charName)
-    -- Normalize: strip realm if provided for matching
-    local nameOnly = charName:match("^([^-]+)") or charName
+    local nameOnly, realmInput = charName:match("^([^-]+)-(.+)$")
+    if not nameOnly then
+        nameOnly = charName:match("^%s*(.-)%s*$")  -- trim whitespace
+        realmInput = nil
+    end
+    local normRealm = realmInput and NormalizeRealm(realmInput) or nil
+
+    local matches = {}       -- { {bnetAccountID, gameAccountID, realmName}, ... }
+    local offlineMatches = 0 -- count of BNet friends whose battleTag/note we can't check by char, but are offline
     local numFriends = BNGetNumFriends()
+
     for i = 1, numFriends do
         local accountInfo = C_BattleNet.GetFriendAccountInfo(i)
         if accountInfo then
             local numGameAccounts = C_BattleNet.GetFriendNumGameAccounts(i)
+            if numGameAccounts == 0 then
+                -- Friend is offline or not in a game — can't check character names
+                offlineMatches = offlineMatches + 1
+            end
             for j = 1, numGameAccounts do
                 local gameInfo = C_BattleNet.GetFriendGameAccountInfo(i, j)
-                if gameInfo and gameInfo.characterName then
-                    if gameInfo.characterName == nameOnly or gameInfo.characterName == charName then
-                        return accountInfo.bnetAccountID, gameInfo.gameAccountID
+                if gameInfo and gameInfo.characterName and gameInfo.characterName == nameOnly then
+                    if normRealm then
+                        -- Realm was specified — must match
+                        if NormalizeRealm(gameInfo.realmName or "") == normRealm then
+                            return accountInfo.bnetAccountID, gameInfo.gameAccountID, "found", {
+                                battleTag = accountInfo.battleTag,
+                                charName  = gameInfo.characterName,
+                                realmName = gameInfo.realmName,
+                            }
+                        end
+                    else
+                        matches[#matches + 1] = {
+                            bnetAccountID = accountInfo.bnetAccountID,
+                            gameAccountID = gameInfo.gameAccountID,
+                            battleTag     = accountInfo.battleTag,
+                            charName      = gameInfo.characterName,
+                            realmName     = gameInfo.realmName or "?",
+                        }
                     end
                 end
             end
         end
     end
-    return nil, nil
+
+    -- Realm was specified but no exact match found
+    if normRealm then
+        return nil, nil, (offlineMatches > 0) and "offline" or "not_found"
+    end
+
+    -- No realm specified — check matches
+    if #matches == 1 then
+        return matches[1].bnetAccountID, matches[1].gameAccountID, "found", {
+            battleTag = matches[1].battleTag,
+            charName  = matches[1].charName,
+            realmName = matches[1].realmName,
+        }
+    elseif #matches > 1 then
+        -- Build a list of realms for the error message
+        local realms = {}
+        for _, m in ipairs(matches) do
+            realms[#realms + 1] = nameOnly .. "-" .. m.realmName
+        end
+        return nil, nil, "ambiguous", realms
+    end
+
+    -- No matches at all
+    return nil, nil, (offlineMatches > 0) and "offline" or "not_found"
 end
 
 -- Look up the current session gameAccountID for a stored bnetAccountID.
@@ -155,6 +262,38 @@ function Sync:GetGameAccountID(bnetAccountID)
                 end
             end
             return nil -- friend found but not in WoW
+        end
+    end
+    return nil
+end
+
+-- Look up the BattleTag for a given gameAccountID by walking the BNet friends list.
+function Sync:GetBattleTagFromGameID(gameAccountID)
+    if not gameAccountID then return nil end
+    local numFriends = BNGetNumFriends()
+    for i = 1, numFriends do
+        local accountInfo = C_BattleNet.GetFriendAccountInfo(i)
+        if accountInfo then
+            local numGameAccounts = C_BattleNet.GetFriendNumGameAccounts(i)
+            for j = 1, numGameAccounts do
+                local gameInfo = C_BattleNet.GetFriendGameAccountInfo(i, j)
+                if gameInfo and gameInfo.gameAccountID == gameAccountID then
+                    return accountInfo.battleTag
+                end
+            end
+        end
+    end
+    return nil
+end
+
+-- Look up the BattleTag for a stored bnetAccountID.
+function Sync:GetBattleTagFromBNetID(bnetAccountID)
+    if not bnetAccountID then return nil end
+    local numFriends = BNGetNumFriends()
+    for i = 1, numFriends do
+        local accountInfo = C_BattleNet.GetFriendAccountInfo(i)
+        if accountInfo and accountInfo.bnetAccountID == bnetAccountID then
+            return accountInfo.battleTag
         end
     end
     return nil
@@ -398,6 +537,7 @@ function Sync:DrainQueue()
 
     local ok, err = pcall(BNSendGameData, entry.gameAccountID, PREFIX, entry.msg)
     if not ok then
+        self:Log("SEND_ERR", tostring(err) .. " → gameAccountID " .. tostring(entry.gameAccountID))
         ns:PrintDebug("Sync send failed: " .. tostring(err))
     end
 end
@@ -488,6 +628,25 @@ function Sync:OnChunkReceived(message, senderGameAccountID)
 end
 
 function Sync:Dispatch(opcode, payload, senderGameAccountID)
+    -- Log all incoming traffic (skip FDAT chunks to reduce noise)
+    if opcode ~= OP_FDAT then
+        local detail = "from gameAccountID " .. tostring(senderGameAccountID)
+        if payload and payload ~= "" and #payload < 80 then
+            detail = detail .. " | " .. payload
+        end
+        self:Log("RECV " .. opcode, detail)
+    end
+
+    -- SECURITY: Only allow PAIR/PACK/PDEN from anyone (pairing flow).
+    -- All other opcodes require the sender to be a known linked partner.
+    if opcode ~= OP_PAIR and opcode ~= OP_PACK and opcode ~= OP_PDEN then
+        local senderUUID = self:IdentifySender(senderGameAccountID)
+        if not senderUUID or not (ns.db and ns.db.sync and ns.db.sync.partners and ns.db.sync.partners[senderUUID]) then
+            self:Log("REJECT " .. opcode, "from non-partner gameAccountID " .. tostring(senderGameAccountID))
+            return
+        end
+    end
+
     if opcode == OP_PAIR then
         self:OnPairRequest(payload, senderGameAccountID)
     elseif opcode == OP_PACK then
@@ -520,10 +679,19 @@ end
 function Sync:RequestPair(targetCharName)
     if not ns.db or not ns.db.sync then return end
 
-    -- Look up BNet friend by character name
-    local bnetAccountID, gameAccountID = self:FindBNetByCharName(targetCharName)
-    if not bnetAccountID or not gameAccountID then
-        ns:Print(ns.COLORS.RED .. "Could not find " .. targetCharName .. " in your BNet friends list.|r Make sure they're online and on your friends list.")
+    -- Look up BNet friend by character name (and optional realm)
+    local bnetAccountID, gameAccountID, status, extra = self:FindBNetByCharName(targetCharName)
+    if not bnetAccountID then
+        if status == "ambiguous" and extra then
+            ns:Print(ns.COLORS.RED .. "Multiple BNet friends have a character named \"" .. targetCharName .. "\". Use Name-Realm to be specific:|r")
+            for _, qualified in ipairs(extra) do
+                ns:Print("  " .. ns.COLORS.CYAN .. qualified .. "|r")
+            end
+        elseif status == "offline" then
+            ns:Print(ns.COLORS.RED .. "No online BNet friend found with a character named \"" .. targetCharName .. "\".|r They must be logged into WoW.")
+        else
+            ns:Print(ns.COLORS.RED .. "Could not find \"" .. targetCharName .. "\" among your BNet friends.|r Make sure they are on your BNet friends list and online in WoW.")
+        end
         return
     end
 
@@ -552,7 +720,11 @@ function Sync:RequestPair(targetCharName)
     local myBNetID = select(2, BNGetInfo()) -- our own bnetAccountID
     local payload = myUUID .. SEP .. tostring(myBNetID or 0)
     self:Enqueue(OP_PAIR .. SEP .. payload, gameAccountID, PRIORITY[OP_PAIR])
-    ns:Print(ns.COLORS.CYAN .. "Link request sent to " .. targetCharName .. "|r")
+    local displayName = targetCharName
+    if extra and extra.battleTag then
+        displayName = extra.battleTag .. " (" .. (extra.charName or "?") .. "-" .. (extra.realmName or "?") .. ")"
+    end
+    ns:Print(ns.COLORS.CYAN .. "Link request sent to " .. displayName .. "|r")
 end
 
 function Sync:OnPairRequest(payload, senderGameAccountID)
@@ -589,21 +761,30 @@ function Sync:OnPairRequest(payload, senderGameAccountID)
         return
     end
 
-    -- Get sender's character name for display
-    local charName = "?"
+    -- Get sender's identity for display
+    local charName, realmName, battleTag = "?", nil, nil
     local gameAccountInfo = C_BattleNet.GetGameAccountInfoByID(senderGameAccountID)
     if gameAccountInfo then
         charName = gameAccountInfo.characterName or "?"
+        realmName = gameAccountInfo.realmName
     end
+    battleTag = self:GetBattleTagFromGameID(senderGameAccountID)
+
+    local displayName = charName
+    if realmName then displayName = displayName .. "-" .. realmName end
+    if battleTag then displayName = battleTag .. " (" .. displayName .. ")" end
 
     -- Store pending request
     pendingPairRequests[senderGameAccountID] = {
         uuid = remoteUUID,
         bnetAccountID = senderBNetID,
         charName = charName,
+        realmName = realmName,
+        battleTag = battleTag,
+        displayName = displayName,
     }
 
-    ns:Print(ns.COLORS.CYAN .. charName .. " wants to link FlipQueue.|r Open Settings > Multi-Account to accept.")
+    ns:Print(ns.COLORS.CYAN .. displayName .. " wants to link FlipQueue.|r Open Settings > Multi-Account to accept.")
 
     if ns.UI and ns.UI.RefreshSettings then
         ns.UI:RefreshSettings()
@@ -619,10 +800,13 @@ function Sync:AcceptPair(senderGameAccountID)
     local remoteUUID = req.uuid
     local remoteBNetID = req.bnetAccountID
 
+    -- Build a label from the best available identity
+    local label = req.displayName or req.battleTag or req.charName or "Linked Account"
+
     -- Store partner
     ns.db.sync.partners[remoteUUID] = {
         bnetAccountID = remoteBNetID,
-        label = "Linked Account",
+        label = label,
         lastSeen = time(),
         lastFullSync = 0,
         lastRecvSeq = 0,
@@ -639,7 +823,7 @@ function Sync:AcceptPair(senderGameAccountID)
     local myBNetID = select(2, BNGetInfo())
     self:Enqueue(OP_PACK .. SEP .. myUUID .. SEP .. tostring(myBNetID or 0), senderGameAccountID, PRIORITY[OP_PACK])
 
-    ns:Print(ns.COLORS.GREEN .. "Linked to " .. (req.charName or "partner") .. "|r")
+    ns:Print(ns.COLORS.GREEN .. "Linked to " .. label .. "|r")
     self:StartHeartbeat()
     if ns.UI and ns.UI.RefreshSettings then ns.UI:RefreshSettings() end
 
@@ -653,13 +837,13 @@ function Sync:DenyPair(senderGameAccountID)
     if senderGameAccountID then
         self:Enqueue(OP_PDEN, senderGameAccountID, PRIORITY[OP_PDEN])
         local req = pendingPairRequests[senderGameAccountID]
-        ns:Print("Link request from " .. (req and req.charName or "?") .. " denied.")
+        ns:Print("Link request from " .. (req and req.displayName or "?") .. " denied.")
         pendingPairRequests[senderGameAccountID] = nil
     else
         -- Deny all pending requests
         for gaid, req in pairs(pendingPairRequests) do
             self:Enqueue(OP_PDEN, gaid, PRIORITY[OP_PDEN])
-            ns:Print("Link request from " .. (req.charName or "?") .. " denied.")
+            ns:Print("Link request from " .. (req.displayName or req.charName or "?") .. " denied.")
         end
         wipe(pendingPairRequests)
     end
@@ -678,15 +862,29 @@ function Sync:OnPairAck(payload, senderGameAccountID)
         senderBNetID = remoteBNetID
     end
 
+    -- Resolve identity for display and storage
+    local charName, realmName, battleTag = "?", nil, nil
+    local gameAccountInfo = C_BattleNet.GetGameAccountInfoByID(senderGameAccountID)
+    if gameAccountInfo then
+        charName = gameAccountInfo.characterName or "?"
+        realmName = gameAccountInfo.realmName
+    end
+    battleTag = self:GetBattleTagFromGameID(senderGameAccountID)
+
+    local label = charName
+    if realmName then label = label .. "-" .. realmName end
+    if battleTag then label = battleTag .. " (" .. label .. ")" end
+
     -- If already exists, just update
     if ns.db.sync.partners[remoteUUID] then
         if senderBNetID then
             ns.db.sync.partners[remoteUUID].bnetAccountID = senderBNetID
         end
+        ns.db.sync.partners[remoteUUID].label = label
     else
         ns.db.sync.partners[remoteUUID] = {
             bnetAccountID = senderBNetID,
-            label = "Linked Account",
+            label = label,
             lastSeen = time(),
             lastFullSync = 0,
             lastRecvSeq = 0,
@@ -699,7 +897,7 @@ function Sync:OnPairAck(payload, senderGameAccountID)
     missedPings[remoteUUID] = 0
     ns.db.sync.partners[remoteUUID].lastSeen = time()
 
-    ns:Print(ns.COLORS.GREEN .. "Linked successfully.|r")
+    ns:Print(ns.COLORS.GREEN .. "Linked to " .. label .. "|r")
     self:StartHeartbeat()
     if ns.UI and ns.UI.RefreshSettings then ns.UI:RefreshSettings() end
 
@@ -874,6 +1072,7 @@ function Sync:OnPing(senderGameAccountID, payload)
 
     if partnerStates[senderUUID] == "disconnected" or not partnerStates[senderUUID] then
         partnerStates[senderUUID] = "connected"
+        self:Log("PING_RECONNECT", (partner.label or senderUUID) .. " reconnected via ping")
         ns:Print(ns.COLORS.GREEN .. (partner.label or "Partner") .. " reconnected.|r")
         self:StartHeartbeat()
 
@@ -913,6 +1112,7 @@ function Sync:OnPong(senderGameAccountID, payload)
 
     if partnerStates[senderUUID] == "disconnected" or not partnerStates[senderUUID] then
         partnerStates[senderUUID] = "connected"
+        self:Log("PONG_RECONNECT", (partner.label or senderUUID) .. " reconnected via pong")
         ns:Print(ns.COLORS.GREEN .. (partner.label or "Partner") .. " reconnected.|r")
         self:StartHeartbeat()
         self:RequestFullSyncWith(senderUUID)
@@ -927,6 +1127,8 @@ end
 function Sync:OnFriendInfoChanged()
     if not ns.db or not ns.db.sync or not ns.db.sync.partners then return end
 
+    local hasUnresolvedDisconnected = false
+
     for uuid, partner in pairs(ns.db.sync.partners) do
         if partner.bnetAccountID then
             local gameAccountID = self:GetGameAccountID(partner.bnetAccountID)
@@ -939,6 +1141,7 @@ function Sync:OnFriendInfoChanged()
                 missedPings[uuid] = 0
                 partner.lastSeen = time()
 
+                self:Log("FRIEND_ONLINE", (partner.label or uuid) .. " → gameAccountID " .. gameAccountID)
                 ns:Print(ns.COLORS.GREEN .. (partner.label or "Partner") .. " came online.|r")
                 self:StartHeartbeat()
 
@@ -961,10 +1164,26 @@ function Sync:OnFriendInfoChanged()
             elseif not gameAccountID and (pState == "connected" or pState == "syncing") then
                 -- Partner went offline
                 partnerStates[uuid] = "disconnected"
+                self:Log("FRIEND_OFFLINE", (partner.label or uuid))
                 ns:PrintDebug((partner.label or "Partner") .. " went offline.")
                 if ns.UI and ns.UI.RefreshSettings then ns.UI:RefreshSettings() end
+
+            elseif not gameAccountID and pState == "disconnected" then
+                -- Still disconnected and can't resolve — may need a retry
+                hasUnresolvedDisconnected = true
             end
         end
+    end
+
+    -- BN_FRIEND_INFO_CHANGED often fires before game account data is populated.
+    -- Schedule a delayed retry to catch partners whose data wasn't ready yet.
+    if hasUnresolvedDisconnected then
+        if friendRetryTimer then friendRetryTimer:Cancel() end
+        friendRetryTimer = C_Timer.NewTimer(5, function()
+            friendRetryTimer = nil
+            self:Log("FRIEND_RETRY", "Delayed re-check for disconnected partners")
+            self:ProbeDisconnectedPartners()
+        end)
     end
 end
 
@@ -996,9 +1215,8 @@ end
 function Sync:OnFullSyncRequest(senderGameAccountID)
     if not self:IsLinked() then return end
     local senderUUID = self:IdentifySender(senderGameAccountID)
-    if senderUUID then
-        partnerStates[senderUUID] = "syncing"
-    end
+    if not senderUUID or not ns.db.sync.partners[senderUUID] then return end
+    partnerStates[senderUUID] = "syncing"
     self:SendFullSyncTo(senderGameAccountID)
 end
 
@@ -1048,6 +1266,12 @@ function Sync:SendFullSyncTo(gameAccountID)
 end
 
 function Sync:OnFullSyncData(payload, senderGameAccountID)
+    -- Reject data from non-partners
+    local senderUUID = self:IdentifySender(senderGameAccountID)
+    if not senderUUID or not (ns.db and ns.db.sync and ns.db.sync.partners and ns.db.sync.partners[senderUUID]) then
+        return
+    end
+
     local sepPos1 = payload:find(SEP, 1, true)
     if not sepPos1 then return end
     local sepPos2 = payload:find(SEP, sepPos1 + 1, true)
@@ -1059,9 +1283,7 @@ function Sync:OnFullSyncData(payload, senderGameAccountID)
 
     if not chunkIdx or not totalChunks then return end
 
-    -- Buffer per sender
-    local senderUUID = self:IdentifySender(senderGameAccountID)
-    local bufferKey = senderUUID or tostring(senderGameAccountID)
+    local bufferKey = senderUUID
 
     if not fullSyncBuffers[bufferKey] then
         fullSyncBuffers[bufferKey] = { expected = totalChunks, chunks = {} }
@@ -1071,8 +1293,12 @@ function Sync:OnFullSyncData(payload, senderGameAccountID)
 end
 
 function Sync:OnFullSyncEnd(senderGameAccountID)
+    -- Reject from non-partners
     local senderUUID = self:IdentifySender(senderGameAccountID)
-    local bufferKey = senderUUID or tostring(senderGameAccountID)
+    if not senderUUID or not (ns.db and ns.db.sync and ns.db.sync.partners and ns.db.sync.partners[senderUUID]) then
+        return
+    end
+    local bufferKey = senderUUID
 
     local buffer = fullSyncBuffers[bufferKey]
     if not buffer or not buffer.expected then return end
@@ -1113,6 +1339,11 @@ function Sync:OnFullSyncEnd(senderGameAccountID)
         end
     end
 
+    local charCount = 0
+    if remoteData.characters then
+        for _ in pairs(remoteData.characters) do charCount = charCount + 1 end
+    end
+    self:Log("FULL_SYNC_DONE", "from " .. (senderUUID or "?") .. " | " .. charCount .. " chars received")
     ns:Print(ns.COLORS.GREEN .. "Sync complete.|r")
 
     if ns.UI and ns.UI.Refresh then ns.UI:Refresh() end
@@ -1622,7 +1853,7 @@ end
 -- Legacy compat: return first pending request sender
 function Sync:GetPendingPairFrom()
     for gaid, req in pairs(pendingPairRequests) do
-        return req.charName or "?", gaid
+        return req.displayName or req.charName or "?", gaid
     end
     return nil
 end

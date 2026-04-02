@@ -85,42 +85,53 @@ local function BuildPersonalSalesIndex()
         if not key then key = nil end  -- skip entries with no key
 
         if key then
-            if not index[key] then index[key] = { _sold = 0, _failed = 0 } end
+            if not index[key] then index[key] = { _sold = 0, _failed = 0, _posted = 0 } end
             -- Also index by name for fallback matching
             local entryName = entry.name and entry.name:lower() or nil
             if entryName and not nameIndex[entryName] then
                 nameIndex[entryName] = index[key]
             elseif entryName and nameIndex[entryName] ~= index[key] then
-                -- Multiple keys for same name — merge into the name entry
-                -- (happens when collected vs active log entries have different keys)
                 nameIndex[entryName] = nameIndex[entryName] or index[key]
             end
+
             local isSold = (entry.auctionStatus == "sold" or entry.saleOutcome == "sold")
             local isFailed = (entry.auctionStatus == "expired" or entry.auctionStatus == "cancelled"
                 or entry.saleOutcome == "expired" or entry.saleOutcome == "cancelled")
+            local isPosted = (entry.auctionStatus == "collected" or entry.auctionStatus == "active")
 
-            if isSold and entry.targetRealm then
-                local realmNorm = ns:NormalizeRealmKey(entry.targetRealm)
-                local price = entry.soldPrice or entry.postedPrice
-                if type(price) == "string" then
-                    price = (ns:ParseGoldValue(price) or 0) * 10000
-                end
-                if price and price > 0 then
+            -- Parse price from any available field
+            local price = entry.soldPrice or entry.postedPrice
+            if type(price) == "string" then
+                price = (ns:ParseGoldValue(price) or 0) * 10000
+            end
+            local realmNorm = entry.targetRealm and ns:NormalizeRealmKey(entry.targetRealm) or nil
+
+            if isSold then
+                index[key]._sold = index[key]._sold + 1
+                if realmNorm then
                     if not index[key][realmNorm] then
-                        index[key][realmNorm] = { total = 0, count = 0, failed = 0 }
+                        index[key][realmNorm] = { total = 0, count = 0, failed = 0, posted = 0 }
                     end
-                    index[key][realmNorm].total = index[key][realmNorm].total + price
+                    if price and price > 0 then
+                        index[key][realmNorm].total = index[key][realmNorm].total + price
+                    end
                     index[key][realmNorm].count = index[key][realmNorm].count + 1
-                    index[key]._sold = index[key]._sold + 1
                 end
             elseif isFailed then
                 index[key]._failed = index[key]._failed + 1
-                if entry.targetRealm then
-                    local realmNorm = ns:NormalizeRealmKey(entry.targetRealm)
+                if realmNorm then
                     if not index[key][realmNorm] then
-                        index[key][realmNorm] = { total = 0, count = 0, failed = 0 }
+                        index[key][realmNorm] = { total = 0, count = 0, failed = 0, posted = 0 }
                     end
                     index[key][realmNorm].failed = index[key][realmNorm].failed + 1
+                end
+            elseif isPosted then
+                index[key]._posted = index[key]._posted + 1
+                if realmNorm then
+                    if not index[key][realmNorm] then
+                        index[key][realmNorm] = { total = 0, count = 0, failed = 0, posted = 0 }
+                    end
+                    index[key][realmNorm].posted = index[key][realmNorm].posted + 1
                 end
             end
         end
@@ -160,18 +171,19 @@ end
 -- Get personal sales summary for an item across all realms.
 local function GetPersonalSummary(salesIndex, nameIndex, itemKey, itemName)
     local data = ResolveSalesData(salesIndex, nameIndex, itemKey, itemName)
-    if not data then return { sold = 0, failed = 0, successRate = 0, avgPrice = 0, byRealm = {} } end
+    if not data then return { sold = 0, failed = 0, posted = 0, successRate = 0, avgPrice = 0, byRealm = {} } end
 
     local totalCopper, totalSold = 0, 0
     local byRealm = {}
     for k, r in pairs(data) do
-        if k ~= "_sold" and k ~= "_failed" then
-            totalCopper = totalCopper + r.total
-            totalSold = totalSold + r.count
+        if k:sub(1, 1) ~= "_" then
+            totalCopper = totalCopper + (r.total or 0)
+            totalSold = totalSold + (r.count or 0)
             byRealm[k] = {
-                count = r.count,
-                failed = r.failed,
-                avg = r.count > 0 and math.floor(r.total / r.count) or 0,
+                count = r.count or 0,
+                failed = r.failed or 0,
+                posted = r.posted or 0,
+                avg = (r.count or 0) > 0 and math.floor((r.total or 0) / r.count) or 0,
             }
         end
     end
@@ -180,6 +192,7 @@ local function GetPersonalSummary(salesIndex, nameIndex, itemKey, itemName)
     return {
         sold = data._sold or 0,
         failed = data._failed or 0,
+        posted = data._posted or 0,
         successRate = totalAttempts > 0 and (data._sold or 0) / totalAttempts or 0,
         avgPrice = totalSold > 0 and math.floor(totalCopper / totalSold) or 0,
         byRealm = byRealm,

@@ -189,8 +189,8 @@ configPanel:SetScript("OnSizeChanged", function(self, w, h)
     rightCol:ClearAllPoints()
     rightCol:SetPoint("TOPLEFT", leftCol, "TOPRIGHT", 1, 0)
     rightCol:SetPoint("BOTTOMRIGHT", invPreviewPanel, "TOPRIGHT", 0, 0)
-    -- Preview panel: 35% of available height, min 80px
-    local previewH = math.max(80, math.floor((h - 36) * 0.35))
+    -- Preview panel: 65% of available height (dominant), min 120px
+    local previewH = math.max(120, math.floor((h - 36) * 0.65))
     invPreviewPanel:SetHeight(previewH)
 end)
 
@@ -418,12 +418,13 @@ RefreshInventoryPreview = function()
         r:SetPoint("TOPLEFT", invContent, "TOPLEFT", 2 + col * colW, -(row * ROW_H))
 
         local iconStr = item.icon and ("|T" .. item.icon .. ":14:14:0:0|t ") or ""
+        local ilvlStr = (item.ilvl and item.ilvl > 0) and (" |cff888888i" .. item.ilvl .. "|r") or ""
         local locParts = {}
         for _, src in ipairs(item.sources or {}) do
             local sl = src.location == "warbank" and "wb" or src.location == "reagent" and "rg" or src.location
             table.insert(locParts, src.quantity .. " " .. sl)
         end
-        r.text:SetText(iconStr .. (item.name or "?") .. "  |cffaaaaaa" .. (item.totalQuantity or 0) .. " (" .. table.concat(locParts, ", ") .. ")|r")
+        r.text:SetText(iconStr .. (item.name or "?") .. ilvlStr .. "  |cffaaaaaa" .. (item.totalQuantity or 0) .. " (" .. table.concat(locParts, ", ") .. ")|r")
         r.bg:SetColorTexture(row % 2 == 0 and 0.06 or 0.04, row % 2 == 0 and 0.06 or 0.04, row % 2 == 0 and 0.08 or 0.06, 0.3)
         r:Show()
     end
@@ -438,20 +439,21 @@ local reviewPanel = CreateFrame("Frame", nil, page)
 reviewPanel:SetAllPoints(); reviewPanel:Hide()
 
 local itemHeader = CreateFrame("Frame", nil, reviewPanel)
-itemHeader:SetHeight(108)
+itemHeader:SetHeight(92)
 itemHeader:SetPoint("TOPLEFT", reviewPanel, "TOPLEFT", 0, 0)
 itemHeader:SetPoint("TOPRIGHT", reviewPanel, "TOPRIGHT", 0, 0)
 local headerBg = itemHeader:CreateTexture(nil, "BACKGROUND")
 headerBg:SetAllPoints(); headerBg:SetColorTexture(0.08, 0.08, 0.12, 1)
 
-local prevBtn = NavBtn(itemHeader, "< Previous")
-prevBtn:SetPoint("TOPRIGHT", itemHeader, "TOPRIGHT", -100, -4)
+-- Nav buttons anchored to right side, vertically centered in header
 local nextBtn = NavBtn(itemHeader, "Next >")
-nextBtn:SetPoint("LEFT", prevBtn, "RIGHT", 4, 0)
+nextBtn:SetPoint("TOPRIGHT", itemHeader, "TOPRIGHT", -8, -4)
+local prevBtn = NavBtn(itemHeader, "< Previous")
+prevBtn:SetPoint("RIGHT", nextBtn, "LEFT", -4, 0)
 local skipBtn = NavBtn(itemHeader, "Skip")
-skipBtn:SetPoint("TOPRIGHT", prevBtn, "TOPLEFT", -4, 0)
+skipBtn:SetPoint("RIGHT", prevBtn, "LEFT", -4, 0)
 local itemCounter = itemHeader:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
-itemCounter:SetPoint("TOPRIGHT", skipBtn, "TOPLEFT", -8, -6)
+itemCounter:SetPoint("RIGHT", skipBtn, "LEFT", -8, 0)
 
 -- Fixed realm table (clips children to prevent overflow during resize)
 local realmFrame = CreateFrame("Frame", nil, reviewPanel)
