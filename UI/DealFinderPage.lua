@@ -518,6 +518,16 @@ local function ResolvePvPrice(item)
         end
         return ""
     end
+    if src == "blended" then
+        if item.blendedPrice and item.blendedPrice > 0 then
+            return G(item.blendedPrice)
+        end
+        -- Fallback to expectedPrice if no separate blended price stored
+        if item.expectedPrice then
+            return type(item.expectedPrice) == "number" and G(item.expectedPrice) or tostring(item.expectedPrice)
+        end
+        return ""
+    end
     -- Live TSM lookup
     if ns.TSM and item.itemKey then
         local copper = ns.TSM:GetPrice(item.itemKey, src)
@@ -527,8 +537,8 @@ local function ResolvePvPrice(item)
 end
 
 local PRICE_LABELS = {
-    deal = "Deal Price", DBMinBuyout = "Min Buyout", DBMarket = "Market",
-    DBRegionMarketAvg = "Regional Mkt", DBRegionSaleAvg = "Sale Avg",
+    deal = "Deal Price", blended = "Blended", DBMinBuyout = "Min Buyout",
+    DBMarket = "Market", DBRegionMarketAvg = "Regional Mkt", DBRegionSaleAvg = "Sale Avg",
 }
 
 local pvHeader = CreateFrame("Frame", nil, previewPanel)

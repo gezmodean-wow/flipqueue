@@ -901,58 +901,88 @@ function UI:CreateSettingsPanel(parent)
         end)
 
         ly = ly - 4 -- collapsed height
+
+        -- When sync log toggles, shift everything below it
+        local SYNC_LOG_HEIGHT = 180
+        local belowSyncBaseY = ly - SECTION_SPACING
+        local belowSync = CreateFrame("Frame", nil, lower)
+        belowSync:SetPoint("TOPLEFT", lower, "TOPLEFT", 0, belowSyncBaseY)
+        belowSync:SetPoint("RIGHT", lower, "RIGHT", 0, 0)
+        belowSync:SetHeight(600)
+        settingsWidgets.belowSyncFrame = belowSync
+        settingsWidgets.belowSyncBaseY = belowSyncBaseY
+
+        local origToggleOnClick = toggleBtn:GetScript("OnClick")
+        toggleBtn:SetScript("OnClick", function(self)
+            origToggleOnClick(self)
+            -- Reposition the content below the sync log
+            belowSync:ClearAllPoints()
+            if logFrame:IsShown() then
+                belowSync:SetPoint("TOPLEFT", lower, "TOPLEFT", 0, belowSyncBaseY - SYNC_LOG_HEIGHT)
+            else
+                belowSync:SetPoint("TOPLEFT", lower, "TOPLEFT", 0, belowSyncBaseY)
+            end
+            -- Update total content height
+            local extraH = logFrame:IsShown() and SYNC_LOG_HEIGHT or 0
+            local bsH = settingsWidgets.belowSyncContentHeight or 300
+            lower:SetHeight(math.abs(belowSyncBaseY) + bsH + extraH + 10)
+            content:SetHeight(settingsWidgets.baseY + SECTION_SPACING + math.abs(belowSyncBaseY) + bsH + extraH + 40)
+        end)
     end
-    ly = ly - SECTION_SPACING
+
+    -- Everything below the sync log goes into belowSync container
+    local belowSync = settingsWidgets.belowSyncFrame
+    local bsy = 0
 
     -- External Accounts (manual entry)
-    local extSubLabel = lower:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-    extSubLabel:SetPoint("TOPLEFT", lower, "TOPLEFT", LEFT_MARGIN, ly)
+    local extSubLabel = belowSync:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+    extSubLabel:SetPoint("TOPLEFT", belowSync, "TOPLEFT", LEFT_MARGIN, bsy)
     extSubLabel:SetTextColor(0.9, 0.8, 0.5)
     extSubLabel:SetText("External Accounts")
-    ly = ly - 18
+    bsy = bsy - 18
 
-    local extDesc = lower:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
-    extDesc:SetPoint("TOPLEFT", lower, "TOPLEFT", LEFT_MARGIN, ly)
-    extDesc:SetPoint("RIGHT", lower, "RIGHT", RIGHT_MARGIN, 0)
+    local extDesc = belowSync:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+    extDesc:SetPoint("TOPLEFT", belowSync, "TOPLEFT", LEFT_MARGIN, bsy)
+    extDesc:SetPoint("RIGHT", belowSync, "RIGHT", RIGHT_MARGIN, 0)
     extDesc:SetJustifyH("LEFT")
     extDesc:SetWordWrap(true)
     extDesc:SetTextColor(DESC_COLOR[1], DESC_COLOR[2], DESC_COLOR[3])
     extDesc:SetText("Manually add realms from other WoW accounts. These realms will be excluded from 'Create char' suggestions in Next Steps.")
-    ly = ly - 32
+    bsy = bsy - 32
 
     -- Label input
-    local lblLabel = lower:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-    lblLabel:SetPoint("TOPLEFT", lower, "TOPLEFT", LEFT_MARGIN, ly)
+    local lblLabel = belowSync:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    lblLabel:SetPoint("TOPLEFT", belowSync, "TOPLEFT", LEFT_MARGIN, bsy)
     lblLabel:SetText("Account label:")
-    ly = ly - 16
+    bsy = bsy - 16
 
-    local lblBox = CreateFrame("EditBox", nil, lower, "InputBoxTemplate")
+    local lblBox = CreateFrame("EditBox", nil, belowSync, "InputBoxTemplate")
     lblBox:SetSize(170, 20)
-    lblBox:SetPoint("TOPLEFT", lower, "TOPLEFT", LEFT_MARGIN + 4, ly)
+    lblBox:SetPoint("TOPLEFT", belowSync, "TOPLEFT", LEFT_MARGIN + 4, bsy)
     lblBox:SetAutoFocus(false)
     lblBox:SetMaxLetters(30)
     lblBox:SetText("")
-    ly = ly - 24
+    bsy = bsy - 24
 
     -- Realms input
-    local rlmLabel = lower:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-    rlmLabel:SetPoint("TOPLEFT", lower, "TOPLEFT", LEFT_MARGIN, ly)
+    local rlmLabel = belowSync:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    rlmLabel:SetPoint("TOPLEFT", belowSync, "TOPLEFT", LEFT_MARGIN, bsy)
     rlmLabel:SetText("Realms (comma-separated):")
-    ly = ly - 16
+    bsy = bsy - 16
 
-    local rlmBox = CreateFrame("EditBox", nil, lower, "InputBoxTemplate")
+    local rlmBox = CreateFrame("EditBox", nil, belowSync, "InputBoxTemplate")
     rlmBox:SetSize(280, 20)
-    rlmBox:SetPoint("TOPLEFT", lower, "TOPLEFT", LEFT_MARGIN + 4, ly)
+    rlmBox:SetPoint("TOPLEFT", belowSync, "TOPLEFT", LEFT_MARGIN + 4, bsy)
     rlmBox:SetAutoFocus(false)
     rlmBox:SetMaxLetters(200)
     rlmBox:SetText("")
-    ly = ly - 26
+    bsy = bsy - 26
 
     -- Add button
     do
-        local row = CreateFrame("Frame", nil, lower)
-        row:SetPoint("TOPLEFT", lower, "TOPLEFT", LEFT_MARGIN, ly)
-        row:SetPoint("RIGHT", lower, "RIGHT", RIGHT_MARGIN, 0)
+        local row = CreateFrame("Frame", nil, belowSync)
+        row:SetPoint("TOPLEFT", belowSync, "TOPLEFT", LEFT_MARGIN, bsy)
+        row:SetPoint("RIGHT", belowSync, "RIGHT", RIGHT_MARGIN, 0)
         row:SetHeight(28)
 
         local btn = CreateFrame("Button", nil, row, "BackdropTemplate")
@@ -998,20 +1028,20 @@ function UI:CreateSettingsPanel(parent)
             UI:Refresh()
         end)
     end
-    ly = ly - 28 - ITEM_SPACING
+    bsy = bsy - 28 - ITEM_SPACING
 
     -- List existing external accounts
-    settingsWidgets.extAccountList = lower:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-    settingsWidgets.extAccountList:SetPoint("TOPLEFT", lower, "TOPLEFT", LEFT_MARGIN, ly)
-    settingsWidgets.extAccountList:SetPoint("RIGHT", lower, "RIGHT", RIGHT_MARGIN, 0)
+    settingsWidgets.extAccountList = belowSync:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    settingsWidgets.extAccountList:SetPoint("TOPLEFT", belowSync, "TOPLEFT", LEFT_MARGIN, bsy)
+    settingsWidgets.extAccountList:SetPoint("RIGHT", belowSync, "RIGHT", RIGHT_MARGIN, 0)
     settingsWidgets.extAccountList:SetJustifyH("LEFT")
     settingsWidgets.extAccountList:SetWordWrap(true)
-    ly = ly - 20
+    bsy = bsy - 20
 
     do
-        local row = CreateFrame("Frame", nil, lower)
-        row:SetPoint("TOPLEFT", lower, "TOPLEFT", LEFT_MARGIN, ly)
-        row:SetPoint("RIGHT", lower, "RIGHT", RIGHT_MARGIN, 0)
+        local row = CreateFrame("Frame", nil, belowSync)
+        row:SetPoint("TOPLEFT", belowSync, "TOPLEFT", LEFT_MARGIN, bsy)
+        row:SetPoint("RIGHT", belowSync, "RIGHT", RIGHT_MARGIN, 0)
         row:SetHeight(28)
 
         local btn = CreateFrame("Button", nil, row, "BackdropTemplate")
@@ -1039,26 +1069,26 @@ function UI:CreateSettingsPanel(parent)
             end
         end)
     end
-    ly = ly - 28 - SECTION_SPACING
+    bsy = bsy - 28 - SECTION_SPACING
 
     ------------------------------------------------
     -- Tutorial
     ------------------------------------------------
     -- Divider
-    local tutDivider = lower:CreateTexture(nil, "ARTWORK")
+    local tutDivider = belowSync:CreateTexture(nil, "ARTWORK")
     tutDivider:SetHeight(1)
-    tutDivider:SetPoint("TOPLEFT", lower, "TOPLEFT", LEFT_MARGIN, ly)
-    tutDivider:SetPoint("RIGHT", lower, "RIGHT", RIGHT_MARGIN, 0)
+    tutDivider:SetPoint("TOPLEFT", belowSync, "TOPLEFT", LEFT_MARGIN, bsy)
+    tutDivider:SetPoint("RIGHT", belowSync, "RIGHT", RIGHT_MARGIN, 0)
     tutDivider:SetColorTexture(0.35, 0.35, 0.45, 0.6)
-    local tutHeader = lower:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-    tutHeader:SetPoint("TOPLEFT", lower, "TOPLEFT", LEFT_MARGIN, ly - 6)
+    local tutHeader = belowSync:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+    tutHeader:SetPoint("TOPLEFT", belowSync, "TOPLEFT", LEFT_MARGIN, bsy - 6)
     tutHeader:SetTextColor(0.9, 0.8, 0.3)
     tutHeader:SetText("Tutorial")
-    ly = ly - 22 - ITEM_SPACING
+    bsy = bsy - 22 - ITEM_SPACING
 
-    local tutorialBtn = CreateFrame("Button", nil, lower, "BackdropTemplate")
+    local tutorialBtn = CreateFrame("Button", nil, belowSync, "BackdropTemplate")
     tutorialBtn:SetSize(180, 26)
-    tutorialBtn:SetPoint("TOPLEFT", lower, "TOPLEFT", LEFT_MARGIN, ly)
+    tutorialBtn:SetPoint("TOPLEFT", belowSync, "TOPLEFT", LEFT_MARGIN, bsy)
     tutorialBtn:SetBackdrop({
         bgFile = "Interface\\Tooltips\\UI-Tooltip-Background",
         edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
@@ -1085,39 +1115,71 @@ function UI:CreateSettingsPanel(parent)
         UI:Refresh()
     end)
 
-    local tutDesc = lower:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    local tutDesc = belowSync:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
     tutDesc:SetPoint("LEFT", tutorialBtn, "RIGHT", 8, 0)
     tutDesc:SetTextColor(DESC_COLOR[1], DESC_COLOR[2], DESC_COLOR[3])
     tutDesc:SetText("Walk through the first-time setup again")
-    ly = ly - 30 - SECTION_SPACING
+    bsy = bsy - 30 - ITEM_SPACING
+
+    -- Setup Wizard button
+    local wizardBtn = CreateFrame("Button", nil, belowSync, "BackdropTemplate")
+    wizardBtn:SetSize(180, 26)
+    wizardBtn:SetPoint("TOPLEFT", belowSync, "TOPLEFT", LEFT_MARGIN, bsy)
+    wizardBtn:SetBackdrop({
+        bgFile = "Interface\\Tooltips\\UI-Tooltip-Background",
+        edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
+        edgeSize = 10,
+        insets = {left = 2, right = 2, top = 2, bottom = 2},
+    })
+    wizardBtn:SetBackdropColor(0.15, 0.15, 0.2, 1)
+    wizardBtn:SetBackdropBorderColor(0.3, 0.3, 0.4, 0.8)
+    local wizBtnText = wizardBtn:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+    wizBtnText:SetPoint("CENTER")
+    wizBtnText:SetText("Run Setup Wizard")
+    wizardBtn:SetScript("OnEnter", function(self)
+        self:SetBackdropColor(0.2, 0.2, 0.3, 1)
+    end)
+    wizardBtn:SetScript("OnLeave", function(self)
+        self:SetBackdropColor(0.15, 0.15, 0.2, 1)
+    end)
+    wizardBtn:SetScript("OnClick", function()
+        ns.db.settings.setupDone = false
+        UI:Refresh()  -- triggers wizard detection with proper page cleanup
+    end)
+
+    local wizDesc = belowSync:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    wizDesc:SetPoint("LEFT", wizardBtn, "RIGHT", 8, 0)
+    wizDesc:SetTextColor(DESC_COLOR[1], DESC_COLOR[2], DESC_COLOR[3])
+    wizDesc:SetText("Walk through settings step by step")
+    bsy = bsy - 30 - SECTION_SPACING
 
     ------------------------------------------------
     -- Credits
     ------------------------------------------------
-    local credDivider = lower:CreateTexture(nil, "ARTWORK")
+    local credDivider = belowSync:CreateTexture(nil, "ARTWORK")
     credDivider:SetHeight(1)
-    credDivider:SetPoint("TOPLEFT", lower, "TOPLEFT", LEFT_MARGIN, ly)
-    credDivider:SetPoint("RIGHT", lower, "RIGHT", RIGHT_MARGIN, 0)
+    credDivider:SetPoint("TOPLEFT", belowSync, "TOPLEFT", LEFT_MARGIN, bsy)
+    credDivider:SetPoint("RIGHT", belowSync, "RIGHT", RIGHT_MARGIN, 0)
     credDivider:SetColorTexture(0.35, 0.35, 0.45, 0.6)
-    local credHeader = lower:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-    credHeader:SetPoint("TOPLEFT", lower, "TOPLEFT", LEFT_MARGIN, ly - 6)
+    local credHeader = belowSync:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+    credHeader:SetPoint("TOPLEFT", belowSync, "TOPLEFT", LEFT_MARGIN, bsy - 6)
     credHeader:SetTextColor(0.9, 0.8, 0.3)
     credHeader:SetText("Credits")
-    ly = ly - 22
+    bsy = bsy - 22
 
     -- Banner logo
-    local banner = lower:CreateTexture(nil, "ARTWORK")
+    local banner = belowSync:CreateTexture(nil, "ARTWORK")
     banner:SetSize(340, 86)
-    banner:SetPoint("TOP", lower, "TOP", 0, ly)
+    banner:SetPoint("TOP", belowSync, "TOP", 0, bsy)
     banner:SetTexture("Interface\\AddOns\\flipqueue\\Art\\flipqueue-banner")
-    ly = ly - 92
+    bsy = bsy - 92
 
     -- Version
-    local ver = lower:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-    ver:SetPoint("TOP", lower, "TOP", 0, ly)
+    local ver = belowSync:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+    ver:SetPoint("TOP", belowSync, "TOP", 0, bsy)
     ver:SetTextColor(0.8, 0.75, 0.5)
     ver:SetText("v" .. ns.VERSION)
-    ly = ly - 20
+    bsy = bsy - 20
 
     -- Credits text
     local function AddCreditLine(parent, yOff, label, value)
@@ -1128,32 +1190,36 @@ function UI:CreateSettingsPanel(parent)
         return 14
     end
 
-    ly = ly - 4
-    ly = ly - AddCreditLine(lower, ly, "Developed by", "Gezmodean & Claude")
-    ly = ly - 4
-    ly = ly - AddCreditLine(lower, ly, "Additional support by", "Berick")
-    ly = ly - 4
-    ly = ly - AddCreditLine(lower, ly, "Additional testing by", "KittyKiller, Niduin, Artificer Skills")
-    ly = ly - 12
+    bsy = bsy - 4
+    bsy = bsy - AddCreditLine(belowSync, bsy, "Developed by", "Gezmodean & Claude")
+    bsy = bsy - 4
+    bsy = bsy - AddCreditLine(belowSync, bsy, "Additional support by", "Berick")
+    bsy = bsy - 4
+    bsy = bsy - AddCreditLine(belowSync, bsy, "Additional testing by", "KittyKiller, Niduin, Artificer Skills")
+    bsy = bsy - 12
 
-    local thanksLabel = lower:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-    thanksLabel:SetPoint("TOP", lower, "TOP", 0, ly)
+    local thanksLabel = belowSync:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    thanksLabel:SetPoint("TOP", belowSync, "TOP", 0, bsy)
     thanksLabel:SetJustifyH("CENTER")
     thanksLabel:SetTextColor(DESC_COLOR[1], DESC_COLOR[2], DESC_COLOR[3])
     thanksLabel:SetText("Special thanks to")
-    ly = ly - 14
+    bsy = bsy - 14
 
-    local thanksNames = lower:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-    thanksNames:SetPoint("TOP", lower, "TOP", 0, ly)
+    local thanksNames = belowSync:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    thanksNames:SetPoint("TOP", belowSync, "TOP", 0, bsy)
     thanksNames:SetJustifyH("CENTER")
     thanksNames:SetText("FlippingPal  |  TradeSkillMaster  |  Auctionator  |  Epos")
-    ly = ly - 24
+    bsy = bsy - 24
 
-    lower:SetHeight(math.abs(ly) + 10)
-    settingsWidgets.lowerSectionHeight = math.abs(ly) + 10
+    settingsWidgets.belowSyncContentHeight = math.abs(bsy)
+    belowSync:SetHeight(math.abs(bsy) + 10)
+
+    local belowSyncBaseY = settingsWidgets.belowSyncBaseY or 0
+    lower:SetHeight(math.abs(belowSyncBaseY) + math.abs(bsy) + 10)
+    settingsWidgets.lowerSectionHeight = math.abs(belowSyncBaseY) + math.abs(bsy) + 10
 
     -- Content height: upper fixed section + SECTION_SPACING + lower container
-    content:SetHeight(math.abs(y) + SECTION_SPACING + math.abs(ly) + 40)
+    content:SetHeight(math.abs(y) + SECTION_SPACING + math.abs(belowSyncBaseY) + math.abs(bsy) + 40)
 
     settingsPanel = scroll
     return settingsPanel

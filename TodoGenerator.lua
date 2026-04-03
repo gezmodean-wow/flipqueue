@@ -85,8 +85,11 @@ function TodoList:BuildItemPool()
             for itemKey, itemData in pairs(charData.inventory.items) do
                 local numID = tonumber(itemData.itemID)
                 local isDNT = numID and ns:IsDoNotTrack(numID)
+                -- Exclude soulbound/untradeable: isBound BoE/BoU = soulbound,
+                -- BoP (1), Quest (4), BtA (7), BtW (8) can never be sold on AH
+                local bt = itemData.bindType
                 local tradeable = not itemData.isBound
-                    and (not itemData.bindType or itemData.bindType ~= 1)
+                    and (not bt or (bt ~= 1 and bt ~= 4 and bt ~= 7 and bt ~= 8))
 
                 if not isDNT and tradeable then
                     if itemData.locations then
@@ -101,12 +104,15 @@ function TodoList:BuildItemPool()
         end
     end
 
-    -- Warbank
+    -- Warbank (same tradeable filter: exclude soulbound, BoP, Quest, BtA, BtW)
     if ns.db.warbank and ns.db.warbank.items then
         for itemKey, itemData in pairs(ns.db.warbank.items) do
             local numID = tonumber(itemData.itemID)
             local isDNT = numID and ns:IsDoNotTrack(numID)
-            if not isDNT and (itemData.quantity or 0) > 0 then
+            local bt = itemData.bindType
+            local tradeable = not itemData.isBound
+                and (not bt or (bt ~= 1 and bt ~= 4 and bt ~= 7 and bt ~= 8))
+            if not isDNT and tradeable and (itemData.quantity or 0) > 0 then
                 AddToPool(itemKey, itemData, "Warbank", "warbank", itemData.quantity)
             end
         end

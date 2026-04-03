@@ -816,6 +816,7 @@ local function HideAllTables()
     if UI._debugPage then UI._debugPage:Hide() end
     if UI._researchPage then UI._researchPage:Hide() end
     if UI._dealFinderPage then UI._dealFinderPage:Hide() end
+    if UI.HideSetupWizard then UI:HideSetupWizard() end
 end
 
 local function ShowTable(tbl)
@@ -940,6 +941,15 @@ function UI:Refresh()
     end
     if navButtons.log then
         navButtons.log.badge:SetText(logCount > 0 and (ns.COLORS.GRAY .. logCount .. "|r") or "")
+    end
+
+    -- Setup wizard: auto-show on first open when not yet completed
+    if not ns.db.settings.setupDone and UI.ShowSetupWizard then
+        UI:ShowSetupWizard()
+        return  -- wizard covers the content area; skip normal page rendering
+    end
+    if UI.IsSetupWizardShown and UI:IsSetupWizardShown() then
+        return  -- wizard still active
     end
 
     -- Tutorial: auto-activate on first open with no data

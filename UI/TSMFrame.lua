@@ -380,7 +380,8 @@ function UI:CreateTSMPanel(parent)
     y = y - 14
 
     local DF_PRICE_OPTIONS = {
-        { key = "deal",              label = "Deal Price (blended)" },
+        { key = "deal",              label = "Deal Price" },
+        { key = "blended",           label = "Blended" },
         { key = "DBMinBuyout",       label = "Min Buyout" },
         { key = "DBMarket",          label = "Market" },
         { key = "DBRegionMarketAvg", label = "Regional Market Avg" },

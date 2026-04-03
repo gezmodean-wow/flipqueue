@@ -5,6 +5,65 @@ local addonName, ns = ...
 local Tracker = ns.Tracker
 
 --------------------------
+-- Bank Operation Progress
+--------------------------
+
+local progressFrame
+
+local function GetProgressFrame()
+    if progressFrame then return progressFrame end
+
+    local f = CreateFrame("Frame", "FlipQueueBankProgress", UIParent, "BackdropTemplate")
+    f:SetSize(240, 42)
+    f:SetPoint("TOP", UIParent, "TOP", 0, -80)
+    f:SetFrameStrata("DIALOG")
+    f:SetBackdrop({
+        bgFile = "Interface\\Tooltips\\UI-Tooltip-Background",
+        edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
+        edgeSize = 14,
+        insets = {left = 3, right = 3, top = 3, bottom = 3},
+    })
+    f:SetBackdropColor(0.05, 0.05, 0.1, 0.92)
+    f:SetBackdropBorderColor(0.3, 0.3, 0.4, 0.8)
+
+    f.label = f:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    f.label:SetPoint("TOP", f, "TOP", 0, -6)
+
+    local bar = CreateFrame("StatusBar", nil, f)
+    bar:SetSize(216, 14)
+    bar:SetPoint("BOTTOM", f, "BOTTOM", 0, 6)
+    bar:SetStatusBarTexture("Interface\\TargetingFrame\\UI-StatusBar")
+    bar:SetStatusBarColor(0.26, 0.6, 1)
+    bar:SetMinMaxValues(0, 1)
+    bar:SetValue(0)
+    f.bar = bar
+
+    local barBg = bar:CreateTexture(nil, "BACKGROUND")
+    barBg:SetAllPoints()
+    barBg:SetColorTexture(0.1, 0.1, 0.1, 0.8)
+
+    f.barText = bar:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    f.barText:SetPoint("CENTER", bar, "CENTER", 0, 0)
+
+    f:Hide()
+    progressFrame = f
+    return f
+end
+
+local function ShowProgress(label, current, total)
+    local f = GetProgressFrame()
+    f.label:SetText(ns.COLORS.YELLOW .. "FlipQueue|r " .. label)
+    f.bar:SetMinMaxValues(0, total)
+    f.bar:SetValue(current)
+    f.barText:SetText(current .. " / " .. total)
+    f:Show()
+end
+
+local function HideProgress()
+    if progressFrame then progressFrame:Hide() end
+end
+
+--------------------------
 -- Bank Auto-Pull
 --------------------------
 
@@ -160,6 +219,7 @@ function Tracker:AutoPullFromBank(onComplete)
 
     local function FinishPull()
         Cleanup()
+        HideProgress()
         local successCount = #pulledNames
         if successCount > 0 then
             if successCount == totalMoves then
@@ -218,6 +278,7 @@ function Tracker:AutoPullFromBank(onComplete)
         end
 
         moveIndex = batchEnd + 1
+        ShowProgress("Pulling from bank...", #pulledNames, totalMoves)
 
         if moveIndex > totalMoves then
             -- All batches issued — wait briefly for any trailing events
@@ -272,6 +333,7 @@ function Tracker:AutoPullFromBank(onComplete)
     end
 
     ns:PrintDebug("Pulling " .. totalMoves .. " item(s) from bank...")
+    ShowProgress("Pulling from bank...", 0, totalMoves)
     ExecuteNextBatch()
 end
 
@@ -648,8 +710,8 @@ function Tracker:AutoDepositToWarbank(onComplete)
                             pcall(C_Item.GetItemInfo, info.hyperlink)
                         if not okBind or not bt then
                             skipBound = true  -- unknown bind type, assume soulbound
-                        elseif bt == 1 or bt == 4 then
-                            skipBound = true  -- BoP or Quest
+                        elseif bt ~= 7 and bt ~= 8 then
+                            skipBound = true  -- Only BtA (7) / BtW (8) can move when bound
                         end
                     end
                     if not skipBound then
@@ -731,6 +793,7 @@ function Tracker:AutoDepositToWarbank(onComplete)
 
     local function FinishDeposit()
         Cleanup()
+        HideProgress()
         if #depositedNames > 0 then
             if #depositedNames == totalMoves then
                 ns:Print(ns.COLORS.CYAN .. "Deposited " .. #depositedNames ..
@@ -799,6 +862,7 @@ function Tracker:AutoDepositToWarbank(onComplete)
         end
 
         moveIndex = batchEnd + 1
+        ShowProgress("Depositing to warbank...", #depositedNames, totalMoves)
 
         if moveIndex > totalMoves then
             C_Timer.After(0.3, FinishDeposit)
@@ -847,6 +911,7 @@ function Tracker:AutoDepositToWarbank(onComplete)
     end
 
     ns:PrintDebug("Depositing " .. totalMoves .. " item(s) to warbank...")
+    ShowProgress("Depositing to warbank...", 0, totalMoves)
     ExecuteNextBatch()
 end
 
@@ -942,8 +1007,8 @@ function Tracker:AutoDepositExtraItems()
                                         pcall(C_Item.GetItemInfo, info.hyperlink)
                                     if not ok3 or not bindType then
                                         isSoulbound = true  -- unknown, assume soulbound
-                                    elseif bindType == 1 or bindType == 4 then
-                                        isSoulbound = true
+                                    elseif bindType ~= 7 and bindType ~= 8 then
+                                        isSoulbound = true  -- Only BtA (7) / BtW (8) can move when bound
                                     end
                                 end
                                 if isSoulbound then
@@ -1065,6 +1130,7 @@ function Tracker:AutoDepositExtraItems()
 
     local function FinishDeposit()
         Cleanup()
+        HideProgress()
         if #depositedNames > 0 then
             local destLabel = #warbankEmpty > 0 and "warbank/bank" or "bank"
             ns:Print(ns.COLORS.CYAN .. "Deposited " .. #depositedNames ..
@@ -1124,6 +1190,7 @@ function Tracker:AutoDepositExtraItems()
         end
 
         moveIndex = batchEnd + 1
+        ShowProgress("Depositing extras...", #depositedNames, totalMoves)
 
         if moveIndex > totalMoves then
             C_Timer.After(0.3, FinishDeposit)
@@ -1170,5 +1237,6 @@ function Tracker:AutoDepositExtraItems()
     end
 
     ns:PrintDebug("Depositing " .. totalMoves .. " extra item(s) to warbank/bank...")
+    ShowProgress("Depositing extras...", 0, totalMoves)
     ExecuteNextBatch()
 end

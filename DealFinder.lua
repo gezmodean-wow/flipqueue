@@ -549,6 +549,7 @@ function DealFinder:SaveSelectedToImports(itemGroups)
                         quantity      = 1,  -- per-deal baseline; actual post qty set by TSM postCap / defaultSellQty during generation
                         targetRealm   = realm.realmName,
                         expectedPrice = ns:FormatGold(realm.blendedPrice),
+                        blendedPrice  = realm.blendedPrice,
                         sellRate      = group.regionSaleRate or 0,
                         noCompetition = realm.noCompetition,
                         category      = "",

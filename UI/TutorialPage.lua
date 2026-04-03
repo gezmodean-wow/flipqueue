@@ -30,8 +30,8 @@ local TUTORIAL_STEPS = {
                 title = "Welcome to FlipQueue!",
                 text = "FlipQueue organizes your AH flipping workflow.\n\n" ..
                     "This tutorial will walk you through the real interface —\n" ..
-                    "your inventory, exporting to FlippingPal, importing deals,\n" ..
-                    "and generating your first to-do list.\n\n" ..
+                    "your inventory, the to-do generator, and how deals\n" ..
+                    "turn into a task list for your characters.\n\n" ..
                     "Click |cffe8c840Next|r to begin.",
             },
         },
@@ -68,32 +68,7 @@ local TUTORIAL_STEPS = {
             },
         },
     },
-    -- Step 3: Export
-    {
-        page = "export",
-        label = "Export",
-        callouts = {
-            {
-                type = "banner",
-                text = "This is the |cffe8c840Export|r page. Export your inventory " ..
-                    "and paste it into FlippingPal's |cffe8c840Inventory Analysis Tool|r " ..
-                    "so FP can find profitable deals for you.",
-            },
-            {
-                type = "anchor",
-                anchor = "_exportEdit",
-                arrow = "UP",
-                text = "Click an export button above, then |cffe8c840Ctrl+A|r, |cffe8c840Ctrl+C|r to copy. " ..
-                    "Paste into FlippingPal.",
-            },
-            {
-                type = "banner",
-                text = "After FlippingPal analyzes your inventory and finds deals, " ..
-                    "you'll import those deals back in the next step.",
-            },
-        },
-    },
-    -- Step 4: Generator
+    -- Step 3: Generator
     {
         page = "generator",
         label = "Generator",
@@ -104,24 +79,18 @@ local TUTORIAL_STEPS = {
                     "and builds a task list — which items to post, on which characters.",
             },
             {
-                type = "anchor",
-                anchor = "_genFrame.trackSelectPanel.inventoryCard",
-                arrow = "UP",
-                text = "|cffe8c840Inventory Scan|r: Use this when you have items and want FP " ..
-                    "to find deals for them. It walks you through: scan inventory → " ..
-                    "import FP deals → generate to-do list.",
-            },
-            {
-                type = "anchor",
-                anchor = "_genFrame.trackSelectPanel.crossrealmCard",
-                arrow = "UP",
-                text = "|cffe8c840Cross-Realm Import|r: Use this when you want to buy items " ..
-                    "on cheap realms and sell on expensive ones. " ..
-                    "FP's cross-realm flip report feeds directly into this.",
+                type = "banner",
+                text = "There are three ways to generate tasks:\n\n" ..
+                    "|cffe8c840Deal Finder|r — Scans your inventory against TSM data to find " ..
+                    "profitable items to sell on other realms.\n\n" ..
+                    "|cffe8c840Inventory Scan|r — Export your inventory to FlippingPal, " ..
+                    "import the deals it finds, and generate tasks from them.\n\n" ..
+                    "|cffe8c840Cross-Realm Import|r — Import FlippingPal's cross-realm flip " ..
+                    "report to buy items on cheap realms and sell on expensive ones.",
             },
         },
     },
-    -- Step 5: All Set
+    -- Step 4: All Set
     {
         page = "todo",
         label = "To-Do",
@@ -129,13 +98,14 @@ local TUTORIAL_STEPS = {
             {
                 type = "center",
                 title = "You're All Set!",
-                text = "Your |cffe8c840To-Do|r list will appear here once you generate one.\n\n" ..
+                text = "Your |cffe8c840To-Do|r list will appear here\n" ..
+                    "once you generate one.\n\n" ..
                     "The daily workflow:\n" ..
                     "|cff66b2ff1.|r Retrieve items from the warbank\n" ..
                     "|cffffff002.|r Post on the Auction House\n" ..
                     "|cff4ae14a3.|r Collect gold or expired items from mail\n\n" ..
-                    "FQ auto-detects bag contents, AH posts, and mail —\n" ..
-                    "steps advance automatically.\n\n" ..
+                    "FQ auto-detects bag contents, AH posts,\n" ..
+                    "and mail — steps advance automatically.\n\n" ..
                     "Click |cff4ae14aFinish|r to start using FlipQueue!",
             },
         },
@@ -374,14 +344,17 @@ function UI:ShowTutorialCallouts()
     f.stepLabel:SetText(stepInfo)
 
     -- Title
+    f.text:ClearAllPoints()
     if callout.title then
         f.title:SetText(callout.title)
         f.title:Show()
         f.text:SetPoint("TOP", f.title, "BOTTOM", 0, -8)
+        f.text:SetJustifyH("CENTER")
     else
         f.title:Hide()
-        f.text:ClearAllPoints()
         f.text:SetPoint("TOPLEFT", f, "TOPLEFT", 14, -22)
+        f.text:SetPoint("RIGHT", f, "RIGHT", -14, 0)
+        f.text:SetJustifyH("LEFT")
     end
 
     -- Text

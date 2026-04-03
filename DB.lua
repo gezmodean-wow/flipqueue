@@ -42,8 +42,8 @@ function ns:InitDB()
         autoDepositWarbank = false,
         autoDepositAll = false,
         showLoginMessage = true,
-        autoWithdrawGold = false,
-        maxWithdrawGold = 0, -- 0 = no limit, otherwise max gold per withdrawal
+        autoWithdrawGold = true,
+        maxWithdrawGold = 500,
     }
     db.settings.collapsed = db.settings.collapsed or {}
     db.settings.sortMode  = db.settings.sortMode or "realm"
@@ -85,9 +85,9 @@ function ns:InitDB()
     if db.settings.tsmSkipOnGenerate == nil then db.settings.tsmSkipOnGenerate = true end
     -- Debug messages (off by default)
     if db.settings.debugMessages == nil then db.settings.debugMessages = false end
-    -- Auto-deposit earnings to warbank (off by default)
+    -- Auto-deposit earnings to warbank (off by default — players may want to keep earnings)
     if db.settings.autoDepositGold == nil then db.settings.autoDepositGold = false end
-    db.settings.goldBuffer = db.settings.goldBuffer or 0  -- gold to keep on character (0 = keep nothing extra)
+    db.settings.goldBuffer = db.settings.goldBuffer or 50  -- gold to keep on character beyond fees
     -- Bank tab selection
     if not db.settings.pullTabs then
         db.settings.pullTabs = { mode = "all" }
@@ -116,6 +116,15 @@ function ns:InitDB()
     db.settings.dismissedTSMChars = db.settings.dismissedTSMChars or {}
     -- Tutorial (first-time interactive walkthrough)
     if db.settings.tutorialDone == nil then db.settings.tutorialDone = false end
+    -- Setup wizard (first-run settings configuration)
+    -- Existing users (tutorial done or have character data) skip the wizard
+    if db.settings.setupDone == nil then
+        if db.settings.tutorialDone or next(db.characters or {}) then
+            db.settings.setupDone = true
+        else
+            db.settings.setupDone = false
+        end
+    end
 
     ns.db = db
 
