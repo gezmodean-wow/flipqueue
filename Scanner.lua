@@ -541,6 +541,7 @@ end
 local frame = CreateFrame("Frame")
 frame:RegisterEvent("PLAYER_LOGIN")
 frame:RegisterEvent("BANKFRAME_OPENED")
+frame:RegisterEvent("BANKFRAME_CLOSED")
 frame:RegisterEvent("PLAYER_MONEY")
 frame:RegisterEvent("PLAYER_INTERACTION_MANAGER_FRAME_SHOW")
 frame:RegisterEvent("PLAYER_INTERACTION_MANAGER_FRAME_HIDE")
@@ -617,17 +618,9 @@ frame:SetScript("OnEvent", function(self, event, ...)
 
                 -- Sold/expired auctions on this character (need mail collection)
                 local currentCharKey = ns:GetCharKey()
-                local soldCount = 0
-                local expiredCount = 0
-                for _, entry in ipairs(ns.db.log) do
-                    if entry.charKey == currentCharKey then
-                        if entry.auctionStatus == "sold" and not entry.collectedAt then
-                            soldCount = soldCount + 1
-                        elseif entry.auctionStatus == "expired" then
-                            expiredCount = expiredCount + 1
-                        end
-                    end
-                end
+                local uncollected = ns.SalesIndex:GetUncollectedForChar(currentCharKey)
+                local soldCount = uncollected.sold
+                local expiredCount = uncollected.expired
                 if soldCount > 0 then
                     ns:Print(ns.COLORS.GREEN .. soldCount .. " auction(s) sold — check mail to collect gold!|r")
                 end
@@ -659,6 +652,13 @@ frame:SetScript("OnEvent", function(self, event, ...)
             Scanner:ScanWarbank()
         end)
 
+    elseif event == "BANKFRAME_CLOSED" then
+        if BankPanel then
+            BankPanel:Hide()
+        end
+        if ns.UI and ns.UI.HideBankPopup then ns.UI:HideBankPopup() end
+        if ns.BankQueue then ns.BankQueue:Abort() end
+
     elseif event == "PLAYER_MONEY" then
         if ns.db then
             local charKey = ns:GetCharKey()
@@ -685,8 +685,10 @@ frame:SetScript("OnEvent", function(self, event, ...)
         end
 
     elseif event == "PLAYERBANKSLOTS_CHANGED" then
-        -- Personal bank slots changed (manual move between bank and bags/warbank)
+        -- Personal bank slots changed — skip during queue processing (final scan handles it)
+        if ns.BankQueue and ns.BankQueue.processing then return end
         C_Timer.After(0.5, function()
+            if ns.BankQueue and ns.BankQueue.processing then return end
             Scanner:ScanCurrentCharacter()
             Scanner:ScanBank()
             if ns.TodoList then
@@ -700,8 +702,10 @@ frame:SetScript("OnEvent", function(self, event, ...)
         end)
 
     elseif event == "PLAYER_ACCOUNT_BANK_TAB_SLOTS_CHANGED" then
-        -- Warbank slots changed (manual move between warbank and bags/bank)
+        -- Warbank slots changed — skip during queue processing (final scan handles it)
+        if ns.BankQueue and ns.BankQueue.processing then return end
         C_Timer.After(0.5, function()
+            if ns.BankQueue and ns.BankQueue.processing then return end
             Scanner:ScanCurrentCharacter()
             Scanner:ScanWarbank()
             if ns.TodoList then

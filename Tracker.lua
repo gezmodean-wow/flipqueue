@@ -138,6 +138,458 @@ local function CheckForPosts()
 end
 
 --------------------------
+-- Bank Operations Popup
+--------------------------
+
+-- Collect all pending bank operations and show the popup.
+-- The user clicks Execute, which runs everything in hardware event context.
+function Tracker:ShowBankOpsPopup()
+    if not ns.UI or not ns.UI.ShowBankPopup then
+        -- Fallback: run old auto chain
+        Tracker:AutoPullFromBank(function()
+            Tracker:AutoWithdrawGold()
+            Tracker:AutoDepositGold()
+            Tracker:AutoDepositToWarbank(function()
+                Tracker:AutoDepositExtraItems()
+            end)
+        end)
+        return
+    end
+
+    local charKey = ns:GetCharKey()
+    local isAuto = ns.db and ns:GetCharSetting(charKey, "autoPullBank")
+
+    -- Collect pull operations (reuse AutoPullFromBank's logic but don't execute)
+    local pullOps = Tracker:BuildPullOps()
+    local depositOps = Tracker:BuildDepositOps()
+    -- Build exclude set from deposit ops so extras don't duplicate them
+    local depositSlots = {}
+    for _, op in ipairs(depositOps) do
+        depositSlots[op.srcBag .. ":" .. op.srcSlot] = true
+    end
+    local extraOps = Tracker:BuildExtraDepositOps(depositSlots)
+
+    -- Calculate gold operations
+    local charKey = ns:GetCharKey()
+    local currentRealm = charKey:match("%-(.+)$") or GetRealmName()
+    local goldWithdraw, goldDeposit = 0, 0
+
+    -- Estimate withdrawal need (show in popup regardless of auto setting)
+    if ns.db then
+        local hasTasks = false
+        if ns.TodoList then
+            local todoTasks = ns.TodoList:GetCharacterTasks(charKey)
+            for _, task in ipairs(todoTasks) do
+                local isBuy = task.item.action == "buy"
+                local realmToMatch = isBuy and task.item.buyRealm or task.item.targetRealm
+                if ns:RealmMatches(realmToMatch or "", currentRealm) then
+                    hasTasks = true
+                    break
+                end
+            end
+        end
+        if hasTasks then
+            local totalFees = Tracker:CalculateRequiredGold(charKey, currentRealm)
+            local playerCopper = GetMoney()
+            local needed = math.max(10000, math.ceil(totalFees * 1.1))
+            if playerCopper < needed then
+                goldWithdraw = needed - playerCopper
+            end
+
+            -- Estimate deposit excess
+            local bufferCopper = (ns.db.settings.goldBuffer or 0) * 10000
+            local keepCopper = math.max(10000, math.ceil(totalFees * 1.1)) + bufferCopper
+            if playerCopper > keepCopper then
+                local excess = math.floor((playerCopper - keepCopper) / 10000) * 10000
+                if excess > 0 then goldDeposit = excess end
+            end
+        end
+    end
+
+    local hasPulls = pullOps and #pullOps > 0
+    local hasDeposits = depositOps and #depositOps > 0
+    local hasExtras = extraOps and #extraOps > 0
+    local hasGold = goldWithdraw > 0 or goldDeposit > 0
+
+    ns:PrintDebug("Bank popup: " .. #pullOps .. " pulls, " .. #depositOps .. " deposits, " ..
+        #extraOps .. " extras, withdraw=" .. goldWithdraw .. " deposit=" .. goldDeposit)
+
+    if not hasPulls and not hasDeposits and not hasExtras and not hasGold then
+        ns:PrintDebug("Bank popup: nothing to do")
+        return
+    end
+
+    local function ExecuteAllOps()
+        -- Phase 1: Pull all items from bank (batched)
+        local function DoPulls(callback)
+            if not hasPulls or #pullOps == 0 then callback() return end
+            if ns.UI then ns.UI:BankOpProgress(0, 0, "Pulling") end
+            ns.BankQueue:ProcessSync(pullOps, "Pulling from bank...", function(successNames, errorCount)
+                if #successNames > 0 then
+                    ns:Print("Pulled: " .. table.concat(successNames, ", "))
+                end
+                if errorCount > 0 then
+                    ns:Print(ns.COLORS.YELLOW .. errorCount .. " pull(s) failed|r")
+                end
+                if ns.UI then ns.UI:BankOpProgress(#successNames, errorCount, "Pulling", successNames) end
+                C_Timer.After(0.3, callback)
+            end)
+        end
+
+        -- Phase 2: Gold operations
+        local function DoGold(callback)
+            if not hasGold then callback() return end
+            if ns.UI then ns.UI:BankOpProgress(0, 0, "Gold") end
+            local goldDetails = {}
+            local withdrawnCopper = Tracker:AutoWithdrawGold() or 0
+            if withdrawnCopper > 0 then
+                local goldStr = ns.FormatGold and ns:FormatGold(withdrawnCopper) or (math.floor(withdrawnCopper / 10000) .. "g")
+                table.insert(goldDetails, "Withdrew " .. goldStr)
+                if ns.UI then ns.UI:BankOpProgress(1, 0, "Gold", goldDetails) end
+            elseif goldWithdraw > 0 then
+                if ns.UI then ns.UI:BankOpProgress(0, 1, "Gold") end
+            end
+            local depositedCopper = Tracker:AutoDepositGold() or 0
+            if depositedCopper > 0 then
+                local goldStr = ns.FormatGold and ns:FormatGold(depositedCopper) or (math.floor(depositedCopper / 10000) .. "g")
+                table.insert(goldDetails, "Deposited " .. goldStr)
+                if ns.UI then ns.UI:BankOpProgress(1, 0, "Gold", goldDetails) end
+            elseif goldDeposit > 0 then
+                if ns.UI then ns.UI:BankOpProgress(0, 1, "Gold") end
+            end
+            callback()
+        end
+
+        -- Phase 3: Deposits to warbank
+        local function DoDeposits(callback)
+            if not hasDeposits and not hasExtras then callback() return end
+            if ns.UI then ns.UI:BankOpProgress(0, 0, "Depositing") end
+            Tracker:AutoDepositToWarbank(function()
+                local depCount = #depositOps
+                if ns.UI and depCount > 0 then ns.UI:BankOpProgress(depCount, 0, "Depositing") end
+                Tracker:AutoDepositExtraItems()
+                local extCount = #extraOps
+                if ns.UI and extCount > 0 then ns.UI:BankOpProgress(extCount, 0, "Depositing") end
+                callback()
+            end)
+        end
+
+        -- Chain: pulls → gold → deposits → finish
+        DoPulls(function()
+            DoGold(function()
+                DoDeposits(function()
+                    -- Refresh everything
+                    if ns.Scanner then
+                        ns.Scanner:ScanCurrentCharacter()
+                        ns.Scanner:ScanBank()
+                    end
+                    if ns.TodoList then
+                        if ns.TodoList.RefreshLocations then ns.TodoList:RefreshLocations() end
+                        if ns.TodoList.RefreshTaskSteps then ns.TodoList:RefreshTaskSteps() end
+                    end
+                    if ns.UI then
+                        if ns.UI.Refresh then ns.UI:Refresh() end
+                        if ns.UI.RefreshMini then ns.UI:RefreshMini() end
+                        ns.UI:BankPopupComplete()
+                    end
+                end)
+            end)
+        end)
+    end
+
+    -- Initialize unified progress tracking (total = pulls + deposits + extras + gold ops)
+    local totalOps = #pullOps + #depositOps + #extraOps
+    if goldWithdraw > 0 then totalOps = totalOps + 1 end
+    if goldDeposit > 0 then totalOps = totalOps + 1 end
+    if not ns.UI:IsBankExecuting() then
+        ns.UI:BeginBankExecution(totalOps)
+    end
+
+    ns.UI:ShowBankPopup({
+        pulls = pullOps,
+        deposits = depositOps,
+        extras = extraOps,
+        goldWithdraw = goldWithdraw,
+        goldDeposit = goldDeposit,
+        isAuto = isAuto,
+    }, ExecuteAllOps)
+end
+
+-- Build pull operation list without executing.
+-- Returns array of { op="pull", srcBag, srcSlot, name, icon, quantity } or empty table.
+function Tracker:BuildPullOps()
+    if not ns.db then return {} end
+
+    local charKey = ns:GetCharKey()
+    local currentRealm = charKey:match("%-(.+)$") or GetRealmName()
+    local needed = {}
+
+    local taskCount = 0
+    if ns.TodoList and ns.TodoList:GetCurrentList() then
+        local todoTasks = ns.TodoList:GetCharacterTasks(charKey)
+        for _, task in ipairs(todoTasks) do
+            local item = task.item
+            taskCount = taskCount + 1
+            if item.action ~= "buy" and ns:RealmMatches(item.targetRealm or "", currentRealm) then
+                local targetQty = item.quantity or 1
+                local inBags = Tracker._CountInBags(item)
+                local stillNeeded = targetQty - inBags
+                ns:PrintDebug("BuildPull: " .. (item.name or "?") .. " need=" .. targetQty ..
+                    " inBags=" .. inBags .. " src=" .. tostring(item.source))
+                if stillNeeded > 0 then
+                    needed[item] = stillNeeded
+                end
+            end
+        end
+    end
+
+    -- Also pull deposit-from items
+    if ns.TodoList and ns.TodoList:GetCurrentList() then
+        local todoList = ns.TodoList:GetCurrentList()
+        if todoList.tasks then
+            for _, item in ipairs(todoList.tasks) do
+                if item.status == "pending" and item.depositFrom == charKey
+                    and item.assignedChar ~= charKey
+                    and item.source ~= "warbank" then
+                    local inBags = Tracker._CountInBags(item)
+                    if inBags <= 0 and not needed[item] then
+                        needed[item] = item.quantity or 1
+                    end
+                end
+            end
+        end
+    end
+
+    ns:PrintDebug("BuildPull: " .. taskCount .. " tasks, " .. (next(needed) and "has needed" or "nothing needed"))
+    if not next(needed) then return {} end
+
+    local allBankTabs = {}
+    for _, b in ipairs(ns:GetEnabledBankTabs()) do table.insert(allBankTabs, b) end
+    for _, b in ipairs(ns:GetEnabledWarbankTabs()) do table.insert(allBankTabs, b) end
+
+    local ops = {}
+    for _, bagIndex in ipairs(allBankTabs) do
+        local ok, numSlots = pcall(C_Container.GetContainerNumSlots, bagIndex)
+        if ok and numSlots then
+            for slot = 1, numSlots do
+                local ok2, info = pcall(C_Container.GetContainerItemInfo, bagIndex, slot)
+                if ok2 and info and info.hyperlink then
+                    local itemID, bonusIDs, modifiers = ns:ParseItemLink(info.hyperlink)
+                    if itemID then
+                        local key = ns:MakeItemKey(itemID, bonusIDs, modifiers)
+                        local slotName
+                        for queueItem, count in pairs(needed) do
+                            if count > 0 then
+                                local matched = ns:ItemsMatch(key, nil, queueItem, false, false)
+                                if not matched then
+                                    if slotName == nil then slotName = Tracker._GetNameFromLink(info.hyperlink) or false end
+                                    if slotName then
+                                        matched = ns:ItemsMatch(key, slotName, queueItem, false, false)
+                                    end
+                                end
+                                if matched then
+                                    table.insert(ops, {
+                                        op = "pull",
+                                        srcBag = bagIndex,
+                                        srcSlot = slot,
+                                        name = queueItem.name or "?",
+                                        icon = info.iconFileID,
+                                        quantity = info.stackCount or 1,
+                                    })
+                                    needed[queueItem] = count - (info.stackCount or 1)
+                                    break
+                                end
+                            end
+                        end
+                    end
+                end
+            end
+        end
+    end
+
+    return ops
+end
+
+-- Build warbank deposit operation list without executing.
+function Tracker:BuildDepositOps()
+    if not ns.db then return {} end
+
+    local charKey = ns:GetCharKey()
+    local todoList = ns.TodoList and ns.TodoList:GetCurrentList()
+    if not todoList or not todoList.tasks then return {} end
+
+    local depositTasks = {}
+    for _, task in ipairs(todoList.tasks) do
+        if task.status == "pending" and task.depositFrom == charKey
+            and task.assignedChar ~= charKey then
+            table.insert(depositTasks, task)
+        end
+    end
+
+    if #depositTasks == 0 then return {} end
+
+    local myPostingKeys = {}
+    local myTasks = ns.TodoList:GetCharacterTasks(charKey)
+    for _, task in ipairs(myTasks) do
+        if task.item.itemKey then myPostingKeys[task.item.itemKey] = true end
+    end
+
+    local ops = {}
+    local depositMatched = {}
+
+    for _, bagIndex in ipairs(ns.INVENTORY_BAGS) do
+        local ok, numSlots = pcall(C_Container.GetContainerNumSlots, bagIndex)
+        if ok and numSlots then
+            for slot = 1, numSlots do
+                local ok2, info = pcall(C_Container.GetContainerItemInfo, bagIndex, slot)
+                if ok2 and info and info.hyperlink then
+                    local skipBound = false
+                    if info.isBound then
+                        local okBind, _, _, _, _, _, _, _, _, _, _, _, _, _, bt =
+                            pcall(C_Item.GetItemInfo, info.hyperlink)
+                        if not okBind or not bt then
+                            skipBound = true
+                        elseif bt ~= 7 and bt ~= 8 then
+                            skipBound = true
+                        end
+                    end
+                    if not skipBound then
+                        local itemID, bonusIDs, modifiers = ns:ParseItemLink(info.hyperlink)
+                        if itemID then
+                            local key = ns:MakeItemKey(itemID, bonusIDs, modifiers)
+                            if not myPostingKeys[key] then
+                                local slotName
+                                for _, task in ipairs(depositTasks) do
+                                    if not depositMatched[task] then
+                                        local matched = ns:ItemsMatch(key, nil, task, false, false)
+                                        if not matched then
+                                            if slotName == nil then slotName = Tracker._GetNameFromLink(info.hyperlink) or false end
+                                            if slotName then
+                                                matched = ns:ItemsMatch(key, slotName, task, false, false)
+                                            end
+                                        end
+                                        if matched then
+                                            depositMatched[task] = true
+                                            table.insert(ops, {
+                                                op = "deposit",
+                                                srcBag = bagIndex,
+                                                srcSlot = slot,
+                                                name = task.name or "?",
+                                                icon = info.iconFileID,
+                                                quantity = info.stackCount or 1,
+                                                destType = "warbank",
+                                            })
+                                            break
+                                        end
+                                    end
+                                end
+                            end
+                        end
+                    end
+                end
+            end
+        end
+    end
+
+    return ops
+end
+
+-- Build extra deposit operation list (items not needed by current char).
+-- excludeSlots: optional table of "bag:slot" keys already claimed by BuildDepositOps
+function Tracker:BuildExtraDepositOps(excludeSlots)
+    if not ns.db then return {} end
+
+    local charKey = ns:GetCharKey()
+    local keepKeys = {}
+    local keepNames = {}
+    if ns.TodoList then
+        local myTasks = ns.TodoList:GetCharacterTasks(charKey)
+        for _, task in ipairs(myTasks) do
+            local item = task.item
+            if item.itemKey then
+                keepKeys[item.itemKey] = (keepKeys[item.itemKey] or 0) + (item.quantity or 1)
+            end
+            if item.name and item.name ~= "" then
+                local ln = item.name:lower()
+                keepNames[ln] = (keepNames[ln] or 0) + (item.quantity or 1)
+            end
+        end
+    end
+
+    local KEEP_ITEM_IDS = { [6948] = true }
+    local ops = {}
+    local consumedKeys = {}
+    local consumedNames = {}
+    excludeSlots = excludeSlots or {}
+
+    for _, bagIndex in ipairs(ns.INVENTORY_BAGS) do
+        local ok, numSlots = pcall(C_Container.GetContainerNumSlots, bagIndex)
+        if ok and numSlots then
+            for slot = 1, numSlots do
+                local ok2, info = pcall(C_Container.GetContainerItemInfo, bagIndex, slot)
+                if ok2 and info and info.hyperlink then
+                    local slotKey = bagIndex .. ":" .. slot
+                    if not excludeSlots[slotKey] then
+                    local itemID, bonusIDs, modifiers = ns:ParseItemLink(info.hyperlink)
+                    if itemID then
+                        local numID = tonumber(itemID) or tonumber((itemID:gsub(";.*", "")))
+                        if not KEEP_ITEM_IDS[numID] then
+                            local key = ns:MakeItemKey(itemID, bonusIDs, modifiers)
+                            local stackCount = info.stackCount or 1
+                            local shouldKeep = false
+
+                            local neededByKey = keepKeys[key] or 0
+                            local usedByKey = consumedKeys[key] or 0
+                            if neededByKey > usedByKey then
+                                consumedKeys[key] = usedByKey + stackCount
+                                shouldKeep = true
+                            else
+                                local itemName = Tracker._GetNameFromLink(info.hyperlink)
+                                if itemName then
+                                    local ln = itemName:lower()
+                                    local neededByName = keepNames[ln] or 0
+                                    local usedByName = consumedNames[ln] or 0
+                                    if neededByName > usedByName then
+                                        consumedNames[ln] = usedByName + stackCount
+                                        shouldKeep = true
+                                    end
+                                end
+                            end
+
+                            if not shouldKeep then
+                                local itemName = Tracker._GetNameFromLink(info.hyperlink)
+                                local isSoulbound = false
+                                if info.isBound then
+                                    local ok3, _, _, _, _, _, _, _, _, _, _, _, _, _, bindType =
+                                        pcall(C_Item.GetItemInfo, info.hyperlink)
+                                    if not ok3 or not bindType then
+                                        isSoulbound = true
+                                    elseif bindType ~= 7 and bindType ~= 8 then
+                                        isSoulbound = true
+                                    end
+                                end
+                                table.insert(ops, {
+                                    op = "deposit",
+                                    srcBag = bagIndex,
+                                    srcSlot = slot,
+                                    name = itemName or ("Item " .. key),
+                                    icon = info.iconFileID,
+                                    quantity = stackCount,
+                                    destType = isSoulbound and "bank" or "any",
+                                })
+                            end
+                        end
+                    end
+                end
+                end -- excludeSlots check
+            end
+        end
+    end
+
+    return ops
+end
+
+--------------------------
 -- Event Handling
 --------------------------
 
@@ -195,10 +647,10 @@ frame:SetScript("OnEvent", function(self, event)
             C_Timer.After(0.3, CheckForPosts)
         end
         -- Skip refresh during active deposit/pull — FinishDeposit handles it with fresh scans
-        if Tracker._depositInProgress or Tracker._pullInProgress then return end
+        if (ns.BankQueue and ns.BankQueue.processing) then return end
         -- Rescan inventory and refresh todo locations/steps on every item movement
         C_Timer.After(0.5, function()
-            if Tracker._depositInProgress or Tracker._pullInProgress then return end
+            if (ns.BankQueue and ns.BankQueue.processing) then return end
             if ns.Scanner then ns.Scanner:ScanCurrentCharacter() end
             if ns.TodoList then
                 if ns.TodoList.RefreshLocations then
@@ -229,27 +681,9 @@ frame:SetScript("OnEvent", function(self, event)
                 if ns.UI.mainFrame and ns.UI.mainFrame:IsShown() then ns.UI:Refresh() end
                 if ns.UI.RefreshMini then ns.UI:RefreshMini() end
             end
-            -- Pull completes async, then chain deposit + gold + task refresh
-            Tracker:AutoPullFromBank(function()
-                -- Withdraw gold FIRST while all pulled items are still in bags
-                -- (deposit operations move items out, which breaks vendor price lookup)
-                Tracker:AutoWithdrawGold()
-                -- Deposit excess earnings back to warbank
-                Tracker:AutoDepositGold()
-                -- Then deposit task items, chaining extras after completion
-                Tracker:AutoDepositToWarbank(function()
-                    Tracker:AutoDepositExtraItems()
-                    -- Final UI refresh after all bank operations complete
-                    if ns.UI then
-                        if ns.UI.mainFrame and ns.UI.mainFrame:IsShown() then ns.UI:Refresh() end
-                        if ns.UI.RefreshMini then ns.UI:RefreshMini() end
-                    end
-                end)
-                -- Refresh task steps (items may now be in bags after pull/deposit)
-                if ns.TodoList and ns.TodoList.RefreshTaskSteps then
-                    ns.TodoList:RefreshTaskSteps()
-                end
-            end)
+            -- Show bank operations popup — user clicks Execute to run all ops
+            -- in hardware event context (bypasses warbank taint).
+            Tracker:ShowBankOpsPopup()
         end)
 
     elseif event == "OWNED_AUCTIONS_UPDATED" then

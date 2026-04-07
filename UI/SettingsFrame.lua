@@ -15,23 +15,97 @@ local ITEM_SPACING = 6
 local DESC_COLOR = {0.6, 0.6, 0.6}
 
 --------------------------
--- Section Header
+-- Collapsible Section Header
 --------------------------
 
-local function CreateSectionHeader(parent, yOffset, text)
-    -- Divider line above
-    local divider = parent:CreateTexture(nil, "ARTWORK")
+local sectionContainers = {}  -- sectionKey -> { container, header, content, collapsed, contentHeight }
+
+local function CreateCollapsibleSection(parent, yOffset, sectionKey, title, summary)
+    -- Container holds header + content
+    local container = CreateFrame("Frame", nil, parent)
+    container:SetPoint("TOPLEFT", parent, "TOPLEFT", 0, yOffset)
+    container:SetPoint("RIGHT", parent, "RIGHT", 0, 0)
+
+    -- Divider line
+    local divider = container:CreateTexture(nil, "ARTWORK")
     divider:SetHeight(1)
-    divider:SetPoint("TOPLEFT", parent, "TOPLEFT", LEFT_MARGIN, yOffset)
-    divider:SetPoint("RIGHT", parent, "RIGHT", RIGHT_MARGIN, 0)
+    divider:SetPoint("TOPLEFT", container, "TOPLEFT", LEFT_MARGIN, 0)
+    divider:SetPoint("RIGHT", container, "RIGHT", RIGHT_MARGIN, 0)
     divider:SetColorTexture(0.35, 0.35, 0.45, 0.6)
 
-    local label = parent:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-    label:SetPoint("TOPLEFT", parent, "TOPLEFT", LEFT_MARGIN, yOffset - 6)
-    label:SetTextColor(0.9, 0.8, 0.3)
-    label:SetText(text)
+    -- Header row (clickable)
+    local headerBtn = CreateFrame("Button", nil, container)
+    headerBtn:SetHeight(22)
+    headerBtn:SetPoint("TOPLEFT", container, "TOPLEFT", LEFT_MARGIN, -4)
+    headerBtn:SetPoint("RIGHT", container, "RIGHT", RIGHT_MARGIN, 0)
 
-    return 22 -- total height consumed
+    local arrow = headerBtn:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+    arrow:SetPoint("LEFT", headerBtn, "LEFT", 0, 0)
+    arrow:SetTextColor(0.7, 0.7, 0.7)
+
+    local label = headerBtn:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+    label:SetPoint("LEFT", arrow, "RIGHT", 4, 0)
+    label:SetTextColor(0.9, 0.8, 0.3)
+    label:SetText(title)
+
+    local summaryText = headerBtn:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+    summaryText:SetPoint("LEFT", label, "RIGHT", 8, 0)
+    summaryText:SetPoint("RIGHT", headerBtn, "RIGHT", 0, 0)
+    summaryText:SetJustifyH("LEFT")
+    summaryText:SetTextColor(0.5, 0.5, 0.5)
+    summaryText:SetText(summary or "")
+
+    -- Highlight on hover
+    local hl = headerBtn:CreateTexture(nil, "HIGHLIGHT")
+    hl:SetAllPoints()
+    hl:SetColorTexture(0.2, 0.2, 0.3, 0.2)
+
+    -- Content container (holds all settings in this section)
+    local sectionContent = CreateFrame("Frame", nil, container)
+    sectionContent:SetPoint("TOPLEFT", container, "TOPLEFT", 0, -26)
+    sectionContent:SetPoint("RIGHT", container, "RIGHT", 0, 0)
+
+    -- Default to collapsed; user uncollapsing sets collapsed[key] = false explicitly
+    local collapsed = not ns.db or ns.db.settings.collapsed[sectionKey] == nil or ns.db.settings.collapsed[sectionKey]
+
+    local section = {
+        container = container,
+        headerBtn = headerBtn,
+        arrow = arrow,
+        summaryText = summaryText,
+        content = sectionContent,
+        collapsed = collapsed,
+        contentHeight = 0,
+        sectionKey = sectionKey,
+    }
+
+    local function UpdateLayout()
+        if section.collapsed then
+            arrow:SetText("+")
+            sectionContent:Hide()
+            summaryText:Show()
+            container:SetHeight(28)
+        else
+            arrow:SetText("-")
+            sectionContent:Show()
+            summaryText:Hide()
+            container:SetHeight(26 + section.contentHeight)
+        end
+    end
+
+    headerBtn:SetScript("OnClick", function()
+        section.collapsed = not section.collapsed
+        if ns.db then ns.db.settings.collapsed[sectionKey] = section.collapsed end
+        UpdateLayout()
+        -- Reflow all sections below
+        if UI.ReflowSettings then UI:ReflowSettings() end
+    end)
+
+    section.UpdateLayout = UpdateLayout
+    UpdateLayout()
+
+    sectionContainers[sectionKey] = section
+    return section
 end
 
 --------------------------
@@ -131,9 +205,132 @@ local function CreateSettingsButton(parent, yOffset, label, desc, width, onClick
     return btn, totalHeight
 end
 
+local function CreateSettingsDropdown(parent, yOffset, title, desc, settingKey, options, onChange)
+    local row = CreateFrame("Frame", nil, parent)
+    row:SetPoint("TOPLEFT", parent, "TOPLEFT", LEFT_MARGIN, yOffset)
+    row:SetPoint("RIGHT", parent, "RIGHT", RIGHT_MARGIN, 0)
+
+    local label = row:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    label:SetPoint("TOPLEFT", row, "TOPLEFT", 0, 0)
+    label:SetText(title)
+
+    local btn = CreateFrame("Button", nil, row, "BackdropTemplate")
+    btn:SetSize(160, 22)
+    btn:SetPoint("TOPLEFT", label, "BOTTOMLEFT", 0, -2)
+    btn:SetBackdrop({
+        bgFile = "Interface\\Tooltips\\UI-Tooltip-Background",
+        edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
+        edgeSize = 10,
+        insets = {left = 2, right = 2, top = 2, bottom = 2},
+    })
+    btn:SetBackdropColor(0.15, 0.15, 0.2, 1)
+    btn:SetBackdropBorderColor(0.3, 0.3, 0.4, 0.8)
+
+    btn.text = btn:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    btn.text:SetPoint("LEFT", btn, "LEFT", 6, 0)
+
+    local arrow = btn:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    arrow:SetPoint("RIGHT", btn, "RIGHT", -6, 0)
+    arrow:SetText("v")
+
+    if desc and desc ~= "" then
+        local descText = row:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+        descText:SetPoint("LEFT", btn, "RIGHT", 8, 0)
+        descText:SetPoint("RIGHT", row, "RIGHT", 0, 0)
+        descText:SetJustifyH("LEFT")
+        descText:SetTextColor(DESC_COLOR[1], DESC_COLOR[2], DESC_COLOR[3])
+        descText:SetText(desc)
+    end
+
+    -- Menu frame
+    local menu = CreateFrame("Frame", nil, btn, "BackdropTemplate")
+    menu:SetFrameStrata("TOOLTIP")
+    menu:SetPoint("TOPLEFT", btn, "BOTTOMLEFT", 0, -2)
+    menu:SetWidth(160)
+    menu:SetBackdrop({
+        bgFile = "Interface\\Tooltips\\UI-Tooltip-Background",
+        edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
+        edgeSize = 10,
+        insets = {left = 2, right = 2, top = 2, bottom = 2},
+    })
+    menu:SetBackdropColor(0.1, 0.1, 0.15, 0.98)
+    menu:SetBackdropBorderColor(0.3, 0.3, 0.4, 1)
+    menu:Hide()
+
+    local menuBtns = {}
+    for i, opt in ipairs(options) do
+        local mb = CreateFrame("Button", nil, menu)
+        mb:SetHeight(20)
+        mb:SetPoint("TOPLEFT", menu, "TOPLEFT", 4, -4 - (i - 1) * 20)
+        mb:SetPoint("RIGHT", menu, "RIGHT", -4, 0)
+        mb.text = mb:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+        mb.text:SetPoint("LEFT", mb, "LEFT", 4, 0)
+        mb.text:SetText(opt.label)
+        local hl = mb:CreateTexture(nil, "HIGHLIGHT")
+        hl:SetAllPoints()
+        hl:SetColorTexture(0.3, 0.3, 0.5, 0.3)
+        mb:SetScript("OnClick", function()
+            if ns.db then ns.db.settings[settingKey] = opt.value end
+            btn.text:SetText(opt.label)
+            menu:Hide()
+            if onChange then onChange(opt.value) end
+        end)
+        menuBtns[i] = mb
+    end
+    menu:SetHeight(8 + #options * 20)
+
+    btn:SetScript("OnClick", function()
+        if menu:IsShown() then menu:Hide() else menu:Show() end
+    end)
+    menu:SetScript("OnLeave", function(self)
+        C_Timer.After(0.2, function()
+            if not self:IsMouseOver() and not btn:IsMouseOver() then
+                self:Hide()
+            end
+        end)
+    end)
+
+    function btn:SetValue(value)
+        for _, opt in ipairs(options) do
+            if opt.value == value then
+                btn.text:SetText(opt.label)
+                return
+            end
+        end
+        btn.text:SetText(value or "?")
+    end
+
+    local totalHeight = 40
+    row:SetHeight(totalHeight)
+    return btn, totalHeight
+end
+
 --------------------------
 -- Main Panel
 --------------------------
+
+-- Section ordering for reflow
+local sectionOrder = { "automation", "notifications", "miniview", "data", "multiaccount" }
+
+function UI:ReflowSettings()
+    if not settingsWidgets.contentFrame then return end
+    local y = -6
+    for _, key in ipairs(sectionOrder) do
+        local section = sectionContainers[key]
+        if section then
+            section.container:ClearAllPoints()
+            section.container:SetPoint("TOPLEFT", settingsWidgets.contentFrame, "TOPLEFT", 0, y)
+            section.container:SetPoint("RIGHT", settingsWidgets.contentFrame, "RIGHT", 0, 0)
+            section.UpdateLayout()
+            if section.collapsed then
+                y = y - 28 - SECTION_SPACING
+            else
+                y = y - (26 + section.contentHeight) - SECTION_SPACING
+            end
+        end
+    end
+    settingsWidgets.contentFrame:SetHeight(math.abs(y) + 40)
+end
 
 function UI:CreateSettingsPanel(parent)
     if settingsPanel then return settingsPanel end
@@ -147,38 +344,44 @@ function UI:CreateSettingsPanel(parent)
     content:SetWidth(scroll:GetWidth())
     content:SetHeight(1200)
     scroll:SetScrollChild(content)
+    settingsWidgets.contentFrame = content
 
     scroll:SetScript("OnSizeChanged", function(sf, w)
         content:SetWidth(w)
     end)
 
     local y = -6
+    local h
 
     ------------------------------------------------
     -- Section: Scanning & Automation
     ------------------------------------------------
-    y = y - CreateSectionHeader(content, y, "Scanning & Automation")
+    local secAuto = CreateCollapsibleSection(content, y, "automation",
+        "Scanning & Automation",
+        "Auto-scan, bank pulls, gold, TSM integration, quantities")
+    local sc = secAuto.content  -- widgets go here
+    local sy = 0  -- y offset within section
 
-    settingsWidgets.autoScan, h = CreateSettingsCheckbox(content, y,
+    settingsWidgets.autoScan, h = CreateSettingsCheckbox(sc, sy,
         "Auto-scan bags on login",
         "Automatically scan your character's bags when you log in so FlipQueue knows what you're carrying.",
         "autoScan")
-    y = y - h - ITEM_SPACING
+    sy = sy - h - ITEM_SPACING
 
     -- Auto-pull / auto-deposit / auto-deposit-all moved to Characters page
     -- (per-character settings with global defaults)
 
-    settingsWidgets.autoGold, h = CreateSettingsCheckbox(content, y,
+    settingsWidgets.autoGold, h = CreateSettingsCheckbox(sc, sy,
         "Auto-withdraw gold for AH fees",
         "When you open the bank, withdraw enough gold from your warband bank to cover estimated AH listing fees and buy task costs.",
         "autoWithdrawGold")
-    y = y - h - ITEM_SPACING
+    sy = sy - h - ITEM_SPACING
 
     -- Max withdrawal gold input
     do
-        local row = CreateFrame("Frame", nil, content)
-        row:SetPoint("TOPLEFT", content, "TOPLEFT", LEFT_MARGIN, y)
-        row:SetPoint("RIGHT", content, "RIGHT", RIGHT_MARGIN, 0)
+        local row = CreateFrame("Frame", nil, sc)
+        row:SetPoint("TOPLEFT", sc, "TOPLEFT", LEFT_MARGIN, sy)
+        row:SetPoint("RIGHT", sc, "RIGHT", RIGHT_MARGIN, 0)
         row:SetHeight(52)
 
         local title = row:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
@@ -212,19 +415,19 @@ function UI:CreateSettingsPanel(parent)
 
         settingsWidgets.maxWithdrawBox = box
     end
-    y = y - 52 - ITEM_SPACING
+    sy = sy - 52 - ITEM_SPACING
 
-    settingsWidgets.autoDepositGold, h = CreateSettingsCheckbox(content, y,
+    settingsWidgets.autoDepositGold, h = CreateSettingsCheckbox(sc, sy,
         "Auto-deposit earnings to warbank",
         "When you open the bank, deposit excess gold back to the warbank. Keeps enough for AH fees plus a configurable buffer.",
         "autoDepositGold")
-    y = y - h - ITEM_SPACING
+    sy = sy - h - ITEM_SPACING
 
     -- Gold buffer input
     do
-        local row = CreateFrame("Frame", nil, content)
-        row:SetPoint("TOPLEFT", content, "TOPLEFT", LEFT_MARGIN, y)
-        row:SetPoint("RIGHT", content, "RIGHT", RIGHT_MARGIN, 0)
+        local row = CreateFrame("Frame", nil, sc)
+        row:SetPoint("TOPLEFT", sc, "TOPLEFT", LEFT_MARGIN, sy)
+        row:SetPoint("RIGHT", sc, "RIGHT", RIGHT_MARGIN, 0)
         row:SetHeight(52)
 
         local title = row:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
@@ -258,31 +461,31 @@ function UI:CreateSettingsPanel(parent)
 
         settingsWidgets.goldBufferBox = box
     end
-    y = y - 52 - ITEM_SPACING
+    sy = sy - 52 - ITEM_SPACING
 
-    settingsWidgets.tsmSkipOnGenerate, h = CreateSettingsCheckbox(content, y,
+    settingsWidgets.tsmSkipOnGenerate, h = CreateSettingsCheckbox(sc, sy,
         "TSM: Skip deals on generation",
         "When generating a to-do list, reject deals that TSM says are below min price. Rejected deals appear in a separate list so you can review them and optionally keep individual tasks. Uncheck to include all deals regardless of TSM thresholds.",
         "tsmSkipOnGenerate")
-    y = y - h - ITEM_SPACING
+    sy = sy - h - ITEM_SPACING
 
-    settingsWidgets.tsmAutoSkip, h = CreateSettingsCheckbox(content, y,
+    settingsWidgets.tsmAutoSkip, h = CreateSettingsCheckbox(sc, sy,
         "TSM: Auto-handle at the AH",
         "When you open the AH, automatically skip or reassign tasks that TSM would reject (below min price or already posted). Reassigns to another character on the same realm if available, otherwise skips with reason.",
         "tsmAutoSkipRejected")
-    y = y - h - ITEM_SPACING
+    sy = sy - h - ITEM_SPACING
 
-    settingsWidgets.skipUnassigned, h = CreateSettingsCheckbox(content, y,
+    settingsWidgets.skipUnassigned, h = CreateSettingsCheckbox(sc, sy,
         "Skip deals with no character",
         "When generating a to-do list, skip deals that have no matching character on the required realm instead of creating 'new character' tasks. Useful when you only want tasks for realms you already have characters on.",
         "skipUnassigned")
-    y = y - h - ITEM_SPACING
+    sy = sy - h - ITEM_SPACING
 
     -- Pull batch size slider
     do
-        local row = CreateFrame("Frame", nil, content)
-        row:SetPoint("TOPLEFT", content, "TOPLEFT", LEFT_MARGIN, y)
-        row:SetPoint("RIGHT", content, "RIGHT", RIGHT_MARGIN, 0)
+        local row = CreateFrame("Frame", nil, sc)
+        row:SetPoint("TOPLEFT", sc, "TOPLEFT", LEFT_MARGIN, sy)
+        row:SetPoint("RIGHT", sc, "RIGHT", RIGHT_MARGIN, 0)
         row:SetHeight(68)
 
         local title = row:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
@@ -322,13 +525,13 @@ function UI:CreateSettingsPanel(parent)
         settingsWidgets.batchSizeSlider = slider
         settingsWidgets.batchSizeLabel = valLabel
     end
-    y = y - 68 - ITEM_SPACING
+    sy = sy - 68 - ITEM_SPACING
 
     -- Default sell quantity slider
     do
-        local row = CreateFrame("Frame", nil, content)
-        row:SetPoint("TOPLEFT", content, "TOPLEFT", LEFT_MARGIN, y)
-        row:SetPoint("RIGHT", content, "RIGHT", RIGHT_MARGIN, 0)
+        local row = CreateFrame("Frame", nil, sc)
+        row:SetPoint("TOPLEFT", sc, "TOPLEFT", LEFT_MARGIN, sy)
+        row:SetPoint("RIGHT", sc, "RIGHT", RIGHT_MARGIN, 0)
         row:SetHeight(68)
 
         local title = row:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
@@ -368,13 +571,13 @@ function UI:CreateSettingsPanel(parent)
         settingsWidgets.sellQtySlider = slider
         settingsWidgets.sellQtyLabel = valLabel
     end
-    y = y - 68 - ITEM_SPACING
+    sy = sy - 68 - ITEM_SPACING
 
     -- Sell quantity mode toggle
     do
-        local row = CreateFrame("Frame", nil, content)
-        row:SetPoint("TOPLEFT", content, "TOPLEFT", LEFT_MARGIN, y)
-        row:SetPoint("RIGHT", content, "RIGHT", RIGHT_MARGIN, 0)
+        local row = CreateFrame("Frame", nil, sc)
+        row:SetPoint("TOPLEFT", sc, "TOPLEFT", LEFT_MARGIN, sy)
+        row:SetPoint("RIGHT", sc, "RIGHT", RIGHT_MARGIN, 0)
         row:SetHeight(56)
 
         local title = row:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
@@ -438,13 +641,13 @@ function UI:CreateSettingsPanel(parent)
         settingsWidgets.sellQtyModeTSM = tsmBtn
         settingsWidgets.updateSellQtyMode = UpdateSellQtyMode
     end
-    y = y - 56 - ITEM_SPACING
+    sy = sy - 56 - ITEM_SPACING
 
     -- Expiry alert timer slider
     do
-        local row = CreateFrame("Frame", nil, content)
-        row:SetPoint("TOPLEFT", content, "TOPLEFT", LEFT_MARGIN, y)
-        row:SetPoint("RIGHT", content, "RIGHT", RIGHT_MARGIN, 0)
+        local row = CreateFrame("Frame", nil, sc)
+        row:SetPoint("TOPLEFT", sc, "TOPLEFT", LEFT_MARGIN, sy)
+        row:SetPoint("RIGHT", sc, "RIGHT", RIGHT_MARGIN, 0)
         row:SetHeight(68)
 
         local title = row:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
@@ -485,27 +688,39 @@ function UI:CreateSettingsPanel(parent)
         settingsWidgets.expiryAlertSlider = slider
         settingsWidgets.expiryAlertLabel = valLabel
     end
-    y = y - 68 - SECTION_SPACING
+    sy = sy - 68 - SECTION_SPACING
 
     -- Bank Tab Selection moved to Characters page (per-character config panel)
+
+    secAuto.contentHeight = math.abs(sy)
 
     ------------------------------------------------
     -- Section: Notifications
     ------------------------------------------------
-    y = y - CreateSectionHeader(content, y, "Notifications")
+    local secNotif = CreateCollapsibleSection(content, y, "notifications",
+        "Notifications",
+        "Login messages and alerts")
+    sc = secNotif.content
+    sy = 0
 
-    settingsWidgets.loginMsg, h = CreateSettingsCheckbox(content, y,
+    settingsWidgets.loginMsg, h = CreateSettingsCheckbox(sc, sy,
         "Show login message",
         "Print a chat message on login listing items to post, expired auctions to collect, and other tasks for this character.",
         "showLoginMessage")
-    y = y - h - SECTION_SPACING
+    sy = sy - h - SECTION_SPACING
+
+    secNotif.contentHeight = math.abs(sy)
 
     ------------------------------------------------
     -- Section: Mini View
     ------------------------------------------------
-    y = y - CreateSectionHeader(content, y, "Mini View")
+    local secMini = CreateCollapsibleSection(content, y, "miniview",
+        "Mini View",
+        "Overlay, minimap icon, popup positions")
+    sc = secMini.content
+    sy = 0
 
-    settingsWidgets.showMini, h = CreateSettingsCheckbox(content, y,
+    settingsWidgets.showMini, h = CreateSettingsCheckbox(sc, sy,
         "Show mini overlay",
         "Show a compact floating overlay listing current-character tasks. Drag it anywhere on screen. Persists across sessions.",
         "showMini")
@@ -519,15 +734,15 @@ function UI:CreateSettingsPanel(parent)
             end
         end
     end)
-    y = y - h - ITEM_SPACING
+    sy = sy - h - ITEM_SPACING
 
-    settingsWidgets.hideMiniCombat, h = CreateSettingsCheckbox(content, y,
+    settingsWidgets.hideMiniCombat, h = CreateSettingsCheckbox(sc, sy,
         "Hide mini view in combat",
         "Automatically hide the mini overlay when you enter combat and restore it when combat ends.",
         "hideMiniInCombat")
-    y = y - h - ITEM_SPACING
+    sy = sy - h - ITEM_SPACING
 
-    settingsWidgets.showMinimap, h = CreateSettingsCheckbox(content, y,
+    settingsWidgets.showMinimap, h = CreateSettingsCheckbox(sc, sy,
         "Show minimap icon",
         "Show the FlipQueue icon on the minimap border for quick access. Uses LibDBIcon for compatibility with minimap managers.",
         "showMinimap")
@@ -538,9 +753,29 @@ function UI:CreateSettingsPanel(parent)
             UI:HideMinimapButton()
         end
     end)
-    y = y - h - ITEM_SPACING
+    sy = sy - h - ITEM_SPACING
 
-    settingsWidgets.resetMiniPos, h = CreateSettingsButton(content, y,
+    local bankAnchorOpts = {
+        {value = "below", label = "Below mini"},
+        {value = "above", label = "Above mini"},
+        {value = "left",  label = "Left of mini"},
+        {value = "right", label = "Right of mini"},
+    }
+    settingsWidgets.bankPopupAnchor, h = CreateSettingsDropdown(sc, sy,
+        "Bank popup position", "Where the bank operations popup appears relative to the mini view.",
+        "bankPopupAnchor", bankAnchorOpts)
+    sy = sy - h - ITEM_SPACING
+
+    local detailAnchorOpts = {
+        {value = "left",  label = "Left of mini"},
+        {value = "right", label = "Right of mini"},
+    }
+    settingsWidgets.detailPopupAnchor, h = CreateSettingsDropdown(sc, sy,
+        "Item detail position", "Where the item detail popup appears when clicking a task.",
+        "detailPopupAnchor", detailAnchorOpts)
+    sy = sy - h - ITEM_SPACING
+
+    settingsWidgets.resetMiniPos, h = CreateSettingsButton(sc, sy,
         "Reset Mini Position", "Move the mini overlay back to its default position.", 160, function()
         if ns.db then
             ns.db.settings.miniPos = nil
@@ -551,14 +786,19 @@ function UI:CreateSettingsPanel(parent)
             ns:Print("Mini view position reset.")
         end
     end)
-    y = y - h - SECTION_SPACING
+    sy = sy - h - ITEM_SPACING
+    secMini.contentHeight = math.abs(sy)
 
     ------------------------------------------------
     -- Section: Data Management
     ------------------------------------------------
-    y = y - CreateSectionHeader(content, y, "Data Management")
+    local secData = CreateCollapsibleSection(content, y, "data",
+        "Data Management",
+        "Clear inventory, imports, logs, do-not-track")
+    sc = secData.content
+    sy = 0
 
-    settingsWidgets.clearInv, h = CreateSettingsButton(content, y,
+    settingsWidgets.clearInv, h = CreateSettingsButton(sc, sy,
         "Clear Inventory Data", "Wipe all saved bag/bank/warbank data. You'll need to rescan each character.", 180, function()
         StaticPopupDialogs["FLIPQUEUE_CLEAR_INVENTORY"] = {
             text = "Clear all saved inventory data? You will need to rescan on each character.",
@@ -580,9 +820,9 @@ function UI:CreateSettingsPanel(parent)
         }
         StaticPopup_Show("FLIPQUEUE_CLEAR_INVENTORY")
     end)
-    y = y - h - ITEM_SPACING
+    sy = sy - h - ITEM_SPACING
 
-    settingsWidgets.clearQueue, h = CreateSettingsButton(content, y,
+    settingsWidgets.clearQueue, h = CreateSettingsButton(sc, sy,
         "Clear All Imports", "Remove all imported deals.", 180, function()
         StaticPopupDialogs["FLIPQUEUE_CLEAR_ALL_SETTINGS"] = {
             text = "Clear ALL imported deals?",
@@ -599,9 +839,9 @@ function UI:CreateSettingsPanel(parent)
         }
         StaticPopup_Show("FLIPQUEUE_CLEAR_ALL_SETTINGS")
     end)
-    y = y - h - ITEM_SPACING
+    sy = sy - h - ITEM_SPACING
 
-    settingsWidgets.clearLog, h = CreateSettingsButton(content, y,
+    settingsWidgets.clearLog, h = CreateSettingsButton(sc, sy,
         "Clear Posted Log", "Remove all entries from the posted items log.", 180, function()
         StaticPopupDialogs["FLIPQUEUE_CLEAR_LOG_SETTINGS"] = {
             text = "Clear ALL items from the posted log?",
@@ -618,9 +858,9 @@ function UI:CreateSettingsPanel(parent)
         }
         StaticPopup_Show("FLIPQUEUE_CLEAR_LOG_SETTINGS")
     end)
-    y = y - h - ITEM_SPACING
+    sy = sy - h - ITEM_SPACING
 
-    settingsWidgets.clearDNT, h = CreateSettingsButton(content, y,
+    settingsWidgets.clearDNT, h = CreateSettingsButton(sc, sy,
         "Clear Do Not Track", "Remove all items from the Do Not Track list.", 180, function()
         if ns.db then
             wipe(ns.db.doNotTrack)
@@ -628,20 +868,23 @@ function UI:CreateSettingsPanel(parent)
             UI:Refresh()
         end
     end)
-    y = y - h - SECTION_SPACING
+    sy = sy - h - ITEM_SPACING
+    secData.contentHeight = math.abs(sy)
 
     ------------------------------------------------
     -- Section: Multi-Account
     ------------------------------------------------
-    y = y - CreateSectionHeader(content, y, "Multi-Account")
+    local secMulti = CreateCollapsibleSection(content, y, "multiaccount",
+        "Multi-Account",
+        "Real-time sync between WoW accounts via BNet")
+    sc = secMulti.content
+    sy = 0
 
     -- Everything in this section uses a lower container
-    local lower = CreateFrame("Frame", nil, content)
-    lower:SetPoint("TOPLEFT", content, "TOPLEFT", 0, y - SECTION_SPACING)
-    lower:SetPoint("RIGHT", content, "RIGHT", 0, 0)
+    local lower = CreateFrame("Frame", nil, sc)
+    lower:SetPoint("TOPLEFT", sc, "TOPLEFT", 0, sy)
+    lower:SetPoint("RIGHT", sc, "RIGHT", 0, 0)
     settingsWidgets.lowerSection = lower
-    settingsWidgets.contentFrame = content
-    settingsWidgets.baseY = math.abs(y) -- y consumed above this point
 
     local ly = 0
 
@@ -670,7 +913,7 @@ function UI:CreateSettingsPanel(parent)
     settingsWidgets.linkCharBox:SetSize(200, 20)
     settingsWidgets.linkCharBox:SetPoint("TOPLEFT", lower, "TOPLEFT", LEFT_MARGIN + 4, ly)
     settingsWidgets.linkCharBox:SetAutoFocus(false)
-    settingsWidgets.linkCharBox:SetMaxLetters(60)
+    settingsWidgets.linkCharBox:SetMaxLetters(0)  -- unlimited: CharName-RealmName can be long (esp. German EU)
     settingsWidgets.linkCharBox:SetText("")
     settingsWidgets.linkCharBox:SetScript("OnEscapePressed", function(self) self:ClearFocus() end)
     settingsWidgets.linkCharBox:SetScript("OnEnterPressed", function(self)
@@ -926,7 +1169,10 @@ function UI:CreateSettingsPanel(parent)
             local extraH = logFrame:IsShown() and SYNC_LOG_HEIGHT or 0
             local bsH = settingsWidgets.belowSyncContentHeight or 300
             lower:SetHeight(math.abs(belowSyncBaseY) + bsH + extraH + 10)
-            content:SetHeight(settingsWidgets.baseY + SECTION_SPACING + math.abs(belowSyncBaseY) + bsH + extraH + 40)
+            if sectionContainers.multiaccount then
+                sectionContainers.multiaccount.contentHeight = math.abs(belowSyncBaseY) + bsH + extraH + 10
+            end
+            if UI.ReflowSettings then UI:ReflowSettings() end
         end)
     end
 
@@ -1218,8 +1464,11 @@ function UI:CreateSettingsPanel(parent)
     lower:SetHeight(math.abs(belowSyncBaseY) + math.abs(bsy) + 10)
     settingsWidgets.lowerSectionHeight = math.abs(belowSyncBaseY) + math.abs(bsy) + 10
 
-    -- Content height: upper fixed section + SECTION_SPACING + lower container
-    content:SetHeight(math.abs(y) + SECTION_SPACING + math.abs(belowSyncBaseY) + math.abs(bsy) + 40)
+    -- Set multi-account section height from the lower container
+    secMulti.contentHeight = math.abs(belowSyncBaseY) + math.abs(bsy) + 10
+
+    -- Initial reflow positions all collapsible sections
+    UI:ReflowSettings()
 
     settingsPanel = scroll
     return settingsPanel
@@ -1276,6 +1525,12 @@ function UI:RefreshSettings()
     end
     if settingsWidgets.showMinimap then
         settingsWidgets.showMinimap:SetChecked(UI:IsMinimapButtonShown())
+    end
+    if settingsWidgets.bankPopupAnchor then
+        settingsWidgets.bankPopupAnchor:SetValue(ns.db.settings.bankPopupAnchor)
+    end
+    if settingsWidgets.detailPopupAnchor then
+        settingsWidgets.detailPopupAnchor:SetValue(ns.db.settings.detailPopupAnchor)
     end
     -- Batch size slider
     if settingsWidgets.batchSizeSlider then

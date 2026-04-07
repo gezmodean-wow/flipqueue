@@ -398,7 +398,7 @@ end)
 mainFrame.actionBtns.pullBank = CreateActionBtn("Pull Bank", "Pull queued items from bank to bags", function()
     local saved = ns.db.settings.autoPullBank
     ns.db.settings.autoPullBank = true
-    ns.Tracker:AutoPullFromBank()
+    ns.Tracker:AutoPullFromBank(nil, true) -- fromClick = true for hardware event context
     ns.db.settings.autoPullBank = saved
 end)
 

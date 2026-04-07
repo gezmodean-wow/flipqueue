@@ -5,71 +5,10 @@ local addonName, ns = ...
 local Tracker = ns.Tracker
 
 --------------------------
--- Bank Operation Progress
---------------------------
-
-local progressFrame
-
-local function GetProgressFrame()
-    if progressFrame then return progressFrame end
-
-    local f = CreateFrame("Frame", "FlipQueueBankProgress", UIParent, "BackdropTemplate")
-    f:SetSize(240, 42)
-    f:SetPoint("TOP", UIParent, "TOP", 0, -80)
-    f:SetFrameStrata("DIALOG")
-    f:SetBackdrop({
-        bgFile = "Interface\\Tooltips\\UI-Tooltip-Background",
-        edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
-        edgeSize = 14,
-        insets = {left = 3, right = 3, top = 3, bottom = 3},
-    })
-    f:SetBackdropColor(0.05, 0.05, 0.1, 0.92)
-    f:SetBackdropBorderColor(0.3, 0.3, 0.4, 0.8)
-
-    f.label = f:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-    f.label:SetPoint("TOP", f, "TOP", 0, -6)
-
-    local bar = CreateFrame("StatusBar", nil, f)
-    bar:SetSize(216, 14)
-    bar:SetPoint("BOTTOM", f, "BOTTOM", 0, 6)
-    bar:SetStatusBarTexture("Interface\\TargetingFrame\\UI-StatusBar")
-    bar:SetStatusBarColor(0.26, 0.6, 1)
-    bar:SetMinMaxValues(0, 1)
-    bar:SetValue(0)
-    f.bar = bar
-
-    local barBg = bar:CreateTexture(nil, "BACKGROUND")
-    barBg:SetAllPoints()
-    barBg:SetColorTexture(0.1, 0.1, 0.1, 0.8)
-
-    f.barText = bar:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-    f.barText:SetPoint("CENTER", bar, "CENTER", 0, 0)
-
-    f:Hide()
-    progressFrame = f
-    return f
-end
-
-local function ShowProgress(label, current, total)
-    local f = GetProgressFrame()
-    f.label:SetText(ns.COLORS.YELLOW .. "FlipQueue|r " .. label)
-    f.bar:SetMinMaxValues(0, total)
-    f.bar:SetValue(current)
-    f.barText:SetText(current .. " / " .. total)
-    f:Show()
-end
-
-local function HideProgress()
-    if progressFrame then progressFrame:Hide() end
-end
-
---------------------------
 -- Bank Auto-Pull
 --------------------------
 
-local PULL_TIMEOUT = 5  -- seconds to wait for locks before giving up on a batch
-
-function Tracker:AutoPullFromBank(onComplete)
+function Tracker:AutoPullFromBank(onComplete, fromClick)
     if not ns.db or not ns:GetCharSetting(ns:GetCharKey(), "autoPullBank") then
         if onComplete then onComplete() end
         return
@@ -199,37 +138,34 @@ function Tracker:AutoPullFromBank(onComplete)
             freeBagSlots .. " of " .. #moves .. " item(s) from bank.|r")
     end
 
-    -- Event-driven batch execution
-    -- Pattern from Baganator: move a small batch, wait for ITEM_LOCK_CHANGED
-    -- to signal the server has processed the moves, then continue
+    -- Build operations from the moves list
     local totalMoves = math.min(#moves, freeBagSlots)
-    local moveIndex = 1
-    local pulledNames = {}
-    local pullErrors = 0
-    local aborted = false
-    Tracker._pullInProgress = true
-
-    local listener = CreateFrame("Frame")
-
-    local function Cleanup()
-        listener:UnregisterAllEvents()
-        listener:SetScript("OnEvent", nil)
-        Tracker._pullInProgress = false
+    local ops = {}
+    local hasWarbankPulls = false
+    for i = 1, totalMoves do
+        local isWarbank = false
+        for _, wb in ipairs(ns.WARBANK_TABS) do
+            if moves[i].bag == wb then isWarbank = true; break end
+        end
+        if isWarbank then hasWarbankPulls = true end
+        table.insert(ops, {
+            op = "pull",
+            srcBag = moves[i].bag,
+            srcSlot = moves[i].slot,
+            name = moves[i].name,
+        })
     end
 
-    local function FinishPull()
-        Cleanup()
-        HideProgress()
-        local successCount = #pulledNames
-        if successCount > 0 then
-            if successCount == totalMoves then
-                ns:Print("Auto-pulled " .. successCount .. " item(s) from bank: " .. table.concat(pulledNames, ", "))
+    local function PullComplete(successNames, errorCount)
+        if #successNames > 0 then
+            if errorCount == 0 then
+                ns:Print("Auto-pulled " .. #successNames .. " item(s) from bank: " .. table.concat(successNames, ", "))
             else
-                ns:Print("Auto-pulled " .. successCount .. " of " .. totalMoves .. " item(s) from bank: " .. table.concat(pulledNames, ", "))
+                ns:Print("Auto-pulled " .. #successNames .. " of " .. totalMoves .. " item(s) from bank: " .. table.concat(successNames, ", "))
             end
         end
-        if pullErrors > 0 then
-            ns:Print(ns.COLORS.YELLOW .. pullErrors .. " item(s) failed to move. Try opening your bank again.|r")
+        if errorCount > 0 then
+            ns:Print(ns.COLORS.YELLOW .. errorCount .. " item(s) failed to move. Try opening your bank again.|r")
         end
         C_Timer.After(1, function()
             if ns.Scanner then
@@ -248,93 +184,18 @@ function Tracker:AutoPullFromBank(onComplete)
         end)
     end
 
-    local function ExecuteNextBatch()
-        if aborted or moveIndex > totalMoves then
-            FinishPull()
-            return
-        end
-
-        local batchSize = ns.db and ns.db.settings.pullBatchSize or 5
-        local batchEnd = math.min(moveIndex + batchSize - 1, totalMoves)
-        local batchMoved = 0
-
-        for i = moveIndex, batchEnd do
-            local move = moves[i]
-            -- Verify slot still has an item and isn't locked
-            local okLock, slotInfo = pcall(C_Container.GetContainerItemInfo, move.bag, move.slot)
-            if not okLock or not slotInfo then
-                -- Slot is empty or inaccessible — skip
-            elseif slotInfo.isLocked then
-                pullErrors = pullErrors + 1
-            else
-                local ok3 = pcall(C_Container.UseContainerItem, move.bag, move.slot)
-                if ok3 then
-                    table.insert(pulledNames, move.name)
-                    batchMoved = batchMoved + 1
-                else
-                    pullErrors = pullErrors + 1
-                end
-            end
-        end
-
-        moveIndex = batchEnd + 1
-        ShowProgress("Pulling from bank...", #pulledNames, totalMoves)
-
-        if moveIndex > totalMoves then
-            -- All batches issued — wait briefly for any trailing events
-            C_Timer.After(0.3, FinishPull)
-        elseif batchMoved > 0 then
-            -- Wait for items to unlock before continuing
-            -- ITEM_LOCK_CHANGED fires when server finishes processing
-            local waitingForUnlock = true
-            listener:RegisterEvent("ITEM_LOCK_CHANGED")
-            listener:RegisterEvent("UI_ERROR_MESSAGE")
-            listener:SetScript("OnEvent", function(_, event, errorType, message)
-                if event == "UI_ERROR_MESSAGE" then
-                    if message == ERR_INTERNAL_BAG_ERROR
-                        or (message and message:find("Internal Bag Error")) then
-                        aborted = true
-                        pullErrors = pullErrors + 1
-                        listener:UnregisterEvent("ITEM_LOCK_CHANGED")
-                        listener:UnregisterEvent("UI_ERROR_MESSAGE")
-                        FinishPull()
-                        return
-                    elseif message == ERR_INV_FULL
-                        or (message and message:find("Inventory is full")) then
-                        aborted = true
-                        listener:UnregisterEvent("ITEM_LOCK_CHANGED")
-                        listener:UnregisterEvent("UI_ERROR_MESSAGE")
-                        FinishPull()
-                        return
-                    end
-                elseif event == "ITEM_LOCK_CHANGED" and waitingForUnlock then
-                    waitingForUnlock = false
-                    listener:UnregisterEvent("ITEM_LOCK_CHANGED")
-                    listener:UnregisterEvent("UI_ERROR_MESSAGE")
-                    -- Items unlocked — server processed the batch, continue
-                    C_Timer.After(0.1, ExecuteNextBatch)
-                end
-            end)
-
-            -- Safety timeout in case ITEM_LOCK_CHANGED never fires
-            C_Timer.After(PULL_TIMEOUT, function()
-                if waitingForUnlock then
-                    waitingForUnlock = false
-                    listener:UnregisterEvent("ITEM_LOCK_CHANGED")
-                    listener:UnregisterEvent("UI_ERROR_MESSAGE")
-                    -- Continue anyway — items may have moved without firing the event
-                    ExecuteNextBatch()
-                end
-            end)
-        else
-            -- Nothing moved in this batch (all locked) — short delay then retry next batch
-            C_Timer.After(0.5, ExecuteNextBatch)
-        end
+    if hasWarbankPulls and not fromClick then
+        -- Warbank pulls from timer context taint the bank frame, breaking all
+        -- subsequent warbank operations (including manual right-clicks).
+        -- Show pull button — user click provides hardware event context.
+        ns.BankQueue:ShowPullButton(ops, PullComplete)
+    elseif fromClick then
+        -- User clicked a button — hardware event context bypasses taint
+        ns.BankQueue:ProcessSync(ops, "Pulling from bank...", PullComplete)
+    else
+        -- Personal bank only — fully automatic
+        ns.BankQueue:Process(ops, "Pulling from bank...", PullComplete)
     end
-
-    ns:PrintDebug("Pulling " .. totalMoves .. " item(s) from bank...")
-    ShowProgress("Pulling from bank...", 0, totalMoves)
-    ExecuteNextBatch()
 end
 
 --------------------------
@@ -604,8 +465,10 @@ function Tracker:AutoWithdrawGold()
         sessionWithdrawnCopper = sessionWithdrawnCopper + shortfallCopper
         ns:Print(ns.COLORS.GREEN .. "Withdrew " .. shortfallGold .. "g|r from warbank" ..
             " (est. " .. estimatedFeesGold .. "g fees for " .. itemCount .. " items, had " .. playerGold .. "g)")
+        return shortfallCopper
     else
         ns:Print(ns.COLORS.RED .. "Failed to withdraw: " .. tostring(err) .. "|r")
+        return 0
     end
 end
 
@@ -645,8 +508,10 @@ function Tracker:AutoDepositGold()
         local keptGold = math.floor(keepCopper / 10000)
         ns:Print(ns.COLORS.GREEN .. "Deposited " .. depositGold .. "g|r to warbank" ..
             " (kept " .. keptGold .. "g for fees + buffer)")
+        return excessCopper
     else
         ns:PrintDebug("Failed to deposit gold: " .. tostring(err))
+        return 0
     end
 end
 
@@ -750,61 +615,30 @@ function Tracker:AutoDepositToWarbank(onComplete)
         return
     end
 
-    -- Find empty warbank slots
-    local emptySlots = {}
-    for _, wbBag in ipairs(ns:GetEnabledWarbankTabs()) do
-        local ok, numSlots = pcall(C_Container.GetContainerNumSlots, wbBag)
-        if ok and numSlots then
-            for slot = 1, numSlots do
-                local ok2, info = pcall(C_Container.GetContainerItemInfo, wbBag, slot)
-                if ok2 and not info then
-                    table.insert(emptySlots, { bag = wbBag, slot = slot })
-                end
-            end
-        end
+    -- Build queue operations — destinations found dynamically by the processor
+    local ops = {}
+    for _, m in ipairs(moves) do
+        table.insert(ops, {
+            op = "deposit",
+            srcBag = m.bag,
+            srcSlot = m.slot,
+            name = m.name,
+            destType = "warbank",
+        })
     end
 
-    if #emptySlots == 0 then
-        ns:Print(ns.COLORS.RED .. "Warbank is full!|r Cannot deposit " .. #moves .. " item(s).")
-        if onComplete then onComplete() end
-        return
-    end
-
-    if #emptySlots < #moves then
-        ns:Print(ns.COLORS.YELLOW .. "Only " .. #emptySlots .. " free warbank slot(s) — depositing " ..
-            #emptySlots .. " of " .. #moves .. " item(s).|r")
-    end
-
-    -- Event-driven batch execution (same pattern as AutoPullFromBank)
-    local totalMoves = math.min(#moves, #emptySlots)
-    local depositedNames = {}
-    local depositErrors = 0
-    local moveIndex = 1
-    local aborted = false
-    Tracker._depositInProgress = true
-
-    local listener = CreateFrame("Frame")
-
-    local function Cleanup()
-        listener:UnregisterAllEvents()
-        listener:SetScript("OnEvent", nil)
-        Tracker._depositInProgress = false
-    end
-
-    local function FinishDeposit()
-        Cleanup()
-        HideProgress()
-        if #depositedNames > 0 then
-            if #depositedNames == totalMoves then
-                ns:Print(ns.COLORS.CYAN .. "Deposited " .. #depositedNames ..
-                    " item(s) to warbank:|r " .. table.concat(depositedNames, ", "))
+    ns.BankQueue:Process(ops, "Depositing to warbank...", function(successNames, errorCount)
+        if #successNames > 0 then
+            if errorCount == 0 then
+                ns:Print(ns.COLORS.CYAN .. "Deposited " .. #successNames ..
+                    " item(s) to warbank:|r " .. table.concat(successNames, ", "))
             else
-                ns:Print(ns.COLORS.CYAN .. "Deposited " .. #depositedNames ..
-                    " of " .. totalMoves .. " item(s) to warbank:|r " .. table.concat(depositedNames, ", "))
+                ns:Print(ns.COLORS.CYAN .. "Deposited " .. #successNames ..
+                    " of " .. #ops .. " item(s) to warbank:|r " .. table.concat(successNames, ", "))
             end
         end
-        if depositErrors > 0 then
-            ns:Print(ns.COLORS.YELLOW .. depositErrors .. " item(s) failed to deposit. Try opening your bank again.|r")
+        if errorCount > 0 then
+            ns:Print(ns.COLORS.YELLOW .. errorCount .. " item(s) failed to deposit. Try opening your bank again.|r")
         end
         C_Timer.After(1, function()
             if ns.Scanner then
@@ -822,97 +656,7 @@ function Tracker:AutoDepositToWarbank(onComplete)
             if ns.UI and ns.UI.RefreshMini then ns.UI:RefreshMini() end
             if onComplete then onComplete() end
         end)
-    end
-
-    local function ExecuteNextBatch()
-        if aborted or moveIndex > totalMoves then
-            FinishDeposit()
-            return
-        end
-
-        local batchSize = ns.db and ns.db.settings.pullBatchSize or 5
-        local batchEnd = math.min(moveIndex + batchSize - 1, totalMoves)
-        local batchMoved = 0
-
-        for i = moveIndex, batchEnd do
-            local src = moves[i]
-            local dest = emptySlots[i]
-
-            -- Verify source slot still has an item (may have shifted since scan)
-            local okLock, srcInfo = pcall(C_Container.GetContainerItemInfo, src.bag, src.slot)
-            if not okLock or not srcInfo then
-                -- Slot is empty or inaccessible — skip
-            elseif srcInfo.isLocked then
-                depositErrors = depositErrors + 1
-            else
-                pcall(ClearCursor)
-                pcall(C_Container.PickupContainerItem, src.bag, src.slot)
-                -- Only count as moved if cursor actually holds an item
-                if CursorHasItem() then
-                    pcall(C_Container.PickupContainerItem, dest.bag, dest.slot)
-                    if not CursorHasItem() then
-                        table.insert(depositedNames, src.name)
-                        batchMoved = batchMoved + 1
-                    else
-                        pcall(ClearCursor)
-                        depositErrors = depositErrors + 1
-                    end
-                end
-            end
-        end
-
-        moveIndex = batchEnd + 1
-        ShowProgress("Depositing to warbank...", #depositedNames, totalMoves)
-
-        if moveIndex > totalMoves then
-            C_Timer.After(0.3, FinishDeposit)
-        elseif batchMoved > 0 then
-            local waitingForUnlock = true
-            listener:RegisterEvent("ITEM_LOCK_CHANGED")
-            listener:RegisterEvent("UI_ERROR_MESSAGE")
-            listener:SetScript("OnEvent", function(_, event, errorType, message)
-                if event == "UI_ERROR_MESSAGE" then
-                    if message == ERR_INTERNAL_BAG_ERROR
-                        or (message and message:find("Internal Bag Error")) then
-                        aborted = true
-                        depositErrors = depositErrors + 1
-                        listener:UnregisterEvent("ITEM_LOCK_CHANGED")
-                        listener:UnregisterEvent("UI_ERROR_MESSAGE")
-                        FinishDeposit()
-                        return
-                    elseif message == ERR_INV_FULL
-                        or (message and message:find("Inventory is full")) then
-                        aborted = true
-                        listener:UnregisterEvent("ITEM_LOCK_CHANGED")
-                        listener:UnregisterEvent("UI_ERROR_MESSAGE")
-                        FinishDeposit()
-                        return
-                    end
-                elseif event == "ITEM_LOCK_CHANGED" and waitingForUnlock then
-                    waitingForUnlock = false
-                    listener:UnregisterEvent("ITEM_LOCK_CHANGED")
-                    listener:UnregisterEvent("UI_ERROR_MESSAGE")
-                    C_Timer.After(0.1, ExecuteNextBatch)
-                end
-            end)
-
-            C_Timer.After(PULL_TIMEOUT, function()
-                if waitingForUnlock then
-                    waitingForUnlock = false
-                    listener:UnregisterEvent("ITEM_LOCK_CHANGED")
-                    listener:UnregisterEvent("UI_ERROR_MESSAGE")
-                    ExecuteNextBatch()
-                end
-            end)
-        else
-            -- Nothing moved this batch (empty/stale slots) — proceed immediately
-            C_Timer.After(0, ExecuteNextBatch)
-        end
-    end
-
-    ns:PrintDebug("Depositing " .. totalMoves .. " item(s) to warbank...")
-    ShowProgress("Depositing to warbank...", 0, totalMoves)
-    ExecuteNextBatch()
+    end)
 end
 
 --------------------------
@@ -1026,119 +770,37 @@ function Tracker:AutoDepositExtraItems()
 
     if #warbankMoves == 0 and #bankOnlyMoves == 0 then return end
 
-    -- Find empty slots: warbank and personal bank separately
-    local warbankEmpty = {}
-    for _, wbBag in ipairs(ns:GetEnabledWarbankTabs()) do
-        local ok, numSlots = pcall(C_Container.GetContainerNumSlots, wbBag)
-        if ok and numSlots then
-            for slot = 1, numSlots do
-                local ok2, info = pcall(C_Container.GetContainerItemInfo, wbBag, slot)
-                if ok2 and not info then
-                    table.insert(warbankEmpty, { bag = wbBag, slot = slot })
-                end
-            end
-        end
-    end
-
-    local bankEmpty = {}
-    for _, bankBag in ipairs(ns:GetEnabledBankTabs()) do
-        local ok, numSlots = pcall(C_Container.GetContainerNumSlots, bankBag)
-        if ok and numSlots and numSlots > 0 then
-            for slot = 1, numSlots do
-                local ok2, info = pcall(C_Container.GetContainerItemInfo, bankBag, slot)
-                if ok2 and not info then
-                    table.insert(bankEmpty, { bag = bankBag, slot = slot })
-                end
-            end
-        end
-    end
-
-    -- Check for bank access
-    if #warbankEmpty == 0 and #bankEmpty == 0 then
-        local hasBankAccess = false
-        for _, bankBag in ipairs(ns.BANK_TABS) do
-            local ok, numSlots = pcall(C_Container.GetContainerNumSlots, bankBag)
-            if ok and numSlots and numSlots > 0 then
-                hasBankAccess = true
-                break
-            end
-        end
-        if not hasBankAccess then
-            ns:PrintError("No bank slots available — purchase bank tabs to deposit items.")
-        else
-            ns:Print(ns.COLORS.YELLOW .. "Warbank and bank are full!|r Cannot deposit " ..
-                (#warbankMoves + #bankOnlyMoves) .. " extra item(s).")
-        end
-        return
-    end
-
-    -- Pair moves with destination slots:
-    -- Warbank-eligible items → warbank first, overflow to bank
-    -- Bank-only items (soulbound) → bank only
-    local moves = {}     -- { bag, slot, name }
-    local emptySlots = {} -- paired destinations
-    local wbIdx, bkIdx = 1, 1
-
+    -- Build queue operations with appropriate destination types
+    -- Non-soulbound: "any" (warbank first, bank fallback)
+    -- Soulbound: "bank" only
+    local ops = {}
     for _, m in ipairs(warbankMoves) do
-        if wbIdx <= #warbankEmpty then
-            table.insert(moves, m)
-            table.insert(emptySlots, warbankEmpty[wbIdx])
-            wbIdx = wbIdx + 1
-        elseif bkIdx <= #bankEmpty then
-            table.insert(moves, m)
-            table.insert(emptySlots, bankEmpty[bkIdx])
-            bkIdx = bkIdx + 1
-        end
+        table.insert(ops, {
+            op = "deposit",
+            srcBag = m.bag,
+            srcSlot = m.slot,
+            name = m.name,
+            destType = "any",
+        })
     end
     for _, m in ipairs(bankOnlyMoves) do
-        if bkIdx <= #bankEmpty then
-            table.insert(moves, m)
-            table.insert(emptySlots, bankEmpty[bkIdx])
-            bkIdx = bkIdx + 1
+        table.insert(ops, {
+            op = "deposit",
+            srcBag = m.bag,
+            srcSlot = m.slot,
+            name = m.name,
+            destType = "bank",
+        })
+    end
+
+    ns.BankQueue:Process(ops, "Depositing extras...", function(successNames, errorCount)
+        if #successNames > 0 then
+            ns:Print(ns.COLORS.CYAN .. "Deposited " .. #successNames ..
+                " extra item(s) to warbank/bank:|r " ..
+                table.concat(successNames, ", "))
         end
-    end
-
-    if #moves == 0 then
-        local skipped = #warbankMoves + #bankOnlyMoves
-        if skipped > 0 then
-            ns:Print(ns.COLORS.YELLOW .. "Not enough free slots — " .. skipped .. " item(s) remain in bags.|r")
-        end
-        return
-    end
-
-    local totalRequested = #warbankMoves + #bankOnlyMoves
-    if #moves < totalRequested then
-        ns:Print(ns.COLORS.YELLOW .. "Only " .. #moves .. " free slot(s) — depositing " ..
-            #moves .. " of " .. totalRequested .. " extra item(s).|r")
-    end
-
-    -- Execute deposits using same batch pattern as AutoDepositToWarbank
-    local totalMoves = math.min(#moves, #emptySlots)
-    local depositedNames = {}
-    local depositErrors = 0
-    local moveIndex = 1
-    local aborted = false
-    Tracker._depositInProgress = true
-
-    local listener = CreateFrame("Frame")
-
-    local function Cleanup()
-        listener:UnregisterAllEvents()
-        listener:SetScript("OnEvent", nil)
-        Tracker._depositInProgress = false
-    end
-
-    local function FinishDeposit()
-        Cleanup()
-        HideProgress()
-        if #depositedNames > 0 then
-            local destLabel = #warbankEmpty > 0 and "warbank/bank" or "bank"
-            ns:Print(ns.COLORS.CYAN .. "Deposited " .. #depositedNames ..
-                " extra item(s) to " .. destLabel .. ":|r " ..
-                table.concat(depositedNames, ", "))
-        end
-        if depositErrors > 0 then
-            ns:Print(ns.COLORS.YELLOW .. depositErrors ..
+        if errorCount > 0 then
+            ns:Print(ns.COLORS.YELLOW .. errorCount ..
                 " item(s) failed to deposit.|r")
         end
         C_Timer.After(1, function()
@@ -1150,93 +812,5 @@ function Tracker:AutoDepositExtraItems()
             if ns.UI and ns.UI.Refresh then ns.UI:Refresh() end
             if ns.UI and ns.UI.RefreshMini then ns.UI:RefreshMini() end
         end)
-    end
-
-    local function ExecuteNextBatch()
-        if aborted or moveIndex > totalMoves then
-            FinishDeposit()
-            return
-        end
-
-        local batchSize = ns.db and ns.db.settings.pullBatchSize or 5
-        local batchEnd = math.min(moveIndex + batchSize - 1, totalMoves)
-        local batchMoved = 0
-
-        for i = moveIndex, batchEnd do
-            local src = moves[i]
-            local dest = emptySlots[i]
-
-            -- Verify source slot still has an item (may have shifted since scan)
-            local okLock, srcInfo = pcall(C_Container.GetContainerItemInfo, src.bag, src.slot)
-            if not okLock or not srcInfo then
-                -- Slot is empty or inaccessible — skip
-            elseif srcInfo.isLocked then
-                depositErrors = depositErrors + 1
-            else
-                pcall(ClearCursor)
-                pcall(C_Container.PickupContainerItem, src.bag, src.slot)
-                -- Only count as moved if cursor actually holds an item
-                if CursorHasItem() then
-                    pcall(C_Container.PickupContainerItem, dest.bag, dest.slot)
-                    if not CursorHasItem() then
-                        table.insert(depositedNames, src.name)
-                        batchMoved = batchMoved + 1
-                    else
-                        pcall(ClearCursor)
-                        depositErrors = depositErrors + 1
-                    end
-                end
-            end
-        end
-
-        moveIndex = batchEnd + 1
-        ShowProgress("Depositing extras...", #depositedNames, totalMoves)
-
-        if moveIndex > totalMoves then
-            C_Timer.After(0.3, FinishDeposit)
-        elseif batchMoved > 0 then
-            local waitingForUnlock = true
-            listener:RegisterEvent("ITEM_LOCK_CHANGED")
-            listener:RegisterEvent("UI_ERROR_MESSAGE")
-            listener:SetScript("OnEvent", function(_, event, errorType, message)
-                if event == "UI_ERROR_MESSAGE" then
-                    if (message and (message:find("Internal Bag Error") or message == ERR_INTERNAL_BAG_ERROR)) then
-                        aborted = true
-                        depositErrors = depositErrors + 1
-                        listener:UnregisterEvent("ITEM_LOCK_CHANGED")
-                        listener:UnregisterEvent("UI_ERROR_MESSAGE")
-                        FinishDeposit()
-                        return
-                    elseif (message and (message:find("Inventory is full") or message == ERR_INV_FULL)) then
-                        aborted = true
-                        listener:UnregisterEvent("ITEM_LOCK_CHANGED")
-                        listener:UnregisterEvent("UI_ERROR_MESSAGE")
-                        FinishDeposit()
-                        return
-                    end
-                elseif event == "ITEM_LOCK_CHANGED" and waitingForUnlock then
-                    waitingForUnlock = false
-                    listener:UnregisterEvent("ITEM_LOCK_CHANGED")
-                    listener:UnregisterEvent("UI_ERROR_MESSAGE")
-                    C_Timer.After(0.1, ExecuteNextBatch)
-                end
-            end)
-
-            C_Timer.After(PULL_TIMEOUT, function()
-                if waitingForUnlock then
-                    waitingForUnlock = false
-                    listener:UnregisterEvent("ITEM_LOCK_CHANGED")
-                    listener:UnregisterEvent("UI_ERROR_MESSAGE")
-                    ExecuteNextBatch()
-                end
-            end)
-        else
-            -- Nothing moved this batch (empty/stale slots) — proceed immediately
-            C_Timer.After(0, ExecuteNextBatch)
-        end
-    end
-
-    ns:PrintDebug("Depositing " .. totalMoves .. " extra item(s) to warbank/bank...")
-    ShowProgress("Depositing extras...", 0, totalMoves)
-    ExecuteNextBatch()
+    end)
 end

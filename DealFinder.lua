@@ -75,138 +75,7 @@ end
 -- Pre-build personal sales index from log.
 -- Tracks both sold and failed (expired/cancelled) entries for success rate.
 -- Returns: { itemKey = { _sold=N, _failed=N, realmNorm = { total, count, failed } } }
-local function BuildPersonalSalesIndex()
-    local index = {}     -- itemKey -> data
-    local nameIndex = {} -- lowercase name -> data (fallback for key mismatches)
-    if not ns.db or not ns.db.log then return index, nameIndex end
-
-    for _, entry in ipairs(ns.db.log) do
-        local key = entry.itemKey
-        if not key then key = nil end  -- skip entries with no key
-
-        if key then
-            if not index[key] then index[key] = { _sold = 0, _failed = 0, _posted = 0 } end
-            -- Also index by name for fallback matching
-            local entryName = entry.name and entry.name:lower() or nil
-            if entryName and not nameIndex[entryName] then
-                nameIndex[entryName] = index[key]
-            elseif entryName and nameIndex[entryName] ~= index[key] then
-                nameIndex[entryName] = nameIndex[entryName] or index[key]
-            end
-
-            local isSold = (entry.auctionStatus == "sold" or entry.saleOutcome == "sold")
-            local isFailed = (entry.auctionStatus == "expired" or entry.auctionStatus == "cancelled"
-                or entry.saleOutcome == "expired" or entry.saleOutcome == "cancelled")
-            local isPosted = (entry.auctionStatus == "collected" or entry.auctionStatus == "active")
-
-            -- Parse price from any available field
-            local price = entry.soldPrice or entry.postedPrice
-            if type(price) == "string" then
-                price = (ns:ParseGoldValue(price) or 0) * 10000
-            end
-            local realmNorm = entry.targetRealm and ns:NormalizeRealmKey(entry.targetRealm) or nil
-
-            if isSold then
-                index[key]._sold = index[key]._sold + 1
-                if realmNorm then
-                    if not index[key][realmNorm] then
-                        index[key][realmNorm] = { total = 0, count = 0, failed = 0, posted = 0 }
-                    end
-                    if price and price > 0 then
-                        index[key][realmNorm].total = index[key][realmNorm].total + price
-                    end
-                    index[key][realmNorm].count = index[key][realmNorm].count + 1
-                end
-            elseif isFailed then
-                index[key]._failed = index[key]._failed + 1
-                if realmNorm then
-                    if not index[key][realmNorm] then
-                        index[key][realmNorm] = { total = 0, count = 0, failed = 0, posted = 0 }
-                    end
-                    index[key][realmNorm].failed = index[key][realmNorm].failed + 1
-                end
-            elseif isPosted then
-                index[key]._posted = index[key]._posted + 1
-                if realmNorm then
-                    if not index[key][realmNorm] then
-                        index[key][realmNorm] = { total = 0, count = 0, failed = 0, posted = 0 }
-                    end
-                    index[key][realmNorm].posted = index[key][realmNorm].posted + 1
-                end
-            end
-        end
-    end
-
-    return index, nameIndex
-end
-
--- Resolve sales index entry: exact key → base ID fallback → pet fallback → name fallback
-local function ResolveSalesData(salesIndex, nameIndex, itemKey, itemName)
-    -- 1. Exact key match
-    if salesIndex[itemKey] then return salesIndex[itemKey] end
-
-    -- 2. Try without bonus/modifier suffix (e.g., "12345;;" matches "12345;bonus;mod")
-    local baseKey = itemKey:match("^([^;]+)") .. ";;"
-    if baseKey ~= itemKey and salesIndex[baseKey] then return salesIndex[baseKey] end
-
-    -- 3. Pet fallback: try species variants
-    local speciesID = itemKey:match("^(pet:%d+)")
-    if speciesID then
-        local fallback = salesIndex[speciesID .. ";;"]
-        if fallback then return fallback end
-        for k, v in pairs(salesIndex) do
-            if k:match("^" .. speciesID) then return v end
-        end
-    end
-
-    -- 4. Name-based fallback
-    if nameIndex and itemName then
-        local data = nameIndex[itemName:lower()]
-        if data then return data end
-    end
-
-    return nil
-end
-
--- Get personal sales summary for an item across all realms.
-local function GetPersonalSummary(salesIndex, nameIndex, itemKey, itemName)
-    local data = ResolveSalesData(salesIndex, nameIndex, itemKey, itemName)
-    if not data then return { sold = 0, failed = 0, posted = 0, successRate = 0, avgPrice = 0, byRealm = {} } end
-
-    local totalCopper, totalSold = 0, 0
-    local byRealm = {}
-    for k, r in pairs(data) do
-        if k:sub(1, 1) ~= "_" then
-            totalCopper = totalCopper + (r.total or 0)
-            totalSold = totalSold + (r.count or 0)
-            byRealm[k] = {
-                count = r.count or 0,
-                failed = r.failed or 0,
-                posted = r.posted or 0,
-                avg = (r.count or 0) > 0 and math.floor((r.total or 0) / r.count) or 0,
-            }
-        end
-    end
-
-    local totalAttempts = (data._sold or 0) + (data._failed or 0)
-    return {
-        sold = data._sold or 0,
-        failed = data._failed or 0,
-        posted = data._posted or 0,
-        successRate = totalAttempts > 0 and (data._sold or 0) / totalAttempts or 0,
-        avgPrice = totalSold > 0 and math.floor(totalCopper / totalSold) or 0,
-        byRealm = byRealm,
-    }
-end
-
-local function GetPersonalForRealm(salesIndex, nameIndex, itemKey, itemName, targetRealm)
-    local data = ResolveSalesData(salesIndex, nameIndex, itemKey, itemName)
-    if not data then return nil, 0 end
-    local realmNorm = ns:NormalizeRealmKey(targetRealm)
-    local r = data[realmNorm]
-    if r and r.count > 0 then return math.floor(r.total / r.count), r.count end
-    return nil, 0
-end
+-- Sales data now served by ns.SalesIndex (SalesIndex.lua)
 
 local function BlendPrice(tsmPrice, personalAvg, personalCount)
     if not tsmPrice or tsmPrice <= 0 then return personalAvg or 0 end
@@ -304,7 +173,7 @@ function DealFinder:ScanChunked(pool, onProgress, onComplete)
     for _ in pairs(sellRealms) do realmCount = realmCount + 1 end
 
     local hasRealmData = ns.TSMRealms and ns.TSMRealms:IsLoaded()
-    local salesIndex, salesNameIndex = BuildPersonalSalesIndex()
+    -- Sales data from unified SalesIndex
 
     local itemGroups = {}
     local total = #pool
@@ -349,7 +218,7 @@ function DealFinder:ScanChunked(pool, onProgress, onComplete)
                 saleRate = regionSaleRate > 1 and (regionSaleRate / 100) or regionSaleRate
             end
 
-            local personalSummary = GetPersonalSummary(salesIndex, salesNameIndex, itemKey, poolItem.name)
+            local personalSummary = ns.SalesIndex:GetSalesSummary(itemKey, poolItem.name)
 
             -- Extract base ID, bonus, modifiers (handle pet:SPECIESID format)
             local baseID, bonusStr, modStr
@@ -381,7 +250,7 @@ function DealFinder:ScanChunked(pool, onProgress, onComplete)
                 end
 
                 if tsmPrice and tsmPrice > 0 then
-                    local personalAvg, personalCount = GetPersonalForRealm(salesIndex, salesNameIndex, itemKey, poolItem.name, targetRealm)
+                    local personalAvg, personalCount = ns.SalesIndex:GetSalesForRealm(itemKey, poolItem.name, targetRealm)
                     local blendedPrice = BlendPrice(tsmPrice, personalAvg, personalCount)
 
                     if blendedPrice >= minPrice then

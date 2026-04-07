@@ -118,6 +118,9 @@ function ns:InitDB()
     if db.settings.tutorialDone == nil then db.settings.tutorialDone = false end
     -- Setup wizard (first-run settings configuration)
     -- Existing users (tutorial done or have character data) skip the wizard
+    -- Popup anchor positions (relative to mini frame)
+    db.settings.bankPopupAnchor = db.settings.bankPopupAnchor or "below"   -- below, above, left, right
+    db.settings.detailPopupAnchor = db.settings.detailPopupAnchor or "left" -- left, right
     if db.settings.setupDone == nil then
         if db.settings.tutorialDone or next(db.characters or {}) then
             db.settings.setupDone = true

@@ -162,20 +162,10 @@ local function BuildCurrentCharTasks()
     -- Expired auctions are in MAIL, not AH — handled by "Check Mail" below
 
     -- Check Mail: distinguish sold (collect gold) vs expired/cancelled (collect items)
-    local soldInMail = 0
-    local expiredInMail = 0
-    local cancelledInMail = 0
-    for _, entry in ipairs(ns.db.log) do
-        if entry.charKey == myCharKey then
-            if entry.auctionStatus == "sold" and not entry.collectedAt then
-                soldInMail = soldInMail + 1
-            elseif entry.auctionStatus == "expired" then
-                expiredInMail = expiredInMail + 1
-            elseif entry.auctionStatus == "cancelled" then
-                cancelledInMail = cancelledInMail + 1
-            end
-        end
-    end
+    local uncollected = ns.SalesIndex:GetUncollectedForChar(myCharKey)
+    local soldInMail = uncollected.sold
+    local expiredInMail = uncollected.expired
+    local cancelledInMail = uncollected.cancelled
     if soldInMail > 0 then
         table.insert(tasks, {
             icon   = "Interface\\Icons\\INV_Misc_Coin_01",
@@ -294,9 +284,11 @@ local function BuildNextStepsData()
     local receiverOf = {}      -- receiverCharKey -> { depositorCharKey = true }
 
     if todoList and todoList.tasks then
-        -- Collect deposit dependencies (only pending tasks — posted/skipped are terminal)
+        -- Collect deposit dependencies (only pending tasks — posted/skipped are terminal).
+        -- Don't require source=="unavailable" — for non-logged-in chars, source may
+        -- still reflect the last known state (e.g. "warbank") until RefreshLocations runs.
         for _, item in ipairs(todoList.tasks) do
-            if item.status == "pending" and item.source == "unavailable" and item.depositFrom then
+            if item.status == "pending" and item.depositFrom then
                 if not depositsByChar[item.depositFrom] then
                     depositsByChar[item.depositFrom] = { count = 0, gold = 0 }
                 end

@@ -153,6 +153,7 @@ function Tracker:ScanMailForSales()
         ns:Print(ns.COLORS.YELLOW .. collectedCount .. " returned auction(s) collected.|r")
     end
     if soldCount > 0 or collectedCount > 0 then
+        if ns.SalesIndex then ns.SalesIndex:Invalidate() end
         if ns.UI and ns.UI.Refresh then ns.UI:Refresh() end
         if ns.UI and ns.UI.RefreshMini then ns.UI:RefreshMini() end
     end

@@ -400,9 +400,15 @@ function TodoList:RefreshLocations()
                 changed = true
             elseif not inBags and item.source == "bags" then
                 -- Item left bags (posted, deposited, etc.) — mark unavailable
-                -- Full scan (bank open, etc.) will set the correct location
                 item.source = "unavailable"
                 changed = true
+            elseif not inBags and item.source == "warbank" then
+                -- Verify item is still in warbank (data may be stale)
+                local stillInWarbank = IsItemInLookup(item, warbankItemKeys, warbankItemIDs, warbankPetSpecies, warbankItemNames)
+                if not stillInWarbank then
+                    item.source = "unavailable"
+                    changed = true
+                end
             end
         end
 

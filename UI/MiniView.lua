@@ -207,6 +207,11 @@ end
 function UI:RefreshMini()
     if not mini:IsShown() then return end
     if not ns.db then return end
+    -- Close detail popup on refresh (data may have changed)
+    if detailPopup and detailPopup:IsShown() then
+        detailPopup:Hide()
+        detailItemKey = nil
+    end
 
     -- Update sync status dot
     if ns.Sync and ns.Sync.IsLinked and ns.Sync:IsLinked() then
@@ -278,10 +283,11 @@ function UI:RefreshMini()
             local isBuyTask = task.item.action == "buy"
             local realmToMatch = isBuyTask and task.item.buyRealm or task.item.targetRealm
             if ns:RealmMatches(realmToMatch or "", myRealm) then
-                -- Skip tasks where another character needs to deposit first
+                -- Skip deferred tasks and tasks where another character needs to deposit first
+                local isDeferred = task.item.deferredAt and true or false
                 local needsOtherDeposit = task.item.depositFrom and task.item.depositFrom ~= charKey
-                if not isBuyTask and needsOtherDeposit then
-                    -- skip — item is on another character, not actionable here
+                if isDeferred or (not isBuyTask and needsOtherDeposit) then
+                    -- skip — not actionable here
                 else
 
                 local itemNumID = tonumber(task.item.itemID) or tonumber(task.item.itemKey and task.item.itemKey:match("^(%d+)"))
@@ -296,6 +302,7 @@ function UI:RefreshMini()
                 table.insert(tasks, {
                     name     = task.item.name or "?",
                     itemID   = task.item.itemID,
+                    itemKey  = task.item.itemKey,
                     price    = isBuyTask and task.item.buyPrice or task.item.expectedPrice,
                     realm    = isBuyTask and task.item.buyRealm or task.item.targetRealm,
                     icon     = task.item.icon,
@@ -307,6 +314,7 @@ function UI:RefreshMini()
                     _isBuy   = isBuyTask,
                     _deferred = task.item.deferredAt and true or false,
                     _depositFrom = task.item.depositFrom,
+                    _taskItem = task.item,  -- full task data for detail popup
                 })
                 end -- else (not deferred)
             end
@@ -632,9 +640,12 @@ function UI:RefreshMini()
                 UI.HideTaskActionBtns(row)
             end
 
-            -- Right-click to mark posted, Shift+Right to skip (kept as alternative)
+            -- Left-click: show item detail popup
+            -- Right-click: mark posted / Shift+Right: skip
             row:SetScript("OnMouseDown", function(self, button)
-                if button == "RightButton" then
+                if button == "LeftButton" then
+                    UI:ShowItemDetail(capturedTask)
+                elseif button == "RightButton" then
                     if capturedTask._isTodo and ns.TodoList then
                         if IsShiftKeyDown() then
                             ns.TodoList:SkipTask(capturedTask._taskIdx, "manual skip")
@@ -915,6 +926,285 @@ function UI:ToggleMini()
 end
 
 UI.miniFrame = mini
+
+--------------------------
+-- Bank operations progress rollout (visible even when collapsed)
+--------------------------
+
+local progressRollout = CreateFrame("Frame", nil, mini, "BackdropTemplate")
+progressRollout:SetHeight(22)
+progressRollout:SetPoint("TOPLEFT", mini, "BOTTOMLEFT", 0, 2)
+progressRollout:SetPoint("TOPRIGHT", mini, "BOTTOMRIGHT", 0, 2)
+progressRollout:SetBackdrop({
+    bgFile = "Interface\\Tooltips\\UI-Tooltip-Background",
+    edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
+    edgeSize = 14,
+    insets = {left = 3, right = 3, top = 3, bottom = 3},
+})
+progressRollout:SetBackdropColor(0.05, 0.05, 0.1, 0.9)
+progressRollout:SetBackdropBorderColor(0.3, 0.3, 0.4, 0.8)
+progressRollout:Hide()
+
+local rolloutBar = CreateFrame("StatusBar", nil, progressRollout)
+rolloutBar:SetHeight(12)
+rolloutBar:SetPoint("LEFT", progressRollout, "LEFT", 6, 0)
+rolloutBar:SetPoint("RIGHT", progressRollout, "RIGHT", -6, 0)
+rolloutBar:SetStatusBarTexture("Interface\\TargetingFrame\\UI-StatusBar")
+rolloutBar:SetStatusBarColor(0.26, 0.6, 1)
+rolloutBar:SetMinMaxValues(0, 1)
+rolloutBar:SetValue(0)
+
+local rolloutBarBg = rolloutBar:CreateTexture(nil, "BACKGROUND")
+rolloutBarBg:SetAllPoints()
+rolloutBarBg:SetColorTexture(0.1, 0.1, 0.1, 0.8)
+
+local rolloutText = rolloutBar:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+rolloutText:SetPoint("CENTER", rolloutBar, "CENTER")
+
+function UI:ShowMiniProgress(current, total, label)
+    if not mini:IsShown() then return end
+    rolloutBar:SetMinMaxValues(0, total)
+    rolloutBar:SetValue(current)
+    rolloutText:SetText((label or "Bank ops") .. "  " .. current .. "/" .. total)
+    progressRollout:Show()
+end
+
+function UI:HideMiniProgress()
+    progressRollout:Hide()
+end
+
+--------------------------
+-- Item Detail Popup (click-to-inspect on left side of mini)
+--------------------------
+
+local detailPopup = nil
+local detailItemKey = nil  -- currently shown itemKey (toggle on re-click)
+
+local function GetDetailPopup()
+    if detailPopup then return detailPopup end
+
+    local f = CreateFrame("Frame", "FlipQueueItemDetail", mini, "BackdropTemplate")
+    f:SetWidth(280)
+    f:SetFrameStrata("DIALOG")
+
+    -- Anchor based on user setting
+    local function ApplyDetailAnchor()
+        f:ClearAllPoints()
+        local anchor = ns.db and ns.db.settings.detailPopupAnchor or "left"
+        if anchor == "right" then
+            f:SetPoint("TOPLEFT", mini, "TOPRIGHT", 4, 0)
+        else -- "left" (default)
+            f:SetPoint("TOPRIGHT", mini, "TOPLEFT", -4, 0)
+        end
+    end
+    f.ApplyAnchor = ApplyDetailAnchor
+    ApplyDetailAnchor()
+    f:SetClampedToScreen(true)
+    f:SetBackdrop({
+        bgFile = "Interface\\Tooltips\\UI-Tooltip-Background",
+        edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
+        edgeSize = 14,
+        insets = {left = 3, right = 3, top = 3, bottom = 3},
+    })
+    f:SetBackdropColor(0.06, 0.06, 0.1, 0.95)
+    f:SetBackdropBorderColor(0.3, 0.3, 0.4, 0.9)
+
+    -- Title
+    f.title = f:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+    f.title:SetPoint("TOPLEFT", f, "TOPLEFT", 8, -8)
+    f.title:SetPoint("TOPRIGHT", f, "TOPRIGHT", -8, -8)
+    f.title:SetJustifyH("LEFT")
+
+    -- Close button
+    local closeBtn = CreateFrame("Button", nil, f)
+    closeBtn:SetSize(14, 14)
+    closeBtn:SetPoint("TOPRIGHT", f, "TOPRIGHT", -6, -6)
+    closeBtn:SetNormalTexture("Interface\\Buttons\\UI-StopButton")
+    closeBtn:SetHighlightTexture("Interface\\Buttons\\UI-StopButton")
+    closeBtn:GetHighlightTexture():SetAlpha(0.3)
+    closeBtn:SetScript("OnClick", function()
+        f:Hide()
+        detailItemKey = nil
+    end)
+
+    -- Content lines pool
+    f.lines = {}
+    f.lineCount = 0
+
+    f:Hide()
+    detailPopup = f
+    return f
+end
+
+local function ClearDetailLines(f)
+    for _, line in ipairs(f.lines) do line:Hide() end
+    f.lineCount = 0
+end
+
+local function AddDetailLine(f, text, r, g, b)
+    f.lineCount = f.lineCount + 1
+    local idx = f.lineCount
+    local line = f.lines[idx]
+    if not line then
+        line = f:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+        line:SetPoint("TOPLEFT", f, "TOPLEFT", 8, -26 - (idx - 1) * 14)
+        line:SetPoint("RIGHT", f, "RIGHT", -8, 0)
+        line:SetJustifyH("LEFT")
+        line:SetWordWrap(true)
+        f.lines[idx] = line
+    end
+    line:SetText(text)
+    if r then line:SetTextColor(r, g, b) end
+    line:Show()
+    return line
+end
+
+local function AddDetailSpacer(f)
+    AddDetailLine(f, " ")
+end
+
+local function FormatCopper(copper)
+    if not copper or copper == 0 then return "0g" end
+    return math.floor(copper / 10000) .. "g"
+end
+
+local function ShowItemDetail(task)
+    if not task or not task._taskItem then return end
+    local item = task._taskItem
+    local f = GetDetailPopup()
+    ClearDetailLines(f)
+
+    -- Title: item name with icon
+    local qualColor = ITEM_QUALITY_COLORS[item.quality or 1]
+    local colorHex = qualColor and qualColor.hex or "|cffffffff"
+    f.title:SetText(colorHex .. (item.name or "Unknown") .. "|r")
+
+    -- Section: Location & Assignment
+    AddDetailLine(f, ns.COLORS.YELLOW .. "Location & Assignment|r")
+
+    local source = item.source or "unknown"
+    if source == "bags" then
+        AddDetailLine(f, "  In bags on " .. (item.assignedChar or "?"))
+    elseif source == "warbank" then
+        AddDetailLine(f, "  In warband bank")
+    elseif source == "bank" then
+        AddDetailLine(f, "  In personal bank")
+    elseif item.depositFrom then
+        local depName = item.depositFrom:match("^(.-)%-") or item.depositFrom
+        AddDetailLine(f, "  Needs deposit from " .. depName)
+    else
+        AddDetailLine(f, "  " .. source)
+    end
+
+    AddDetailLine(f, "  Assigned to: " .. (item.assignedChar or "unassigned"))
+
+    if item.action == "buy" then
+        AddDetailLine(f, "  Action: BUY on " .. (item.buyRealm or "?"))
+        if item.buyPrice then AddDetailLine(f, "  Buy price: " .. item.buyPrice) end
+    else
+        AddDetailLine(f, "  Action: SELL on " .. (item.targetRealm or "?"))
+    end
+
+    -- Section: Pricing
+    AddDetailSpacer(f)
+    AddDetailLine(f, ns.COLORS.YELLOW .. "Pricing|r")
+    if item.expectedPrice then
+        AddDetailLine(f, "  Expected price: " .. item.expectedPrice)
+    end
+    if item.profitAmount then
+        local profitStr = FormatCopper(item.profitAmount)
+        local pctStr = item.profitPct and string.format(" (%.0f%%)", item.profitPct) or ""
+        AddDetailLine(f, "  Est. profit: " .. ns.COLORS.GREEN .. profitStr .. pctStr .. "|r")
+    end
+    if item.saleAvg then
+        AddDetailLine(f, "  Regional avg: " .. FormatCopper(item.saleAvg))
+    end
+
+    -- Section: Research (if ItemResearch is available)
+    if ns.ItemResearch and item.itemKey then
+        AddDetailSpacer(f)
+        AddDetailLine(f, ns.COLORS.YELLOW .. "Research|r")
+
+        local research = ns.ItemResearch:GetItemResearch(item.itemKey, item.name)
+        if research then
+            -- Inventory
+            if research.totalInventory then
+                AddDetailLine(f, "  Total inventory: " .. research.totalInventory)
+            end
+            if research.inventory then
+                for _, inv in ipairs(research.inventory) do
+                    local charName = inv.charKey and (inv.charKey:match("^(.-)%-") or inv.charKey) or "?"
+                    local locs = {}
+                    if inv.locations then
+                        if inv.locations.bags and inv.locations.bags > 0 then table.insert(locs, inv.locations.bags .. " bags") end
+                        if inv.locations.bank and inv.locations.bank > 0 then table.insert(locs, inv.locations.bank .. " bank") end
+                        if inv.locations.warbank and inv.locations.warbank > 0 then table.insert(locs, inv.locations.warbank .. " wb") end
+                    end
+                    local locStr = #locs > 0 and (" (" .. table.concat(locs, ", ") .. ")") or ""
+                    AddDetailLine(f, "    " .. charName .. ": " .. inv.quantity .. locStr)
+                end
+            end
+
+            -- Sales summary
+            if research.salesSummary and research.salesSummary.count > 0 then
+                local ss = research.salesSummary
+                AddDetailLine(f, "  Sales: " .. ss.count .. " sold, avg " .. FormatCopper(ss.avgPrice))
+            end
+
+            -- Failure summary
+            if research.failureSummary then
+                local fs = research.failureSummary
+                local expCount = fs.expiredCount or 0
+                local canCount = fs.cancelledCount or 0
+                if expCount > 0 or canCount > 0 then
+                    local feesStr = fs.totalFeesLost and (" (" .. FormatCopper(fs.totalFeesLost) .. " fees)") or ""
+                    AddDetailLine(f, "  Failures: " .. expCount .. " expired, " .. canCount .. " cancelled" .. feesStr, 1, 0.5, 0.5)
+                end
+            end
+
+            -- Sell rate
+            if item.sellRate then
+                AddDetailLine(f, "  Sell rate: " .. string.format("%.1f", item.sellRate) .. "/day")
+            elseif research.fpDeals then
+                for _, deal in ipairs(research.fpDeals) do
+                    if deal.sellRate then
+                        AddDetailLine(f, "  Sell rate: " .. string.format("%.1f", deal.sellRate) .. "/day")
+                        break
+                    end
+                end
+            end
+        else
+            AddDetailLine(f, "  No research data available", 0.5, 0.5, 0.5)
+        end
+    end
+
+    -- Resize to fit
+    local height = 26 + f.lineCount * 14 + 8
+    f:SetHeight(height)
+    f:Show()
+end
+
+function UI:ShowItemDetail(task)
+    if not task or not task.itemKey then
+        if detailPopup then detailPopup:Hide() end
+        detailItemKey = nil
+        return
+    end
+    -- Toggle: clicking same item closes the popup
+    if detailItemKey == task.itemKey and detailPopup and detailPopup:IsShown() then
+        detailPopup:Hide()
+        detailItemKey = nil
+        return
+    end
+    detailItemKey = task.itemKey
+    if detailPopup and detailPopup.ApplyAnchor then detailPopup.ApplyAnchor() end
+    ShowItemDetail(task)
+end
+
+function UI:HideItemDetail()
+    if detailPopup then detailPopup:Hide() end
+    detailItemKey = nil
+end
 
 --------------------------
 -- Hide in combat (optional)

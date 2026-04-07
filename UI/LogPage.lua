@@ -35,26 +35,29 @@ local function BuildLogData(startIdx, endIdx)
         end
 
         -- Status display
-        local aStatus = entry.auctionStatus or "active"
+        local SI = ns.SalesIndex
         local statusStr
-        if aStatus == "sold" then
+        if SI.IsSold(entry) then
             statusStr = ns.COLORS.GREEN .. "Sold" .. "|r"
-        elseif aStatus == "cancelled" then
-            statusStr = ns.COLORS.ORANGE .. "Cancelled" .. "|r"
-        elseif aStatus == "expired" then
-            statusStr = ns.COLORS.RED .. "Expired" .. "|r"
-        elseif aStatus == "collected" then
-            if entry.saleOutcome == "sold" then
-                statusStr = ns.COLORS.GREEN .. "Sold" .. "|r"
-            elseif entry.saleOutcome == "expired" then
-                statusStr = ns.COLORS.ORANGE .. "Unsold" .. "|r"
+        elseif SI.IsFailed(entry) then
+            local aStatus = entry.auctionStatus or ""
+            if aStatus == "cancelled" then
+                statusStr = ns.COLORS.ORANGE .. "Cancelled" .. "|r"
+            elseif entry.saleOutcome == "expired" or aStatus == "expired" then
+                if aStatus == "collected" then
+                    statusStr = ns.COLORS.ORANGE .. "Unsold" .. "|r"
+                else
+                    statusStr = ns.COLORS.RED .. "Expired" .. "|r"
+                end
             else
                 statusStr = ns.COLORS.GRAY .. "Done" .. "|r"
             end
-        elseif aStatus == "skipped" then
+        elseif (entry.auctionStatus or "") == "skipped" then
             statusStr = ns.COLORS.ORANGE .. "Skipped" .. "|r"
-        else
+        elseif SI.IsActive(entry) then
             statusStr = ns.COLORS.YELLOW .. "Active" .. "|r"
+        else
+            statusStr = ns.COLORS.GRAY .. "Done" .. "|r"
         end
 
         if (entry.postAttempts or 0) > 0 then
@@ -63,7 +66,7 @@ local function BuildLogData(startIdx, endIdx)
 
         -- Price display
         local priceStr
-        if (aStatus == "sold" or entry.saleOutcome == "sold") and entry.soldPrice and entry.soldPrice > 0 then
+        if SI.IsSold(entry) and entry.soldPrice and entry.soldPrice > 0 then
             priceStr = ns.COLORS.GREEN .. ns:FormatGold(entry.soldPrice) .. "|r"
         else
             priceStr = entry.postedPrice or "?"
@@ -79,7 +82,7 @@ local function BuildLogData(startIdx, endIdx)
         if entry.isRecovered then
             tooltipExtra = tooltipExtra .. "\n" .. ns.COLORS.YELLOW .. "Recovered from AH (approx. post time)|r"
         end
-        if aStatus == "sold" or entry.saleOutcome == "sold" then
+        if SI.IsSold(entry) then
             tooltipExtra = tooltipExtra .. "\n" .. ns.COLORS.GREEN .. "Sold for: " ..
                 (entry.soldPrice and entry.soldPrice > 0 and ns:FormatGold(entry.soldPrice) or "unknown") .. "|r"
             if entry.soldAt then
@@ -143,40 +146,20 @@ local function BuildLogData(startIdx, endIdx)
     return data
 end
 
--- Build summary stats from full log (counting only, no API calls — fast even for 8000+)
+-- Build summary stats via SalesIndex (canonical counts)
 local function BuildLogStats()
     if not ns.db or not ns.db.log then return 0, "" end
     local logCount = #ns.db.log
-    local soldCount, activeCount, expiredCount, skippedCount, unsoldCount = 0, 0, 0, 0, 0
-    local totalFeesLost = 0
-    for _, entry in ipairs(ns.db.log) do
-        if entry.auctionStatus == "sold" then
-            soldCount = soldCount + 1
-        elseif entry.auctionStatus == "expired" then
-            expiredCount = expiredCount + 1
-        elseif entry.auctionStatus == "active" then
-            activeCount = activeCount + 1
-        elseif entry.auctionStatus == "skipped" then
-            skippedCount = skippedCount + 1
-        elseif entry.auctionStatus == "collected" and entry.saleOutcome == "sold" then
-            soldCount = soldCount + 1
-        elseif entry.auctionStatus == "collected" and entry.saleOutcome == "expired" then
-            unsoldCount = unsoldCount + 1
-        end
-        if (entry.totalFeesSpent or 0) > 0 then
-            totalFeesLost = totalFeesLost + entry.totalFeesSpent
-        end
-    end
+    local s = ns.SalesIndex:GetLogStats()
     local parts = {}
-    if soldCount > 0 then table.insert(parts, ns.COLORS.GREEN .. soldCount .. " sold|r") end
-    if activeCount > 0 then table.insert(parts, ns.COLORS.YELLOW .. activeCount .. " active|r") end
-    if expiredCount > 0 then table.insert(parts, ns.COLORS.RED .. expiredCount .. " expired|r") end
-    if unsoldCount > 0 then table.insert(parts, ns.COLORS.ORANGE .. unsoldCount .. " unsold|r") end
-    if skippedCount > 0 then table.insert(parts, ns.COLORS.ORANGE .. skippedCount .. " skipped|r") end
+    if s.sold > 0 then table.insert(parts, ns.COLORS.GREEN .. s.sold .. " sold|r") end
+    if s.active > 0 then table.insert(parts, ns.COLORS.YELLOW .. s.active .. " active|r") end
+    if s.expired > 0 then table.insert(parts, ns.COLORS.RED .. s.expired .. " expired|r") end
+    if s.skipped > 0 then table.insert(parts, ns.COLORS.ORANGE .. s.skipped .. " skipped|r") end
     local statsStr = logCount .. " logged"
     if #parts > 0 then statsStr = statsStr .. " (" .. table.concat(parts, ", ") .. ")" end
-    if totalFeesLost > 0 then
-        statsStr = statsStr .. "  |  " .. ns.COLORS.RED .. "Fees lost: " .. ns:FormatGold(totalFeesLost) .. "|r"
+    if s.totalFees > 0 then
+        statsStr = statsStr .. "  |  " .. ns.COLORS.RED .. "Fees lost: " .. ns:FormatGold(s.totalFees) .. "|r"
     end
     return logCount, statsStr
 end

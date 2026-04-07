@@ -19,6 +19,7 @@ function ItemResearch:InvalidateCache(itemKey)
     else
         wipe(researchCache)
     end
+    if ns.SalesIndex then ns.SalesIndex:Invalidate() end
 end
 
 --------------------------
@@ -39,16 +40,11 @@ end
 -- Pet cage item ID (82800) — used to detect orphaned pet log entries
 local PET_CAGE_ID = 82800
 
+-- Adapter: uses ns:ItemsMatch (the canonical matcher) with a synthetic queueItem
 local function ItemMatches(entryKey, entryName, targetKey, targetID, targetName)
-    if entryKey and entryKey ~= "" and entryKey == targetKey then return true end
-    if targetID then
-        local entryID = ExtractNumericID(entryKey)
-        if entryID and entryID == targetID then return true end
-    end
-    if targetName and entryName then
-        if entryName:lower() == targetName:lower() then return true end
-    end
-    return false
+    local queueItem = { itemKey = targetKey, itemID = targetID, name = targetName or "" }
+    local matched = ns:ItemsMatch(entryKey, entryName, queueItem, false, false)
+    return matched
 end
 
 local function ParseCopper(val)
@@ -341,10 +337,7 @@ function ItemResearch:GetItemResearch(itemKey, itemName, skipCache)
             if not record.quality and entry.quality then record.quality = entry.quality end
             if (not record.name or record.name == "") and entry.name then record.name = entry.name end
 
-            local status = entry.auctionStatus
-            local outcome = entry.saleOutcome
-
-            if status == "sold" or outcome == "sold" then
+            if ns.SalesIndex.IsSold(entry) then
                 local soldCopper = entry.soldPrice or ParseCopper(entry.postedPrice or entry.expectedPrice)
                 table.insert(record.sales, {
                     soldPrice = soldCopper,
@@ -355,21 +348,20 @@ function ItemResearch:GetItemResearch(itemKey, itemName, skipCache)
                     postedAt = entry.postedAt,
                     quantity = entry.postedQuantity or 1,
                 })
-            elseif status == "expired" or status == "cancelled"
-                or (status == "collected" and outcome == "expired") then
+            elseif ns.SalesIndex.IsFailed(entry) then
                 table.insert(record.failures, {
                     postedPrice = entry.postedPrice or "",
                     targetRealm = entry.targetRealm or "Unknown",
                     charKey = entry.charKey or "",
                     postedAt = entry.postedAt,
-                    auctionStatus = status,
-                    saleOutcome = outcome,
+                    auctionStatus = entry.auctionStatus,
+                    saleOutcome = entry.saleOutcome,
                     fee = entry.ahFee or 0,
                     totalFeesSpent = entry.totalFeesSpent or 0,
                     postAttempts = entry.postAttempts or 0,
                     postHistory = entry.postHistory,
                 })
-            elseif status == "active" then
+            elseif ns.SalesIndex.IsActive(entry) then
                 table.insert(record.activeAuctions, {
                     postedPrice = entry.postedPrice or "",
                     expectedPrice = entry.expectedPrice or "",

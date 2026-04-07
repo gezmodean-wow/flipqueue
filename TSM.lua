@@ -335,7 +335,7 @@ end
 -- Detect characters from TSM's internal scope data.
 -- Returns array of {charKey, name, realm, class, gold} for chars not in ns.db.characters.
 function TSM:DetectCharacters()
-    if not type(TradeSkillMasterDB) == "table" then return {} end
+    if type(TradeSkillMasterDB) ~= "table" then return {} end
 
     local scopeKeys = TradeSkillMasterDB._scopeKeys
     if not scopeKeys or not scopeKeys.char then return {} end
