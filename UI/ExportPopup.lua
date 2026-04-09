@@ -215,13 +215,13 @@ function UI:ShowDebugExport(text, statusMsg)
     -- Build HTML in chunks to avoid massive single string
     local htmlStr = "<html><body><p>" .. safeText .. "</p></body></html>"
 
-    ns:Print("ShowDebugExport: htmlLen=" .. #htmlStr)
+    ns:PrintDebug("ShowDebugExport: htmlLen=" .. #htmlStr)
     local ok, err = pcall(debugPopup._html.SetText, debugPopup._html, htmlStr)
     if not ok then
-        ns:Print(ns.COLORS.RED .. "SimpleHTML error: " .. tostring(err) .. "|r")
+        ns:PrintError("SimpleHTML error: " .. tostring(err))
         debugPopup._html:SetText("<html><body><p>Error rendering (" .. #htmlStr .. " chars). Use Save &amp; Reload button.</p></body></html>")
     else
-        ns:Print("SimpleHTML SetText OK")
+        ns:PrintDebug("SimpleHTML SetText OK")
     end
     debugPopup._status:SetText(statusMsg or "")
     debugPopup:Show()

@@ -30,10 +30,12 @@ end
 -- Expose for TrackerBank
 Tracker._GetNameFromLink = GetNameFromLink
 
--- Get the bag quantity for a specific queue item across all inventory bags
+-- Get the bag quantity for a specific queue item across all carried bags
+-- (regular bags + reagent bag — items in the reagent bag still count as
+-- "in inventory" for our purposes).
 local function CountInBags(queueItem)
     local total = 0
-    for _, bagIndex in ipairs(ns.INVENTORY_BAGS) do
+    for _, bagIndex in ipairs(ns.ALL_PLAYER_BAGS) do
         local okSlots, numSlots = pcall(C_Container.GetContainerNumSlots, bagIndex)
         if not okSlots or not numSlots then numSlots = 0 end
         for slot = 1, numSlots do
@@ -437,7 +439,7 @@ function Tracker:BuildDepositOps()
     local ops = {}
     local depositMatched = {}
 
-    for _, bagIndex in ipairs(ns.INVENTORY_BAGS) do
+    for _, bagIndex in ipairs(ns.ALL_PLAYER_BAGS) do
         local ok, numSlots = pcall(C_Container.GetContainerNumSlots, bagIndex)
         if ok and numSlots then
             for slot = 1, numSlots do
@@ -522,14 +524,48 @@ function Tracker:BuildExtraDepositOps(excludeSlots)
     local consumedNames = {}
     excludeSlots = excludeSlots or {}
 
-    for _, bagIndex in ipairs(ns.INVENTORY_BAGS) do
+    -- Reagents/materials are not tracked for sales or to-dos (not
+    -- cross-region), so by default we leave them on the character. The user
+    -- can opt in to sweep them into the warbank via depositIncludeReagents.
+    local includeReagents = ns.db and ns.db.settings.depositIncludeReagents
+
+    for _, bagIndex in ipairs(ns.ALL_PLAYER_BAGS) do
         local ok, numSlots = pcall(C_Container.GetContainerNumSlots, bagIndex)
         if ok and numSlots then
             for slot = 1, numSlots do
                 local ok2, info = pcall(C_Container.GetContainerItemInfo, bagIndex, slot)
                 if ok2 and info and info.hyperlink then
                     local slotKey = bagIndex .. ":" .. slot
-                    if not excludeSlots[slotKey] then
+                    -- Skip soulbound items entirely (matches BuildDepositOps).
+                    -- Warbound items (bind types 7 and 8) are still allowed —
+                    -- they can go to the warbank.
+                    local skipBound = false
+                    if info.isBound then
+                        local okBind, _, _, _, _, _, _, _, _, _, _, _, _, _, bt =
+                            pcall(C_Item.GetItemInfo, info.hyperlink)
+                        if not okBind or not bt then
+                            skipBound = true
+                        elseif bt ~= 7 and bt ~= 8 then
+                            skipBound = true
+                        end
+                    end
+                    -- Skip reagents/materials (class Tradegoods) unless the
+                    -- user opted in. Items in the dedicated reagent bag are
+                    -- always reagents by definition; items in regular bags
+                    -- are checked by item class.
+                    local skipReagent = false
+                    if not includeReagents then
+                        if bagIndex == ns.REAGENT_BAG then
+                            skipReagent = true
+                        else
+                            local _, _, _, _, _, _, _, _, _, _, _, classID =
+                                GetItemInfo(info.hyperlink)
+                            if classID == Enum.ItemClass.Tradegoods then
+                                skipReagent = true
+                            end
+                        end
+                    end
+                    if not excludeSlots[slotKey] and not skipBound and not skipReagent then
                     local itemID, bonusIDs, modifiers = ns:ParseItemLink(info.hyperlink)
                     if itemID then
                         local numID = tonumber(itemID) or tonumber((itemID:gsub(";.*", "")))
@@ -557,17 +593,11 @@ function Tracker:BuildExtraDepositOps(excludeSlots)
                             end
 
                             if not shouldKeep then
+                                -- Soulbound items were already filtered out
+                                -- by the skipBound check above. Anything that
+                                -- reaches here is either unbound or warbound,
+                                -- so warbank is always a valid destination.
                                 local itemName = Tracker._GetNameFromLink(info.hyperlink)
-                                local isSoulbound = false
-                                if info.isBound then
-                                    local ok3, _, _, _, _, _, _, _, _, _, _, _, _, _, bindType =
-                                        pcall(C_Item.GetItemInfo, info.hyperlink)
-                                    if not ok3 or not bindType then
-                                        isSoulbound = true
-                                    elseif bindType ~= 7 and bindType ~= 8 then
-                                        isSoulbound = true
-                                    end
-                                end
                                 table.insert(ops, {
                                     op = "deposit",
                                     srcBag = bagIndex,
@@ -575,7 +605,7 @@ function Tracker:BuildExtraDepositOps(excludeSlots)
                                     name = itemName or ("Item " .. key),
                                     icon = info.iconFileID,
                                     quantity = stackCount,
-                                    destType = isSoulbound and "bank" or "any",
+                                    destType = "warbank",
                                 })
                             end
                         end
@@ -648,8 +678,15 @@ frame:SetScript("OnEvent", function(self, event)
         end
         -- Skip refresh during active deposit/pull — FinishDeposit handles it with fresh scans
         if (ns.BankQueue and ns.BankQueue.processing) then return end
-        -- Rescan inventory and refresh todo locations/steps on every item movement
+        -- Debounce: collapse a burst of bag updates into a single refresh chain.
+        -- BAG_UPDATE_DELAYED can fire several times during AH/mailbox activity,
+        -- and the chain it kicks off (Scanner + RefreshLocations + RefreshTaskSteps
+        -- + UI:Refresh + RefreshMini + Sync delta emit) is expensive enough that
+        -- running it 5x in a second was a major source of micro-lag.
+        if Tracker._bagUpdatePending then return end
+        Tracker._bagUpdatePending = true
         C_Timer.After(0.5, function()
+            Tracker._bagUpdatePending = false
             if (ns.BankQueue and ns.BankQueue.processing) then return end
             if ns.Scanner then ns.Scanner:ScanCurrentCharacter() end
             if ns.TodoList then

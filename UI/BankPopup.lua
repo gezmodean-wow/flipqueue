@@ -101,18 +101,34 @@ local function GetPopup()
     f.progressText = progressBar:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
     f.progressText:SetPoint("CENTER", progressBar, "CENTER")
 
-    -- Content area (below progress bar when visible, else below header)
-    local content = CreateFrame("Frame", nil, f)
-    f.content = content
+    -- Content area: a ScrollFrame holding all rows. The visible window is
+    -- clamped to MAX_VISIBLE_ROWS by ResizePopup; anything beyond scrolls
+    -- via the mouse wheel.
+    local scrollFrame = CreateFrame("ScrollFrame", nil, f)
+    scrollFrame:EnableMouseWheel(true)
+    scrollFrame:SetClipsChildren(true)
+    f.scrollFrame = scrollFrame
+
+    local content = CreateFrame("Frame", nil, scrollFrame)
+    content:SetSize(1, 1)
+    scrollFrame:SetScrollChild(content)
+    f.content = content  -- rows still anchor to f.content
+
+    scrollFrame:SetScript("OnMouseWheel", function(self, delta)
+        local step = ROW_HEIGHT * 2
+        local maxScroll = math.max(0, self:GetVerticalScrollRange())
+        local newScroll = math.max(0, math.min(maxScroll, self:GetVerticalScroll() - delta * step))
+        self:SetVerticalScroll(newScroll)
+    end)
 
     local function UpdateContentAnchor()
-        content:ClearAllPoints()
+        scrollFrame:ClearAllPoints()
         if progressBar:IsShown() then
-            content:SetPoint("TOPLEFT", progressBar, "BOTTOMLEFT", 0, -4)
-            content:SetPoint("TOPRIGHT", progressBar, "BOTTOMRIGHT", 0, -4)
+            scrollFrame:SetPoint("TOPLEFT", progressBar, "BOTTOMLEFT", 0, -4)
+            scrollFrame:SetPoint("TOPRIGHT", progressBar, "BOTTOMRIGHT", 0, -4)
         else
-            content:SetPoint("TOPLEFT", bar, "BOTTOMLEFT", 4, -4)
-            content:SetPoint("TOPRIGHT", bar, "BOTTOMRIGHT", -4, -4)
+            scrollFrame:SetPoint("TOPLEFT", bar, "BOTTOMLEFT", 4, -4)
+            scrollFrame:SetPoint("TOPRIGHT", bar, "BOTTOMRIGHT", -4, -4)
         end
     end
     f.UpdateContentAnchor = UpdateContentAnchor
@@ -178,10 +194,59 @@ local function GetOrCreateRow(parent, index)
     return row
 end
 
-local function AddSectionHeader(f, index, text)
+-- Get current collapse state for a section key (or false if no key / no db).
+local function IsCollapsed(sectionKey)
+    if not sectionKey then return false end
+    if not (ns.db and ns.db.settings.bankPopupCollapsed) then return false end
+    return ns.db.settings.bankPopupCollapsed[sectionKey] and true or false
+end
+
+-- Clickable section header. If sectionKey is provided, the row toggles
+-- the collapse state for that key on click and the popup re-renders.
+-- A ▼/▶ marker indicates current state.
+local function AddSectionHeader(f, index, text, sectionKey)
     local row = GetOrCreateRow(f, index)
     row.icon:SetTexture(nil)
-    row.text:SetText(ns.COLORS.YELLOW .. text .. "|r")
+
+    -- Use Blizzard's standard plus/minus button textures via inline escapes —
+    -- consistent with the settings panel and works in every font.
+    local marker = ""
+    if sectionKey then
+        if IsCollapsed(sectionKey) then
+            marker = "|TInterface\\Buttons\\UI-PlusButton-Up:14:14:0:0|t "
+        else
+            marker = "|TInterface\\Buttons\\UI-MinusButton-Up:14:14:0:0|t "
+        end
+    end
+    row.text:SetText(marker .. ns.COLORS.YELLOW .. text .. "|r")
+
+    if sectionKey then
+        row:EnableMouse(true)
+        row:SetScript("OnMouseDown", function()
+            if not (ns.db and ns.db.settings.bankPopupCollapsed) then return end
+            local cur = ns.db.settings.bankPopupCollapsed[sectionKey] and true or false
+            ns.db.settings.bankPopupCollapsed[sectionKey] = not cur
+            -- Re-render with the cached ops/onExecute.
+            if f._lastOps then
+                UI:ShowBankPopup(f._lastOps, f._lastOnExecute)
+            end
+        end)
+        row:SetScript("OnEnter", function(self)
+            GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+            GameTooltip:SetText(IsCollapsed(sectionKey)
+                and "Click to expand" or "Click to collapse", 1, 1, 1)
+            GameTooltip:Show()
+        end)
+        row:SetScript("OnLeave", function() GameTooltip:Hide() end)
+    else
+        -- Plain section header — clear any leaked click handler from
+        -- a prior reuse of this row index.
+        row:EnableMouse(false)
+        row:SetScript("OnMouseDown", nil)
+        row:SetScript("OnEnter", nil)
+        row:SetScript("OnLeave", nil)
+    end
+
     row:Show()
     return index + 1
 end
@@ -195,12 +260,26 @@ local function AddItemRow(f, index, icon, name, detail)
 end
 
 local function ResizePopup(f, rowCount, hasButton, hasProgress)
-    local contentHeight = math.min(rowCount, MAX_VISIBLE_ROWS) * ROW_HEIGHT
-    f.content:SetHeight(contentHeight)
+    local visibleHeight = math.min(rowCount, MAX_VISIBLE_ROWS) * ROW_HEIGHT
+    local fullHeight = math.max(rowCount * ROW_HEIGHT, 1)
+    -- Scroll frame: the visible window. Width comes from its left/right anchors.
+    f.scrollFrame:SetHeight(visibleHeight)
+    -- Scroll child: the full row stack. Width must be set explicitly because
+    -- a scroll child has no anchors of its own. Use the scroll frame's
+    -- current width (set by its TOPLEFT/TOPRIGHT anchors).
+    local childWidth = f.scrollFrame:GetWidth()
+    if childWidth and childWidth > 0 then
+        f.content:SetWidth(childWidth)
+    end
+    f.content:SetHeight(fullHeight)
+    -- Reset to top whenever the row set changes so users always see the
+    -- first section after a refresh.
+    f.scrollFrame:SetVerticalScroll(0)
+
     local bottomHeight = 8
     if hasProgress then bottomHeight = bottomHeight + 20 end
     if hasButton then bottomHeight = bottomHeight + 36 end
-    f:SetHeight(24 + 8 + contentHeight + bottomHeight)
+    f:SetHeight(24 + 8 + visibleHeight + bottomHeight)
 end
 
 --------------------------
@@ -343,6 +422,11 @@ function UI:ShowBankPopup(ops, onExecute)
     local f = GetPopup()
     f.AttachToMini()
 
+    -- Cache the latest ops/callback so collapse-toggle click handlers can
+    -- re-render via UI:ShowBankPopup(f._lastOps, f._lastOnExecute).
+    f._lastOps = ops
+    f._lastOnExecute = onExecute
+
     -- Hide all existing rows
     for _, row in pairs(f.rows) do row:Hide() end
     f.title:SetText(ns.COLORS.YELLOW .. "FlipQueue|r Bank Operations")
@@ -364,45 +448,54 @@ function UI:ShowBankPopup(ops, onExecute)
 
     -- Pull section
     if pullCount > 0 then
-        idx = AddSectionHeader(f, idx, "Pull from bank (" .. pullCount .. ")")
-        for _, op in ipairs(ops.pulls) do
-            idx = AddItemRow(f, idx, op.icon, op.name, "x" .. (op.quantity or 1))
-            totalOps = totalOps + 1
+        idx = AddSectionHeader(f, idx, "Pull from bank (" .. pullCount .. ")", "pulls")
+        if not IsCollapsed("pulls") then
+            for _, op in ipairs(ops.pulls) do
+                idx = AddItemRow(f, idx, op.icon, op.name, "x" .. (op.quantity or 1))
+            end
         end
+        totalOps = totalOps + pullCount
     end
 
     -- Deposit section
     if depositCount > 0 then
-        idx = AddSectionHeader(f, idx, "Deposit to warbank (" .. depositCount .. ")")
-        for _, op in ipairs(ops.deposits) do
-            idx = AddItemRow(f, idx, op.icon, op.name, "x" .. (op.quantity or 1))
-            totalOps = totalOps + 1
+        idx = AddSectionHeader(f, idx, "Deposit to warbank (" .. depositCount .. ")", "deposits")
+        if not IsCollapsed("deposits") then
+            for _, op in ipairs(ops.deposits) do
+                idx = AddItemRow(f, idx, op.icon, op.name, "x" .. (op.quantity or 1))
+            end
         end
+        totalOps = totalOps + depositCount
     end
 
     -- Gold operations
-    if ops.goldWithdraw and ops.goldWithdraw > 0 then
-        idx = AddSectionHeader(f, idx, "Gold")
-        local goldStr = ns.FormatGold and ns:FormatGold(ops.goldWithdraw) or (math.floor(ops.goldWithdraw / 10000) .. "g")
-        idx = AddItemRow(f, idx, "Interface\\Icons\\INV_Misc_Coin_01", "Withdraw " .. goldStr, "for posting fees")
-        totalOps = totalOps + 1
-    end
-    if ops.goldDeposit and ops.goldDeposit > 0 then
-        if not (ops.goldWithdraw and ops.goldWithdraw > 0) then
-            idx = AddSectionHeader(f, idx, "Gold")
+    local hasGoldWithdraw = ops.goldWithdraw and ops.goldWithdraw > 0
+    local hasGoldDeposit = ops.goldDeposit and ops.goldDeposit > 0
+    if hasGoldWithdraw or hasGoldDeposit then
+        idx = AddSectionHeader(f, idx, "Gold", "gold")
+        if not IsCollapsed("gold") then
+            if hasGoldWithdraw then
+                local goldStr = ns.FormatGold and ns:FormatGold(ops.goldWithdraw) or (math.floor(ops.goldWithdraw / 10000) .. "g")
+                idx = AddItemRow(f, idx, "Interface\\Icons\\INV_Misc_Coin_01", "Withdraw " .. goldStr, "for posting fees")
+            end
+            if hasGoldDeposit then
+                local goldStr = ns.FormatGold and ns:FormatGold(ops.goldDeposit) or (math.floor(ops.goldDeposit / 10000) .. "g")
+                idx = AddItemRow(f, idx, "Interface\\Icons\\INV_Misc_Coin_01", "Deposit " .. goldStr, "excess to warbank")
+            end
         end
-        local goldStr = ns.FormatGold and ns:FormatGold(ops.goldDeposit) or (math.floor(ops.goldDeposit / 10000) .. "g")
-        idx = AddItemRow(f, idx, "Interface\\Icons\\INV_Misc_Coin_01", "Deposit " .. goldStr, "excess to warbank")
-        totalOps = totalOps + 1
+        if hasGoldWithdraw then totalOps = totalOps + 1 end
+        if hasGoldDeposit then totalOps = totalOps + 1 end
     end
 
     -- Deposit extras section
     if extraCount > 0 then
-        idx = AddSectionHeader(f, idx, "Deposit extras (" .. extraCount .. ")")
-        for _, op in ipairs(ops.extras) do
-            idx = AddItemRow(f, idx, op.icon, op.name)
-            totalOps = totalOps + 1
+        idx = AddSectionHeader(f, idx, "Deposit extras (" .. extraCount .. ")", "extras")
+        if not IsCollapsed("extras") then
+            for _, op in ipairs(ops.extras) do
+                idx = AddItemRow(f, idx, op.icon, op.name)
+            end
         end
+        totalOps = totalOps + extraCount
     end
 
     if totalOps == 0 and not isExecuting then

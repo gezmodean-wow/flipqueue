@@ -310,7 +310,7 @@ end
 --------------------------
 
 -- Section ordering for reflow
-local sectionOrder = { "automation", "notifications", "miniview", "data", "multiaccount" }
+local sectionOrder = { "automation", "bankops", "notifications", "miniview", "data", "multiaccount" }
 
 function UI:ReflowSettings()
     if not settingsWidgets.contentFrame then return end
@@ -357,8 +357,8 @@ function UI:CreateSettingsPanel(parent)
     -- Section: Scanning & Automation
     ------------------------------------------------
     local secAuto = CreateCollapsibleSection(content, y, "automation",
-        "Scanning & Automation",
-        "Auto-scan, bank pulls, gold, TSM integration, quantities")
+        "General",
+        "Scanning, deal lists, posting quantities, alerts")
     local sc = secAuto.content  -- widgets go here
     local sy = 0  -- y offset within section
 
@@ -369,163 +369,15 @@ function UI:CreateSettingsPanel(parent)
     sy = sy - h - ITEM_SPACING
 
     -- Auto-pull / auto-deposit / auto-deposit-all moved to Characters page
-    -- (per-character settings with global defaults)
-
-    settingsWidgets.autoGold, h = CreateSettingsCheckbox(sc, sy,
-        "Auto-withdraw gold for AH fees",
-        "When you open the bank, withdraw enough gold from your warband bank to cover estimated AH listing fees and buy task costs.",
-        "autoWithdrawGold")
-    sy = sy - h - ITEM_SPACING
-
-    -- Max withdrawal gold input
-    do
-        local row = CreateFrame("Frame", nil, sc)
-        row:SetPoint("TOPLEFT", sc, "TOPLEFT", LEFT_MARGIN, sy)
-        row:SetPoint("RIGHT", sc, "RIGHT", RIGHT_MARGIN, 0)
-        row:SetHeight(52)
-
-        local title = row:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-        title:SetPoint("TOPLEFT", row, "TOPLEFT", 0, 0)
-        title:SetText("Max withdrawal per visit (gold)")
-
-        local box = CreateFrame("EditBox", nil, row, "InputBoxTemplate")
-        box:SetSize(100, 20)
-        box:SetPoint("TOPLEFT", title, "BOTTOMLEFT", 4, -4)
-        box:SetAutoFocus(false)
-        box:SetMaxLetters(10)
-        box:SetNumeric(true)
-        box:SetScript("OnEscapePressed", function(self) self:ClearFocus() end)
-        box:SetScript("OnEnterPressed", function(self)
-            local val = tonumber(self:GetText()) or 0
-            if ns.db then ns.db.settings.maxWithdrawGold = val end
-            self:ClearFocus()
-        end)
-        box:SetScript("OnEditFocusLost", function(self)
-            local val = tonumber(self:GetText()) or 0
-            if ns.db then ns.db.settings.maxWithdrawGold = val end
-        end)
-
-        local descText = row:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
-        descText:SetPoint("TOPLEFT", box, "BOTTOMLEFT", -4, -4)
-        descText:SetPoint("RIGHT", row, "RIGHT", 0, 0)
-        descText:SetJustifyH("LEFT")
-        descText:SetWordWrap(true)
-        descText:SetTextColor(DESC_COLOR[1], DESC_COLOR[2], DESC_COLOR[3])
-        descText:SetText("Maximum gold to withdraw per bank visit. 0 = no limit.")
-
-        settingsWidgets.maxWithdrawBox = box
-    end
-    sy = sy - 52 - ITEM_SPACING
-
-    settingsWidgets.autoDepositGold, h = CreateSettingsCheckbox(sc, sy,
-        "Auto-deposit earnings to warbank",
-        "When you open the bank, deposit excess gold back to the warbank. Keeps enough for AH fees plus a configurable buffer.",
-        "autoDepositGold")
-    sy = sy - h - ITEM_SPACING
-
-    -- Gold buffer input
-    do
-        local row = CreateFrame("Frame", nil, sc)
-        row:SetPoint("TOPLEFT", sc, "TOPLEFT", LEFT_MARGIN, sy)
-        row:SetPoint("RIGHT", sc, "RIGHT", RIGHT_MARGIN, 0)
-        row:SetHeight(52)
-
-        local title = row:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-        title:SetPoint("TOPLEFT", row, "TOPLEFT", 0, 0)
-        title:SetText("Gold buffer to keep on character")
-
-        local box = CreateFrame("EditBox", nil, row, "InputBoxTemplate")
-        box:SetSize(100, 20)
-        box:SetPoint("TOPLEFT", title, "BOTTOMLEFT", 4, -4)
-        box:SetAutoFocus(false)
-        box:SetMaxLetters(10)
-        box:SetNumeric(true)
-        box:SetScript("OnEscapePressed", function(self) self:ClearFocus() end)
-        box:SetScript("OnEnterPressed", function(self)
-            local val = tonumber(self:GetText()) or 0
-            if ns.db then ns.db.settings.goldBuffer = val end
-            self:ClearFocus()
-        end)
-        box:SetScript("OnEditFocusLost", function(self)
-            local val = tonumber(self:GetText()) or 0
-            if ns.db then ns.db.settings.goldBuffer = val end
-        end)
-
-        local descText = row:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
-        descText:SetPoint("TOPLEFT", box, "BOTTOMLEFT", -4, -4)
-        descText:SetPoint("RIGHT", row, "RIGHT", 0, 0)
-        descText:SetJustifyH("LEFT")
-        descText:SetWordWrap(true)
-        descText:SetTextColor(DESC_COLOR[1], DESC_COLOR[2], DESC_COLOR[3])
-        descText:SetText("Extra gold (beyond AH fees) to keep on character. 0 = keep only fees.")
-
-        settingsWidgets.goldBufferBox = box
-    end
-    sy = sy - 52 - ITEM_SPACING
-
-    settingsWidgets.tsmSkipOnGenerate, h = CreateSettingsCheckbox(sc, sy,
-        "TSM: Skip deals on generation",
-        "When generating a to-do list, reject deals that TSM says are below min price. Rejected deals appear in a separate list so you can review them and optionally keep individual tasks. Uncheck to include all deals regardless of TSM thresholds.",
-        "tsmSkipOnGenerate")
-    sy = sy - h - ITEM_SPACING
-
-    settingsWidgets.tsmAutoSkip, h = CreateSettingsCheckbox(sc, sy,
-        "TSM: Auto-handle at the AH",
-        "When you open the AH, automatically skip or reassign tasks that TSM would reject (below min price or already posted). Reassigns to another character on the same realm if available, otherwise skips with reason.",
-        "tsmAutoSkipRejected")
-    sy = sy - h - ITEM_SPACING
+    -- (per-character settings with global defaults).
+    -- Bank/warbank/gold settings moved to the dedicated "Bank & Warbank"
+    -- section below. TSM behavior toggles moved to the TSM Integration page.
 
     settingsWidgets.skipUnassigned, h = CreateSettingsCheckbox(sc, sy,
         "Skip deals with no character",
         "When generating a to-do list, skip deals that have no matching character on the required realm instead of creating 'new character' tasks. Useful when you only want tasks for realms you already have characters on.",
         "skipUnassigned")
     sy = sy - h - ITEM_SPACING
-
-    -- Pull batch size slider
-    do
-        local row = CreateFrame("Frame", nil, sc)
-        row:SetPoint("TOPLEFT", sc, "TOPLEFT", LEFT_MARGIN, sy)
-        row:SetPoint("RIGHT", sc, "RIGHT", RIGHT_MARGIN, 0)
-        row:SetHeight(68)
-
-        local title = row:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-        title:SetPoint("TOPLEFT", row, "TOPLEFT", 0, 0)
-        title:SetText("Bank pull batch size")
-
-        local slider = CreateFrame("Slider", "FlipQueueBatchSizeSlider", row, "OptionsSliderTemplate")
-        slider:SetWidth(180)
-        slider:SetHeight(16)
-        slider:SetPoint("TOPLEFT", title, "BOTTOMLEFT", 4, -8)
-        slider:SetMinMaxValues(1, 10)
-        slider:SetValueStep(1)
-        slider:SetObeyStepOnDrag(true)
-        slider.Low:SetText("1")
-        slider.High:SetText("10")
-
-        local valLabel = row:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-        valLabel:SetPoint("LEFT", slider, "RIGHT", 8, 0)
-        valLabel:SetTextColor(1, 1, 1)
-
-        slider:SetScript("OnValueChanged", function(self, value)
-            value = math.floor(value + 0.5)
-            valLabel:SetText(tostring(value))
-            if ns.db then
-                ns.db.settings.pullBatchSize = value
-            end
-        end)
-
-        local descText = row:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
-        descText:SetPoint("TOPLEFT", slider, "BOTTOMLEFT", -4, -4)
-        descText:SetPoint("RIGHT", row, "RIGHT", 0, 0)
-        descText:SetJustifyH("LEFT")
-        descText:SetWordWrap(true)
-        descText:SetTextColor(DESC_COLOR[1], DESC_COLOR[2], DESC_COLOR[3])
-        descText:SetText("How many items to move per batch when auto-pulling from bank. Lower values are safer but slower.")
-
-        settingsWidgets.batchSizeSlider = slider
-        settingsWidgets.batchSizeLabel = valLabel
-    end
-    sy = sy - 68 - ITEM_SPACING
 
     -- Default sell quantity slider
     do
@@ -693,6 +545,243 @@ function UI:CreateSettingsPanel(parent)
     -- Bank Tab Selection moved to Characters page (per-character config panel)
 
     secAuto.contentHeight = math.abs(sy)
+
+    ------------------------------------------------
+    -- Section: Bank & Warbank
+    ------------------------------------------------
+    local secBank = CreateCollapsibleSection(content, y, "bankops",
+        "Bank & Warbank",
+        "Gold withdrawals, auto-deposits, reagents, overflow, batch size")
+    sc = secBank.content
+    sy = 0
+
+    -- Withdraw gold for AH fees
+    settingsWidgets.autoGold, h = CreateSettingsCheckbox(sc, sy,
+        "Withdraw gold from the warbank to cover listing fees",
+        "When you open the bank, take just enough gold from the warbank to pay estimated AH listing fees and any 'buy item' tasks for this character.",
+        "autoWithdrawGold")
+    sy = sy - h - ITEM_SPACING
+
+    -- Max withdrawal gold input
+    do
+        local row = CreateFrame("Frame", nil, sc)
+        row:SetPoint("TOPLEFT", sc, "TOPLEFT", LEFT_MARGIN, sy)
+        row:SetPoint("RIGHT", sc, "RIGHT", RIGHT_MARGIN, 0)
+        row:SetHeight(52)
+
+        local title = row:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+        title:SetPoint("TOPLEFT", row, "TOPLEFT", 0, 0)
+        title:SetText("Maximum gold to withdraw per visit")
+
+        local box = CreateFrame("EditBox", nil, row, "InputBoxTemplate")
+        box:SetSize(100, 20)
+        box:SetPoint("TOPLEFT", title, "BOTTOMLEFT", 4, -4)
+        box:SetAutoFocus(false)
+        box:SetMaxLetters(10)
+        box:SetNumeric(true)
+        box:SetScript("OnEscapePressed", function(self) self:ClearFocus() end)
+        box:SetScript("OnEnterPressed", function(self)
+            local val = tonumber(self:GetText()) or 0
+            if ns.db then ns.db.settings.maxWithdrawGold = val end
+            self:ClearFocus()
+        end)
+        box:SetScript("OnEditFocusLost", function(self)
+            local val = tonumber(self:GetText()) or 0
+            if ns.db then ns.db.settings.maxWithdrawGold = val end
+        end)
+
+        local descText = row:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+        descText:SetPoint("TOPLEFT", box, "BOTTOMLEFT", -4, -4)
+        descText:SetPoint("RIGHT", row, "RIGHT", 0, 0)
+        descText:SetJustifyH("LEFT")
+        descText:SetWordWrap(true)
+        descText:SetTextColor(DESC_COLOR[1], DESC_COLOR[2], DESC_COLOR[3])
+        descText:SetText("Cap how much gold is taken in one visit. 0 means no limit.")
+
+        settingsWidgets.maxWithdrawBox = box
+    end
+    sy = sy - 52 - ITEM_SPACING
+
+    -- Send extra gold back to warbank
+    settingsWidgets.autoDepositGold, h = CreateSettingsCheckbox(sc, sy,
+        "Send extra gold back to the warbank",
+        "When you open the bank, deposit gold beyond what's needed for fees plus your buffer.",
+        "autoDepositGold")
+    sy = sy - h - ITEM_SPACING
+
+    -- Gold buffer input
+    do
+        local row = CreateFrame("Frame", nil, sc)
+        row:SetPoint("TOPLEFT", sc, "TOPLEFT", LEFT_MARGIN, sy)
+        row:SetPoint("RIGHT", sc, "RIGHT", RIGHT_MARGIN, 0)
+        row:SetHeight(52)
+
+        local title = row:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+        title:SetPoint("TOPLEFT", row, "TOPLEFT", 0, 0)
+        title:SetText("Gold to keep on the character")
+
+        local box = CreateFrame("EditBox", nil, row, "InputBoxTemplate")
+        box:SetSize(100, 20)
+        box:SetPoint("TOPLEFT", title, "BOTTOMLEFT", 4, -4)
+        box:SetAutoFocus(false)
+        box:SetMaxLetters(10)
+        box:SetNumeric(true)
+        box:SetScript("OnEscapePressed", function(self) self:ClearFocus() end)
+        box:SetScript("OnEnterPressed", function(self)
+            local val = tonumber(self:GetText()) or 0
+            if ns.db then ns.db.settings.goldBuffer = val end
+            self:ClearFocus()
+        end)
+        box:SetScript("OnEditFocusLost", function(self)
+            local val = tonumber(self:GetText()) or 0
+            if ns.db then ns.db.settings.goldBuffer = val end
+        end)
+
+        local descText = row:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+        descText:SetPoint("TOPLEFT", box, "BOTTOMLEFT", -4, -4)
+        descText:SetPoint("RIGHT", row, "RIGHT", 0, 0)
+        descText:SetJustifyH("LEFT")
+        descText:SetWordWrap(true)
+        descText:SetTextColor(DESC_COLOR[1], DESC_COLOR[2], DESC_COLOR[3])
+        descText:SetText("Extra gold to keep beyond AH fees. 0 means keep only fees.")
+
+        settingsWidgets.goldBufferBox = box
+    end
+    sy = sy - 52 - ITEM_SPACING
+
+    settingsWidgets.depositIncludeReagents, h = CreateSettingsCheckbox(sc, sy,
+        "Move reagents to warbank when depositing all",
+        "Include reagents when auto-depositing extra items in your bags to the warbank. This is off by default, as reagents are not tracked for sale.",
+        "depositIncludeReagents")
+    sy = sy - h - ITEM_SPACING
+
+    -- Deposit overflow (nested setting — built by hand instead of via
+    -- CreateSettingsCheckbox which only writes to ns.db.settings[key]).
+    do
+        local row = CreateFrame("Frame", nil, sc)
+        row:SetPoint("TOPLEFT", sc, "TOPLEFT", LEFT_MARGIN, sy)
+        row:SetPoint("RIGHT", sc, "RIGHT", RIGHT_MARGIN, 0)
+
+        local cb = CreateFrame("CheckButton", nil, row, "UICheckButtonTemplate")
+        cb:SetSize(22, 22)
+        cb:SetPoint("TOPLEFT", row, "TOPLEFT", 0, 0)
+        cb.text:SetText("Deposit to bank when warbank is full")
+        cb.text:SetFontObject("GameFontHighlightSmall")
+
+        local desc = row:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+        desc:SetPoint("TOPLEFT", cb.text, "BOTTOMLEFT", 0, -1)
+        desc:SetPoint("RIGHT", row, "RIGHT", 0, 0)
+        desc:SetJustifyH("LEFT")
+        desc:SetWordWrap(true)
+        desc:SetTextColor(DESC_COLOR[1], DESC_COLOR[2], DESC_COLOR[3])
+        desc:SetText("When trying to deposit to the warbank, automatically deposit to the player bank if the warbank is full.")
+
+        cb:SetScript("OnClick", function(self)
+            if not (ns.db and ns.db.settings.depositOverflow) then return end
+            ns.db.settings.depositOverflow.enabled = self:GetChecked() and true or false
+            -- Refresh the sub-checkbox enabled state.
+            if settingsWidgets.depositOverflowCrossStack then
+                local sub = settingsWidgets.depositOverflowCrossStack
+                if ns.db.settings.depositOverflow.enabled then
+                    sub:Enable()
+                    sub.text:SetTextColor(1, 1, 1)
+                else
+                    sub:Disable()
+                    sub.text:SetTextColor(0.5, 0.5, 0.5)
+                end
+            end
+        end)
+
+        row:SetScript("OnShow", function(self)
+            local descH = desc:GetStringHeight() or 12
+            self:SetHeight(22 + descH + 4)
+        end)
+        row:SetHeight(38)
+        settingsWidgets.depositOverflow = cb
+    end
+    sy = sy - 42 - ITEM_SPACING
+
+    -- Sub-setting: combine partial stacks across both banks
+    do
+        local row = CreateFrame("Frame", nil, sc)
+        row:SetPoint("TOPLEFT", sc, "TOPLEFT", LEFT_MARGIN + 20, sy)
+        row:SetPoint("RIGHT", sc, "RIGHT", RIGHT_MARGIN, 0)
+
+        local cb = CreateFrame("CheckButton", nil, row, "UICheckButtonTemplate")
+        cb:SetSize(20, 20)
+        cb:SetPoint("TOPLEFT", row, "TOPLEFT", 0, 0)
+        cb.text:SetText("Combine partial stacks across both banks")
+        cb.text:SetFontObject("GameFontHighlightSmall")
+
+        local desc = row:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+        desc:SetPoint("TOPLEFT", cb.text, "BOTTOMLEFT", 0, -1)
+        desc:SetPoint("RIGHT", row, "RIGHT", 0, 0)
+        desc:SetJustifyH("LEFT")
+        desc:SetWordWrap(true)
+        desc:SetTextColor(DESC_COLOR[1], DESC_COLOR[2], DESC_COLOR[3])
+        desc:SetText("When depositing to the player bank because the warbank is full, also top up existing stacks of the same item. Otherwise only empty slots in the bank are used.")
+
+        cb:SetScript("OnClick", function(self)
+            if not (ns.db and ns.db.settings.depositOverflow) then return end
+            ns.db.settings.depositOverflow.crossStack = self:GetChecked() and true or false
+        end)
+
+        row:SetScript("OnShow", function(self)
+            local descH = desc:GetStringHeight() or 12
+            self:SetHeight(20 + descH + 4)
+        end)
+        row:SetHeight(36)
+        settingsWidgets.depositOverflowCrossStack = cb
+    end
+    sy = sy - 40 - ITEM_SPACING
+
+    -- Items per batch slider (was "Bank pull batch size")
+    do
+        local row = CreateFrame("Frame", nil, sc)
+        row:SetPoint("TOPLEFT", sc, "TOPLEFT", LEFT_MARGIN, sy)
+        row:SetPoint("RIGHT", sc, "RIGHT", RIGHT_MARGIN, 0)
+        row:SetHeight(68)
+
+        local title = row:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+        title:SetPoint("TOPLEFT", row, "TOPLEFT", 0, 0)
+        title:SetText("Items moved per batch")
+
+        local slider = CreateFrame("Slider", "FlipQueueBatchSizeSlider", row, "OptionsSliderTemplate")
+        slider:SetWidth(180)
+        slider:SetHeight(16)
+        slider:SetPoint("TOPLEFT", title, "BOTTOMLEFT", 4, -8)
+        slider:SetMinMaxValues(1, 10)
+        slider:SetValueStep(1)
+        slider:SetObeyStepOnDrag(true)
+        slider.Low:SetText("1")
+        slider.High:SetText("10")
+
+        local valLabel = row:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+        valLabel:SetPoint("LEFT", slider, "RIGHT", 8, 0)
+        valLabel:SetTextColor(1, 1, 1)
+
+        slider:SetScript("OnValueChanged", function(self, value)
+            value = math.floor(value + 0.5)
+            valLabel:SetText(tostring(value))
+            if ns.db then
+                ns.db.settings.pullBatchSize = value
+            end
+        end)
+
+        local descText = row:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+        descText:SetPoint("TOPLEFT", slider, "BOTTOMLEFT", -4, -4)
+        descText:SetPoint("RIGHT", row, "RIGHT", 0, 0)
+        descText:SetJustifyH("LEFT")
+        descText:SetWordWrap(true)
+        descText:SetTextColor(DESC_COLOR[1], DESC_COLOR[2], DESC_COLOR[3])
+        descText:SetText("How many items to withdraw or deposit at once. Lower values are safer but slower.")
+
+        settingsWidgets.batchSizeSlider = slider
+        settingsWidgets.batchSizeLabel = valLabel
+    end
+    sy = sy - 68 - SECTION_SPACING
+
+    secBank.contentHeight = math.abs(sy)
 
     ------------------------------------------------
     -- Section: Notifications
@@ -876,7 +965,7 @@ function UI:CreateSettingsPanel(parent)
     ------------------------------------------------
     local secMulti = CreateCollapsibleSection(content, y, "multiaccount",
         "Multi-Account",
-        "Real-time sync between WoW accounts via BNet")
+        "Sync inventory and to-dos across your accounts via BattleNet")
     sc = secMulti.content
     sy = 0
 
@@ -891,9 +980,22 @@ function UI:CreateSettingsPanel(parent)
     -- Real-Time Sync
     local syncLabel = lower:CreateFontString(nil, "OVERLAY", "GameFontNormal")
     syncLabel:SetPoint("TOPLEFT", lower, "TOPLEFT", LEFT_MARGIN, ly)
-    syncLabel:SetTextColor(0.9, 0.8, 0.5)
-    syncLabel:SetText("Real-Time Sync")
+    syncLabel:SetTextColor(0.4, 0.95, 0.4)  -- green = recommended
+    syncLabel:SetText("Real-Time Sync (recommended)")
     ly = ly - 18
+
+    -- "What this does" description
+    local syncDesc = lower:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+    syncDesc:SetPoint("TOPLEFT", lower, "TOPLEFT", LEFT_MARGIN, ly)
+    syncDesc:SetPoint("RIGHT", lower, "RIGHT", RIGHT_MARGIN, 0)
+    syncDesc:SetJustifyH("LEFT")
+    syncDesc:SetWordWrap(true)
+    syncDesc:SetTextColor(DESC_COLOR[1], DESC_COLOR[2], DESC_COLOR[3])
+    syncDesc:SetText("Link to a character on another WoW account through your BattleNet friends list. " ..
+        "Once linked, FlipQueue keeps both accounts in sync in real time — your characters, bag/bank " ..
+        "contents, and to-do tasks all show up on a single unified list, and posting an item on one " ..
+        "account immediately marks it complete on the other.")
+    ly = ly - 48
 
     -- Sync status display
     settingsWidgets.syncStatusText = lower:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
@@ -1180,11 +1282,11 @@ function UI:CreateSettingsPanel(parent)
     local belowSync = settingsWidgets.belowSyncFrame
     local bsy = 0
 
-    -- External Accounts (manual entry)
+    -- External Accounts (manual entry — legacy fallback)
     local extSubLabel = belowSync:CreateFontString(nil, "OVERLAY", "GameFontNormal")
     extSubLabel:SetPoint("TOPLEFT", belowSync, "TOPLEFT", LEFT_MARGIN, bsy)
-    extSubLabel:SetTextColor(0.9, 0.8, 0.5)
-    extSubLabel:SetText("External Accounts")
+    extSubLabel:SetTextColor(0.7, 0.7, 0.55)  -- muted = legacy/deprecated
+    extSubLabel:SetText("External Accounts (legacy — use Real-Time Sync above)")
     bsy = bsy - 18
 
     local extDesc = belowSync:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
@@ -1193,8 +1295,12 @@ function UI:CreateSettingsPanel(parent)
     extDesc:SetJustifyH("LEFT")
     extDesc:SetWordWrap(true)
     extDesc:SetTextColor(DESC_COLOR[1], DESC_COLOR[2], DESC_COLOR[3])
-    extDesc:SetText("Manually add realms from other WoW accounts. These realms will be excluded from 'Create char' suggestions in Next Steps.")
-    bsy = bsy - 32
+    extDesc:SetText("Quick manual fallback: type in the realms where your other accounts have characters. " ..
+        "FlipQueue won't actually see those characters' inventory or tasks — the realms just get excluded " ..
+        "from \"create a character here\" suggestions. " ..
+        "|cffaaaa55Real-Time Sync above does the same thing automatically and also keeps your data in " ..
+        "sync, so this option will be removed in a future update.|r")
+    bsy = bsy - 56
 
     -- Label input
     local lblLabel = belowSync:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
@@ -1508,12 +1614,27 @@ function UI:RefreshSettings()
         local val = ns.db.settings.goldBuffer or 0
         settingsWidgets.goldBufferBox:SetText(tostring(val))
     end
-    if settingsWidgets.tsmSkipOnGenerate then
-        settingsWidgets.tsmSkipOnGenerate:SetChecked(ns.db.settings.tsmSkipOnGenerate)
+    if settingsWidgets.depositIncludeReagents then
+        settingsWidgets.depositIncludeReagents:SetChecked(ns.db.settings.depositIncludeReagents)
     end
-    if settingsWidgets.tsmAutoSkip then
-        settingsWidgets.tsmAutoSkip:SetChecked(ns.db.settings.tsmAutoSkipRejected)
+    if settingsWidgets.depositOverflow then
+        local ov = ns.db.settings.depositOverflow or {}
+        settingsWidgets.depositOverflow:SetChecked(ov.enabled and true or false)
     end
+    if settingsWidgets.depositOverflowCrossStack then
+        local ov = ns.db.settings.depositOverflow or {}
+        local sub = settingsWidgets.depositOverflowCrossStack
+        sub:SetChecked(ov.crossStack and true or false)
+        if ov.enabled then
+            sub:Enable()
+            sub.text:SetTextColor(1, 1, 1)
+        else
+            sub:Disable()
+            sub.text:SetTextColor(0.5, 0.5, 0.5)
+        end
+    end
+    -- TSM behavior toggles moved to the TSM Integration page; their populate
+    -- logic now lives in UI/TSMFrame.lua RefreshTSMPage().
     if settingsWidgets.loginMsg then
         settingsWidgets.loginMsg:SetChecked(ns.db.settings.showLoginMessage)
     end

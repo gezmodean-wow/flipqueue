@@ -467,9 +467,11 @@ function ItemResearch:GetItemResearch(itemKey, itemName, skipCache)
         local regionSaleAvg = ns.TSM:GetPrice(itemKey, "DBRegionSaleAvg")
         local regionSaleRate = ns.TSM:GetPrice(itemKey, "DBRegionSaleRate")
         local regionSoldPerDay = ns.TSM:GetPrice(itemKey, "DBRegionSoldPerDay")
+        -- TSM Accounting cost basis (what we paid on average across our characters)
+        local smartAvgBuy = ns.TSM:GetPrice(itemKey, "SmartAvgBuy")
         local auctionOp = ns.TSM:GetItemAuctioningOp(itemKey)
 
-        if minBuyout or market or regionSaleAvg or regionMarketAvg or auctionOp then
+        if minBuyout or market or regionSaleAvg or regionMarketAvg or auctionOp or smartAvgBuy then
             record.tsm = {
                 -- Current realm
                 minBuyout = minBuyout,
@@ -482,6 +484,8 @@ function ItemResearch:GetItemResearch(itemKey, itemName, skipCache)
                 regionSaleAvg = regionSaleAvg,
                 regionSaleRate = regionSaleRate,
                 regionSoldPerDay = regionSoldPerDay,
+                -- Cost basis from TSM Accounting
+                smartAvgBuy = smartAvgBuy,
                 -- Operation
                 auctioningOp = auctionOp,
             }

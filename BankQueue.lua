@@ -21,11 +21,21 @@ local INTER_BATCH_DELAY = 0.3  -- pause between batches
 -- Helpers
 --------------------------
 
--- Determine the bank type for a bag ID
+-- Determine the bank type for a bag ID. Uses the same numeric ranges as
+-- ns.BANK_TABS (6-11) and ns.WARBANK_TABS (12-16) instead of Enum.BagIndex
+-- constants — some of those constants (BankBag_1..BankBag_7,
+-- AccountBankTab_1..AccountBankTab_5) aren't defined on every client/patch,
+-- and a missing constant would crash the comparison with "compare nil with
+-- number".
 local function GetBankTypeForBag(bagID)
-    if bagID >= Enum.BagIndex.AccountBankTab_1 and bagID <= Enum.BagIndex.AccountBankTab_5 then
+    if type(bagID) ~= "number" then return nil end
+    if not Enum or not Enum.BankType then return nil end
+    -- Warbank tabs: 12-16 (account bank)
+    if bagID >= 12 and bagID <= 16 then
         return Enum.BankType.Account
-    elseif bagID == Enum.BagIndex.Bank or (bagID >= Enum.BagIndex.BankBag_1 and bagID <= Enum.BagIndex.BankBag_7) then
+    end
+    -- Character bank: -1 (main bank slot) or 6-11 (character bank bags)
+    if bagID == -1 or (bagID >= 6 and bagID <= 11) then
         return Enum.BankType.Character
     end
     return nil
@@ -84,6 +94,200 @@ local function FindFreeSlot(bagList)
                 end
             end
         end
+    end
+    return nil, nil
+end
+
+--------------------------
+-- Bank Tab Filter Cache & Smart Deposit Slot Picker
+--------------------------
+
+-- Cache for C_Bank.FetchPurchasedBankTabData results, keyed by bagID.
+-- depositFlags is the per-tab item-type filter the player set in Blizzard's
+-- bank UI ("Equipment only", "Reagents only", etc.). We honor it strictly.
+local tabFilterCache = {}
+local tabFilterCacheTs = 0
+local TAB_CACHE_TTL = 5
+
+local function RefreshTabFilterCache()
+    tabFilterCache = {}
+    tabFilterCacheTs = time()
+    if not (C_Bank and C_Bank.FetchPurchasedBankTabData and Enum and Enum.BankType) then
+        return
+    end
+    local function ingest(bankType)
+        local ok, data = pcall(C_Bank.FetchPurchasedBankTabData, bankType)
+        if ok and type(data) == "table" then
+            for _, td in ipairs(data) do
+                if td.ID then
+                    tabFilterCache[td.ID] = td
+                end
+            end
+        end
+    end
+    ingest(Enum.BankType.Character)
+    ingest(Enum.BankType.Account)
+end
+
+local function GetTabFilterData(bagID)
+    if time() - tabFilterCacheTs > TAB_CACHE_TTL then
+        RefreshTabFilterCache()
+    end
+    return tabFilterCache[bagID]
+end
+
+-- Resolve flag constants in a way that survives the ClassXxx → PriorityXxx
+-- rename Blizzard did between patches.
+local function FlagConst(...)
+    if not Enum or not Enum.BagSlotFlags then return nil end
+    for i = 1, select("#", ...) do
+        local v = Enum.BagSlotFlags[select(i, ...)]
+        if v then return v end
+    end
+    return nil
+end
+
+local FLAG_EQUIPMENT   = FlagConst("ClassEquipment",   "PriorityEquipment")
+local FLAG_CONSUMABLES = FlagConst("ClassConsumables", "PriorityConsumables")
+local FLAG_TRADEGOODS  = FlagConst("ClassTradeGoods",  "PriorityTradeGoods")
+local FLAG_JUNK        = FlagConst("ClassJunk",        "PriorityJunk")
+local FLAG_QUEST       = FlagConst("ClassQuestItems",  "PriorityQuestItems")
+local FLAG_REAGENTS    = FlagConst("ClassReagents",    "PriorityReagents")
+
+-- True if the tab will accept this item via deposit. depositFlags == 0 (or
+-- nil) is a catch-all tab. Otherwise the tab only accepts items that match
+-- at least one of its set class flags.
+local function ItemMatchesTabFlags(itemLink, depositFlags)
+    if not depositFlags or depositFlags == 0 then return true end
+    if not itemLink then return true end
+
+    local _, _, quality, _, _, _, _, _, _, _, _, classID = GetItemInfo(itemLink)
+    if not classID then return true end  -- can't determine — allow
+
+    local function has(flag)
+        return flag and bit.band(depositFlags, flag) ~= 0
+    end
+
+    if has(FLAG_EQUIPMENT) and (classID == Enum.ItemClass.Weapon or classID == Enum.ItemClass.Armor) then
+        return true
+    end
+    if has(FLAG_CONSUMABLES) and classID == Enum.ItemClass.Consumable then
+        return true
+    end
+    if has(FLAG_TRADEGOODS) and (classID == Enum.ItemClass.Tradegoods or classID == Enum.ItemClass.Recipe) then
+        return true
+    end
+    if has(FLAG_REAGENTS) and classID == Enum.ItemClass.Tradegoods then
+        return true
+    end
+    if has(FLAG_JUNK) and quality == (Enum.ItemQuality and Enum.ItemQuality.Poor or 0) then
+        return true
+    end
+    if has(FLAG_QUEST) and classID == Enum.ItemClass.Questitem then
+        return true
+    end
+    return false
+end
+
+-- Specificity score for picking the most specific matching tab over the
+-- catch-all. More set flags = more specific.
+local function TabSpecificity(depositFlags)
+    if not depositFlags or depositFlags == 0 then return 0 end
+    local count, mask = 0, depositFlags
+    while mask > 0 do
+        if bit.band(mask, 1) == 1 then count = count + 1 end
+        mask = bit.rshift(mask, 1)
+    end
+    return count + 1  -- any specific tab beats catch-all
+end
+
+-- Build the list of accepting tabs sorted by specificity (most specific first).
+local function MatchingTabsSorted(itemLink, bagList)
+    local matched = {}
+    if not bagList then return matched end
+    for _, bag in ipairs(bagList) do
+        local td = GetTabFilterData(bag)
+        local flags = td and td.depositFlags or 0
+        if ItemMatchesTabFlags(itemLink, flags) then
+            table.insert(matched, { bag = bag, spec = TabSpecificity(flags) })
+        end
+    end
+    table.sort(matched, function(a, b) return a.spec > b.spec end)
+    return matched
+end
+
+-- Find a partial-stack target for stacking deposits. Walks accepting tabs in
+-- specificity order, returns the first slot whose itemID matches and has
+-- stack room. The server will merge the picked-up stack onto the target.
+local function FindStackTarget(itemLink, itemID, bagList)
+    if not itemID then return nil end
+    local stackMax
+    if itemLink then
+        local _, _, _, _, _, _, _, sm = GetItemInfo(itemLink)
+        stackMax = sm
+    end
+    if not stackMax or stackMax <= 1 then return nil end
+
+    local sorted = MatchingTabsSorted(itemLink, bagList)
+    for _, m in ipairs(sorted) do
+        local ok, num = pcall(C_Container.GetContainerNumSlots, m.bag)
+        if ok and num then
+            for slot = 1, num do
+                local ok2, info = pcall(C_Container.GetContainerItemInfo, m.bag, slot)
+                if ok2 and info and info.itemID == itemID then
+                    local count = info.stackCount or 1
+                    if count < stackMax then
+                        return m.bag, slot
+                    end
+                end
+            end
+        end
+    end
+end
+
+-- Find an empty slot inside an accepting tab, preferring most-specific.
+local function FindEmptyAcceptingSlot(itemLink, bagList)
+    local sorted = MatchingTabsSorted(itemLink, bagList)
+    for _, m in ipairs(sorted) do
+        local ok, num = pcall(C_Container.GetContainerNumSlots, m.bag)
+        if ok and num then
+            for slot = 1, num do
+                local ok2, info = pcall(C_Container.GetContainerItemInfo, m.bag, slot)
+                if ok2 and not info then
+                    return m.bag, slot
+                end
+            end
+        end
+    end
+end
+
+-- Pick a deposit destination respecting tab filters, smart stacking, and
+-- the user's overflow settings. Returns destBag, destSlot, or nil.
+--
+-- Strategy:
+--   1. Stack into a partial stack inside the primary bag list.
+--   2. If overflow is enabled AND crossStack is enabled, try stacking inside
+--      the secondary bag list.
+--   3. Empty slot in primary (most-specific tab first).
+--   4. If overflow is enabled, empty slot in secondary.
+local function PickDepositSlot(info, primaryBags, secondaryBags, overflowEnabled, crossStack)
+    local link = info.hyperlink
+    local id = info.itemID
+
+    local b, s = FindStackTarget(link, id, primaryBags)
+    if b then return b, s end
+
+    if overflowEnabled and crossStack then
+        b, s = FindStackTarget(link, id, secondaryBags)
+        if b then return b, s end
+    end
+
+    b, s = FindEmptyAcceptingSlot(link, primaryBags)
+    if b then return b, s end
+
+    if overflowEnabled then
+        b, s = FindEmptyAcceptingSlot(link, secondaryBags)
+        if b then return b, s end
     end
     return nil, nil
 end
@@ -294,19 +498,45 @@ ProcessNextBatch = function()
                 abortDeposits = true
                 ns:Print(ns.COLORS.RED .. "Bank closed!|r Skipping remaining deposits.")
             else
-                local destBankType
+                -- See ProcessSync IssueOne for the deposit-routing rationale.
+                local primary, secondary
                 if op.destType == "warbank" then
-                    destBankType = Enum.BankType.Account
+                    primary, secondary = snapshot.warbankBags, snapshot.bankBags
                 elseif op.destType == "bank" then
-                    destBankType = Enum.BankType.Character
+                    primary, secondary = snapshot.bankBags, snapshot.warbankBags
                 else
-                    destBankType = Enum.BankType.Account
+                    primary = {}
+                    for _, b in ipairs(snapshot.warbankBags) do table.insert(primary, b) end
+                    for _, b in ipairs(snapshot.bankBags) do table.insert(primary, b) end
+                    secondary = {}
                 end
-                SetBankPanelType(destBankType)
-                op._itemID = info.itemID
-                op._stackBefore = info.stackCount or 1
-                ShiftMove(op.srcBag, op.srcSlot)
-                table.insert(issuedOps, op)
+
+                local overflowEnabled, crossStack = false, false
+                if ns.GetDepositOverflow then
+                    overflowEnabled, crossStack = ns:GetDepositOverflow()
+                end
+
+                local destBag, destSlot = PickDepositSlot(
+                    info, primary, secondary, overflowEnabled, crossStack)
+                if not destBag then
+                    abortDeposits = true
+                    ns:Print(ns.COLORS.RED .. "No accepting " .. (op.destType or "")
+                        .. " slot!|r Skipping remaining deposits.")
+                else
+                    EnsureBankType(destBag)
+                    op._itemID = info.itemID
+                    op._stackBefore = info.stackCount or 1
+                    if CursorMove(op.srcBag, op.srcSlot, destBag, destSlot) then
+                        table.insert(issuedOps, op)
+                    else
+                        op._retries = (op._retries or 0) + 1
+                        if op._retries <= MAX_RETRIES then
+                            table.insert(queue, op)
+                        else
+                            stats.errors = stats.errors + 1
+                        end
+                    end
+                end
             end
         end
     end
@@ -512,14 +742,58 @@ function BankQueue:ProcessSync(ops, label, callback)
                 op._stackBefore = info.stackCount or 1
                 table.insert(issuedOps, op)
                 return false
-            elseif op.op == "pull" or op.op == "deposit" then
+            elseif op.op == "pull" then
                 if not bankOpen then
                     nonRetryableErrors = nonRetryableErrors + 1
                     return false
                 end
+                -- Pulls use shift-click: bank → inventory direction is
+                -- unambiguous, so UseContainerItem routes correctly.
                 op._itemID = info.itemID
                 op._stackBefore = info.stackCount or 1
                 ShiftMove(op.srcBag, op.srcSlot)
+                table.insert(issuedOps, op)
+                return true
+            elseif op.op == "deposit" then
+                if not bankOpen then
+                    nonRetryableErrors = nonRetryableErrors + 1
+                    return false
+                end
+                -- Deposits use cursor moves with an *explicit* destination
+                -- bag/slot. PickDepositSlot honors:
+                --   • the user's enabled bank/warbank tab settings
+                --   • each tab's Blizzard depositFlags filter
+                --   • smart stacking (merge into existing partial stacks)
+                --   • the user's overflow setting (cross-bank-type fallback)
+                local primary, secondary
+                if op.destType == "warbank" then
+                    primary, secondary = warbankBags, bankBags
+                elseif op.destType == "bank" then
+                    primary, secondary = bankBags, warbankBags
+                else
+                    -- "any" — try warbank first, fall back to bank, no
+                    -- explicit overflow needed since both are primary.
+                    primary = {}
+                    for _, b in ipairs(warbankBags) do table.insert(primary, b) end
+                    for _, b in ipairs(bankBags) do table.insert(primary, b) end
+                    secondary = {}
+                end
+
+                local overflowEnabled, crossStack = false, false
+                if ns.GetDepositOverflow then
+                    overflowEnabled, crossStack = ns:GetDepositOverflow()
+                end
+
+                local destBag, destSlot = PickDepositSlot(
+                    info, primary, secondary, overflowEnabled, crossStack)
+                if not destBag then
+                    nonRetryableErrors = nonRetryableErrors + 1
+                    return false
+                end
+
+                op._itemID = info.itemID
+                op._stackBefore = info.stackCount or 1
+                CursorMove(op.srcBag, op.srcSlot, destBag, destSlot)
                 table.insert(issuedOps, op)
                 return true
             end

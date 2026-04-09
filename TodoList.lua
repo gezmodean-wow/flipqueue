@@ -36,6 +36,12 @@ function TodoList:CommitList(preview, mode)
     elseif mode == "queue" or mode == "upcoming" then
         table.insert(ns.db.todoLists.upcoming, preview)
     end
+
+    -- Imports are ephemeral working state for the import → generate phase.
+    -- Once a list has been committed they've served their purpose, and the
+    -- to-do list itself becomes the source of truth for what's "active".
+    -- Clearing here prevents the imports table from growing across sessions.
+    if ns.ImportClearAll then ns:ImportClearAll() end
 end
 
 -- Promote next upcoming list to active. Returns true if promoted.

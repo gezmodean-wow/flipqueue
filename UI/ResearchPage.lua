@@ -675,6 +675,88 @@ local function RenderFPDeals(record, yOffset)
     return yOffset - SECTION_PAD
 end
 
+-- TSM Market Data — what TSM knows about how this item actually sells.
+-- This is the section that lets a player make "should I keep posting?"
+-- decisions when their personal log has zero or sparse sales. Pulls from
+-- TSM's region-wide accounting + market data.
+local function RenderTSMMarket(record, yOffset)
+    if not record.tsm then return yOffset end
+    local t = record.tsm
+
+    -- Bail if there's nothing market-y to show (auctioningOp is rendered
+    -- separately by RenderTSMOperation).
+    local hasAny = t.regionSoldPerDay or t.regionSaleRate or t.regionSaleAvg
+        or t.regionMarketAvg or t.regionHistorical or t.smartAvgBuy
+        or t.market or t.historical or t.minBuyout
+    if not hasAny then return yOffset end
+
+    -- Header conveys the "no personal sales? here's the market view" framing.
+    local header = "TSM Market Data"
+    if #record.sales == 0 then
+        header = header .. "  |cffaaaaaa(no personal sales recorded — market context)|r"
+    end
+    yOffset = RenderSectionHeader(yOffset, header)
+
+    -- Sale activity — does this item actually move?
+    if t.regionSoldPerDay then
+        local perDay = t.regionSoldPerDay
+        yOffset = RenderKeyValue(yOffset, "Region sold/day",
+            string.format("%.1f", perDay))
+    end
+    if t.regionSaleRate then
+        local pct = t.regionSaleRate
+        if pct > 1 then pct = pct / 100 end
+        yOffset = RenderKeyValue(yOffset, "Region sale rate",
+            string.format("%.1f%%", pct * 100))
+    end
+
+    -- Sale prices — what items are actually selling for
+    if t.regionSaleAvg then
+        yOffset = RenderKeyValue(yOffset, "Region avg sale price",
+            FormatGold(t.regionSaleAvg))
+    end
+    if t.regionHistorical then
+        yOffset = RenderKeyValue(yOffset, "Region historical price",
+            FormatGold(t.regionHistorical))
+    end
+    if t.historical and t.historical ~= t.regionHistorical then
+        yOffset = RenderKeyValue(yOffset, "This realm historical",
+            FormatGold(t.historical))
+    end
+
+    -- Listed prices (what's currently up, not necessarily what's selling)
+    if t.regionMarketAvg then
+        yOffset = RenderKeyValue(yOffset, "Region market value",
+            FormatGold(t.regionMarketAvg))
+    end
+    if t.market and t.market ~= t.regionMarketAvg then
+        yOffset = RenderKeyValue(yOffset, "This realm market value",
+            FormatGold(t.market))
+    end
+
+    -- Cost basis from TSM Accounting (what we've paid for it, on average)
+    if t.smartAvgBuy and t.smartAvgBuy > 0 then
+        yOffset = RenderKeyValue(yOffset, "Avg cost (TSM Accounting)",
+            FormatGold(t.smartAvgBuy))
+        -- Quick profit hint when we have both a sale price and a cost basis
+        local sellRef = t.regionSaleAvg or t.regionMarketAvg
+        if sellRef and sellRef > 0 then
+            local margin = math.floor(sellRef * 0.95) - t.smartAvgBuy
+            local marginStr
+            if margin > 0 then
+                marginStr = ns.COLORS.GREEN .. "+" .. FormatGold(margin) .. "|r per sale (after 5% AH cut)"
+            elseif margin < 0 then
+                marginStr = ns.COLORS.RED .. FormatGold(margin) .. "|r per sale (you'd lose money)"
+            else
+                marginStr = "Break-even"
+            end
+            yOffset = RenderKeyValue(yOffset, "Estimated margin", marginStr)
+        end
+    end
+
+    return yOffset - SECTION_PAD
+end
+
 -- TSM Auctioning Operation (pricing is in the comparison table; this shows posting rules)
 local function RenderTSMOperation(record, yOffset)
     if not record.tsm then return yOffset end
@@ -699,11 +781,12 @@ local function RenderTSMOperation(record, yOffset)
     return yOffset - SECTION_PAD
 end
 
--- Sale History — only recent individual transactions (summary is in comparison table)
+-- Sale History — recent individual transactions
 local function RenderSaleHistory(record, yOffset)
     if #record.sales == 0 then return yOffset end
-    -- Only show if there are recent sales worth detailing
-    if #record.sales <= 1 then return yOffset end
+    -- Render even a single sale: players want to see "yes this thing has
+    -- actually sold once, here's what for" rather than have it disappear
+    -- because the count is 1.
 
     local sorted = {}
     for _, s in ipairs(record.sales) do table.insert(sorted, s) end
@@ -841,6 +924,7 @@ local function RenderDetailPanel(record)
     y = RenderSummaryBadges(record, y)
     y = y - 4
     y = RenderPriceComparison(record, y)
+    y = RenderTSMMarket(record, y)
     y = RenderInventory(record, y)
     y = RenderTSMOperation(record, y)
     y = RenderFPDeals(record, y)
@@ -851,7 +935,7 @@ local function RenderDetailPanel(record)
 
     -- If nothing rendered beyond header
     if y > -80 and record.totalInventory == 0 and #record.sales == 0
-        and #record.fpDeals == 0 and not record.tsm then
+        and #record.failures == 0 and #record.fpDeals == 0 and not record.tsm then
         y = y - 8
         local f = AcquireFrame()
         f:SetHeight(20)

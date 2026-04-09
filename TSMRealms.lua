@@ -203,3 +203,101 @@ end
 function TSMRealms:InvalidateCache()
     wipe(queryCache)
 end
+
+--------------------------
+-- Batch Lookup (single pass per realm)
+--------------------------
+
+-- For a list of TSM item strings, return per-item-per-realm pricing in a single
+-- pass over each realm's raw data. The previous per-item API does an O(N)
+-- string.match for *every* item × realm combination, which scales as
+--   items × realms × stringSize  (gigabytes of byte comparisons for typical
+--   Deal Finder pools — that's the source of the Deal Finder lockup).
+-- This batch path collapses that to
+--   realms × stringSize  (one gmatch walk per realm, with a hash-set lookup
+--   at every item match).
+--
+-- Returns: { [tsmItemString] = { [realmName] = { minBuyout, numAuctions,
+--             marketValueRecent, updateTime } } }
+function TSMRealms:GetBatchPricing(itemStrings)
+    local result = {}
+    if not isLoaded or not itemStrings or #itemStrings == 0 then return result end
+
+    -- Two lookup sets: numeric IDs (for "i:NNNN" plain items) and the full
+    -- quoted form (for items with bonus/modifier tails like "i:225575::2:1663:2293").
+    local wantedIDs = {}      -- numericID string -> tsmItemString
+    local wantedQuoted = {}   -- full tsmItemString -> true
+    local emptyResult = {}    -- shared empty default for items with no hits
+    for _, str in ipairs(itemStrings) do
+        if str then
+            local id = str:match("^i:(%d+)$")
+            if id then
+                wantedIDs[id] = str
+            else
+                wantedQuoted[str] = true
+            end
+            result[str] = nil  -- placeholder so callers can distinguish
+        end
+    end
+
+    for _, realm in ipairs(realmList) do
+        local rawEntry = realmRaw[realm]
+        if rawEntry and rawEntry.str then
+            local fl = rawEntry.fieldLookup
+            local fMin = fl.minBuyout
+            local fNum = fl.numAuctions
+            local fRecent = fl.marketValueRecent
+            local downloadTime = rawEntry.downloadTime
+
+            -- Walk every item entry in the realm string exactly once.
+            -- Format is `{itemPart,values}` where itemPart is either a numeric
+            -- itemID or a quoted "itemString". Values are comma-separated
+            -- base-32 encoded numbers; brace nesting doesn't occur in values.
+            for itemPart, valuesPart in rawEntry.str:gmatch("{([^,]+),([^}]+)}") do
+                local key
+                if itemPart:sub(1, 1) == '"' then
+                    -- Quoted item string variant
+                    local stripped = itemPart:sub(2, -2)
+                    if wantedQuoted[stripped] then
+                        key = stripped
+                    end
+                else
+                    -- Plain numeric ID
+                    key = wantedIDs[itemPart]
+                end
+
+                if key then
+                    -- Decode just the values we care about (minBuyout,
+                    -- numAuctions, marketValueRecent). Avoid the cost of
+                    -- decoding every column.
+                    local parts = { strsplit(",", valuesPart) }
+                    local minBuyout   = fMin and parts[fMin] and DecodeValue(parts[fMin]) or nil
+                    local numAuctions = fNum and parts[fNum] and DecodeValue(parts[fNum]) or nil
+                    local recent      = fRecent and parts[fRecent] and DecodeValue(parts[fRecent]) or nil
+
+                    if (minBuyout and minBuyout > 0) or (recent and recent > 0) then
+                        local entry = result[key]
+                        if not entry then
+                            entry = {}
+                            result[key] = entry
+                        end
+                        entry[realm] = {
+                            minBuyout = (minBuyout and minBuyout > 0) and minBuyout or nil,
+                            numAuctions = (numAuctions and numAuctions > 0) and numAuctions or nil,
+                            marketValueRecent = (recent and recent > 0) and recent or nil,
+                            updateTime = downloadTime,
+                        }
+                    end
+                end
+            end
+        end
+    end
+
+    -- Fill in empty tables for items that had no hits anywhere, so callers
+    -- get a deterministic shape.
+    for _, str in ipairs(itemStrings) do
+        if str and result[str] == nil then result[str] = emptyResult end
+    end
+
+    return result
+end

@@ -333,11 +333,55 @@ SlashCmdList["FLIPQUEUE"] = function(msg)
             UI:ShowExportPopup(output, #lines .. " lines, " .. #output .. " chars — Ctrl+A, Ctrl+C to copy")
         end
 
-    elseif msg == "debug" then
+    elseif msg == "debug" or msg == "debug console" then
+        -- Open the in-game debug console (buttons + live debug log).
+        if UI.ToggleDebugConsole then UI:ToggleDebugConsole() end
+
+    elseif msg == "debug toggle" then
         if ns.db then
             ns.db.settings.debugMessages = not ns.db.settings.debugMessages
             ns:Print("Debug messages: " .. (ns.db.settings.debugMessages and
                 ns.COLORS.GREEN .. "ON" or ns.COLORS.RED .. "OFF") .. "|r")
+        end
+
+    elseif msg:match("^debug bankpopup") then
+        -- /fq debug bankpopup [N]              -> N pulls, N deposits, N extras
+        -- /fq debug bankpopup [P] [D] [E]      -> explicit per-section counts
+        -- Generates fake ops so the popup overflows the visible row window,
+        -- letting us validate the scroll behavior without needing real ops.
+        local p, d, e = msg:match("^debug bankpopup%s+(%d+)%s+(%d+)%s+(%d+)")
+        local n = msg:match("^debug bankpopup%s+(%d+)$")
+        if p and d and e then
+            p, d, e = tonumber(p), tonumber(d), tonumber(e)
+        elseif n then
+            n = tonumber(n)
+            p, d, e = n, n, n
+        else
+            p, d, e = 20, 20, 20
+        end
+        local function fake(prefix, count)
+            local arr = {}
+            for i = 1, count do
+                arr[i] = {
+                    op = "fake",
+                    name = prefix .. " item " .. i,
+                    icon = "Interface\\Icons\\INV_Misc_QuestionMark",
+                    quantity = (i % 5) + 1,
+                }
+            end
+            return arr
+        end
+        if UI.ShowBankPopup then
+            -- Reset any in-progress execution state so the popup builds fresh.
+            if UI.HideBankPopup then UI:HideBankPopup() end
+            UI:ShowBankPopup({
+                pulls    = fake("Pull", p),
+                deposits = fake("Deposit", d),
+                extras   = fake("Extra", e),
+            }, function()
+                ns:Print("Debug popup: execute clicked (no-op).")
+            end)
+            ns:Print("Debug bank popup: " .. p .. " pulls, " .. d .. " deposits, " .. e .. " extras.")
         end
 
     elseif msg == "tutorial" then
@@ -390,7 +434,9 @@ SlashCmdList["FLIPQUEUE"] = function(msg)
         print("  /fq dnt - Show Do Not Track list")
         print("  /fq mini - Toggle mini overlay")
         print("  /fq state - Export full FQ state for diagnosis")
-        print("  /fq debug - Toggle debug messages")
+        print("  /fq debug - Open the debug console (buttons + live log)")
+        print("  /fq debug toggle - Toggle debug message output to chat")
+        print("  /fq debug bankpopup [N|P D E] - Show fake bank popup with N (or P/D/E) rows for UI overflow testing")
         print("  /fq tutorial - Show the first-time tutorial")
         print("  /fq settings - Open settings panel")
         print("  /fq link <Char-Realm> - Link to another account for sync")

@@ -8,8 +8,13 @@ local tocVersion = C_AddOns and C_AddOns.GetAddOnMetadata(addonName, "Version") 
 ns.VERSION = tocVersion:find("@") and "dev" or tocVersion
 
 -- Bag index constants (TWW 12.0+)
-ns.INVENTORY_BAGS = {0, 1, 2, 3, 4}
-ns.REAGENT_BAG = 5
+ns.INVENTORY_BAGS = {0, 1, 2, 3, 4}      -- player bags (general use)
+ns.REAGENT_BAG = 5                        -- dedicated reagent bag slot
+-- ALL_PLAYER_BAGS includes the reagent bag — used when iterating items the
+-- player is *carrying* (counting / depositing). Pull destinations still use
+-- INVENTORY_BAGS so non-reagent bank items don't get routed to the reagent
+-- bag (where the server would reject them).
+ns.ALL_PLAYER_BAGS = {0, 1, 2, 3, 4, 5}
 ns.BANK_TABS = {6, 7, 8, 9, 10, 11}
 ns.WARBANK_TABS = {12, 13, 14, 15, 16}
 
@@ -38,7 +43,26 @@ function ns:PrintError(msg)
     print(ns.COLORS.RED .. "FlipQueue:|r " .. msg)
 end
 
+-- Ring buffer of recent debug messages, exposed for the in-game debug
+-- console (UI/DebugPopup.lua). Always populated regardless of whether
+-- debugMessages is on, so the console can show the last N messages even
+-- when the user just enabled debug mode.
+ns._debugLog = ns._debugLog or {}
+ns._debugLogMax = 500
+
 function ns:PrintDebug(msg)
+    -- Push to the ring buffer regardless of the debugMessages setting so the
+    -- in-game debug console always has recent context.
+    local ts = date("%H:%M:%S")
+    ns._debugLog[#ns._debugLog + 1] = ts .. "  " .. tostring(msg)
+    if #ns._debugLog > ns._debugLogMax then
+        table.remove(ns._debugLog, 1)
+    end
+    -- Notify the debug popup if it's open so it can append the new line live.
+    if ns.UI and ns.UI._OnDebugLogAppend then
+        ns.UI:_OnDebugLogAppend()
+    end
+
     if ns.db and ns.db.settings.debugMessages then
         print(ns.COLORS.GRAY .. "FlipQueue [debug]:|r " .. msg)
     end

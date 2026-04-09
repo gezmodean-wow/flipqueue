@@ -175,6 +175,21 @@ function DealFinder:ScanChunked(pool, onProgress, onComplete)
     local hasRealmData = ns.TSMRealms and ns.TSMRealms:IsLoaded()
     -- Sales data from unified SalesIndex
 
+    -- Pre-compute per-realm pricing for the entire pool in a single pass per
+    -- realm. The previous per-item GetAllRealmPricing() ran an O(N) string
+    -- scan over each realm's multi-megabyte AppData string for *every* pool
+    -- item — that's the source of the Deal Finder lockup. The batch lookup
+    -- collapses items × realms × stringSize into realms × stringSize.
+    local batchPricing = nil
+    if hasRealmData then
+        local itemStrings = {}
+        for _, poolItem in ipairs(pool) do
+            local s = ns.TSM:ItemKeyToTSMString(poolItem.itemKey)
+            if s then itemStrings[#itemStrings + 1] = s end
+        end
+        batchPricing = ns.TSMRealms:GetBatchPricing(itemStrings)
+    end
+
     local itemGroups = {}
     local total = #pool
     local idx = 1
@@ -200,9 +215,16 @@ function DealFinder:ScanChunked(pool, onProgress, onComplete)
 
             if tsmStr then
 
-            local allRealmPrices = {}
-            if hasRealmData then
+            -- Look up per-realm prices from the precomputed batch result
+            -- (one pass per realm, populated above). Falls back to the old
+            -- per-item path only if the batch path is unavailable.
+            local allRealmPrices
+            if batchPricing then
+                allRealmPrices = batchPricing[tsmStr] or {}
+            elseif hasRealmData then
                 allRealmPrices = ns.TSMRealms:GetAllRealmPricing(tsmStr) or {}
+            else
+                allRealmPrices = {}
             end
 
             local regionSaleRate = ns.TSM:GetPrice(itemKey, "DBRegionSaleRate")

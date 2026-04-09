@@ -922,7 +922,7 @@ function UI:RefreshCharactersPage()
                 for idx, ck in ipairs(order) do
                     if ck == rowData._charKey and idx > 1 then
                         order[idx], order[idx - 1] = order[idx - 1], order[idx]
-                        ns:Print("Moved up: " .. rowData._charKey)
+                        ns:PrintDebug("Moved up: " .. rowData._charKey)
                         break
                     end
                 end
@@ -937,7 +937,7 @@ function UI:RefreshCharactersPage()
                 for idx, ck in ipairs(order) do
                     if ck == rowData._charKey and idx < #order then
                         order[idx], order[idx + 1] = order[idx + 1], order[idx]
-                        ns:Print("Moved down: " .. rowData._charKey)
+                        ns:PrintDebug("Moved down: " .. rowData._charKey)
                         break
                     end
                 end

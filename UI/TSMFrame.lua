@@ -448,6 +448,23 @@ function UI:CreateTSMPanel(parent)
     y = y - h - SECTION_SPACING
 
     ------------------------------------------------
+    -- Behavior — how FlipQueue uses TSM thresholds
+    ------------------------------------------------
+    y = y - SectionHeader(content, y, "Behavior")
+
+    tsmWidgets.skipOnGenerate, h = CreateCheckbox(content, y,
+        "Skip deals priced below TSM's minimum when building lists",
+        "When generating a to-do list, FlipQueue will reject deals that TSM would refuse to post. Rejected deals appear in a separate list so you can review them and keep individual ones if you want. Uncheck to include every deal regardless of TSM's threshold.",
+        "tsmSkipOnGenerate")
+    y = y - h - ITEM_SPACING
+
+    tsmWidgets.autoSkipRejected, h = CreateCheckbox(content, y,
+        "Auto-reassign or skip rejected deals at the AH",
+        "When you open the auction house, FlipQueue will automatically reassign tasks that TSM would reject (below min price or already posted) to another character on the same realm, or skip them with a reason if no alternate character is available.",
+        "tsmAutoSkipRejected")
+    y = y - h - SECTION_SPACING
+
+    ------------------------------------------------
     -- Price Auto-Update
     ------------------------------------------------
     y = y - SectionHeader(content, y, "Price Updates")
@@ -633,6 +650,12 @@ function UI:RefreshTSMPage()
     -- Checkboxes
     if tsmWidgets.showColumns then
         tsmWidgets.showColumns:SetChecked(ns.db.settings.tsmShowColumns)
+    end
+    if tsmWidgets.skipOnGenerate then
+        tsmWidgets.skipOnGenerate:SetChecked(ns.db.settings.tsmSkipOnGenerate)
+    end
+    if tsmWidgets.autoSkipRejected then
+        tsmWidgets.autoSkipRejected:SetChecked(ns.db.settings.tsmAutoSkipRejected)
     end
     if tsmWidgets.autoUpdate then
         tsmWidgets.autoUpdate:SetChecked(ns.db.settings.tsmAutoUpdatePrice)

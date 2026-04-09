@@ -129,6 +129,38 @@ local collapseBtn = CreateIconButton(header, "Interface\\Buttons\\UI-MinusButton
 end)
 collapseBtn:SetPoint("RIGHT", importBtn, "LEFT", -ICON_SPACING, 0)
 
+-- Unread mail indicator (left side, next to title). Hidden when no mail.
+local mailIcon = CreateFrame("Frame", nil, header)
+mailIcon:SetSize(ICON_SIZE, ICON_SIZE)
+mailIcon:SetPoint("LEFT", syncDot, "RIGHT", 4, 0)
+mailIcon:EnableMouse(true)
+mailIcon.tex = mailIcon:CreateTexture(nil, "ARTWORK")
+mailIcon.tex:SetAllPoints()
+mailIcon.tex:SetTexture("Interface\\Icons\\INV_Letter_15")
+mailIcon:Hide()
+mailIcon:SetScript("OnEnter", function(self)
+    GameTooltip:SetOwner(self, "ANCHOR_BOTTOM")
+    GameTooltip:SetText("You have unread mail", 1, 1, 1)
+    GameTooltip:AddLine("Visit a mailbox to collect.", 0.7, 0.7, 0.7)
+    GameTooltip:Show()
+end)
+mailIcon:SetScript("OnLeave", function() GameTooltip:Hide() end)
+
+local function UpdateMailIndicator()
+    local hasMail = HasNewMail and HasNewMail()
+    if hasMail then mailIcon:Show() else mailIcon:Hide() end
+end
+
+local mailEvents = CreateFrame("Frame")
+mailEvents:RegisterEvent("UPDATE_PENDING_MAIL")
+mailEvents:RegisterEvent("MAIL_INBOX_UPDATE")
+mailEvents:RegisterEvent("MAIL_CLOSED")
+mailEvents:RegisterEvent("MAIL_SHOW")
+mailEvents:RegisterEvent("PLAYER_ENTERING_WORLD")
+mailEvents:SetScript("OnEvent", UpdateMailIndicator)
+-- Run once on load in case mail is already pending.
+C_Timer.After(1, UpdateMailIndicator)
+
 -- Resize grip (bottom-right corner)
 local resizeGrip = CreateFrame("Button", nil, mini)
 resizeGrip:SetSize(12, 12)
@@ -341,205 +373,12 @@ function UI:RefreshMini()
         elseif todoPending > 0 then
             titleText:SetText(fqTitle ..
                 ns.COLORS.GRAY .. " - " .. todoPending .. " on other chars" .. ns.COLORS.RESET)
-
-            -- Show grouped summary of the to-do list (top 5 chars + up to 2 create char)
-            local currentList = ns.TodoList:GetCurrentList()
-            if currentList and currentList.tasks then
-                -- Annotate task indices (same as TodoPage) so bulk actions work
-                for i, task in ipairs(currentList.tasks) do
-                    task._taskIndex = i
-                end
-                local MAX_MINI_CHARS = 5
-                local sortMode = (UI.GetGenSortMode and UI:GetGenSortMode()) or "profit"
-                local displayGroups = ns.TodoList:BuildDisplayGroups(currentList.tasks, sortMode)
-
-                local assignedGroups = {}
-                local unassignedGroups = {}
-                for _, group in ipairs(displayGroups) do
-                    if group.charKey then
-                        table.insert(assignedGroups, group)
-                    else
-                        table.insert(unassignedGroups, group)
-                    end
-                end
-
-                local shownCount = 0
-                for _, group in ipairs(assignedGroups) do
-                    if shownCount >= MAX_MINI_CHARS then break end
-                    shownCount = shownCount + 1
-                    rowIndex = rowIndex + 1
-                    local row = GetOrCreateMiniRow(rowIndex)
-                    row.icon:SetTexture(nil)
-                    row.tooltipItemID = nil
-                    row.tooltipItemName = group.charKey
-                    local goldStr = group.totalGold >= 1000 and string.format("%.1fk", group.totalGold / 1000) or (math.floor(group.totalGold) .. "g")
-                    -- Count buy vs sell in group
-                    local gBuys, gPosts = 0, 0
-                    for _, gi in ipairs(group.items) do
-                        if gi.action == "buy" then gBuys = gBuys + 1 else gPosts = gPosts + 1 end
-                    end
-                    local gParts = {}
-                    if gPosts > 0 then table.insert(gParts, gPosts .. " to post") end
-                    if gBuys > 0 then table.insert(gParts, gBuys .. " to buy") end
-                    row.tooltipExtra = table.concat(gParts, ", ") .. ", ~" .. goldStr
-
-                    -- Collect task indices for bulk action buttons
-                    local grpIndices = {}
-                    for _, gi in ipairs(group.items) do
-                        if gi._taskIndex then table.insert(grpIndices, gi._taskIndex) end
-                    end
-                    row:SetScript("OnMouseDown", nil)
-                    if #grpIndices > 0 then
-                        local miniRefresh = function()
-                            UI:RefreshMini()
-                            if UI.mainFrame and UI.mainFrame:IsShown() then UI:Refresh() end
-                        end
-                        UI.SetupTaskActionBtns(row)
-                        local btns = row._taskActionBtns
-                        btns.complete:SetScript("OnClick", function()
-                            ns.TodoList:BulkComplete(grpIndices)
-                            miniRefresh()
-                        end)
-                        btns.skip:SetScript("OnClick", function()
-                            ns.TodoList:BulkSkip(grpIndices, "bulk skip")
-                            miniRefresh()
-                        end)
-                        btns.delete:SetScript("OnClick", function()
-                            ns.TodoList:BulkDelete(grpIndices)
-                            miniRefresh()
-                        end)
-                        UI.HideTaskActionBtns(row)
-                        row:SetScript("OnEnter", function(self)
-                            UI.ShowTaskActionBtns(self)
-                            if self.tooltipItemName then
-                                GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
-                                GameTooltip:SetText(self.tooltipItemName, 1, 1, 1)
-                                if self.tooltipExtra then
-                                    GameTooltip:AddLine(self.tooltipExtra, 0.7, 0.7, 0.7, true)
-                                end
-                                GameTooltip:Show()
-                            end
-                        end)
-                        row:SetScript("OnLeave", function(self)
-                            self._actionBtnHovered = false
-                            C_Timer.After(0.1, function()
-                                if not self._actionBtnHovered and not self:IsMouseOver() then
-                                    GameTooltip:Hide()
-                                    UI.HideTaskActionBtns(self)
-                                end
-                            end)
-                        end)
-                    end
-
-                    local charEntry = ns.db.characters and ns.db.characters[group.charKey]
-                    local cc = charEntry and UI._CLASS_COLORS and UI._CLASS_COLORS[charEntry.class] or "888888"
-                    local charName = group.charName or "?"
-                    local realmShort = group.realm:match("^([^,]+)") or group.realm
-
-                    local countLabel = gBuys > 0 and gPosts > 0
-                        and (gPosts .. "P+" .. gBuys .. "B")
-                        or (gBuys > 0 and (gBuys .. "B") or tostring(#group.items))
-                    local rp = ns.IsRemoteChar and ns:IsRemoteChar(group.charKey) and "|cff8866cc*|r " or ""
-                    row.text:SetText(
-                        rp .. "|cff" .. cc .. charName .. "|r" ..
-                        ns.COLORS.GRAY .. " " .. realmShort .. ns.COLORS.RESET ..
-                        ns.COLORS.GRAY .. " (" .. countLabel .. ")" .. ns.COLORS.RESET ..
-                        ns.COLORS.GREEN .. " ~" .. goldStr .. ns.COLORS.RESET)
-                    row:Show()
-                end
-
-                if #assignedGroups > MAX_MINI_CHARS then
-                    rowIndex = rowIndex + 1
-                    local row = GetOrCreateMiniRow(rowIndex)
-                    row.icon:SetTexture(nil)
-                    row.text:SetText(ns.COLORS.GRAY .. "+" .. (#assignedGroups - MAX_MINI_CHARS) ..
-                        " more characters... (open /fq)" .. ns.COLORS.RESET)
-                    row.tooltipItemID = nil
-                    row.tooltipItemName = nil
-                    row.tooltipExtra = nil
-                    row:SetScript("OnMouseDown", nil)
-                    row:Show()
-                end
-
-                if #unassignedGroups > 0 then
-                    local MAX_MINI_UNASSIGNED = 2
-                    local unassignedShown = 0
-                    for _, group in ipairs(unassignedGroups) do
-                        if unassignedShown >= MAX_MINI_UNASSIGNED then break end
-                        unassignedShown = unassignedShown + 1
-                        rowIndex = rowIndex + 1
-                        local row = GetOrCreateMiniRow(rowIndex)
-                        row.icon:SetTexture(nil)
-                        row.tooltipItemID = nil
-                        row.tooltipItemName = nil
-                        local realmName = group.realm ~= "" and group.realm or "?"
-                        row.tooltipExtra = "Create a character on " .. realmName .. " (" .. #group.items .. " items)"
-
-                        -- Bulk action buttons for unassigned (create char) groups
-                        local uIndices = {}
-                        for _, gi in ipairs(group.items) do
-                            if gi._taskIndex then table.insert(uIndices, gi._taskIndex) end
-                        end
-                        row:SetScript("OnMouseDown", nil)
-                        if #uIndices > 0 then
-                            local miniRefresh = function()
-                                UI:RefreshMini()
-                                if UI.mainFrame and UI.mainFrame:IsShown() then UI:Refresh() end
-                            end
-                            UI.SetupTaskActionBtns(row)
-                            local btns = row._taskActionBtns
-                            btns.complete:SetScript("OnClick", function()
-                                ns.TodoList:BulkComplete(uIndices)
-                                miniRefresh()
-                            end)
-                            btns.skip:SetScript("OnClick", function()
-                                ns.TodoList:BulkSkip(uIndices, "bulk skip")
-                                miniRefresh()
-                            end)
-                            btns.delete:SetScript("OnClick", function()
-                                ns.TodoList:BulkDelete(uIndices)
-                                miniRefresh()
-                            end)
-                            UI.HideTaskActionBtns(row)
-                            row:SetScript("OnEnter", function(self)
-                                UI.ShowTaskActionBtns(self)
-                                if self.tooltipExtra then
-                                    GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
-                                    GameTooltip:SetText(self.tooltipExtra, 0.7, 0.7, 0.7)
-                                    GameTooltip:Show()
-                                end
-                            end)
-                            row:SetScript("OnLeave", function(self)
-                                self._actionBtnHovered = false
-                                C_Timer.After(0.1, function()
-                                    if not self._actionBtnHovered and not self:IsMouseOver() then
-                                        GameTooltip:Hide()
-                                        UI.HideTaskActionBtns(self)
-                                    end
-                                end)
-                            end)
-                        end
-
-                        row.text:SetText(
-                            ns.COLORS.GRAY .. "Create char " .. ns.COLORS.RESET ..
-                            ns.COLORS.RED .. realmName .. ns.COLORS.RESET ..
-                            ns.COLORS.GRAY .. " (" .. #group.items .. ")" .. ns.COLORS.RESET)
-                        row:Show()
-                    end
-                    if #unassignedGroups > MAX_MINI_UNASSIGNED then
-                        rowIndex = rowIndex + 1
-                        local row = GetOrCreateMiniRow(rowIndex)
-                        row.icon:SetTexture(nil)
-                        row.text:SetText(ns.COLORS.GRAY .. "+" .. (#unassignedGroups - MAX_MINI_UNASSIGNED) ..
-                            " more realms need chars" .. ns.COLORS.RESET)
-                        row.tooltipItemID = nil
-                        row.tooltipItemName = nil
-                        row.tooltipExtra = nil
-                        row:SetScript("OnMouseDown", nil)
-                        row:Show()
-                    end
-                end
-            end
+            -- The detail listing of other characters is rendered by the
+            -- "Next Steps" section below — this branch used to also render
+            -- its own grouped summary in the per-character rows, but that
+            -- duplicated Next Steps in a different sort order and confused
+            -- users. We just set the title here and let Next Steps render
+            -- the actual rows.
         else
             titleText:SetText(fqTitle ..
                 ns.COLORS.GRAY .. " - nothing to do" .. ns.COLORS.RESET)

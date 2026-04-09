@@ -202,9 +202,9 @@ local function ScanAndExport(bagIndices)
     end
 
     if totalItems > 0 and #itemDataList == 0 then
-        ns:Print(ns.COLORS.GRAY .. "Export: scanned " .. totalItems ..
+        ns:PrintDebug("Export: scanned " .. totalItems ..
             " items across " .. totalSlots .. " slots, " .. skipped ..
-            " filtered (commodities/bound/untradeable).|r")
+            " filtered (commodities/bound/untradeable).")
     end
 
     local aggregated = AggregateItems(itemDataList)

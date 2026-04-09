@@ -92,6 +92,37 @@ function ns:InitDB()
     if not db.settings.pullTabs then
         db.settings.pullTabs = { mode = "all" }
     end
+    -- Deposit overflow: when the destination bank type has no accepting/free
+    -- slot, optionally fall back to the other bank type. Default OFF — we
+    -- never overflow unless the user explicitly opts in.
+    --   scope     "global" (one toggle for all chars) or "char" (per-char)
+    --   enabled   global default
+    --   crossStack  sub-setting: when overflow is enabled, also allow
+    --               smart-stacking to merge into partial stacks in the
+    --               secondary bank type. Default OFF.
+    --   char[ck] = { enabled, crossStack } — per-char overrides
+    if not db.settings.depositOverflow then
+        db.settings.depositOverflow = {
+            scope = "global",
+            enabled = false,
+            crossStack = false,
+            char = {},
+        }
+    end
+    -- Reagents/materials in extras: tradegoods aren't tracked for sales or
+    -- to-dos (they're not cross-region), so by default we leave them on the
+    -- character instead of sweeping them into the warbank as "extras". Users
+    -- who DO want them deposited can opt in.
+    if db.settings.depositIncludeReagents == nil then
+        db.settings.depositIncludeReagents = false
+    end
+    -- Bank popup section collapse state — persisted so the user's choices
+    -- carry across popups. All sections expanded by default.
+    if not db.settings.bankPopupCollapsed then
+        db.settings.bankPopupCollapsed = {
+            pulls = false, deposits = false, gold = false, extras = false,
+        }
+    end
     -- Generator filter persistence
     db.settings.genFilterMode = db.settings.genFilterMode or "all"
     db.settings.genFilterValue = db.settings.genFilterValue or ""
@@ -321,6 +352,23 @@ function ns:GetEnabledWarbankTabs()
     return result
 end
 
+-- Returns the effective deposit-overflow settings for the current character.
+-- When scope is "char" and the current char has overrides, those win;
+-- otherwise the global defaults apply.
+-- Returns: enabled (bool), crossStack (bool)
+function ns:GetDepositOverflow()
+    if not ns.db then return false, false end
+    local s = ns.db.settings.depositOverflow
+    if not s then return false, false end
+    if s.scope == "char" then
+        local cfg = s.char and s.char[ns:GetCharKey()]
+        if cfg then
+            return cfg.enabled and true or false, cfg.crossStack and true or false
+        end
+    end
+    return s.enabled and true or false, s.crossStack and true or false
+end
+
 -- Returns the list of bank bag indices (6-11) filtered by settings for current character
 function ns:GetEnabledBankTabs()
     if not ns.db or not ns.db.settings.pullTabs or ns.db.settings.pullTabs.mode == "all" then
@@ -523,6 +571,18 @@ function ns:ImportClear(source)
     if not ns.db or not ns.db.imports then return end
     local src = source or "fpScanner"
     if ns.db.imports[src] then
+        wipe(ns.db.imports[src])
+    end
+end
+
+-- Wipe every import source. Imports are intended to be ephemeral working
+-- state that exists only during the import → generate phase of building a
+-- to-do list. Once the list is committed, imports have served their purpose
+-- and would otherwise grow unbounded across sessions. Called automatically
+-- by TodoList:CommitList.
+function ns:ImportClearAll()
+    if not ns.db or not ns.db.imports then return end
+    for src in pairs(ns.db.imports) do
         wipe(ns.db.imports[src])
     end
 end

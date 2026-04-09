@@ -85,8 +85,8 @@ local function ScanContainers(bagIndices, captureBindInfo)
                             end
 
                             -- Debug ilvl capture (enable with /fq debug)
-                            if ns.db and ns.db.settings and ns.db.settings.debug and (bonusIDs ~= "" or modifiers ~= "") then
-                                ns:Print("|cffaaaaaaiLvl|r " .. (itemName or "?") .. " [" .. (bonusIDs or "") .. "] → " .. ilvl)
+                            if (bonusIDs ~= "" or modifiers ~= "") then
+                                ns:PrintDebug("iLvl " .. (itemName or "?") .. " [" .. (bonusIDs or "") .. "] -> " .. ilvl)
                             end
                         end
                         items[key] = {
