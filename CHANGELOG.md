@@ -1,5 +1,88 @@
 # Changelog
 
+## v0.10.0-a3
+
+### Bug Fixes
+- **BankQueue crash on some clients**: `GetBankTypeForBag` used `Enum.BagIndex.BankBag_*` constants that don't exist on every client, causing "compare nil with number" — now uses numeric ranges with nil-safety
+- **Deposits silently going to character bank instead of warbank**: `UseContainerItem` on inventory slots ignores `BankPanel:SetBankType` and defaults to character bank — pulls keep shift-click, deposits now use cursor moves with explicit destination so warbank-bound items can never silently misroute
+- **Deal Finder game lockup**: TSMRealms was doing O(items × realms × stringSize) string scans on multi-megabyte realm pricing data. New `GetBatchPricing` does a single pass per realm; cost drops from gigabytes to megabytes of byte comparisons for typical pools — multi-second freezes now resolve in a single frame
+- **Imports growing unbounded**: imports were meant to be ephemeral working state for the import → generate phase but persisted across sessions. Now auto-cleared in `TodoList:CommitList` so the to-do list becomes the single source of truth once a list is committed
+- **Chronic micro-lag during AH/mailbox activity**: `BAG_UPDATE_DELAYED` handler is now debounced — collapses bursts of bag updates into a single Scanner+RefreshLocations+RefreshTaskSteps+UI:Refresh+RefreshMini chain instead of running it N times
+- **Mini view double-list bug**: when the current character had no tasks, the mini view rendered a duplicate per-character summary above "Next Steps" in a different sort order. Removed the duplicate render — Next Steps is now the single source of truth for that view
+- **Single sale hidden in Item Research**: `RenderSaleHistory` required `> 1` sales; now shows even a single transaction so the "yes this thing has sold once, here's what for" data point isn't lost
+- **Soulbound items in deposit extras**: `BuildExtraDepositOps` was routing soulbound items to the character bank; now skips them entirely (matches `BuildDepositOps`)
+- **Reagent bag invisible to deposits**: `CountInBags`, `BuildDepositOps`, and `BuildExtraDepositOps` weren't iterating bag 5; new `ALL_PLAYER_BAGS = {0..5}` constant covers it
+- **Bank tab filter ignored**: Blizzard's per-tab `depositFlags` (Equipment / Reagents / etc. assignment) wasn't honored. New `ItemMatchesTabFlags` checks each tab's filter and `TabSpecificity` ranks accepting tabs so the most-specific match wins over catch-all
+- **Bank popup overflow**: long pull/deposit lists overflowed off-screen; now wrapped in a `ScrollFrame` with mouse wheel support
+- **"Internal bag error" during multi-item pulls**: `ProcessSync` now issues one move per frame with auto-retry, pre-sets the bank panel with a settle delay, and uses a configurable inter-move delay to stay above Blizzard's container-op rate limit
+- **Debug message leaks in live mode**: audited and fixed several `ns:Print` calls that were debug-style: Scanner iLvl logging (also fixed wrong settings field name), ExportPopup SimpleHTML status, CharactersPage character reorder messages, Export scan summary, Import deduplication count
+
+### Features
+- **TSM Market Data section in Item Research**: surfaces sold/day, sale rate, regional avg sale, historical price, market value, and TSM Accounting cost basis. Computes estimated margin when both cost and a sale reference are available, so players can make "should I keep posting?" decisions even when their personal log has zero sales
+- **Smart deposit stacking**: `FindStackTarget` merges deposits into existing partial stacks before opening new slots
+- **Deposit overflow setting** (off by default): when the warbank has no room, optionally fall back to the character bank. Sub-toggle for combining partial stacks across both banks. Global default with per-character override support
+- **Reagent deposit toggle**: new "Move reagents to warbank when depositing all" setting (off by default — reagents aren't tracked for sale because they're not cross-region)
+- **Collapsible bank popup sections**: Pulls / Deposits / Gold / Extras can each be collapsed independently; state persists across popups
+- **Mail icon on mini view**: small envelope icon shown on the header only when `HasNewMail()` returns true
+- **`/fq debug` console**: in-game debug window with action button grid + live debug log view. Buttons for bank popup overflow tests, FQ state export, copy debug log to clipboard, toggle debug mode. Status indicator shows whether chat-output debug mode is on. Captures the last 500 debug messages to a ring buffer regardless of toggle so the console always has recent context
+- **`UI:RegisterDebugAction(label, fn)`**: public API for other modules to register their own debug console buttons without editing `DebugConsole.lua`
+
+### Settings reorganization
+- **New "Bank & Warbank" section**: bank, gold, reagent, overflow, and batch-size rows moved here from "Scanning & Automation". The remaining section is renamed "General"
+- **TSM behavior moved to TSM Integration page**: `tsmSkipOnGenerate` and `tsmAutoSkipRejected` no longer live in the Settings frame; they're under a new "Behavior" sub-header on the TSM Integration page
+- **Multi-Account section framing**: "Real-Time Sync (recommended)" header in green with a clear description of what it does (BattleNet-linked, real-time inventory + task sync, unified to-do list). "External Accounts" relabeled to "External Accounts (legacy — use Real-Time Sync above)" in muted gold with an inline deprecation notice
+- **Plain-language labels** throughout: e.g. "Withdraw gold from the warbank to cover listing fees", "Deposit to bank when warbank is full", "Move reagents to warbank when depositing all"
+
+## v0.10.0-a2 — BankQueue reliability rewrite
+
+### Bug Fixes
+- **Pull verification false positives**: auto-pull was reporting success for items that never moved. The old verification only checked "is the source slot empty?", which gave false positives when a server-rejected destination placement bounced the item to a different slot. New `CountItemsInBags` snapshots stack counts by itemID before/after each batch; an op only counts as moved when the destination's count of that itemID actually went up. Applied to both `ProcessSync` (popup path) and the async `VerifyBatch`
+- **"Internal bag error" during pulls**: replaced the `PickupContainerItem` + `PickupContainerItem` cursor dance with single-call `C_Container.UseContainerItem` (shift-click semantics). Half the rate-limit pressure, no cursor state to leak between back-to-back moves, server picks the destination including auto-stacking onto partial stacks. Gated behind `IsBankOpen()` so it can't fall through to "use the item"
+- **Failed moves in `ProcessSync` weren't retried**: added auto-retry up to 4 times, matching what the async `Process` path already did
+
+### Features
+- **One move per frame**: each pickup is scheduled via `C_Timer.After(0, IssueNext)` so it lands on its own frame, avoiding the 16ms-too-fast tight loop that tripped Blizzard's container-op rate limit
+- **Local bank panel tracking**: `SetBankType` is only called when the type actually changes, with a small settle delay after a switch — eliminates redundant panel rebuilds inside a batch
+
+## v0.10.0-a1 — BankQueue rewrite, unified sales tracking, item detail popup
+
+### Bug Fixes
+- **Warbank ops blocked by taint**: removed the previous taint workaround (which was causing taint, not fixing it) and rewrote `BankQueue` with explicit `EnsureBankType` mode-setting before warbank operations
+- **Deposit/extra slot overlap**: `BuildExtraDepositOps` now excludes slots already claimed by deposit ops
+- **Mini view deposit visibility for non-logged-in characters**: deposit tasks for items not in inventory are now hidden in the mini view to avoid stale rows
+- **Warbank source verification**: `RefreshLocations` now properly checks warbank inventory for deposit tasks — clears `depositFrom` and updates `source` to "warbank" when the item is found
+
+### Features
+- **Unified sales tracking (`SalesIndex.lua`)**: new module with canonical `IsSold` / `IsFailed` / `IsActive` predicates and a cached index exposing `GetSalesSummary`, `GetSalesForRealm`, `GetLogStats`, and `GetUncollectedForChar`. Single source of truth for all views; removed ~130 lines of duplicate sales indexing in `DealFinder.lua`
+- **Item detail popup**: left-click a task in the mini view to open a popup showing location, assignment, pricing, and research summary
+- **Bank popup with unified progress bar**: color-coded across all phases (pull / deposit / gold), completion summary persists until the bank closes. Anchors to the mini view with configurable position
+- **Bank progress rollout on mini view**: when the popup isn't visible, the mini view shows a compact progress indicator instead
+- **Collapsible settings sections**: collapse with summaries shown in the collapsed state, persisted across reloads
+- **Deferred tasks hidden from mini view**: reduces visual clutter for tasks that aren't actionable right now
+- **Canonical item matcher (`ns:ItemsMatch`) adopted in ItemResearch** and other modules
+
+## v0.9.8 — Setup wizard, bank progress, soulbound/warbound fixes
+
+### Features
+- **First-run setup wizard**: step-by-step interactive wizard with a "Use Recommended Defaults" fast path. Steps: Welcome, Gold, Bank Automation, TSM (if detected), Pricing, Posting, Display. Steps are dynamic based on TSM/Auctionator detection. Auto-triggers for new installs; existing users skip. Re-runnable from Settings via the "Run Setup Wizard" button
+- **Bank progress bar**: status bar overlay during pull/deposit operations showing X / Y progress, updated per batch, hides on completion
+- **Pricing model split**: separated "Deal Price" (imported) from "Blended" (TSM + personal sales history) as distinct options across Deal Finder, the TSM page, and the wizard. New `blendedPrice` field on Deal Finder imports
+
+### Bug Fixes
+- **Soulbound deposit filter**: deposit allowlist now only includes BtA / BtW items when `isBound=true` (was letting equipped BoE through to the deposit list)
+- **Warbank pool builder included untradeable items**: BtW / BtA items were being added to the sell pool; now filtered out
+- **Character inventory tradeable check**: also excludes Quest / BtA / BtW bind types
+
+### Default Changes (fresh installs only)
+- `autoWithdrawGold`: false → true
+- `maxWithdrawGold`: 0 → 500
+- `goldBuffer`: 0 → 50
+- `autoDepositGold` remains off (players keep earnings by default)
+
+### Settings & Tutorial cleanup
+- Sync log toggle now reflows the content below it using a container frame
+- Tutorial: removed Export step (page no longer in nav); generator step uses banners instead of anchor-dependent callouts; fixed text overlap on center-type callouts; reduced from 5 to 4 steps
+
 ## v0.9.7
 
 ### Bug Fixes
