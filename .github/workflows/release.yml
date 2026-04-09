@@ -70,3 +70,85 @@ jobs:
           CF_API_KEY: ${{ secrets.CF_API_KEY }}
           WAGO_API_TOKEN: ${{ secrets.WAGO_API_TOKEN }}
           GITHUB_OAUTH: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Notify Discord
+        if: ${{ env.DISCORD_WEBHOOK_URL != '' }}
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          # Optional: set DISCORD_TESTER_ROLE_ID secret to ping a role
+          # for alpha/beta releases. Leave unset to skip the ping.
+          DISCORD_TESTER_ROLE_ID: ${{ secrets.DISCORD_TESTER_ROLE_ID }}
+          TAG: ${{ github.ref_name }}
+          CHANNEL: ${{ steps.release_type.outputs.channel }}
+          REPO: ${{ github.repository }}
+        run: |
+          # Extract the section for this tag from CHANGELOG.md.
+          # Matches "## <tag>" exactly or "## <tag> <something>" (e.g.
+          # with a trailing em-dash title), and stops at the next
+          # "## " header.
+          BODY=$(awk -v tag="$TAG" '
+            BEGIN { header = "## " tag }
+            !found {
+              if ($0 == header || index($0, header " ") == 1) {
+                found = 1
+                next
+              }
+            }
+            found && /^## / { exit }
+            found { print }
+          ' CHANGELOG.md)
+
+          # Trim leading blank lines.
+          BODY=$(printf "%s" "$BODY" | sed -e '/./,$!d')
+
+          # Fall back to a link if no section was found.
+          if [ -z "$BODY" ]; then
+            BODY="See release notes on GitHub."
+          fi
+
+          # Discord embed description limit is 4096; leave headroom.
+          if [ ${#BODY} -gt 3900 ]; then
+            BODY="${BODY:0:3900}"$'\n\n(truncated; see full changelog on GitHub)'
+          fi
+
+          # Color and label per channel.
+          case "$CHANNEL" in
+            alpha)   COLOR=15105570; LABEL="Alpha" ;;   # orange
+            beta)    COLOR=3447003;  LABEL="Beta"  ;;   # blue
+            release) COLOR=3066993;  LABEL="Release" ;; # green
+            *)       COLOR=9807270;  LABEL="Build" ;;   # gray
+          esac
+
+          TITLE="FlipQueue $TAG ($LABEL)"
+          URL="https://github.com/$REPO/releases/tag/$TAG"
+
+          # Build optional role-ping content string.
+          if [ -n "$DISCORD_TESTER_ROLE_ID" ] && [ "$CHANNEL" != "release" ]; then
+            CONTENT="<@&$DISCORD_TESTER_ROLE_ID> new $LABEL build available"
+          elif [ "$CHANNEL" = "release" ]; then
+            CONTENT="New stable release available"
+          else
+            CONTENT=""
+          fi
+
+          PAYLOAD=$(jq -n \
+            --arg content "$CONTENT" \
+            --arg title "$TITLE" \
+            --arg url "$URL" \
+            --arg body "$BODY" \
+            --argjson color "$COLOR" \
+            '{
+              content: $content,
+              allowed_mentions: { parse: ["roles"] },
+              embeds: [{
+                title: $title,
+                url: $url,
+                description: $body,
+                color: $color
+              }]
+            }')
+
+          curl -fsSL \
+            -H "Content-Type: application/json" \
+            -d "$PAYLOAD" \
+            "$DISCORD_WEBHOOK_URL"
