@@ -1,5 +1,15 @@
 # Changelog
 
+## v0.10.1-a1
+
+### Bug Fixes
+- **Deposits silently swapping items between bag and warbank**: when the client container cache lagged the server — especially for warbank tabs that hadn't been actively viewed — `PickDepositSlot` would target an "empty"-looking slot that was actually occupied, and the resulting `CursorMove` performed a server-side swap: the deposit landed at the destination while an unrelated item was displaced out of the bank. The delta verification, which only tracks the deposited itemID's count, saw `+1` and declared success. The user was left with items in the wrong inventory.
+  - **Allocation ledger** (`allocatedSlots`), scoped per sync attempt and per async batch — each deposit claims its destination slot *before* the `CursorMove` is issued, and `FindStackTarget` / `FindEmptyAcceptingSlot` skip claimed slots so two ops in the same sweep can never collide. Same mechanism Baganator's `BankTransferManager` uses.
+  - **`BAG_UPDATE_DELAYED` wait between sync moves**: the fixed 100ms spacer was a best-effort guess; the event is the deterministic signal that the container cache reflects the last server response. Still enforces the 100ms minimum for Blizzard's container-op rate limit, with a 600ms hard ceiling if the event never arrives (rejected move).
+  - **`C_Item.DoesItemExist` empty-slot probe**: `FindEmptyAcceptingSlot` now prefers the `ItemLocation`-based API over `C_Container.GetContainerItemInfo`, which is more reliable for warbank tabs the player hasn't opened in this session.
+  - **Source-item validation (`op._expectedItemID`)**: `IssueOne` records the source item on first issue and compares on retries — if a prior swap or external move replaced the original item at the source slot, the retry aborts instead of moving an impostor.
+  - **`CursorMove` destination guard**: rejects place attempts when the destination holds a different itemID than what's on the cursor. Belt-and-suspenders for the fresh-cache case.
+
 ## v0.10.0-a3
 
 ### Bug Fixes

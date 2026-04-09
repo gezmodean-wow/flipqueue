@@ -216,10 +216,22 @@ local function MatchingTabsSorted(itemLink, bagList)
     return matched
 end
 
+-- Helper: is (bag, slot) in the allocation ledger?
+local function IsSlotClaimed(allocatedSlots, bag, slot)
+    if not allocatedSlots then return false end
+    local bagClaims = allocatedSlots[bag]
+    return bagClaims and bagClaims[slot] == true
+end
+
 -- Find a partial-stack target for stacking deposits. Walks accepting tabs in
 -- specificity order, returns the first slot whose itemID matches and has
 -- stack room. The server will merge the picked-up stack onto the target.
-local function FindStackTarget(itemLink, itemID, bagList)
+--
+-- allocatedSlots (optional) — a {[bag]={[slot]=true}} map of destinations
+-- already claimed by earlier operations in the current batch. Claimed slots
+-- are skipped so two ops never target the same slot when the client cache
+-- hasn't yet reflected a prior move.
+local function FindStackTarget(itemLink, itemID, bagList, allocatedSlots)
     if not itemID then return nil end
     local stackMax
     if itemLink then
@@ -233,11 +245,13 @@ local function FindStackTarget(itemLink, itemID, bagList)
         local ok, num = pcall(C_Container.GetContainerNumSlots, m.bag)
         if ok and num then
             for slot = 1, num do
-                local ok2, info = pcall(C_Container.GetContainerItemInfo, m.bag, slot)
-                if ok2 and info and info.itemID == itemID then
-                    local count = info.stackCount or 1
-                    if count < stackMax then
-                        return m.bag, slot
+                if not IsSlotClaimed(allocatedSlots, m.bag, slot) then
+                    local ok2, info = pcall(C_Container.GetContainerItemInfo, m.bag, slot)
+                    if ok2 and info and info.itemID == itemID then
+                        local count = info.stackCount or 1
+                        if count < stackMax then
+                            return m.bag, slot
+                        end
                     end
                 end
             end
@@ -246,15 +260,32 @@ local function FindStackTarget(itemLink, itemID, bagList)
 end
 
 -- Find an empty slot inside an accepting tab, preferring most-specific.
-local function FindEmptyAcceptingSlot(itemLink, bagList)
+-- Prefers C_Item.DoesItemExist (ItemLocation-based) over
+-- C_Container.GetContainerItemInfo because the container cache for warbank
+-- tabs that haven't been actively viewed can lag behind the server and
+-- briefly report an occupied slot as empty.
+local function FindEmptyAcceptingSlot(itemLink, bagList, allocatedSlots)
     local sorted = MatchingTabsSorted(itemLink, bagList)
+    local hasDoesItemExist = C_Item and C_Item.DoesItemExist
     for _, m in ipairs(sorted) do
         local ok, num = pcall(C_Container.GetContainerNumSlots, m.bag)
         if ok and num then
             for slot = 1, num do
-                local ok2, info = pcall(C_Container.GetContainerItemInfo, m.bag, slot)
-                if ok2 and not info then
-                    return m.bag, slot
+                if not IsSlotClaimed(allocatedSlots, m.bag, slot) then
+                    local occupied
+                    if hasDoesItemExist then
+                        local eok, ex = pcall(C_Item.DoesItemExist, {bagID = m.bag, slotIndex = slot})
+                        if eok then
+                            occupied = ex
+                        end
+                    end
+                    if occupied == nil then
+                        local ok2, info = pcall(C_Container.GetContainerItemInfo, m.bag, slot)
+                        occupied = ok2 and info ~= nil
+                    end
+                    if not occupied then
+                        return m.bag, slot
+                    end
                 end
             end
         end
@@ -270,35 +301,68 @@ end
 --      the secondary bag list.
 --   3. Empty slot in primary (most-specific tab first).
 --   4. If overflow is enabled, empty slot in secondary.
-local function PickDepositSlot(info, primaryBags, secondaryBags, overflowEnabled, crossStack)
+--
+-- allocatedSlots is forwarded to the finders so prior ops in the same batch
+-- don't collide on the same slot.
+local function PickDepositSlot(info, primaryBags, secondaryBags, overflowEnabled, crossStack, allocatedSlots)
     local link = info.hyperlink
     local id = info.itemID
 
-    local b, s = FindStackTarget(link, id, primaryBags)
+    local b, s = FindStackTarget(link, id, primaryBags, allocatedSlots)
     if b then return b, s end
 
     if overflowEnabled and crossStack then
-        b, s = FindStackTarget(link, id, secondaryBags)
+        b, s = FindStackTarget(link, id, secondaryBags, allocatedSlots)
         if b then return b, s end
     end
 
-    b, s = FindEmptyAcceptingSlot(link, primaryBags)
+    b, s = FindEmptyAcceptingSlot(link, primaryBags, allocatedSlots)
     if b then return b, s end
 
     if overflowEnabled then
-        b, s = FindEmptyAcceptingSlot(link, secondaryBags)
+        b, s = FindEmptyAcceptingSlot(link, secondaryBags, allocatedSlots)
         if b then return b, s end
     end
     return nil, nil
 end
 
+-- Add a claim to the allocation ledger. Called just before issuing a
+-- CursorMove so subsequent ops in the same batch won't target the same slot.
+local function ClaimSlot(allocatedSlots, bag, slot)
+    if not allocatedSlots then return end
+    allocatedSlots[bag] = allocatedSlots[bag] or {}
+    allocatedSlots[bag][slot] = true
+end
+
+-- Remove a claim. Used when CursorMove rejected the move, so another op can
+-- try the slot on its own attempt.
+local function UnclaimSlot(allocatedSlots, bag, slot)
+    if not allocatedSlots or not allocatedSlots[bag] then return end
+    allocatedSlots[bag][slot] = nil
+end
+
 -- Execute a cursor-based item move: pick up from src, place at dst.
 -- Returns true if the move was issued, false otherwise.
 -- Kept as a fallback for cases where ShiftMove can't be used.
-local function CursorMove(srcBag, srcSlot, dstBag, dstSlot)
+--
+-- expectedItemID (optional) — the itemID being moved. When provided the
+-- function checks the destination slot *before* placing: if the slot is
+-- occupied by a *different* itemID the call is aborted (returns false)
+-- instead of executing a swap that would silently displace the occupant.
+-- Stacking onto a partial stack of the same item is still allowed.
+local function CursorMove(srcBag, srcSlot, dstBag, dstSlot, expectedItemID)
     pcall(ClearCursor)
     pcall(C_Container.PickupContainerItem, srcBag, srcSlot)
     if CursorHasItem() then
+        -- Guard: verify destination is empty or holds the same item so we
+        -- never silently swap an unrelated item out of the bank.
+        if expectedItemID then
+            local dok, dinfo = pcall(C_Container.GetContainerItemInfo, dstBag, dstSlot)
+            if dok and dinfo and dinfo.itemID ~= expectedItemID then
+                pcall(ClearCursor)
+                return false
+            end
+        end
         pcall(C_Container.PickupContainerItem, dstBag, dstSlot)
         if not CursorHasItem() then
             return true
@@ -329,6 +393,46 @@ end
 -- without an open bank, UseContainerItem would consume/use the item.
 local function IsBankOpen()
     return BankFrame and BankFrame:IsShown()
+end
+
+-- Wait between successive container moves. Two conditions must both be
+-- satisfied before `callback` runs:
+--
+--   1. A minimum delay (`minDelay`) has elapsed — Blizzard rate-limits
+--      container ops coarsely, and issuing the next move too quickly
+--      throws "Internal bag error". ~100ms is the known-safe spacing.
+--
+--   2. BAG_UPDATE_DELAYED has fired — this is the deterministic signal
+--      that the client container cache has caught up to the server's
+--      response to the last move. Without this wait, the next move's
+--      slot picker may still see stale "empty" slots and silently swap.
+--
+-- If BAG_UPDATE_DELAYED never arrives (e.g. the last move was rejected
+-- server-side and produced no bag change), a hard-ceiling timer releases
+-- the wait after `minDelay + 0.5s` so we don't stall forever.
+local function WaitForBagUpdate(minDelay, callback)
+    local frame = CreateFrame("Frame")
+    local eventFired = false
+    local timerDone = false
+    local released = false
+    local function release()
+        if released then return end
+        released = true
+        frame:UnregisterAllEvents()
+        frame:SetScript("OnEvent", nil)
+        callback()
+    end
+    frame:RegisterEvent("BAG_UPDATE_DELAYED")
+    frame:SetScript("OnEvent", function()
+        eventFired = true
+        if timerDone then release() end
+    end)
+    C_Timer.After(minDelay or 0.1, function()
+        timerDone = true
+        if eventFired then release() end
+    end)
+    -- Hard ceiling: proceed even if no BAG_UPDATE_DELAYED ever arrives.
+    C_Timer.After((minDelay or 0.1) + 0.5, release)
 end
 
 --------------------------
@@ -466,11 +570,20 @@ ProcessNextBatch = function()
     local abortPulls = false
     local abortDeposits = false
     local bankOpen = IsBankOpen()
+    -- Claim ledger for deposit destinations inside this batch, so two ops
+    -- in the same tight loop never target the same slot — the client cache
+    -- won't have reflected the first move's effect yet, but the ledger is
+    -- authoritative. (Same mechanism Baganator uses.)
+    local allocatedSlots = {}
 
     for _, op in ipairs(batch) do
         local ok, info = pcall(C_Container.GetContainerItemInfo, op.srcBag, op.srcSlot)
         if not ok or not info then
             -- Source empty — already moved or gone
+        elseif op._expectedItemID and info.itemID ~= op._expectedItemID then
+            -- Source item has changed since the op was first attempted —
+            -- a prior move or user action displaced the original item.
+            -- Do not move the impostor.
         elseif info.isLocked then
             op._lockWaits = (op._lockWaits or 0) + 1
             if op._lockWaits > 10 then
@@ -486,6 +599,7 @@ ProcessNextBatch = function()
                 ns:Print(ns.COLORS.RED .. "Bank closed!|r Skipping remaining pulls.")
             else
                 EnsureBankType(op.srcBag)
+                op._expectedItemID = op._expectedItemID or info.itemID
                 op._itemID = info.itemID
                 op._stackBefore = info.stackCount or 1
                 ShiftMove(op.srcBag, op.srcSlot)
@@ -498,7 +612,11 @@ ProcessNextBatch = function()
                 abortDeposits = true
                 ns:Print(ns.COLORS.RED .. "Bank closed!|r Skipping remaining deposits.")
             else
-                -- See ProcessSync IssueOne for the deposit-routing rationale.
+                -- CursorMove with an explicit destination, so the user's
+                -- per-tab enable settings and Blizzard tab filters are
+                -- respected. The allocatedSlots ledger prevents multiple
+                -- ops in this batch from colliding on the same slot while
+                -- the client cache lags the server.
                 local primary, secondary
                 if op.destType == "warbank" then
                     primary, secondary = snapshot.warbankBags, snapshot.bankBags
@@ -517,18 +635,24 @@ ProcessNextBatch = function()
                 end
 
                 local destBag, destSlot = PickDepositSlot(
-                    info, primary, secondary, overflowEnabled, crossStack)
+                    info, primary, secondary, overflowEnabled, crossStack, allocatedSlots)
                 if not destBag then
                     abortDeposits = true
                     ns:Print(ns.COLORS.RED .. "No accepting " .. (op.destType or "")
                         .. " slot!|r Skipping remaining deposits.")
                 else
                     EnsureBankType(destBag)
+                    ClaimSlot(allocatedSlots, destBag, destSlot)
+                    op._expectedItemID = op._expectedItemID or info.itemID
                     op._itemID = info.itemID
                     op._stackBefore = info.stackCount or 1
-                    if CursorMove(op.srcBag, op.srcSlot, destBag, destSlot) then
+                    if CursorMove(op.srcBag, op.srcSlot, destBag, destSlot, info.itemID) then
                         table.insert(issuedOps, op)
                     else
+                        -- Move rejected (guard tripped, pickup failed).
+                        -- Release the claim so another op can try it, and
+                        -- re-queue this op for a fresh attempt.
+                        UnclaimSlot(allocatedSlots, destBag, destSlot)
                         op._retries = (op._retries or 0) + 1
                         if op._retries <= MAX_RETRIES then
                             table.insert(queue, op)
@@ -689,6 +813,11 @@ function BankQueue:ProcessSync(ops, label, callback)
     Attempt = function(remainingOps, attemptNum, finishAttempts)
         local issuedOps = {}
         local nonRetryableErrors = 0  -- e.g. bags full
+        -- Claim ledger scoped to this attempt. Two ops issued back-to-back
+        -- in the same attempt must never land on the same slot — the
+        -- client container cache won't have caught up with the first op by
+        -- the time the second one picks its destination.
+        local allocatedSlots = {}
 
         local invBefore = CountItemsInBags(ns.INVENTORY_BAGS)
         local warbankBefore = CountItemsInBags(warbankBags)
@@ -735,7 +864,22 @@ function BankQueue:ProcessSync(ops, label, callback)
                 -- error here — if a prior attempt moved it, that was already
                 -- counted in successNames.
                 return false
-            elseif info.isLocked then
+            end
+            -- Source item validation. The op references a specific (bag, slot)
+            -- captured when the op list was built. If something displaced that
+            -- item — manual move, another addon, a prior attempt's failure —
+            -- the slot now holds a *different* item and we must NOT move it,
+            -- or we'll silently send the wrong item to the bank.
+            --
+            -- _expectedItemID is set on the first successful read and compared
+            -- on every subsequent attempt.
+            if op._expectedItemID and info.itemID ~= op._expectedItemID then
+                return false
+            end
+            if not op._expectedItemID then
+                op._expectedItemID = info.itemID
+            end
+            if info.isLocked then
                 -- Locked from a prior in-flight move. Treat as retryable —
                 -- queue it for the next attempt.
                 op._itemID = info.itemID
@@ -759,20 +903,20 @@ function BankQueue:ProcessSync(ops, label, callback)
                     nonRetryableErrors = nonRetryableErrors + 1
                     return false
                 end
-                -- Deposits use cursor moves with an *explicit* destination
-                -- bag/slot. PickDepositSlot honors:
-                --   • the user's enabled bank/warbank tab settings
-                --   • each tab's Blizzard depositFlags filter
-                --   • smart stacking (merge into existing partial stacks)
-                --   • the user's overflow setting (cross-bank-type fallback)
+                -- CursorMove with an explicit destination slot, so we honour
+                -- the user's enabled-tabs settings and each tab's Blizzard
+                -- deposit flags. Collisions between back-to-back ops (where
+                -- the warbank container cache hasn't caught up to a prior
+                -- move and still reports the just-filled slot as empty) are
+                -- prevented by the `allocatedSlots` ledger, which is checked
+                -- inside FindStackTarget / FindEmptyAcceptingSlot. This is
+                -- the same mechanism Baganator's BankTransferManager uses.
                 local primary, secondary
                 if op.destType == "warbank" then
                     primary, secondary = warbankBags, bankBags
                 elseif op.destType == "bank" then
                     primary, secondary = bankBags, warbankBags
                 else
-                    -- "any" — try warbank first, fall back to bank, no
-                    -- explicit overflow needed since both are primary.
                     primary = {}
                     for _, b in ipairs(warbankBags) do table.insert(primary, b) end
                     for _, b in ipairs(bankBags) do table.insert(primary, b) end
@@ -785,17 +929,31 @@ function BankQueue:ProcessSync(ops, label, callback)
                 end
 
                 local destBag, destSlot = PickDepositSlot(
-                    info, primary, secondary, overflowEnabled, crossStack)
+                    info, primary, secondary, overflowEnabled, crossStack, allocatedSlots)
                 if not destBag then
                     nonRetryableErrors = nonRetryableErrors + 1
                     return false
                 end
 
+                -- Claim the slot *before* issuing the move so the next
+                -- IssueOne in this attempt can't target it even if the
+                -- server hasn't fully processed this move yet.
+                ClaimSlot(allocatedSlots, destBag, destSlot)
                 op._itemID = info.itemID
                 op._stackBefore = info.stackCount or 1
-                CursorMove(op.srcBag, op.srcSlot, destBag, destSlot)
-                table.insert(issuedOps, op)
-                return true
+                if CursorMove(op.srcBag, op.srcSlot, destBag, destSlot, info.itemID) then
+                    table.insert(issuedOps, op)
+                    return true
+                else
+                    -- Move rejected (guard tripped or pickup failed).
+                    -- Release the claim so a follow-up op can retry that
+                    -- slot, and leave this op unissued so the next attempt
+                    -- re-picks with fresh state.
+                    UnclaimSlot(allocatedSlots, destBag, destSlot)
+                    op._itemID = nil
+                    op._stackBefore = nil
+                    return false
+                end
             end
             return false
         end
@@ -882,14 +1040,15 @@ function BankQueue:ProcessSync(ops, label, callback)
             end)  -- C_Timer.After(SYNC_VERIFY_DELAY, ...)
         end  -- AfterAllIssued
 
-        -- Issue one move at a time with a small inter-move delay. Per-frame
-        -- (~16ms) wasn't enough — Blizzard's container-op rate limit is
-        -- coarser than that. SYNC_INTER_MOVE_DELAY (~100ms) gives the server
-        -- enough room to process each move before the next is issued.
+        -- Issue one move at a time, waiting for BAG_UPDATE_DELAYED between
+        -- moves so the client container cache has caught up with the last
+        -- move before the next IssueOne picks its destination. The event
+        -- fires within a frame or two in the common case; the timeout is a
+        -- fallback for moves the server rejected (no event arrives).
         --
-        -- If a panel switch is needed (e.g. mixed bank/warbank ops in the
-        -- same batch) we add a small extra settle delay so the switch
-        -- propagates before the next move's UseContainerItem call.
+        -- If a panel switch is needed (mixed bank/warbank ops in the same
+        -- batch) we add a small extra settle delay so the switch propagates
+        -- before the next move's container call.
         local i = 0
         local function IssueNext()
             i = i + 1
@@ -903,7 +1062,7 @@ function BankQueue:ProcessSync(ops, label, callback)
             local doIssue = function()
                 IssueOne(op)
                 if i < #remainingOps then
-                    C_Timer.After(SYNC_INTER_MOVE_DELAY, IssueNext)
+                    WaitForBagUpdate(SYNC_INTER_MOVE_DELAY, IssueNext)
                 else
                     AfterAllIssued()
                 end
