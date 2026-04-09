@@ -1,6 +1,6 @@
 # Changelog
 
-## v0.10.1-a1
+## v0.10.1-alpha1
 
 ### Bug Fixes
 - **Deposits silently swapping items between bag and warbank**: when the client container cache lagged the server — especially for warbank tabs that hadn't been actively viewed — `PickDepositSlot` would target an "empty"-looking slot that was actually occupied, and the resulting `CursorMove` performed a server-side swap: the deposit landed at the destination while an unrelated item was displaced out of the bank. The delta verification, which only tracks the deposited itemID's count, saw `+1` and declared success. The user was left with items in the wrong inventory.

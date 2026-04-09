@@ -21,33 +21,26 @@ jobs:
         run: |
           TAG="${GITHUB_REF#refs/tags/}"
           LOWER="${TAG,,}"
-          # Treat any of the following as alpha:
-          #   - the literal substring "alpha"
-          #   - a "-a<N>" suffix (e.g. v0.10.0-a3)
-          # Treat any of the following as beta:
-          #   - the literal substring "beta"
-          #   - a "-b<N>" suffix (e.g. v0.10.0-b1)
-          # Anything else is a stable/release.
-          if [[ "$LOWER" == *"alpha"* || "$LOWER" =~ -a[0-9]+$ ]]; then
+          # The BigWigsMods packager auto-detects alpha/beta from the literal
+          # substrings "alpha" / "beta" in the tag name (see release.sh). Match
+          # that same rule here so the GitHub release prerelease flag and the
+          # Discord channel label stay in sync with what the packager uploads.
+          # Tag convention: v<x.y.z>-alpha<N>, v<x.y.z>-beta<N>, or v<x.y.z>.
+          if [[ "$LOWER" == *"alpha"* ]]; then
             CHANNEL=alpha
             PRERELEASE=true
-            PACKAGER_FLAG=-a
-          elif [[ "$LOWER" == *"beta"* || "$LOWER" =~ -b[0-9]+$ ]]; then
+          elif [[ "$LOWER" == *"beta"* ]]; then
             CHANNEL=beta
             PRERELEASE=true
-            PACKAGER_FLAG=-b
           else
             CHANNEL=release
             PRERELEASE=false
-            PACKAGER_FLAG=
           fi
           echo "channel=$CHANNEL" >> "$GITHUB_OUTPUT"
           echo "prerelease=$PRERELEASE" >> "$GITHUB_OUTPUT"
-          echo "packager_flag=$PACKAGER_FLAG" >> "$GITHUB_OUTPUT"
           echo "Tag: $TAG"
           echo "Release channel: $CHANNEL"
           echo "Prerelease: $PRERELEASE"
-          echo "Packager flag: $PACKAGER_FLAG"
 
       - name: Create GitHub Release
         uses: ncipollo/release-action@v1
@@ -59,13 +52,12 @@ jobs:
       - name: Package and Publish
         uses: BigWigsMods/packager@v2
         with:
-          # Explicitly pass -a / -b to the packager so it uploads to
-          # CurseForge / Wago as alpha / beta. Without this the packager
-          # auto-detects from the tag name and only recognizes literal
-          # "-alpha" / "-beta" substrings, so "-a3" style tags would be
-          # uploaded as stable releases by mistake (which is exactly how
-          # v0.10.0-a1, -a2, and -a3 ended up public as full releases).
-          args: -g retail ${{ steps.release_type.outputs.packager_flag }}
+          # Packager auto-detects release channel from literal "alpha" / "beta"
+          # substrings in the git tag name. Keep tags like v0.10.1-alpha1 /
+          # v0.10.1-beta1 so CurseForge and Wago get the right stability.
+          # (Earlier v0.10.0-a1/-a2/-a3 tags uploaded as stable by mistake
+          # because "-a3" doesn't contain the literal word "alpha".)
+          args: -g retail
         env:
           CF_API_KEY: ${{ secrets.CF_API_KEY }}
           WAGO_API_TOKEN: ${{ secrets.WAGO_API_TOKEN }}
