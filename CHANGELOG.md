@@ -1,5 +1,15 @@
 # Changelog
 
+## v0.10.1-alpha2
+
+### Bug Fixes
+- **Deposits overflowing into personal bank with overflow disabled**: `AutoDepositExtraItems` builds non-soulbound deposits with `destType = "any"`, and both `ProcessNextBatch` and `Attempt`'s `IssueOne` handled `"any"` by *merging* warbank+bank into the picker's primary bag list — which silently bypassed the overflow gate inside `PickDepositSlot`. A user with a full warbank, locked bank tabs, and overflow off would still see items land in their bank tabs because the picker never even consulted the overflow flag. Both call sites now treat `"any"` the same as `"warbank"`: warbank as primary, bank as secondary, gated by `overflowEnabled`.
+- **Items leaking to personal bank even when warbank tabs had open slots**: `ItemMatchesTabFlags` only knows about a handful of item classes (Weapon/Armor/Consumable/Tradegoods/Recipe/Questitem/Junk). Items in any other class — Gem, ItemEnhancement, Glyph, Miscellaneous, Battlepet, Profession, etc. — get rejected by every tab that has *any* `depositFlags` set, even when those tabs have empty space. Combined with the overflow bug above, the picker would declare warbank "full" and dump the item into the personal bank. `PickDepositSlot` now has a filter-bypass fallback path: if no filter-matching primary tab can take the item, walk every primary tab ignoring filters before falling back to overflow. Tab filters are now treated as a routing *preference*, not a hard wall. (`FindStackTarget` and `FindEmptyAcceptingSlot` gained an `ignoreFilters` parameter.)
+- **Warbank getting disabled after bulk deposits / between characters**: `ProcessNextBatch` (the async path used by `AutoDepositExtraItems`) issued every op in a batch (`pullBatchSize`, default 5) inside a single tight Lua loop with no inter-move spacing — only `INTER_BATCH_DELAY = 0.3s` *between* batches. Five container ops in a single frame is exactly what trips Blizzard's per-frame rate limit, and the resulting backoff manifests as the warbank being unresponsive on the next character. The async path now serializes ops the same way `ProcessSync` does — `WaitForBagUpdate(INTER_MOVE_DELAY=0.1, …)` between every real container move, with skip-cases yielding via `C_Timer.After(0, …)` so big batches don't blow the Lua call stack.
+
+### Diagnostics
+- **Deposit slot picker debug log**: every call to `PickDepositSlot` now emits one line into the debug ring buffer (visible in the in-game debug console regardless of the `debugMessages` print setting). Each line discloses the item, the picked destination, *which branch picked it* (`stackTarget(primary)`, `emptySlot(primary,filter-bypass)`, `emptySlot(secondary,overflow)`, etc.), and the full candidate list for both primary and secondary bag groups with each tab's `depositFlags`, specificity, and accept/reject decision. Use this to diagnose "wrong tab" reports — it makes it obvious whether the picker chose tab N because of an existing partial stack, a higher-specificity Blizzard filter, or fall-through into the filter-bypass / overflow paths.
+
 ## v0.10.1-alpha1
 
 ### Bug Fixes
