@@ -1,5 +1,17 @@
 # Changelog
 
+## v0.10.1-alpha3
+
+### Bug Fixes
+- **Bank Operations popup showing "Operations complete" with a partial progress bar**: the popup's row content correctly transitioned to the completion summary, but the status bar would land on `0`, `2/N`, or some partial state instead of full. Three independent bugs feeding the same symptom:
+  - **Optimistic deposit progress reports**: `Tracker.lua`'s `DoDeposits` reported `depCount = #depositOps` and `extCount = #extraOps` (the *requested* counts) directly to `BankOpProgress`, never threading the actual `successNames`/`errorCount` returned by `BankQueue:Process`. Refactored to await `AutoDepositToWarbank` and `AutoDepositExtraItems` sequentially via callbacks that pass through the real counts. The two sub-phases now run in series instead of fire-and-forget.
+  - **`AutoDepositExtraItems` was fire-and-forget** — no `onComplete` callback at all. The popup chain would proceed to `BankPopupComplete` while the extras' `BankQueue:Process` was still mid-batch. Added an `onComplete(successNames, errorCount)` parameter that fires from every early-return path and from the final `Process` callback after Scanner refresh settles, so the chain can actually wait for extras before declaring completion.
+  - **Reagent bag silently dropped from `AutoDepositToWarbank`**: `Tracker:BuildDepositOps` (the popup builder) iterates `ALL_PLAYER_BAGS = {0..5}` which includes the reagent bag, but `Tracker:AutoDepositToWarbank` was iterating `INVENTORY_BAGS = {0..4}` which excludes it. So a deposit task whose source item lived in slot 5 would appear in the popup but get silently skipped during execution. Now both call sites iterate `ALL_PLAYER_BAGS` and stay in agreement.
+- **Defensive `ShowCompletionSummary`**: even with the three fixes above, any future regression in the running tally would resurface the partial-bar symptom. `ShowCompletionSummary` now reconciles the running `completed` count up to `totalOps - failed` on transition to "Complete" (preserving the failed count so the orange/green color logic still reflects whether anything failed), and emits a `[bank-popup]` debug line whenever drift is detected so the underlying drift remains diagnosable.
+
+### Diagnostics
+- **`[bank-popup]` debug log**: `BeginBankExecution`, `BankOpProgress`, `ShowCompletionSummary`, and `BankPopupComplete` now each emit a one-line debug entry into the in-game debug ring buffer (visible regardless of the `debugMessages` print setting). Records the operation, the running `completed`/`failed`/`total`, and any guard hits (popup not shown, execState nil). Use this to diagnose any future "popup state out of sync" reports — the entire execution timeline lives in the debug console after the bank visit.
+
 ## v0.10.1-alpha2
 
 ### Bug Fixes

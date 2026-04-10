@@ -324,7 +324,33 @@ local function UpdateProgressBar(f)
 end
 
 local function ShowCompletionSummary(f)
-    if not execState then return end
+    if not execState then
+        if ns.PrintDebug then ns:PrintDebug("[bank-popup] ShowCompletionSummary called with nil execState — bailing") end
+        return
+    end
+
+    -- Defensive: if the running tally drifted from totalOps for any reason
+    -- (optimistic reports, missed callbacks, retry races), the user would
+    -- see "Operations complete" rows but a partial bar. Force the bar to
+    -- show fully complete on transition. The diagnostic line below records
+    -- the drift so we can chase any remaining root cause.
+    local runningDone = execState.completed + execState.failed
+    if runningDone < execState.totalOps then
+        if ns.PrintDebug then
+            ns:PrintDebug(string.format(
+                "[bank-popup] ShowCompletionSummary: tally drift completed=%d failed=%d total=%d — forcing bar full",
+                execState.completed, execState.failed, execState.totalOps))
+        end
+        -- Bring `done` up to total without disturbing the failed count, so
+        -- the orange/green color logic in UpdateProgressBar still reflects
+        -- whether any failures occurred.
+        execState.completed = execState.totalOps - execState.failed
+    elseif ns.PrintDebug then
+        ns:PrintDebug(string.format(
+            "[bank-popup] ShowCompletionSummary: tally OK completed=%d failed=%d total=%d",
+            execState.completed, execState.failed, execState.totalOps))
+    end
+
     execState.phase = "Complete"
     UpdateProgressBar(f)
 
@@ -373,6 +399,9 @@ end
 -- Begin tracking a new execution session with the total operation count.
 -- Called once before the first ShowBankPopup during an execution cycle.
 function UI:BeginBankExecution(totalOps)
+    if ns.PrintDebug then
+        ns:PrintDebug(string.format("[bank-popup] BeginBankExecution totalOps=%d", totalOps or 0))
+    end
     execState = {
         totalOps = totalOps,
         completed = 0,
@@ -386,10 +415,23 @@ end
 
 -- Record progress during execution (called by Tracker after each sub-operation)
 function UI:BankOpProgress(successCount, failCount, phase, details)
-    if not execState then return end
+    if not execState then
+        if ns.PrintDebug then
+            ns:PrintDebug(string.format(
+                "[bank-popup] BankOpProgress(success=%d, fail=%d, phase=%s) IGNORED — execState is nil",
+                successCount or 0, failCount or 0, tostring(phase)))
+        end
+        return
+    end
     execState.completed = execState.completed + successCount
     execState.failed = execState.failed + failCount
     if phase then execState.phase = phase end
+    if ns.PrintDebug then
+        ns:PrintDebug(string.format(
+            "[bank-popup] BankOpProgress(success=%d, fail=%d, phase=%s) -> completed=%d failed=%d total=%d",
+            successCount or 0, failCount or 0, tostring(phase),
+            execState.completed, execState.failed, execState.totalOps))
+    end
 
     -- Track details for summary
     if phase == "Pulling" and details then
@@ -409,6 +451,13 @@ end
 
 -- Show final completion summary
 function UI:BankPopupComplete()
+    if ns.PrintDebug then
+        local popupShown = popup and popup:IsShown()
+        local hasState = execState ~= nil
+        ns:PrintDebug(string.format(
+            "[bank-popup] BankPopupComplete popupShown=%s execState=%s",
+            tostring(popupShown), tostring(hasState)))
+    end
     if popup and popup:IsShown() and execState then
         ShowCompletionSummary(popup)
     else

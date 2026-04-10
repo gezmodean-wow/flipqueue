@@ -262,17 +262,48 @@ function Tracker:ShowBankOpsPopup()
             callback()
         end
 
-        -- Phase 3: Deposits to warbank
+        -- Phase 3: Deposits to warbank, then extras. The two sub-phases must
+        -- run sequentially (not in parallel or fire-and-forget) so the
+        -- progress reports reflect ACTUAL move counts from each
+        -- BankQueue:Process callback rather than the optimistic
+        -- #depositOps / #extraOps the popup pre-built. Previously we were
+        -- reporting requested counts and firing AutoDepositExtraItems
+        -- without awaiting it, which caused the popup's running tally to
+        -- drift away from reality and the bar to land on partial states
+        -- when ShowCompletionSummary ran.
         local function DoDeposits(callback)
             if not hasDeposits and not hasExtras then callback() return end
             if ns.UI then ns.UI:BankOpProgress(0, 0, "Depositing") end
-            Tracker:AutoDepositToWarbank(function()
-                local depCount = #depositOps
-                if ns.UI and depCount > 0 then ns.UI:BankOpProgress(depCount, 0, "Depositing") end
-                Tracker:AutoDepositExtraItems()
-                local extCount = #extraOps
-                if ns.UI and extCount > 0 then ns.UI:BankOpProgress(extCount, 0, "Depositing") end
-                callback()
+
+            -- Sub-phase A: warbank deposits driven by depositFrom tasks.
+            -- AutoDepositToWarbank now reports its actual successNames and
+            -- errorCount via the third callback arg.
+            local function DoExtras()
+                if not hasExtras then callback() return end
+                Tracker:AutoDepositExtraItems(function(extraSuccessNames, extraErrorCount)
+                    if ns.UI then
+                        ns.UI:BankOpProgress(
+                            extraSuccessNames and #extraSuccessNames or 0,
+                            extraErrorCount or 0,
+                            "Depositing")
+                    end
+                    callback()
+                end)
+            end
+
+            if not hasDeposits then
+                DoExtras()
+                return
+            end
+
+            Tracker:AutoDepositToWarbank(function(warbankSuccessNames, warbankErrorCount)
+                if ns.UI then
+                    ns.UI:BankOpProgress(
+                        warbankSuccessNames and #warbankSuccessNames or 0,
+                        warbankErrorCount or 0,
+                        "Depositing")
+                end
+                DoExtras()
             end)
         end
 

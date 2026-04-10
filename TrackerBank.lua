@@ -10,7 +10,7 @@ local Tracker = ns.Tracker
 
 function Tracker:AutoPullFromBank(onComplete, fromClick)
     if not ns.db or not ns:GetCharSetting(ns:GetCharKey(), "autoPullBank") then
-        if onComplete then onComplete() end
+        if onComplete then onComplete({}, 0) end
         return
     end
 
@@ -58,7 +58,7 @@ function Tracker:AutoPullFromBank(onComplete, fromClick)
     end
 
     if not next(needed) then
-        if onComplete then onComplete() end
+        if onComplete then onComplete({}, 0) end
         return
     end
 
@@ -67,7 +67,7 @@ function Tracker:AutoPullFromBank(onComplete, fromClick)
     for _, b in ipairs(ns:GetEnabledWarbankTabs()) do table.insert(allBankTabs, b) end
 
     if not next(needed) then
-        if onComplete then onComplete() end
+        if onComplete then onComplete({}, 0) end
         return
     end
 
@@ -109,7 +109,7 @@ function Tracker:AutoPullFromBank(onComplete, fromClick)
     end
 
     if #moves == 0 then
-        if onComplete then onComplete() end
+        if onComplete then onComplete({}, 0) end
         return
     end
 
@@ -129,7 +129,7 @@ function Tracker:AutoPullFromBank(onComplete, fromClick)
 
     if freeBagSlots == 0 then
         ns:Print(ns.COLORS.RED .. "Bags are full!|r Cannot pull " .. #moves .. " item(s) from bank.")
-        if onComplete then onComplete() end
+        if onComplete then onComplete({}, 0) end
         return
     end
 
@@ -521,14 +521,14 @@ end
 
 function Tracker:AutoDepositToWarbank(onComplete)
     if not ns.db or not ns:GetCharSetting(ns:GetCharKey(), "autoDepositWarbank") then
-        if onComplete then onComplete() end
+        if onComplete then onComplete({}, 0) end
         return
     end
 
     local charKey = ns:GetCharKey()
     local todoList = ns.TodoList and ns.TodoList:GetCurrentList()
     if not todoList or not todoList.tasks then
-        if onComplete then onComplete() end
+        if onComplete then onComplete({}, 0) end
         return
     end
 
@@ -542,7 +542,7 @@ function Tracker:AutoDepositToWarbank(onComplete)
     end
 
     if #depositTasks == 0 then
-        if onComplete then onComplete() end
+        if onComplete then onComplete({}, 0) end
         return
     end
 
@@ -555,11 +555,15 @@ function Tracker:AutoDepositToWarbank(onComplete)
         end
     end
 
-    -- Find items in bags matching deposit tasks
+    -- Find items in bags matching deposit tasks. Iterate ALL_PLAYER_BAGS
+    -- (not INVENTORY_BAGS) so reagent-bag items in slot 5 are matched —
+    -- BuildDepositOps already iterates ALL_PLAYER_BAGS, so the popup can
+    -- list a deposit that lives in the reagent bag, and AutoDepositToWarbank
+    -- must scan the same bag set or it will silently skip those moves.
     local moves = {} -- { bag, slot, name }
     local depositMatched = {} -- task -> true
 
-    for _, bagIndex in ipairs(ns.INVENTORY_BAGS) do
+    for _, bagIndex in ipairs(ns.ALL_PLAYER_BAGS) do
         local ok, numSlots = pcall(C_Container.GetContainerNumSlots, bagIndex)
         if ok and numSlots then
             for slot = 1, numSlots do
@@ -611,7 +615,7 @@ function Tracker:AutoDepositToWarbank(onComplete)
     end
 
     if #moves == 0 then
-        if onComplete then onComplete() end
+        if onComplete then onComplete({}, 0) end
         return
     end
 
@@ -654,7 +658,7 @@ function Tracker:AutoDepositToWarbank(onComplete)
             end
             if ns.UI and ns.UI.Refresh then ns.UI:Refresh() end
             if ns.UI and ns.UI.RefreshMini then ns.UI:RefreshMini() end
-            if onComplete then onComplete() end
+            if onComplete then onComplete(successNames, errorCount) end
         end)
     end)
 end
@@ -666,8 +670,15 @@ end
 -- Deposit all bag items NOT needed by the current character's tasks.
 -- Prioritizes warbank, falls back to personal bank.
 -- Requires autoDepositAll setting enabled.
-function Tracker:AutoDepositExtraItems()
-    if not ns.db or not ns:GetCharSetting(ns:GetCharKey(), "autoDepositAll") then return end
+--
+-- onComplete(successNames, errorCount) — fires after the queue settles, even
+-- on early-return paths. The popup chain awaits this so progress reports
+-- reflect actual moves, not optimistic counts.
+function Tracker:AutoDepositExtraItems(onComplete)
+    if not ns.db or not ns:GetCharSetting(ns:GetCharKey(), "autoDepositAll") then
+        if onComplete then onComplete({}, 0) end
+        return
+    end
 
     local charKey = ns:GetCharKey()
 
@@ -768,7 +779,10 @@ function Tracker:AutoDepositExtraItems()
         end
     end
 
-    if #warbankMoves == 0 and #bankOnlyMoves == 0 then return end
+    if #warbankMoves == 0 and #bankOnlyMoves == 0 then
+        if onComplete then onComplete({}, 0) end
+        return
+    end
 
     -- Build queue operations with appropriate destination types
     -- Non-soulbound: "any" (warbank first, bank fallback)
@@ -811,6 +825,7 @@ function Tracker:AutoDepositExtraItems()
             end
             if ns.UI and ns.UI.Refresh then ns.UI:Refresh() end
             if ns.UI and ns.UI.RefreshMini then ns.UI:RefreshMini() end
+            if onComplete then onComplete(successNames, errorCount) end
         end)
     end)
 end
