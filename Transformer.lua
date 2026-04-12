@@ -322,6 +322,16 @@ function Transformer:InputFromAuctionatorList(name)
     return items
 end
 
+-- Read items from a PBS (Point Blank Sniper) / Auctionator shopping list
+-- export string. Thin wrapper over Import:ParsePBS so the Transformer has
+-- a first-class input adapter for text-pasted PBS data (the paste-mode UI
+-- flow routes through Import:Parse's auto-detector and also works).
+function Transformer:InputFromPBSText(text)
+    if not text or text == "" then return {} end
+    if not ns.Import or not ns.Import.ParsePBS then return {} end
+    return ns.Import:ParsePBS(text)
+end
+
 -- ==========================================
 -- TRANSFORM FUNCTIONS
 -- ==========================================
@@ -432,9 +442,18 @@ end
 -- Accepts either a flat items array or a {items=..., pets=...} split table
 -- AAA format: {"itemID": goldPrice, ...} where goldPrice is gold as a number.
 -- AAA multiplies by 10000 internally to compare against copper. Decimals OK.
-function Transformer:OutputAAAJSON(input, discount, priceSource)
+--
+-- priceMode controls where the gold threshold comes from:
+--   "tsm"      (default) — TSM price source × discount modifier; falls back
+--                           to expectedPrice × modifier when TSM has no data.
+--   "imported" — uses the raw imported price directly (no discount applied).
+--                 For PBS items, reads `_pbs.maxPrice` (the snipe ceiling).
+--                 For other import sources, reads `expectedPrice`. No TSM
+--                 lookup; what the user pasted is what AAA sees.
+function Transformer:OutputAAAJSON(input, discount, priceSource, priceMode)
     discount = discount or 90
     priceSource = priceSource or "DBMarket"
+    priceMode = priceMode or "tsm"
     local modifier = (100 - discount) / 100
 
     local itemsList, petsList
@@ -475,24 +494,60 @@ function Transformer:OutputAAAJSON(input, discount, priceSource)
         return nil
     end
 
-    -- Resolve gold price for AAA output: TSM with discount first, expectedPrice fallback
+    -- Parse a raw "expectedPrice" field into gold. Handles both numeric
+    -- values (FP scanner imports) and string values like "5,000g" (hand-
+    -- entered data). Returns nil if unparseable.
+    local function parseExpectedGold(val)
+        if val == nil then return nil end
+        local gp = tonumber(val)
+        if not gp and parseGold then
+            gp = parseGold(tostring(val))
+        end
+        if gp and gp > 0 then return gp end
+        return nil
+    end
+
+    -- Read the "recorded" price an item arrived with: PBS maxPrice (the
+    -- snipe ceiling) is preferred, falling back to any generic
+    -- expectedPrice from other import sources. Returns gold or nil.
+    -- No discount is ever applied to recorded prices — the user set them
+    -- explicitly as their target, and discounting would change the meaning.
+    local function recordedPrice(item)
+        local pbs = item._pbs
+        if pbs and pbs.maxPrice and pbs.maxPrice > 0 then
+            return pbs.maxPrice
+        end
+        return parseExpectedGold(item.expectedPrice)
+    end
+
+    -- Resolve gold price for AAA output.
+    -- In "tsm" mode: try TSM price × discount first; if TSM has no data
+    --   for this item, fall back to the recorded price (no discount) so
+    --   items TSM can't price still make it into AAA with the user's
+    --   hand-set threshold instead of 0. Previously the fallback was
+    --   expectedPrice × modifier, which silently discounted user-entered
+    --   prices — users asking "why is my 5000g entry showing as 4500g in
+    --   AAA" were hitting exactly that.
+    -- In "imported" mode: recorded price only (no discount, no TSM).
     local function resolveAAPrice(item)
-        -- Always try TSM first (applies discount)
+        if priceMode == "imported" then
+            local gp = recordedPrice(item)
+            if gp then
+                return math.floor(gp * 100 + 0.5) / 100
+            end
+            return nil
+        end
+
+        -- "tsm" mode (default): try TSM first, apply discount
         local copper = getTSMCopper(item)
         if copper then
             local gp = (copper / 10000) * modifier
             return math.floor(gp * 100 + 0.5) / 100
         end
-        -- Fallback: parse expectedPrice (import data) and apply discount
-        if item.expectedPrice then
-            local gp = tonumber(item.expectedPrice)
-            if not gp and parseGold then
-                gp = parseGold(tostring(item.expectedPrice))
-            end
-            if gp and gp > 0 then
-                gp = gp * modifier
-                return math.floor(gp * 100 + 0.5) / 100
-            end
+        -- Fallback: recorded price (raw, no discount)
+        local gp = recordedPrice(item)
+        if gp then
+            return math.floor(gp * 100 + 0.5) / 100
         end
         return nil
     end
@@ -651,6 +706,90 @@ function Transformer:OutputAuctionatorList(items, listName)
     local header = "--- " .. listName
     local output = header .. "\n" .. table.concat(terms, "\n")
     return output, #terms
+end
+
+-- Produce PBS / Auctionator shopping list export format. Reconstructs the
+-- 14-field advanced-search wire format that Auctionator's
+-- ReconstituteAdvancedSearch emits
+-- (Auctionator/Source/Search/Advanced.lua:397), wrapped by the outer
+-- `listName ^ entry ^ entry` format from
+-- Auctionator/Source/Shopping/ImportExport.lua:1.
+--
+-- Round-trip guarantee: items that carry `_pbs` metadata (i.e., came from
+-- Import:ParsePBS) reconstruct byte-for-byte identical to the input.
+-- Items from other sources (TSM groups, to-do lists, FP imports)
+-- synthesize search constraints from the item's `name`, `ilvl`, and
+-- `quality` fields — the resulting PBS string represents "item at ilvl N+"
+-- which is the most useful default for a shopping list.
+function Transformer:OutputPBS(items, listName)
+    listName = listName or (items[1] and items[1]._listName) or "FlipQueue Export"
+
+    -- Numeric field emitter. Returns "" for nil / 0 / "" so round-trip
+    -- matches Auctionator's `tostring(x or "")` pattern where x is already
+    -- nil when unset.
+    local function numField(n)
+        if n == nil then return "" end
+        local v = tonumber(n)
+        if not v or v == 0 then return "" end
+        return tostring(v)
+    end
+
+    -- Quality field. Accepts either a PBS numeric quality (0..7) or the
+    -- text form Scanner/Import uses ("Epic", "Rare", ...). Maps text back
+    -- to the numeric enum so the PBS output stays machine-readable.
+    local QUALITY_TO_NUM = {
+        Poor = 0, Common = 1, Uncommon = 2, Rare = 3,
+        Epic = 4, Legendary = 5, Artifact = 6, Heirloom = 7,
+    }
+    local function qualityField(pbs, item)
+        if pbs and pbs.quality then return tostring(pbs.quality) end
+        if item.quality and item.quality ~= "" then
+            local q = QUALITY_TO_NUM[item.quality]
+            if q then return tostring(q) end
+        end
+        return ""
+    end
+
+    local parts = { listName }
+    local written = 0
+    for _, item in ipairs(items) do
+        local pbs = item._pbs or {}
+        local name = item.name or ""
+        if name ~= "" then
+            -- Wrap in double quotes if Auctionator had this marked as an
+            -- exact-match search (stored in _pbs.isExact at parse time).
+            local searchStr = pbs.isExact and ('"' .. name .. '"') or name
+
+            -- minItemLevel defaults to item.ilvl when _pbs metadata is
+            -- absent, so non-PBS sources produce a useful "item at ilvl N+"
+            -- shopping list entry.
+            local minIlvl = pbs.minItemLevel
+            if minIlvl == nil and item.ilvl and item.ilvl > 0 then
+                minIlvl = item.ilvl
+            end
+
+            local entry = table.concat({
+                searchStr,
+                pbs.categoryKey or "",
+                numField(minIlvl),
+                numField(pbs.maxItemLevel),
+                numField(pbs.minLevel),
+                numField(pbs.maxLevel),
+                numField(pbs.minCraftedLevel),
+                numField(pbs.maxCraftedLevel),
+                numField(pbs.minPrice),
+                numField(pbs.maxPrice),
+                qualityField(pbs, item),
+                tostring(pbs.tier or "#"),  -- Auctionator default placeholder
+                numField(pbs.expansion),
+                numField(pbs.quantity),
+            }, ";")
+            parts[#parts + 1] = entry
+            written = written + 1
+        end
+    end
+
+    return table.concat(parts, "^"), written
 end
 
 -- ==========================================

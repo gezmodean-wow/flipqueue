@@ -12,9 +12,10 @@ local tableContainer = UI.tableContainer
 local sourceMode = "todo"        -- "tsm", "todo", "paste", "inventory", "auctionator"
 local sourceValue = ""           -- group path, source name, charKey, list name
 local inventoryFilter = "all"    -- "all", "bags", "bank", "warbank"
-local outputFormat = "aaa"       -- "aaa", "csv", "tsmgroup", "auctionator"
+local outputFormat = "aaa"       -- "aaa", "csv", "tsmgroup", "auctionator", "pbs"
 local priceSource = "DBMarket"
 local priceDiscount = 90
+local priceMode = "tsm"          -- "tsm" (TSM × discount) or "imported" (PBS maxPrice / expectedPrice raw)
 local currentItems = {}
 local outputListName = "FlipQueue Export"
 
@@ -264,7 +265,7 @@ pasteFrame:Hide()
 
 local pasteInstr = pasteFrame:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
 pasteInstr:SetPoint("TOPLEFT", pasteFrame, "TOPLEFT", 4, 0)
-pasteInstr:SetText("Paste data below (auto-detects format: FP, CSV, TSM, Auctionator, item names)")
+pasteInstr:SetText("Paste data below (auto-detects format: FP, CSV, TSM, Auctionator, PBS, item names)")
 pasteInstr:SetTextColor(0.6, 0.6, 0.6)
 
 local pasteEditBg = CreateFrame("Frame", nil, pasteFrame, "BackdropTemplate")
@@ -303,10 +304,27 @@ srcStatus:SetTextColor(0.5, 0.5, 0.5)
 srcStatus:SetText("")
 
 -- ==========================================
--- PREVIEW BUTTON
+-- PREVIEW BUTTON + WARM CACHE BUTTON
 -- ==========================================
 
 local previewBtn = CreateActionBtn("Preview Source", transformPage)
+
+-- Warm Cache button: proactively loads WoW's client item cache for every
+-- item ID TSM's per-realm pricing data has seen, so PBS files from other
+-- users (items the local player has never personally searched for) can
+-- resolve names → IDs. Shown only when there are unresolved items after
+-- the initial preview. See the Warm Cache state machine further down.
+local warmCacheBtn = CreateActionBtn("Warm Cache", transformPage)
+warmCacheBtn:Hide()
+
+-- Forward declarations for the Warm Cache state machine so DoPreview /
+-- RepositionLayout / SetSource / the button click handler (all defined
+-- earlier in the file) can reference them. Assigned to the real
+-- implementations further down.
+local UpdateWarmCacheButtonVisibility
+local StartWarmCache
+local CompleteWarmCache
+local CancelWarm
 
 -- ==========================================
 -- PREVIEW TABLE
@@ -347,6 +365,9 @@ outTSMBtn:SetPoint("LEFT", outCSVBtn, "RIGHT", 4, 0)
 
 local outAuctBtn = CreateToggleBtn("Auctionator", transformPage)
 outAuctBtn:SetPoint("LEFT", outTSMBtn, "RIGHT", 4, 0)
+
+local outPBSBtn = CreateToggleBtn("PBS", transformPage)
+outPBSBtn:SetPoint("LEFT", outAuctBtn, "RIGHT", 4, 0)
 
 -- ==========================================
 -- PRICE SETTINGS ROW (shown for AAA output)
@@ -394,6 +415,47 @@ priceSrcBox:SetScript("OnEnterPressed", function(self)
     priceSource = self:GetText()
     if ns.db and ns.db.settings then ns.db.settings.transformPriceSource = priceSource end
 end)
+
+-- Price mode toggle: TSM discount (default, uses the discount% and price
+-- source above) vs Imported (uses PBS maxPrice / expectedPrice directly,
+-- no discount). Useful when importing a PBS snipe list where each item
+-- has a hand-set max-price the user wants AAA to use as-is.
+local priceModeLabel = priceRow:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+priceModeLabel:SetPoint("LEFT", priceSrcBox, "RIGHT", 16, 0)
+priceModeLabel:SetText("Mode:")
+priceModeLabel:SetTextColor(0.6, 0.6, 0.6)
+
+local priceModeTSMBtn = CreateToggleBtn("TSM discount", priceRow)
+priceModeTSMBtn:SetPoint("LEFT", priceModeLabel, "RIGHT", 6, 0)
+
+local priceModeImportedBtn = CreateToggleBtn("Imported", priceRow)
+priceModeImportedBtn:SetPoint("LEFT", priceModeTSMBtn, "RIGHT", 4, 0)
+
+local function UpdatePriceModeButtons()
+    priceModeTSMBtn._active = (priceMode == "tsm")
+    priceModeImportedBtn._active = (priceMode == "imported")
+    if priceMode == "tsm" then
+        priceModeTSMBtn:SetBackdropColor(0.2, 0.4, 0.2, 1)
+        priceModeImportedBtn:SetBackdropColor(0.15, 0.15, 0.2, 1)
+    else
+        priceModeTSMBtn:SetBackdropColor(0.15, 0.15, 0.2, 1)
+        priceModeImportedBtn:SetBackdropColor(0.2, 0.4, 0.2, 1)
+    end
+end
+
+priceModeTSMBtn:SetScript("OnClick", function()
+    priceMode = "tsm"
+    UpdatePriceModeButtons()
+    if ns.db and ns.db.settings then ns.db.settings.transformPriceMode = "tsm" end
+end)
+
+priceModeImportedBtn:SetScript("OnClick", function()
+    priceMode = "imported"
+    UpdatePriceModeButtons()
+    if ns.db and ns.db.settings then ns.db.settings.transformPriceMode = "imported" end
+end)
+
+UpdatePriceModeButtons()
 
 -- ==========================================
 -- OUTPUT AREAS
@@ -714,7 +776,10 @@ end
 tsmTreeOnSelect = function() UpdateSourceButtons() end
 
 local function UpdateOutputButtons()
-    local modes = {aaa = outAAABtn, csv = outCSVBtn, tsmgroup = outTSMBtn, auctionator = outAuctBtn}
+    local modes = {
+        aaa = outAAABtn, csv = outCSVBtn, tsmgroup = outTSMBtn,
+        auctionator = outAuctBtn, pbs = outPBSBtn,
+    }
     for mode, btn in pairs(modes) do
         btn._active = (outputFormat == mode)
         if outputFormat == mode then
@@ -766,6 +831,10 @@ local function RepositionLayout()
     -- Preview button
     previewBtn:ClearAllPoints()
     previewBtn:SetPoint("TOPLEFT", transformPage, "TOPLEFT", 8, configBottom)
+
+    -- Warm Cache button sits to the right of Preview when visible
+    warmCacheBtn:ClearAllPoints()
+    warmCacheBtn:SetPoint("LEFT", previewBtn, "RIGHT", 8, 0)
     local afterPreviewBtn = configBottom - 28
 
     -- Preview table
@@ -908,12 +977,36 @@ local function BuildPreviewData(items)
             sortPrice = 0
         end
 
-        -- Detail: owner for inventory, realm for imports, group path for TSM
+        -- Detail: owner for inventory, realm for imports, PBS filter for
+        -- imported shopping lists, group path for TSM
         local detailStr = ""
         if item._owner and item._owner ~= "" then
             detailStr = item._owner
         elseif item.targetRealm and item.targetRealm ~= "" then
             detailStr = item.targetRealm
+        elseif item._pbs then
+            -- Surface the most useful PBS filter in the detail column so
+            -- users can see their imported search constraints at a glance.
+            local pbs = item._pbs
+            local parts = {}
+            if pbs.minItemLevel or pbs.maxItemLevel then
+                if pbs.minItemLevel and pbs.maxItemLevel and pbs.minItemLevel == pbs.maxItemLevel then
+                    parts[#parts + 1] = "ilvl=" .. pbs.minItemLevel
+                elseif pbs.minItemLevel and pbs.maxItemLevel then
+                    parts[#parts + 1] = "ilvl " .. pbs.minItemLevel .. "-" .. pbs.maxItemLevel
+                elseif pbs.minItemLevel then
+                    parts[#parts + 1] = "ilvl\226\137\165" .. pbs.minItemLevel  -- ≥
+                elseif pbs.maxItemLevel then
+                    parts[#parts + 1] = "ilvl\226\137\164" .. pbs.maxItemLevel  -- ≤
+                end
+            end
+            if pbs.maxPrice and pbs.maxPrice > 0 then
+                parts[#parts + 1] = "\226\137\164" .. pbs.maxPrice .. "g"  -- ≤ Ng
+            end
+            if pbs.tier then
+                parts[#parts + 1] = "R" .. pbs.tier
+            end
+            detailStr = table.concat(parts, " ")
         end
 
         table.insert(data, {
@@ -946,11 +1039,33 @@ local previewGeneration = 0
 local function BuildDiagnostics(items)
     local tsmAvail = TSM_API and type(TSM_API) == "table"
         and type(TSM_API.GetCustomPriceValue) == "function"
-    local diag = {names = 0, pets = 0, tsmLookups = 0, tsmHits = 0,
-                  importPriced = 0, unpriced = 0, tsmAvail = tsmAvail}
+    local diag = {
+        names = 0, pets = 0, tsmLookups = 0, tsmHits = 0,
+        importPriced = 0, unpriced = 0, tsmAvail = tsmAvail,
+        resolved = 0,         -- items with a numeric itemID (or battle pet)
+        unresolved = 0,       -- items lacking an itemID (name→ID resolution miss)
+        bySource = {          -- per-source tally of where each item's ID came from
+            itemKey = 0, import = 0, inventory = 0, warbank = 0,
+            pbs = 0, tsm = 0, cache = 0, lookup = 0,
+        },
+    }
     for _, item in ipairs(items) do
         if item._nameResolved then diag.names = diag.names + 1 end
-        if item.isBattlePet then diag.pets = diag.pets + 1 end
+        if item.isBattlePet then
+            diag.pets = diag.pets + 1
+            diag.resolved = diag.resolved + 1
+        else
+            local numID = tonumber(item.itemID)
+            if numID and numID > 0 then
+                diag.resolved = diag.resolved + 1
+                local src = item._resolvedFrom
+                if src and diag.bySource[src] ~= nil then
+                    diag.bySource[src] = diag.bySource[src] + 1
+                end
+            else
+                diag.unresolved = diag.unresolved + 1
+            end
+        end
         if item._priceSource == "import" then
             diag.importPriced = diag.importPriced + 1
         elseif item._priceSource == "tsm" then
@@ -967,24 +1082,56 @@ local function BuildDiagnostics(items)
     return diag
 end
 
--- Build a name→itemID map from all available data: imports, inventory, warbank.
--- Lazily built once per session; covers items the user has encountered.
-local nameToIDMap
+-- Build a name→itemID map from all available data: imports, inventory,
+-- warbank, PBS's item-key cache, TSM's persistent item-info cache, and
+-- (on-demand) proactively-warmed client cache entries.
+--
+-- Each map entry is a `{ id = <numericID>, source = <sourceTag> }` tuple so
+-- the preview can show a per-source breakdown of where each resolved item
+-- came from — useful for debugging "why didn't this item resolve?" and for
+-- deciding whether to offer the user the Warm Cache button.
+--
+-- Source tags used by consumers:
+--   "import"    -- ns.db.imports (FP scanner CSVs etc.)
+--   "inventory" -- ns.db.characters[*].inventory
+--   "warbank"   -- ns.db.warbank
+--   "pbs"       -- PointBlankSniper.ItemKeyCache
+--   "tsm"       -- TSMItemInfoDB (persisted TSM item cache)
+--   "cache"     -- client item cache (post-warming, via LookupItemInfo)
+--   "itemKey"   -- parsed out of the item's own itemKey field
+--
+-- PBS and TSM are the decisive sources for PBS file imports: a snipe list
+-- is typically filled with items the user does NOT own (that's the point
+-- of sniping), so FlipQueue's own data sources miss on most entries and
+-- C_Item.GetItemIDForItemInfo only works for items in the client cache
+-- (~0% hit rate for rare mounts/tools in a snipe list). PBS's cache covers
+-- user-authored files; TSM's cache covers foreign files the user imports
+-- from other people.
+local nameToIDMap   ---@type table<string, {id:integer, source:string}>
+local nameMapCounts ---@type table<string, integer> source → count of entries
 
 local function GetNameToIDMap()
-    if nameToIDMap then return nameToIDMap end
+    if nameToIDMap then return nameToIDMap, nameMapCounts end
     nameToIDMap = {}
-    if not ns.db then return nameToIDMap end
+    nameMapCounts = {
+        import = 0, inventory = 0, warbank = 0,
+        pbs = 0, tsm = 0, cache = 0,
+    }
+    if not ns.db then return nameToIDMap, nameMapCounts end
+
+    local function addEntry(lname, id, source)
+        if not lname or lname == "" or nameToIDMap[lname] then return end
+        if not id or id <= 0 then return end
+        nameToIDMap[lname] = { id = id, source = source }
+        nameMapCounts[source] = (nameMapCounts[source] or 0) + 1
+    end
 
     -- Import database (FP CSV imports have item IDs)
     if ns.db.imports then
         for _, srcMap in pairs(ns.db.imports) do
             for _, importItem in pairs(srcMap) do
                 local name = importItem.name and importItem.name:lower()
-                local numID = tonumber(importItem.itemID)
-                if name and name ~= "" and numID and numID > 0 and not nameToIDMap[name] then
-                    nameToIDMap[name] = numID
-                end
+                addEntry(name, tonumber(importItem.itemID), "import")
             end
         end
     end
@@ -994,10 +1141,7 @@ local function GetNameToIDMap()
         if charData.inventory and charData.inventory.items then
             for _, itemData in pairs(charData.inventory.items) do
                 local name = itemData.name and itemData.name:lower()
-                local numID = tonumber(itemData.itemID)
-                if name and name ~= "" and numID and numID > 0 and not nameToIDMap[name] then
-                    nameToIDMap[name] = numID
-                end
+                addEntry(name, tonumber(itemData.itemID), "inventory")
             end
         end
     end
@@ -1006,14 +1150,132 @@ local function GetNameToIDMap()
     if ns.db.warbank and ns.db.warbank.items then
         for _, itemData in pairs(ns.db.warbank.items) do
             local name = itemData.name and itemData.name:lower()
-            local numID = tonumber(itemData.itemID)
-            if name and name ~= "" and numID and numID > 0 and not nameToIDMap[name] then
-                nameToIDMap[name] = numID
+            addEntry(name, tonumber(itemData.itemID), "warbank")
+        end
+    end
+
+    -- Helper: extract the first numeric itemID from a TSM-format item key
+    -- string. Handles both "i:NNNN" and "i:NNNN::K:b1:b2:..." forms.
+    local function firstIDFromKey(k)
+        if type(k) ~= "string" then return nil end
+        return tonumber(k:match("^i:(%d+)"))
+    end
+
+    -- PBS item-key cache (hits on PBS files the user authored themselves)
+    -- Structure (see PointBlankSniper/Source/ItemKeyCache/MergeKeys.lua):
+    --   orderedKeys = {
+    --     names = { "lowercase name", ... },           -- sorted
+    --     itemKeyStrings = { {tsmKey, tsmKey2, ...}, ... },  -- parallel
+    --   }
+    local pbs = _G.PointBlankSniper
+    local state = pbs and pbs.ItemKeyCache and pbs.ItemKeyCache.State
+    if state then
+        local function absorbPBSKey(lname, keyList)
+            if not lname or lname == "" or nameToIDMap[lname] then return end
+            local id
+            if type(keyList) == "table" then
+                for _, k in ipairs(keyList) do
+                    id = firstIDFromKey(k)
+                    if id and id > 0 then break end
+                    id = nil
+                end
+            elseif type(keyList) == "string" then
+                id = firstIDFromKey(keyList)
+            end
+            addEntry(lname, id, "pbs")
+        end
+
+        local ordered = state.orderedKeys
+        if ordered and ordered.names and ordered.itemKeyStrings then
+            for i, name in ipairs(ordered.names) do
+                -- PBS already lowercases names (MergeKeys.lua:12)
+                absorbPBSKey(name, ordered.itemKeyStrings[i])
+            end
+        end
+
+        -- Staging area: items PBS has seen this session but hasn't merged
+        -- into orderedKeys yet. MergeKeys only runs when PBS decides to
+        -- flush, which may not have happened yet when we read the cache.
+        local newKeys = state.newKeys
+        if newKeys and newKeys.names and newKeys.itemKeyStrings then
+            for i, name in ipairs(newKeys.names) do
+                absorbPBSKey(name and name:lower(), newKeys.itemKeyStrings[i])
             end
         end
     end
 
-    return nameToIDMap
+    -- TSM's persistent item-info database (hits on PBS files authored by
+    -- OTHER people — the user's personal PBS cache only contains items
+    -- they've searched, but TSM's cache is populated from every auction
+    -- scan and item-info lookup TSM has ever performed across the user's
+    -- TSM lifetime, which typically covers tens of thousands of items
+    -- including the kinds of rare mounts and crafted gear that end up in
+    -- snipe lists). Structure (see TradeSkillMaster/LibTSMTypes/Source/
+    -- Item/ItemInfoCache.lua:21-25, :291-304):
+    --   TSMItemInfoDB = {
+    --     versionStr  = "...",
+    --     data        = "<encoded>",
+    --     names       = <LongString>,  -- string | string[] | nil
+    --     itemStrings = <LongString>,  -- parallel to names
+    --   }
+    -- LongString encoding (TSM/LibTSMUtil/Source/BaseType/LongString.lua):
+    --   separator = "\002"
+    --   chunks    = a single string, or an array of strings each holding
+    --               up to MAX_LONG_STRING_ENTRIES = 1000 values
+    -- The `names` and `itemStrings` arrays are parallel: element i of
+    -- names is the display name of the item whose TSM item-string is
+    -- element i of itemStrings. We decode once and reverse-index.
+    local tsmDB = _G.TSMItemInfoDB
+    if type(tsmDB) == "table" and tsmDB.names and tsmDB.itemStrings then
+        local LONG_STRING_SEP = "\002"
+
+        -- Decode a LongString-encoded value (either a single string or a
+        -- list of string chunks) into a flat list of values.
+        local function decodeLongString(value, out)
+            if type(value) == "string" then
+                -- gmatch with "([^\002]*)\002" would drop the last value;
+                -- append the separator so every value is followed by one.
+                for part in (value .. LONG_STRING_SEP):gmatch("([^" .. LONG_STRING_SEP .. "]*)" .. LONG_STRING_SEP) do
+                    out[#out + 1] = part
+                end
+            elseif type(value) == "table" then
+                for _, chunk in ipairs(value) do
+                    if type(chunk) == "string" then
+                        for part in (chunk .. LONG_STRING_SEP):gmatch("([^" .. LONG_STRING_SEP .. "]*)" .. LONG_STRING_SEP) do
+                            out[#out + 1] = part
+                        end
+                    end
+                end
+            end
+        end
+
+        local tsmNames, tsmItemStrings = {}, {}
+        decodeLongString(tsmDB.names, tsmNames)
+        decodeLongString(tsmDB.itemStrings, tsmItemStrings)
+
+        -- Only use the overlap length — if the two arrays decoded to
+        -- different counts we'd be cross-indexing unrelated items. TSM's
+        -- own validator does the same check (ItemInfoCache.lua:294).
+        local n = math.min(#tsmNames, #tsmItemStrings)
+        for i = 1, n do
+            local name = tsmNames[i]
+            local lname = name and name:lower()
+            addEntry(lname, firstIDFromKey(tsmItemStrings[i]), "tsm")
+        end
+    end
+
+    return nameToIDMap, nameMapCounts
+end
+
+-- Folds a newly-warmed cache entry into the name→ID map. Called by the
+-- Warm Cache button's GET_ITEM_INFO_RECEIVED handler as each forced-load
+-- response arrives.
+local function AddWarmedEntry(lname, id)
+    if not nameToIDMap then return end
+    if not lname or lname == "" or nameToIDMap[lname] then return end
+    if not id or id <= 0 then return end
+    nameToIDMap[lname] = { id = id, source = "cache" }
+    nameMapCounts.cache = (nameMapCounts.cache or 0) + 1
 end
 
 -- Process items[startIdx..endIdx] (or all if omitted): resolve IDs, names, prices.
@@ -1022,7 +1284,7 @@ local function ProcessItems(items, startIdx, endIdx)
     local T = ns.Transformer
     local LookupItemInfo = ns.UI and ns.UI._LookupItemInfo
     local pMap = T and T._GetPetNameMap and T:_GetPetNameMap() or {}
-    local idMap = GetNameToIDMap()
+    local idMap = GetNameToIDMap()  -- also populates nameMapCounts
 
     local tsmAPI = TSM_API and type(TSM_API) == "table"
         and type(TSM_API.GetCustomPriceValue) == "function"
@@ -1062,23 +1324,28 @@ local function ProcessItems(items, startIdx, endIdx)
                     numID = tonumber(keyID)
                     if numID and numID > 0 then
                         item.itemID = tostring(numID)
+                        item._resolvedFrom = item._resolvedFrom or "itemKey"
                     end
                 end
             end
-            -- 2. From name→ID map (imports + inventory + warbank)
+            -- 2. From name→ID map (imports + inventory + warbank + PBS + TSM)
             if (not numID or numID <= 0) and item.name and item.name ~= "" then
-                local mapped = idMap[item.name:lower()]
-                if mapped then
-                    numID = mapped
-                    item.itemID = tostring(mapped)
+                local entry = idMap[item.name:lower()]
+                if entry then
+                    numID = entry.id
+                    item.itemID = tostring(entry.id)
+                    item._resolvedFrom = entry.source
                 end
             end
-            -- 3. From WoW API + inventory search (LookupItemInfo)
+            -- 3. From WoW API + inventory search (LookupItemInfo). Runs
+            -- after the map lookup so post-warm cache hits land here even
+            -- if the item wasn't in the map when GetNameToIDMap was built.
             if (not numID or numID <= 0) and LookupItemInfo then
                 local _, _, resolvedID = LookupItemInfo(item.itemID, item.itemKey, item.name)
                 if resolvedID then
                     numID = resolvedID
                     item.itemID = tostring(resolvedID)
+                    item._resolvedFrom = item._resolvedFrom or "lookup"
                 end
             end
         end
@@ -1152,6 +1419,39 @@ local function BuildStatusText(items, diag)
     if petCount > 0 then table.insert(parts, "|cff44ff44" .. petCount .. " pets|r") end
     local text = table.concat(parts, ", ") .. " from " .. sourceMode
 
+    -- Unresolved count (items whose name→ID lookup failed and will drop
+    -- out of AAA/TSM/FP output because resolveItemID can't produce a
+    -- numeric ID). Surfaces what was previously invisible: users pasting
+    -- foreign PBS files used to see "64 items" with no indication that
+    -- 36 more were silently dropped.
+    if diag.unresolved and diag.unresolved > 0 then
+        text = text .. "  " .. ns.COLORS.RED .. diag.unresolved .. " unresolved|r"
+    end
+
+    -- Per-source breakdown of where resolved items came from. Only shown
+    -- when multiple sources contributed, to avoid clutter on simple
+    -- imports (e.g. a TSM-group import has 100% itemKey resolution and
+    -- showing "itemKey=100" on its own is noise).
+    if diag.bySource then
+        local srcParts = {}
+        local function addSrc(label, n, color)
+            if n and n > 0 then
+                table.insert(srcParts, (color or "") .. label .. "=" .. n .. (color and "|r" or ""))
+            end
+        end
+        addSrc("itemKey", diag.bySource.itemKey, ns.COLORS.GRAY)
+        addSrc("inv", diag.bySource.inventory, "|cff88cc88")
+        addSrc("imp", diag.bySource.import, "|cff88cc88")
+        addSrc("wb", diag.bySource.warbank, "|cff88cc88")
+        addSrc("pbs", diag.bySource.pbs, "|cffffaa00")
+        addSrc("tsm", diag.bySource.tsm, "|cff00ccff")
+        addSrc("cache", diag.bySource.cache, "|cff44ff88")
+        addSrc("lookup", diag.bySource.lookup, ns.COLORS.GRAY)
+        if #srcParts >= 2 then
+            text = text .. "  " .. ns.COLORS.GRAY .. "(" .. table.concat(srcParts, " ") .. ns.COLORS.GRAY .. ")|r"
+        end
+    end
+
     -- Price breakdown
     local pp = {}
     if diag.importPriced > 0 then table.insert(pp, "|cffffff00" .. diag.importPriced .. " imp|r") end
@@ -1178,6 +1478,14 @@ local function DoPreview()
 
     previewGeneration = previewGeneration + 1
     local myGen = previewGeneration
+
+    -- Invalidate the name→ID map on paste so PBS cache additions from the
+    -- current session (items PBS saw via AH searches since the last
+    -- preview) are picked up. For other source modes the cached map is
+    -- fine because the underlying data sources don't change mid-session.
+    if sourceMode == "paste" then
+        nameToIDMap = nil
+    end
 
     currentItems = LoadItems()
 
@@ -1239,12 +1547,285 @@ local function DoPreview()
                     local data2 = BuildPreviewData(currentItems)
                     UI.transformPreviewTable:SetData(data2)
                     previewStatus:SetText(BuildStatusText(currentItems, diag2))
+                    if UpdateWarmCacheButtonVisibility then
+                        UpdateWarmCacheButtonVisibility(diag2)
+                    end
                 end)
+            end
+
+            -- Show/hide the Warm Cache button based on whether unresolved
+            -- items remain. The button loads WoW's client item cache for
+            -- every item TSM knows about from its per-realm pricing data,
+            -- which typically covers PBS files sourced from other players.
+            if UpdateWarmCacheButtonVisibility then
+                UpdateWarmCacheButtonVisibility(diag)
             end
         end
     end
 
     processChunk()
+end
+
+-- ==========================================
+-- WARM CACHE — on-demand client item cache warming
+-- ==========================================
+-- Problem: when users paste a PBS file authored by someone else (the
+-- "expert gives me a snipe list" workflow), most items in the list are
+-- neither in the user's inventory nor in their PBS cache nor in TSM's
+-- persistent item-info DB. The name→ID resolution chain in ProcessItems
+-- misses them, they fall out of the AAA/FP/TSM output, and the user sees
+-- "64 of 100 items resolved" with no recourse.
+--
+-- Fix: on demand, walk every unique item ID TSM's realm-pricing data has
+-- seen across every tracked realm (~30-50k IDs for a typical multi-realm
+-- user) and fire C_Item.RequestLoadItemDataByID for each. WoW's server
+-- streams back item info via GET_ITEM_INFO_RECEIVED. We listen for those
+-- events, match incoming names against the unresolved PBS names, and
+-- fold matches into the name→ID map with source="cache". When the
+-- warming pass completes (or every unresolved name is accounted for),
+-- we re-run the preview to fold the newly-resolved items in.
+--
+-- Throttling: RequestLoadItemDataByID is cheap on the client side but
+-- each call hits the server, and firing 30k in one frame gets rate-
+-- limited (can cause disconnects on some setups). We batch 250 per
+-- 0.05s tick — ~30k/6s, well under any realistic rate limit.
+
+local WARM_BATCH_SIZE = 250
+local WARM_TICK_DELAY = 0.05
+
+local warmState = nil  -- active warming session, or nil when idle
+
+CancelWarm = function()
+    if not warmState then return end
+    if warmState.frame then
+        warmState.frame:UnregisterAllEvents()
+        warmState.frame:SetScript("OnEvent", nil)
+    end
+    if warmState.timer then warmState.timer:Cancel() end
+    warmState = nil
+end
+
+-- Union every item ID we can plausibly warm from any available data
+-- source. Used by the Warm Cache button to cast the widest possible net.
+--
+-- Sources:
+--   TSMRealms.realmRaw         — items currently listed on any tracked
+--                                 realm's AH, hourly refresh
+--   AUCTIONATOR_PRICE_DATABASE — items Auctionator has EVER seen on any
+--                                 realm (historical; persists forever,
+--                                 critical for rare snipe targets like
+--                                 TCG mounts that aren't currently on
+--                                 the AH but Auctionator browsed them
+--                                 at some point in the past)
+--
+-- dbKey formats (see Auctionator/Source/Utilities/DBKeyFromLink.lua:1):
+--   "NNNN"                -- bare numeric string for non-gear items
+--   "g:NNNN:<ilvl>"       -- gear items (modern AH)
+--   "gr:NNNN:<suffix>"    -- gear items (legacy AH)
+--   "p:NNNN"              -- battle pets (by speciesID, NOT itemID)
+local function CollectWarmingPool()
+    local seen = {}
+
+    -- TSMRealms per-realm pricing data
+    if ns.TSMRealms and ns.TSMRealms.CollectAllItemIDs then
+        local tsmIDs = ns.TSMRealms:CollectAllItemIDs()
+        for id in pairs(tsmIDs) do seen[id] = true end
+    end
+
+    -- Auctionator price database (historical per-realm records)
+    local aucDB = _G.AUCTIONATOR_PRICE_DATABASE
+    if type(aucDB) == "table" then
+        for realm, realmData in pairs(aucDB) do
+            -- Skip the "__dbversion" key at the root (not a realm)
+            if type(realm) == "string" and realm ~= "__dbversion"
+                and type(realmData) == "table" then
+                for dbKey in pairs(realmData) do
+                    if type(dbKey) == "string" then
+                        -- Bare itemID (non-gear items — mounts, consumables,
+                        -- reagents, etc.)
+                        local id = tonumber(dbKey:match("^(%d+)$"))
+                        if id then
+                            seen[id] = true
+                        else
+                            -- Gear items: "g:<id>:<ilvl>"
+                            id = tonumber(dbKey:match("^g:(%d+)"))
+                            if id then
+                                seen[id] = true
+                            end
+                            -- Gear items (legacy): "gr:<id>:<suffix>"
+                            id = tonumber(dbKey:match("^gr:(%d+)"))
+                            if id then seen[id] = true end
+                        end
+                        -- Pets ("p:<speciesID>") are deliberately skipped;
+                        -- speciesID ≠ itemID and warming them as items
+                        -- would fire spurious server requests.
+                    end
+                end
+            end
+        end
+    end
+
+    return seen
+end
+
+-- Called by DoPreview after a preview completes; decides whether to
+-- show the Warm Cache button.
+UpdateWarmCacheButtonVisibility = function(diag)
+    if not diag or not diag.unresolved or diag.unresolved == 0 then
+        warmCacheBtn:Hide()
+        return
+    end
+    -- Warming only makes sense when we have SOMETHING to warm from.
+    -- TSMRealms is the usual source but Auctionator's DB is an acceptable
+    -- fallback, so check either is available before offering the button.
+    local hasSource = (ns.TSMRealms and ns.TSMRealms.IsLoaded and ns.TSMRealms:IsLoaded())
+        or (type(_G.AUCTIONATOR_PRICE_DATABASE) == "table")
+    if not hasSource then
+        warmCacheBtn:Hide()
+        return
+    end
+    warmCacheBtn.text:SetText("Warm Cache (" .. diag.unresolved .. " missing)")
+    warmCacheBtn:SetWidth(math.max(140, warmCacheBtn.text:GetStringWidth() + 24))
+    warmCacheBtn:Show()
+    RepositionLayout()
+end
+
+StartWarmCache = function()
+    CancelWarm()
+
+    -- Build the wanted set: lowercase names of currently-unresolved items.
+    -- These are the names we're trying to resolve via cache warming.
+    local wanted = {}
+    local wantedCount = 0
+    for _, item in ipairs(currentItems) do
+        if not item.isBattlePet then
+            local numID = tonumber(item.itemID)
+            if (not numID or numID <= 0) and item.name and item.name ~= "" then
+                wanted[item.name:lower()] = true
+                wantedCount = wantedCount + 1
+            end
+        end
+    end
+
+    if wantedCount == 0 then
+        previewStatus:SetText(ns.COLORS.GRAY .. "Nothing to warm.|r")
+        warmCacheBtn:Hide()
+        return
+    end
+
+    -- Collect item IDs to request from ALL available sources (TSM realm
+    -- data + Auctionator DB). Flatten the set to an ordered array so we
+    -- can batch through it deterministically.
+    local idSet = CollectWarmingPool()
+    local ids = {}
+    for id in pairs(idSet) do ids[#ids + 1] = id end
+    table.sort(ids)
+    local totalIDs = #ids
+
+    if totalIDs == 0 then
+        previewStatus:SetText(ns.COLORS.RED .. "No warming data available (TSM realm data + Auctionator DB both empty).|r")
+        return
+    end
+
+    -- Set up the listener frame BEFORE firing any requests so nothing
+    -- gets missed. Incoming GET_ITEM_INFO_RECEIVED events arrive async
+    -- and carry (itemID, success) — we call GetItemInfo(id) for the
+    -- name, match against `wanted`, and fold matches into the map.
+    local frame = CreateFrame("Frame")
+    frame:RegisterEvent("GET_ITEM_INFO_RECEIVED")
+
+    warmState = {
+        frame = frame,
+        ids = ids,
+        idx = 1,
+        totalIDs = totalIDs,
+        wanted = wanted,
+        wantedCount = wantedCount,
+        resolved = 0,
+        generation = previewGeneration,
+    }
+
+    frame:SetScript("OnEvent", function(_, event, itemID, success)
+        if event ~= "GET_ITEM_INFO_RECEIVED" then return end
+        if not warmState or not success then return end
+        local name, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _ = C_Item.GetItemInfo(itemID)
+        if not name then return end
+        local lname = name:lower()
+        if warmState.wanted[lname] then
+            AddWarmedEntry(lname, itemID)
+            warmState.wanted[lname] = nil
+            warmState.resolved = warmState.resolved + 1
+            -- Update progress text
+            if transformPage:IsShown() then
+                previewStatus:SetText(string.format(
+                    "%sWarming: %d/%d sent, %s%d|r%s resolved of %s%d|r missing",
+                    ns.COLORS.YELLOW, warmState.idx - 1, warmState.totalIDs,
+                    ns.COLORS.GREEN, warmState.resolved, ns.COLORS.YELLOW,
+                    ns.COLORS.RED, warmState.wantedCount
+                ))
+            end
+            -- Early exit if everything resolved
+            if warmState.resolved >= warmState.wantedCount then
+                CompleteWarmCache()
+            end
+        end
+    end)
+
+    -- Start the batched request loop.
+    local function tick()
+        if not warmState then return end
+        if previewGeneration ~= warmState.generation then
+            CancelWarm()
+            return
+        end
+
+        local endIdx = math.min(warmState.idx + WARM_BATCH_SIZE - 1, warmState.totalIDs)
+        for i = warmState.idx, endIdx do
+            -- RequestLoadItemDataByID queues a server fetch for the item.
+            -- If the item is already cached it's a cheap no-op.
+            pcall(C_Item.RequestLoadItemDataByID, warmState.ids[i])
+        end
+        warmState.idx = endIdx + 1
+
+        if transformPage:IsShown() and previewStatus then
+            previewStatus:SetText(string.format(
+                "%sWarming cache: %d/%d sent, %s%d|r%s/%s%d|r resolved",
+                ns.COLORS.YELLOW, warmState.idx - 1, warmState.totalIDs,
+                ns.COLORS.GREEN, warmState.resolved, ns.COLORS.YELLOW,
+                ns.COLORS.RED, warmState.wantedCount
+            ))
+        end
+
+        if warmState.idx <= warmState.totalIDs then
+            warmState.timer = C_Timer.NewTimer(WARM_TICK_DELAY, tick)
+        else
+            -- All requests sent. The responses are still arriving; wait
+            -- a short window for them to finish landing, then re-run
+            -- the preview to pick up any items that resolved post-request.
+            warmState.timer = C_Timer.NewTimer(1.5, CompleteWarmCache)
+        end
+    end
+
+    warmCacheBtn:Hide()
+    previewStatus:SetText(ns.COLORS.YELLOW .. "Warming cache: 0/" .. totalIDs .. " sent...|r")
+    tick()
+end
+
+CompleteWarmCache = function()
+    if not warmState then return end
+    local resolved = warmState.resolved
+    CancelWarm()
+    -- Re-run the preview so items with freshly-cached names flow through
+    -- ProcessItems again and pick up their itemIDs from the updated map
+    -- (or from C_Item.GetItemIDForItemInfo which now returns non-nil for
+    -- warmed items).
+    ProcessItems(currentItems)
+    local diag = BuildDiagnostics(currentItems)
+    local data = BuildPreviewData(currentItems)
+    UI.transformPreviewTable:SetData(data)
+    previewStatus:SetText(BuildStatusText(currentItems, diag)
+        .. "  " .. ns.COLORS.GREEN .. "(+" .. resolved .. " warmed)|r")
+    UpdateWarmCacheButtonVisibility(diag)
 end
 
 -- ==========================================
@@ -1262,7 +1843,8 @@ local function DoTransform()
     RepositionLayout()
 
     if outputFormat == "aaa" then
-        local itemsJSON, petsJSON, ic, pc, uic, upc = T:OutputAAAJSON(currentItems, priceDiscount, priceSource)
+        local itemsJSON, petsJSON, ic, pc, uic, upc =
+            T:OutputAAAJSON(currentItems, priceDiscount, priceSource, priceMode)
         local itemLabel = "Items (" .. ic .. ")"
         if uic and uic > 0 then itemLabel = itemLabel .. "  " .. ns.COLORS.GRAY .. uic .. " unpriced|r" end
         itemsOutputLabel:SetText(itemLabel .. ":")
@@ -1284,7 +1866,22 @@ local function DoTransform()
             outputEdit:HighlightText()
         end
     elseif outputFormat == "auctionator" then
-        local output = T:OutputAuctionatorList(currentItems, outputListName)
+        -- Prefer the imported list name (set by ParsePBS / ParseAuctionator*
+        -- when the source was a shopping-list export) so round-trip
+        -- preserves the original name instead of clobbering it with the
+        -- static "FlipQueue Export" default.
+        local importedName = currentItems[1] and currentItems[1]._listName
+        local name = (importedName and importedName ~= "") and importedName or outputListName
+        local output = T:OutputAuctionatorList(currentItems, name)
+        outputEdit:SetText(output)
+        if output ~= "" then
+            outputEdit:HighlightText()
+        end
+    elseif outputFormat == "pbs" then
+        -- PBS round-trip: same list-name precedence as Auctionator.
+        local importedName = currentItems[1] and currentItems[1]._listName
+        local name = (importedName and importedName ~= "") and importedName or outputListName
+        local output = T:OutputPBS(currentItems, name)
         outputEdit:SetText(output)
         if output ~= "" then
             outputEdit:HighlightText()
@@ -1302,6 +1899,12 @@ local function SetSource(mode)
     currentItems = {}
 
     UpdateSourceButtons()
+
+    -- Cancel any in-flight cache warming since the items we were warming
+    -- for no longer exist, and hide the button until the next preview
+    -- determines whether it's needed again.
+    CancelWarm()
+    warmCacheBtn:Hide()
 
     -- Clear table and output
     UI.transformPreviewTable:SetData({})
@@ -1327,6 +1930,10 @@ srcAuctBtn:SetScript("OnClick", function() SetSource("auctionator") end)
 
 previewBtn:SetScript("OnClick", function() DoPreview() end)
 
+warmCacheBtn:SetScript("OnClick", function()
+    if StartWarmCache then StartWarmCache() end
+end)
+
 local function SetOutput(fmt)
     outputFormat = fmt
     UpdateOutputButtons()
@@ -1338,6 +1945,7 @@ outAAABtn:SetScript("OnClick", function() SetOutput("aaa") end)
 outCSVBtn:SetScript("OnClick", function() SetOutput("csv") end)
 outTSMBtn:SetScript("OnClick", function() SetOutput("tsmgroup") end)
 outAuctBtn:SetScript("OnClick", function() SetOutput("auctionator") end)
+outPBSBtn:SetScript("OnClick", function() SetOutput("pbs") end)
 
 transformBtn:SetScript("OnClick", function() DoTransform() end)
 
@@ -1367,6 +1975,7 @@ function UI:RefreshTransformPage()
     if ns.db and ns.db.settings then
         priceSource = ns.db.settings.transformPriceSource or priceSource
         priceDiscount = ns.db.settings.transformDiscount or priceDiscount
+        priceMode = ns.db.settings.transformPriceMode or priceMode
         priceSrcBox:SetText(priceSource)
         priceDiscountBox:SetText(tostring(priceDiscount))
     end
@@ -1375,6 +1984,7 @@ function UI:RefreshTransformPage()
 
     UpdateSourceButtons()
     UpdateOutputButtons()
+    UpdatePriceModeButtons()
     RepositionLayout()
     UI._ShowTable(UI.transformPreviewTable)
 

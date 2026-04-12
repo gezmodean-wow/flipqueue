@@ -889,8 +889,23 @@ function TodoList:GenerateTodoList(source, allocationOrder, opts)
                     local tsmRejected = false
                     if tsmEnabled then
                         local belowThreshold, ahMin, threshold, opName = ns.TSM:IsBelowThreshold(poolItem.itemKey)
-                        if not belowThreshold and deal.itemKey ~= poolItem.itemKey then
-                            belowThreshold = ns.TSM:IsBelowThreshold(deal.itemKey)
+                        -- Only fall back to deal.itemKey if poolItem had NO TSM data
+                        -- at all (ahMin nil). The old logic fell back whenever
+                        -- poolItem was "not below threshold" — which fires in TWO
+                        -- distinct cases the caller cannot distinguish: (a) the
+                        -- variant's price is genuinely above threshold (decided
+                        -- correctly), and (b) TSM has no data for this key
+                        -- (undecided). In case (a), falling back to deal.itemKey
+                        -- (the FP import's base-item key, no bonus IDs) resolved
+                        -- to the base-item DBMinBuyout — which for high-ilvl
+                        -- profession tools and other upgraded crafted gear is
+                        -- dramatically lower than the actual variant's price —
+                        -- and returned true, incorrectly rejecting the task as
+                        -- "below threshold". Gating on `not ahMin` only falls
+                        -- back in case (b). Also reassigns all four return values
+                        -- so the failReason message isn't stale.
+                        if not ahMin and deal.itemKey and deal.itemKey ~= poolItem.itemKey then
+                            belowThreshold, ahMin, threshold, opName = ns.TSM:IsBelowThreshold(deal.itemKey)
                         end
                         if belowThreshold then
                             tsmRejected = true

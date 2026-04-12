@@ -16,6 +16,18 @@
 - WoW symlink: `C:\Program Files (x86)\World of Warcraft\_retail_\Interface\AddOns\flipqueue` -> `C:\src\flipqueue`
 - SavedVariables: FlipQueueDB (account-wide)
 
+## Cogworks suite context
+
+This addon is part of the **Cogworks** WoW addon suite alongside Tempo, Maxcraft, and a planned ledger cog. The shared core lives at `C:\src\cogworks\`. Before making structural or architectural changes, read:
+
+- `C:\src\cogworks\docs\AGENT_BRIEF.md` — single-page suite overview
+- `C:\src\cogworks\docs\PLAN.md` — integration plan and phased rollout
+- `C:\src\cogworks\docs\SYNDICATOR_INTEGRATION.md` — implementation patterns for the upcoming Syndicator hard-dep migration (Phase 6a)
+
+**Live-user constraints:** This cog is published on CurseForge and Wago. The SavedVariables name `FlipQueueDB`, the slash commands `/fq` and `/flipqueue`, and the addon folder name `flipqueue` are all immutable without a migration plan — renaming any of them would break every existing install. The item key format `itemID;bonusIDs;modifiers` is also user-data-shaped and matched against external imports (FlippingPal, TSM, Auctionator).
+
+**Upcoming change (Phase 6a):** The Cogworks integration plan makes Syndicator a hard dependency for FlipQueue, collapses ~600 LOC of `Scanner.lua` onto Syndicator's API, adds a small `ItemLookup.lua` lazy lookup cache, keeps `Sync.lua` (BNet multi-account) but rewires its source of truth, and preserves `TrackerMail.lua` / `TrackerAuctions.lua` / `SalesIndex.lua` untouched. See `SYNDICATOR_INTEGRATION.md` for the preservation list and implementation patterns. Don't start that work without coordinating with the user.
+
 ## Coding Conventions
 - All Lua files use `local addonName, ns = ...` for namespace
 - Colors defined in Core.lua ns.COLORS table

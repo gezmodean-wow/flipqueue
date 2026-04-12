@@ -204,6 +204,38 @@ function TSMRealms:InvalidateCache()
     wipe(queryCache)
 end
 
+-- Collect every unique numeric itemID referenced in any realm's raw
+-- pricing data. Used by the Transform page's Warm Cache button to
+-- proactively warm WoW's client item cache for all items currently on
+-- any tracked realm's auction house — the union typically covers the
+-- overwhelming majority of "pasted from an expert" PBS file entries,
+-- since those lists are sourced from live AH activity.
+--
+-- Returns a map { [numericID] = true }. Iterating via `for id in pairs`
+-- is stable since Lua guarantees key enumeration for integer keys.
+-- Skips pet entries ("p:speciesID") — those don't need cache warming
+-- and are resolved via the pet-name map instead.
+function TSMRealms:CollectAllItemIDs()
+    local seen = {}
+    if not isLoaded then return seen end
+    for _, realm in ipairs(realmList) do
+        local rawEntry = realmRaw[realm]
+        if rawEntry and rawEntry.str then
+            -- Plain numeric entries: {NNNN,val,val,...}
+            for id in rawEntry.str:gmatch("{(%d+),") do
+                local n = tonumber(id)
+                if n and n > 0 then seen[n] = true end
+            end
+            -- Quoted bonus-keyed entries: {"i:NNNN::K:b1:b2:...",val,...}
+            for id in rawEntry.str:gmatch('{"i:(%d+)') do
+                local n = tonumber(id)
+                if n and n > 0 then seen[n] = true end
+            end
+        end
+    end
+    return seen
+end
+
 --------------------------
 -- Batch Lookup (single pass per realm)
 --------------------------
