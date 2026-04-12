@@ -343,6 +343,14 @@ function Transformer:SplitPets(items)
     for _, item in ipairs(items) do
         if item.isBattlePet then
             table.insert(pets, item)
+        elseif item._petSpeciesID then
+            -- Unresolved item that matched a pet name via C_PetJournal
+            -- but kept its original itemID for non-AAA outputs. Promote
+            -- to battle pet for AAA (which has a separate pets array).
+            local copy = self:_CopyItem(item)
+            copy.isBattlePet = true
+            copy.speciesID = item._petSpeciesID
+            table.insert(pets, copy)
         else
             table.insert(regular, item)
         end

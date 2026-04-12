@@ -207,26 +207,45 @@ local function TabSpecificity(depositFlags)
 end
 
 -- Build the list of accepting tabs sorted by specificity (most specific first).
--- If `trace` is a table, append a per-tab description string for each bag in
--- the list — used by PickDepositSlot's debug output to disclose which tabs
--- the picker considered and why each was accepted or rejected.
+-- Ties broken by original bagList index so tabs with equal specificity walk
+-- in the user-configured order (typically ascending bag ID = tab 1 → tab N).
+-- Lua's table.sort is NOT stable, so we MUST provide an explicit tiebreaker
+-- or equal-spec tabs get reordered non-deterministically — which is how we
+-- ended up filling tab 1 → tab 4 → tab 3 → tab 2 when all filters were off.
+--
+-- If `trace` is a table, append per-tab description strings in the SORTED
+-- (walked) order. Rejected tabs are appended after the accepted ones so the
+-- user can see both what the picker considered and why each tab got skipped.
 local function MatchingTabsSorted(itemLink, bagList, trace)
     local matched = {}
     if not bagList then return matched end
-    for _, bag in ipairs(bagList) do
+    local rejectedTrace
+    if trace then rejectedTrace = {} end
+    for idx, bag in ipairs(bagList) do
         local td = GetTabFilterData(bag)
         local flags = td and td.depositFlags or 0
         local spec = TabSpecificity(flags)
         local accepts = ItemMatchesTabFlags(itemLink, flags)
-        if trace then
-            table.insert(trace, string.format("%d(flags=0x%x,spec=%d,%s)",
-                bag, flags, spec, accepts and "accept" or "reject"))
-        end
         if accepts then
-            table.insert(matched, { bag = bag, spec = spec })
+            table.insert(matched, { bag = bag, spec = spec, order = idx, flags = flags })
+        elseif rejectedTrace then
+            table.insert(rejectedTrace, string.format("%d(flags=0x%x,spec=%d,reject)",
+                bag, flags, spec))
         end
     end
-    table.sort(matched, function(a, b) return a.spec > b.spec end)
+    table.sort(matched, function(a, b)
+        if a.spec ~= b.spec then return a.spec > b.spec end
+        return a.order < b.order
+    end)
+    if trace then
+        for _, m in ipairs(matched) do
+            table.insert(trace, string.format("%d(flags=0x%x,spec=%d,accept)",
+                m.bag, m.flags, m.spec))
+        end
+        for _, s in ipairs(rejectedTrace) do
+            table.insert(trace, s)
+        end
+    end
     return matched
 end
 

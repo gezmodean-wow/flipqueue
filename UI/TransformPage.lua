@@ -314,7 +314,7 @@ local previewBtn = CreateActionBtn("Preview Source", transformPage)
 -- users (items the local player has never personally searched for) can
 -- resolve names → IDs. Shown only when there are unresolved items after
 -- the initial preview. See the Warm Cache state machine further down.
-local warmCacheBtn = CreateActionBtn("Warm Cache", transformPage)
+local warmCacheBtn = CreateActionBtn("Deep Search", transformPage)
 warmCacheBtn:Hide()
 
 -- Forward declarations for the Warm Cache state machine so DoPreview /
@@ -1044,6 +1044,7 @@ local function BuildDiagnostics(items)
         importPriced = 0, unpriced = 0, tsmAvail = tsmAvail,
         resolved = 0,         -- items with a numeric itemID (or battle pet)
         unresolved = 0,       -- items lacking an itemID (name→ID resolution miss)
+        nameless = 0,         -- items with numeric ID but placeholder name ("Item NNNN" / "Unknown")
         bySource = {          -- per-source tally of where each item's ID came from
             itemKey = 0, import = 0, inventory = 0, warbank = 0,
             pbs = 0, tsm = 0, cache = 0, lookup = 0,
@@ -1058,6 +1059,10 @@ local function BuildDiagnostics(items)
             local numID = tonumber(item.itemID)
             if numID and numID > 0 then
                 diag.resolved = diag.resolved + 1
+                local iname = item.name or ""
+                if iname == "Unknown" or iname:match("^Item %d+$") then
+                    diag.nameless = diag.nameless + 1
+                end
                 local src = item._resolvedFrom
                 if src and diag.bySource[src] ~= nil then
                     diag.bySource[src] = diag.bySource[src] + 1
@@ -1348,6 +1353,20 @@ local function ProcessItems(items, startIdx, endIdx)
                     item._resolvedFrom = item._resolvedFrom or "lookup"
                 end
             end
+            -- 4. Pet name hint: if still unresolved and the name matches
+            -- a known C_PetJournal species, stash the speciesID so
+            -- pet-aware outputs (AAA JSON) can use it. We do NOT
+            -- convert to isBattlePet here — PBS and other item-ID-based
+            -- outputs need the real item ID, not a speciesID. The
+            -- category-gated pet detection above handles the explicit
+            -- "pet"/"companions" case; this is the fallback for paste
+            -- sources that lack a category field.
+            if (not numID or numID <= 0) and item.name and item.name ~= "" then
+                local sid = pMap[(item.name):lower()]
+                if sid then
+                    item._petSpeciesID = sid
+                end
+            end
         end
 
         -- === NAME / ICON / QUALITY ===
@@ -1426,6 +1445,9 @@ local function BuildStatusText(items, diag)
     -- 36 more were silently dropped.
     if diag.unresolved and diag.unresolved > 0 then
         text = text .. "  " .. ns.COLORS.RED .. diag.unresolved .. " unresolved|r"
+    end
+    if diag.nameless and diag.nameless > 0 then
+        text = text .. "  " .. ns.COLORS.YELLOW .. diag.nameless .. " nameless|r"
     end
 
     -- Per-source breakdown of where resolved items came from. Only shown
@@ -1665,26 +1687,51 @@ local function CollectWarmingPool()
         end
     end
 
+    -- TSM group items (selected profile). Every profile contains the
+    -- same items (unassigned items fall back to the Default group), so
+    -- walking a single profile covers the full item set. This catches
+    -- ultra-rare items (TCG mounts, companion pets) that may never
+    -- appear on an AH or in Auctionator's history but ARE in the
+    -- user's TSM groups. When we fire RequestLoadItemDataByID for
+    -- these, the server returns the name, which we match against the
+    -- unresolved wanted set.
+    if ns.TSM and ns.TSM.GetSelectedProfile then
+        local profile = ns.TSM:GetSelectedProfile()
+        if profile then
+            local itemsDB = ns.TSM:GetItemsDB(profile)
+            if type(itemsDB) == "table" then
+                for tsmStr in pairs(itemsDB) do
+                    local id = type(tsmStr) == "string" and tonumber(tsmStr:match("^i:(%d+)"))
+                    if id then seen[id] = true end
+                end
+            end
+        end
+    end
+
     return seen
 end
 
 -- Called by DoPreview after a preview completes; decides whether to
 -- show the Warm Cache button.
 UpdateWarmCacheButtonVisibility = function(diag)
-    if not diag or not diag.unresolved or diag.unresolved == 0 then
+    local unresolvedN = (diag and diag.unresolved) or 0
+    local namelessN   = (diag and diag.nameless) or 0
+    local missing     = unresolvedN + namelessN
+    if missing == 0 then
         warmCacheBtn:Hide()
         return
     end
-    -- Warming only makes sense when we have SOMETHING to warm from.
-    -- TSMRealms is the usual source but Auctionator's DB is an acceptable
-    -- fallback, so check either is available before offering the button.
-    local hasSource = (ns.TSMRealms and ns.TSMRealms.IsLoaded and ns.TSMRealms:IsLoaded())
-        or (type(_G.AUCTIONATOR_PRICE_DATABASE) == "table")
-    if not hasSource then
-        warmCacheBtn:Hide()
-        return
+    -- For unresolved items we need a realm data source to discover IDs;
+    -- nameless items already have IDs so they can always be warmed.
+    if unresolvedN > 0 then
+        local hasSource = (ns.TSMRealms and ns.TSMRealms.IsLoaded and ns.TSMRealms:IsLoaded())
+            or (type(_G.AUCTIONATOR_PRICE_DATABASE) == "table")
+        if not hasSource and namelessN == 0 then
+            warmCacheBtn:Hide()
+            return
+        end
     end
-    warmCacheBtn.text:SetText("Warm Cache (" .. diag.unresolved .. " missing)")
+    warmCacheBtn.text:SetText("Deep Search (" .. missing .. " missing)")
     warmCacheBtn:SetWidth(math.max(140, warmCacheBtn.text:GetStringWidth() + 24))
     warmCacheBtn:Show()
     RepositionLayout()
@@ -1697,18 +1744,27 @@ StartWarmCache = function()
     -- These are the names we're trying to resolve via cache warming.
     local wanted = {}
     local wantedCount = 0
+    local namelessIDs = {}   -- IDs of items that have a numeric ID but placeholder name
+    local namelessCount = 0
     for _, item in ipairs(currentItems) do
         if not item.isBattlePet then
             local numID = tonumber(item.itemID)
             if (not numID or numID <= 0) and item.name and item.name ~= "" then
                 wanted[item.name:lower()] = true
                 wantedCount = wantedCount + 1
+            elseif numID and numID > 0 then
+                local iname = item.name or ""
+                if iname == "Unknown" or iname:match("^Item %d+$") then
+                    namelessIDs[numID] = true
+                    namelessCount = namelessCount + 1
+                end
             end
         end
     end
 
-    if wantedCount == 0 then
-        previewStatus:SetText(ns.COLORS.GRAY .. "Nothing to warm.|r")
+    local totalMissing = wantedCount + namelessCount
+    if totalMissing == 0 then
+        previewStatus:SetText(ns.COLORS.GRAY .. "Nothing to search for.|r")
         warmCacheBtn:Hide()
         return
     end
@@ -1717,13 +1773,19 @@ StartWarmCache = function()
     -- data + Auctionator DB). Flatten the set to an ordered array so we
     -- can batch through it deterministically.
     local idSet = CollectWarmingPool()
+
+    -- Also include nameless items directly — we already know their IDs,
+    -- we just need RequestLoadItemDataByID to populate their names.
+    for id in pairs(namelessIDs) do
+        idSet[id] = true
+    end
     local ids = {}
     for id in pairs(idSet) do ids[#ids + 1] = id end
     table.sort(ids)
     local totalIDs = #ids
 
     if totalIDs == 0 then
-        previewStatus:SetText(ns.COLORS.RED .. "No warming data available (TSM realm data + Auctionator DB both empty).|r")
+        previewStatus:SetText(ns.COLORS.RED .. "No search data available (TSM realm data + Auctionator DB both empty).|r")
         return
     end
 
@@ -1740,7 +1802,8 @@ StartWarmCache = function()
         idx = 1,
         totalIDs = totalIDs,
         wanted = wanted,
-        wantedCount = wantedCount,
+        namelessIDs = namelessIDs,
+        wantedCount = totalMissing,
         resolved = 0,
         generation = previewGeneration,
     }
@@ -1750,15 +1813,40 @@ StartWarmCache = function()
         if not warmState or not success then return end
         local name, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _ = C_Item.GetItemInfo(itemID)
         if not name then return end
+        local foundNew = false
         local lname = name:lower()
         if warmState.wanted[lname] then
             AddWarmedEntry(lname, itemID)
             warmState.wanted[lname] = nil
             warmState.resolved = warmState.resolved + 1
+            foundNew = true
+        end
+        -- Also update nameless items — items that had numeric IDs but
+        -- placeholder names ("Item NNNN" / "Unknown"). The server just
+        -- told us the real name, so fold it back into currentItems.
+        if warmState.namelessIDs[itemID] then
+            local itemName, _, quality, _, _, _, _, _, _, tex = C_Item.GetItemInfo(itemID)
+            if itemName and itemName ~= "" then
+                for _, item in ipairs(currentItems) do
+                    if tonumber(item.itemID) == itemID then
+                        local iname = item.name or ""
+                        if iname == "Unknown" or iname:match("^Item %d+$") then
+                            item.name = itemName
+                            if quality then item.quality = quality end
+                            if tex then item.icon = tex end
+                            foundNew = true
+                        end
+                    end
+                end
+                warmState.namelessIDs[itemID] = nil
+                warmState.resolved = warmState.resolved + 1
+            end
+        end
+        if foundNew then
             -- Update progress text
             if transformPage:IsShown() then
                 previewStatus:SetText(string.format(
-                    "%sWarming: %d/%d sent, %s%d|r%s resolved of %s%d|r missing",
+                    "%sSearching: %d/%d sent, %s%d|r%s resolved of %s%d|r missing",
                     ns.COLORS.YELLOW, warmState.idx - 1, warmState.totalIDs,
                     ns.COLORS.GREEN, warmState.resolved, ns.COLORS.YELLOW,
                     ns.COLORS.RED, warmState.wantedCount
@@ -1789,7 +1877,7 @@ StartWarmCache = function()
 
         if transformPage:IsShown() and previewStatus then
             previewStatus:SetText(string.format(
-                "%sWarming cache: %d/%d sent, %s%d|r%s/%s%d|r resolved",
+                "%sSearching: %d/%d sent, %s%d|r%s/%s%d|r resolved",
                 ns.COLORS.YELLOW, warmState.idx - 1, warmState.totalIDs,
                 ns.COLORS.GREEN, warmState.resolved, ns.COLORS.YELLOW,
                 ns.COLORS.RED, warmState.wantedCount
@@ -1807,13 +1895,37 @@ StartWarmCache = function()
     end
 
     warmCacheBtn:Hide()
-    previewStatus:SetText(ns.COLORS.YELLOW .. "Warming cache: 0/" .. totalIDs .. " sent...|r")
+    previewStatus:SetText(ns.COLORS.YELLOW .. "Searching: 0/" .. totalIDs .. " sent...|r")
     tick()
 end
 
 CompleteWarmCache = function()
     if not warmState then return end
     local resolved = warmState.resolved
+
+    -- Retry pass: some items may have loaded silently without firing
+    -- GET_ITEM_INFO_RECEIVED, or the event arrived before GetItemInfo
+    -- was ready. One final sweep catches these stragglers.
+    local retryResolved = 0
+    for _, item in ipairs(currentItems) do
+        if not item.isBattlePet then
+            local numID = tonumber(item.itemID)
+            if numID and numID > 0 then
+                local iname = item.name or ""
+                if iname == "Unknown" or iname:match("^Item %d+$") then
+                    local itemName, _, quality, _, _, _, _, _, _, tex = C_Item.GetItemInfo(numID)
+                    if itemName and itemName ~= "" then
+                        item.name = itemName
+                        if quality then item.quality = quality end
+                        if tex then item.icon = tex end
+                        retryResolved = retryResolved + 1
+                    end
+                end
+            end
+        end
+    end
+    resolved = resolved + retryResolved
+
     CancelWarm()
     -- Re-run the preview so items with freshly-cached names flow through
     -- ProcessItems again and pick up their itemIDs from the updated map
@@ -1824,8 +1936,30 @@ CompleteWarmCache = function()
     local data = BuildPreviewData(currentItems)
     UI.transformPreviewTable:SetData(data)
     previewStatus:SetText(BuildStatusText(currentItems, diag)
-        .. "  " .. ns.COLORS.GREEN .. "(+" .. resolved .. " warmed)|r")
+        .. "  " .. ns.COLORS.GREEN .. "(+" .. resolved .. " found)|r")
     UpdateWarmCacheButtonVisibility(diag)
+
+    -- Dump remaining unresolved/nameless items to debug so the user can
+    -- identify what the client truly can't resolve.
+    if ns.PrintDebug then
+        local remaining = {}
+        for _, item in ipairs(currentItems) do
+            if not item.isBattlePet then
+                local numID = tonumber(item.itemID)
+                if not numID or numID <= 0 then
+                    table.insert(remaining, "  [no ID] " .. (item.name or "?"))
+                elseif (item.name or "") == "Unknown" or (item.name or ""):match("^Item %d+$") then
+                    table.insert(remaining, "  [nameless] id=" .. tostring(numID) .. " name=" .. (item.name or "?"))
+                end
+            end
+        end
+        if #remaining > 0 then
+            ns:PrintDebug("[deep-search] " .. #remaining .. " items still unresolved after search:")
+            for _, line in ipairs(remaining) do
+                ns:PrintDebug(line)
+            end
+        end
+    end
 end
 
 -- ==========================================

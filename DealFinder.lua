@@ -113,7 +113,8 @@ function DealFinder:ScoreRealm(realmOpt, priorityOrder)
             score = score + (realmOpt.personalCount or 0) * weight
         elseif key == "population" then
             -- More auctions = higher population/demand (proxy)
-            score = score + (realmOpt.numAuctions or 0) * weight
+            -- nil numAuctions (regional fallback) sorts last: use -1 so unknown < 0-auction realms
+            score = score + (realmOpt.numAuctions or -1) * weight
         end
         weight = weight / 100  -- each subsequent priority has 100x less impact
     end
@@ -300,13 +301,13 @@ function DealFinder:ScanChunked(pool, onProgress, onComplete)
                             personalAvg   = personalAvg,
                             personalCount = personalCount or 0,
                             blendedPrice  = blendedPrice,
-                            numAuctions   = numAuctions or 0,
+                            numAuctions   = numAuctions,  -- nil = unknown (regional fallback)
                             profit        = profit,
                             profitPct     = profitPct,
                             realProfit    = realProfit,
                             realProfitPct = realProfitPct,
                             isOutlier     = isOutlier,
-                            noCompetition = (not numAuctions or numAuctions == 0),
+                            noCompetition = (numAuctions ~= nil and numAuctions == 0),
                             hasPreviousSales = (personalCount or 0) > 0,
                             dataQuality   = dataQuality or "perRealm",
                             score         = 0,  -- set by ApplyPriority
