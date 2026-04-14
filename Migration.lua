@@ -226,6 +226,20 @@ local function RunMigrations(db)
 
         db.schemaVersion = 5
     end  -- migration 5
+
+    -- Migration 6: Dual transport (bnet / whisper). Tag all existing partners as bnet transport.
+    -- Same-BNet-account multiboxing now supported via whisper transport as a fallback when
+    -- BNet friend lookup fails (you cannot BNet-friend your own account).
+    if db.schemaVersion < 6 then
+        db.sync = db.sync or {}
+        db.sync.partners = db.sync.partners or {}
+        for _, partner in pairs(db.sync.partners) do
+            if not partner.transport then
+                partner.transport = "bnet"
+            end
+        end
+        db.schemaVersion = 6
+    end  -- migration 6
 end  -- RunMigrations
 
 -- Expose for DB.lua

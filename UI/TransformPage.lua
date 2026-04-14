@@ -13,8 +13,8 @@ local sourceMode = "todo"        -- "tsm", "todo", "paste", "inventory", "auctio
 local sourceValue = ""           -- group path, source name, charKey, list name
 local inventoryFilter = "all"    -- "all", "bags", "bank", "warbank"
 local outputFormat = "aaa"       -- "aaa", "csv", "tsmgroup", "auctionator", "pbs"
-local priceSource = "DBMarket"
-local priceDiscount = 90
+local priceSource = "45% DBRegionMarketAvg"
+local priceDiscount = 100
 local priceMode = "tsm"          -- "tsm" (TSM × discount) or "imported" (PBS maxPrice / expectedPrice raw)
 local currentItems = {}
 local outputListName = "FlipQueue Export"
@@ -403,18 +403,121 @@ priceSrcLabel:SetPoint("LEFT", priceDiscountBox, "RIGHT", 12, 0)
 priceSrcLabel:SetText("Price source:")
 priceSrcLabel:SetTextColor(0.6, 0.6, 0.6)
 
-local priceSrcBox = CreateFrame("EditBox", nil, priceRow, "InputBoxTemplate")
-priceSrcBox:SetSize(120, 20)
+-- TSM price source dropdown
+local PRICE_SOURCE_OPTIONS = {
+    "DBMarket",
+    "DBMinBuyout",
+    "DBHistorical",
+    "DBRegionMarketAvg",
+    "DBRegionSaleAvg",
+    "45% DBRegionMarketAvg",
+    "70% DBRegionMarketAvg",
+    "80% DBMarket",
+}
+
+local priceSrcBox = CreateFrame("Button", nil, priceRow, "BackdropTemplate")
+priceSrcBox:SetSize(180, 20)
 priceSrcBox:SetPoint("LEFT", priceSrcLabel, "RIGHT", 4, 0)
-priceSrcBox:SetAutoFocus(false)
-priceSrcBox:SetMaxLetters(100)
-priceSrcBox:SetText(priceSource)
-priceSrcBox:SetScript("OnEscapePressed", function(self) self:ClearFocus() end)
-priceSrcBox:SetScript("OnEnterPressed", function(self)
-    self:ClearFocus()
-    priceSource = self:GetText()
-    if ns.db and ns.db.settings then ns.db.settings.transformPriceSource = priceSource end
+priceSrcBox:SetBackdrop({
+    bgFile = "Interface\\Tooltips\\UI-Tooltip-Background",
+    edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
+    edgeSize = 10,
+    insets = {left = 2, right = 2, top = 2, bottom = 2},
+})
+priceSrcBox:SetBackdropColor(0.1, 0.1, 0.15, 1)
+priceSrcBox:SetBackdropBorderColor(0.3, 0.3, 0.4, 0.8)
+priceSrcBox.text = priceSrcBox:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+priceSrcBox.text:SetPoint("LEFT", 6, 0)
+priceSrcBox.text:SetPoint("RIGHT", -14, 0)
+priceSrcBox.text:SetJustifyH("LEFT")
+priceSrcBox.text:SetText(priceSource)
+local priceSrcArrow = priceSrcBox:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+priceSrcArrow:SetPoint("RIGHT", -3, 0)
+priceSrcArrow:SetText("v")
+priceSrcArrow:SetTextColor(0.5, 0.5, 0.6)
+
+-- Dropdown menu frame
+local priceSrcMenu = CreateFrame("Frame", nil, priceSrcBox, "BackdropTemplate")
+priceSrcMenu:SetBackdrop({
+    bgFile = "Interface\\Tooltips\\UI-Tooltip-Background",
+    edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
+    edgeSize = 10,
+    insets = {left = 2, right = 2, top = 2, bottom = 2},
+})
+priceSrcMenu:SetBackdropColor(0.06, 0.06, 0.1, 0.95)
+priceSrcMenu:SetBackdropBorderColor(0.3, 0.3, 0.4, 0.8)
+priceSrcMenu:SetPoint("TOPLEFT", priceSrcBox, "BOTTOMLEFT", 0, -2)
+priceSrcMenu:SetFrameStrata("DIALOG")
+priceSrcMenu:Hide()
+
+local function SetPriceSource(val)
+    priceSource = val
+    priceSrcBox.text:SetText(val)
+    if ns.db and ns.db.settings then ns.db.settings.transformPriceSource = val end
+    priceSrcMenu:Hide()
+end
+
+local function BuildPriceSourceMenu()
+    -- Collect options; include current value if not in the standard list
+    local options = {}
+    local seen = {}
+    for _, opt in ipairs(PRICE_SOURCE_OPTIONS) do
+        options[#options + 1] = opt
+        seen[opt] = true
+    end
+    if not seen[priceSource] and priceSource ~= "" then
+        table.insert(options, 1, priceSource)
+    end
+
+    local ROW_HEIGHT = 18
+    local menuRows = priceSrcMenu.rows or {}
+    for _, r in ipairs(menuRows) do r:Hide() end
+
+    for i, opt in ipairs(options) do
+        local row = menuRows[i]
+        if not row then
+            row = CreateFrame("Button", nil, priceSrcMenu)
+            row:SetHeight(ROW_HEIGHT)
+            row.text = row:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+            row.text:SetPoint("LEFT", 6, 0)
+            row.text:SetJustifyH("LEFT")
+            row:SetHighlightTexture("Interface\\QuestFrame\\UI-QuestTitleHighlight", "ADD")
+            menuRows[i] = row
+        end
+        row:SetPoint("TOPLEFT", priceSrcMenu, "TOPLEFT", 2, -(i - 1) * ROW_HEIGHT - 2)
+        row:SetPoint("RIGHT", priceSrcMenu, "RIGHT", -2, 0)
+        row.text:SetText(opt)
+        if opt == priceSource then
+            row.text:SetTextColor(0.3, 1, 0.3)
+        else
+            row.text:SetTextColor(0.8, 0.8, 0.8)
+        end
+        row:SetScript("OnClick", function() SetPriceSource(opt) end)
+        row:Show()
+    end
+    priceSrcMenu.rows = menuRows
+    priceSrcMenu:SetSize(priceSrcBox:GetWidth(), #options * ROW_HEIGHT + 4)
+end
+
+priceSrcBox:SetScript("OnClick", function()
+    if priceSrcMenu:IsShown() then
+        priceSrcMenu:Hide()
+    else
+        BuildPriceSourceMenu()
+        priceSrcMenu:Show()
+    end
 end)
+priceSrcBox:SetScript("OnEnter", function(self)
+    self:SetBackdropColor(0.15, 0.15, 0.2, 1)
+end)
+priceSrcBox:SetScript("OnLeave", function(self)
+    self:SetBackdropColor(0.1, 0.1, 0.15, 1)
+end)
+-- Close when clicking elsewhere
+priceSrcMenu:SetScript("OnShow", function(self)
+    self:SetPropagateKeyboardInput(true)
+end)
+priceSrcBox:SetScript("OnHide", function() priceSrcMenu:Hide() end)
 
 -- Price mode toggle: TSM discount (default, uses the discount% and price
 -- source above) vs Imported (uses PBS maxPrice / expectedPrice directly,
@@ -2110,7 +2213,7 @@ function UI:RefreshTransformPage()
         priceSource = ns.db.settings.transformPriceSource or priceSource
         priceDiscount = ns.db.settings.transformDiscount or priceDiscount
         priceMode = ns.db.settings.transformPriceMode or priceMode
-        priceSrcBox:SetText(priceSource)
+        priceSrcBox.text:SetText(priceSource)
         priceDiscountBox:SetText(tostring(priceDiscount))
     end
 

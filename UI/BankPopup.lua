@@ -39,7 +39,9 @@ local function GetPopup()
     f:SetBackdropColor(0.08, 0.08, 0.12, 0.95)
     f:SetBackdropBorderColor(0.3, 0.3, 0.4, 1)
 
-    -- Position: attach to mini frame based on user setting, or standalone
+    -- Position: attach to mini frame based on user setting, or standalone.
+    -- When anchor mode is "below" (default) and the services drawer is visible,
+    -- we anchor under the drawer instead of the mini so the popup doesn't overlap.
     local function AttachToMini()
         f:ClearAllPoints()
         local mini = _G["FlipQueueMiniFrame"]
@@ -52,7 +54,15 @@ local function GetPopup()
             elseif anchor == "right" then
                 f:SetPoint("TOPLEFT", mini, "TOPRIGHT", 4, 0)
             else
-                f:SetPoint("TOPRIGHT", mini, "BOTTOMRIGHT", 0, -4)
+                -- Anchor below the mini. If the services drawer popout is visible,
+                -- shift down by its height + a little padding so the popup stays
+                -- right-aligned to the mini and doesn't cover the drawer.
+                local drawer = _G["FlipQueueServiceDrawer"]
+                local extraOffset = 0
+                if drawer and drawer:IsShown() and drawer:GetHeight() > 1 then
+                    extraOffset = drawer:GetHeight() + 6
+                end
+                f:SetPoint("TOPRIGHT", mini, "BOTTOMRIGHT", 0, -4 - extraOffset)
             end
         else
             f:SetPoint("TOP", UIParent, "TOP", 0, -100)

@@ -33,7 +33,7 @@ local RECOMMENDED_TSM = {
     tsmShowColumns      = true,
     tsmAutoUpdatePrice  = true,
     tsmMinPriceSource   = "70% DBRegionMarketAvg",
-    tsmPriceSource      = "DBMinBuyout",
+    tsmPriceSource      = "70% DBRegionMarketAvg",
     tsmSkipOnGenerate   = true,
     tsmAutoSkipRejected = true,
     dfPriceSource       = "deal",
@@ -1211,4 +1211,342 @@ end
 
 function UI:IsSetupWizardShown()
     return wizardFrame and wizardFrame:IsShown()
+end
+
+--============================================================================
+-- Link Account Wizard
+--
+-- A self-contained 3-page modal for linking a sync partner. Separate from the
+-- main Setup Wizard to avoid state entanglement.
+--
+--   Page 1: Mode selection (BattleNet friend / Same BNet account)
+--   Page 2: Character name + mode-specific constraints
+--   Page 3: "Link request sent, waiting..." with auto-dismiss on success
+--============================================================================
+
+local linkWizardFrame = nil
+local linkWizardStep = 1
+local linkWizardMode = nil      -- "bnet" or "whisper"
+local linkWizardTarget = nil    -- character name entered by user
+local linkWizardPartnerUUIDsBefore = nil  -- snapshot for auto-dismiss detection
+local linkWizardPollTicker = nil
+
+local LW_CARD_WIDTH = 540
+local LW_CARD_PAD = 20
+local LW_BTN_HEIGHT = 26
+
+local function LW_ClearSettings(card)
+    if not card.settingsArea then return end
+    for _, child in ipairs({ card.settingsArea:GetChildren() }) do
+        child:Hide()
+        child:SetParent(nil)
+        child:ClearAllPoints()
+    end
+    for _, region in ipairs({ card.settingsArea:GetRegions() }) do
+        if region.GetObjectType and region:GetObjectType() == "FontString" then
+            region:Hide()
+            region:SetParent(nil)
+            region:ClearAllPoints()
+        end
+    end
+end
+
+local function LW_EnsureFrame()
+    if linkWizardFrame then return linkWizardFrame end
+
+    local parent = UI.tableContainer or UIParent
+    local f = CreateFrame("Frame", "FlipQueueLinkWizard", parent, "BackdropTemplate")
+    f:SetAllPoints(parent)
+    f:SetFrameStrata("HIGH")
+    f:SetBackdrop({ bgFile = "Interface\\Tooltips\\UI-Tooltip-Background" })
+    f:SetBackdropColor(0.04, 0.04, 0.06, 0.92)
+    f:EnableMouse(true)  -- swallow clicks so underlying UI isn't interactive
+
+    -- Card (centered)
+    local card = CreateFrame("Frame", nil, f, "BackdropTemplate")
+    card:SetSize(LW_CARD_WIDTH, 380)
+    card:SetPoint("CENTER", f, "CENTER", 0, 0)
+    card:SetBackdrop(CARD_BACKDROP)
+    card:SetBackdropColor(0.07, 0.07, 0.10, 1)
+    card:SetBackdropBorderColor(0.4, 0.35, 0.15, 0.8)
+    f.card = card
+
+    card.title = card:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
+    card.title:SetPoint("TOP", card, "TOP", 0, -14)
+    card.title:SetTextColor(0.9, 0.82, 0.4)
+    card.title:SetWidth(LW_CARD_WIDTH - LW_CARD_PAD * 2)
+    card.title:SetJustifyH("CENTER")
+
+    card.desc = card:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+    card.desc:SetWidth(LW_CARD_WIDTH - LW_CARD_PAD * 2)
+    card.desc:SetJustifyH("LEFT")
+    card.desc:SetWordWrap(true)
+    card.desc:SetTextColor(0.72, 0.72, 0.72)
+    card.desc:SetSpacing(2)
+    card.desc:SetPoint("TOP", card.title, "BOTTOM", 0, -8)
+
+    card.settingsArea = CreateFrame("Frame", nil, card)
+    card.settingsArea:SetPoint("TOPLEFT", card, "TOPLEFT", LW_CARD_PAD, -80)
+    card.settingsArea:SetPoint("TOPRIGHT", card, "TOPRIGHT", -LW_CARD_PAD, -80)
+    card.settingsArea:SetHeight(240)
+
+    -- Navigation buttons
+    f.backBtn = MakeWizardButton(card, "Back", 90)
+    f.backBtn:SetPoint("BOTTOMLEFT", card, "BOTTOMLEFT", LW_CARD_PAD, 14)
+    f.backBtn:SetScript("OnClick", function() UI:_LinkWizardBack() end)
+
+    f.cancelBtn = MakeWizardButton(card, "Cancel", 90)
+    f.cancelBtn:SetPoint("BOTTOM", card, "BOTTOM", 0, 14)
+    f.cancelBtn:SetScript("OnClick", function() UI:HideLinkWizard() end)
+
+    f.nextBtn = MakeWizardButton(card, "Send Request", 140, true)
+    f.nextBtn:SetPoint("BOTTOMRIGHT", card, "BOTTOMRIGHT", -LW_CARD_PAD, 14)
+    f.nextBtn:SetScript("OnClick", function() UI:_LinkWizardSend() end)
+
+    f.doneBtn = MakeWizardButton(card, "Done", 90, true)
+    f.doneBtn:SetPoint("BOTTOMRIGHT", card, "BOTTOMRIGHT", -LW_CARD_PAD, 14)
+    f.doneBtn:SetScript("OnClick", function() UI:HideLinkWizard() end)
+
+    f:Hide()
+    linkWizardFrame = f
+    return f
+end
+
+local function LW_SnapshotPartners()
+    local snapshot = {}
+    if ns.Sync and ns.Sync.GetPartners then
+        for uuid in pairs(ns.Sync:GetPartners()) do
+            snapshot[uuid] = true
+        end
+    end
+    return snapshot
+end
+
+local function LW_NewPartnerAppeared()
+    if not linkWizardPartnerUUIDsBefore then return false end
+    if not (ns.Sync and ns.Sync.GetPartners) then return false end
+    for uuid in pairs(ns.Sync:GetPartners()) do
+        if not linkWizardPartnerUUIDsBefore[uuid] then
+            return true
+        end
+    end
+    return false
+end
+
+local function LW_RenderStep1(card)
+    card.title:SetText("Link Another Account")
+    card.desc:SetText("How do you want to connect? Pick the option that matches your setup.")
+
+    LW_ClearSettings(card)
+    local area = card.settingsArea
+
+    -- BNet friend card
+    local bnetBtn = CreateFrame("Button", nil, area, "BackdropTemplate")
+    bnetBtn:SetPoint("TOPLEFT", area, "TOPLEFT", 0, 0)
+    bnetBtn:SetPoint("TOPRIGHT", area, "TOPRIGHT", 0, 0)
+    bnetBtn:SetHeight(100)
+    bnetBtn:SetBackdrop(BTN_BACKDROP)
+    bnetBtn:SetBackdropColor(0.10, 0.14, 0.20, 1)
+    bnetBtn:SetBackdropBorderColor(0.3, 0.4, 0.6, 0.9)
+    bnetBtn:SetScript("OnEnter", function(self) self:SetBackdropColor(0.14, 0.18, 0.26, 1) end)
+    bnetBtn:SetScript("OnLeave", function(self) self:SetBackdropColor(0.10, 0.14, 0.20, 1) end)
+    bnetBtn:SetScript("OnClick", function()
+        linkWizardMode = "bnet"
+        linkWizardStep = 2
+        UI:_LinkWizardRender()
+    end)
+
+    local bnetTitle = bnetBtn:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
+    bnetTitle:SetPoint("TOPLEFT", bnetBtn, "TOPLEFT", 14, -10)
+    bnetTitle:SetTextColor(0.5, 0.75, 1)
+    bnetTitle:SetText("BattleNet friend")
+
+    local bnetBody = bnetBtn:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+    bnetBody:SetPoint("TOPLEFT", bnetTitle, "BOTTOMLEFT", 0, -4)
+    bnetBody:SetPoint("RIGHT", bnetBtn, "RIGHT", -14, 0)
+    bnetBody:SetJustifyH("LEFT")
+    bnetBody:SetWordWrap(true)
+    bnetBody:SetTextColor(0.75, 0.75, 0.75)
+    bnetBody:SetText("Sync with a different person's account. They must be on your BattleNet friends list and in WoW.\n|cff66cc66Works cross-realm. Survives character switches.|r")
+
+    -- Same BNet account card
+    local localBtn = CreateFrame("Button", nil, area, "BackdropTemplate")
+    localBtn:SetPoint("TOPLEFT", area, "TOPLEFT", 0, -112)
+    localBtn:SetPoint("TOPRIGHT", area, "TOPRIGHT", 0, -112)
+    localBtn:SetHeight(110)
+    localBtn:SetBackdrop(BTN_BACKDROP)
+    localBtn:SetBackdropColor(0.18, 0.14, 0.10, 1)
+    localBtn:SetBackdropBorderColor(0.6, 0.45, 0.25, 0.9)
+    localBtn:SetScript("OnEnter", function(self) self:SetBackdropColor(0.22, 0.18, 0.14, 1) end)
+    localBtn:SetScript("OnLeave", function(self) self:SetBackdropColor(0.18, 0.14, 0.10, 1) end)
+    localBtn:SetScript("OnClick", function()
+        linkWizardMode = "whisper"
+        linkWizardStep = 2
+        UI:_LinkWizardRender()
+    end)
+
+    local localTitle = localBtn:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
+    localTitle:SetPoint("TOPLEFT", localBtn, "TOPLEFT", 14, -10)
+    localTitle:SetTextColor(1, 0.8, 0.5)
+    localTitle:SetText("Same BNet account")
+
+    local localBody = localBtn:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+    localBody:SetPoint("TOPLEFT", localTitle, "BOTTOMLEFT", 0, -4)
+    localBody:SetPoint("RIGHT", localBtn, "RIGHT", -14, 0)
+    localBody:SetJustifyH("LEFT")
+    localBody:SetWordWrap(true)
+    localBody:SetTextColor(0.75, 0.75, 0.75)
+    localBody:SetText("Sync your own second WoW license (e.g. WoW1/WoW2). BattleNet won't let you friend yourself.\n|cffffcc66Must be same realm. Both characters must be online at the same time. Pair specific characters — no character switching.|r")
+
+    -- Hide nav buttons on page 1 (card clicks advance)
+    linkWizardFrame.backBtn:Hide()
+    linkWizardFrame.nextBtn:Hide()
+    linkWizardFrame.doneBtn:Hide()
+    linkWizardFrame.cancelBtn:Show()
+end
+
+local function LW_RenderStep2(card)
+    if linkWizardMode == "bnet" then
+        card.title:SetText("Link a BattleNet friend")
+        card.desc:SetText("Enter the character name of a BattleNet friend who's currently online in WoW. You can use Name or Name-Realm.")
+    else
+        card.title:SetText("Link a same-account character")
+        card.desc:SetText("Enter the character name of your other WoW license. They must be on |cffffcc66this realm|r (" .. GetNormalizedRealmName() .. ") and logged in right now.")
+    end
+
+    LW_ClearSettings(card)
+    local area = card.settingsArea
+
+    -- Input label
+    local lbl = area:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    lbl:SetPoint("TOPLEFT", area, "TOPLEFT", 0, 0)
+    lbl:SetText("Character name (Name or Name-Realm):")
+
+    -- EditBox
+    local eb = CreateFrame("EditBox", nil, area, "InputBoxTemplate")
+    eb:SetSize(260, 22)
+    eb:SetPoint("TOPLEFT", lbl, "BOTTOMLEFT", 4, -6)
+    eb:SetAutoFocus(true)
+    eb:SetMaxLetters(0)
+    eb:SetText(linkWizardTarget or "")
+    eb:SetScript("OnEscapePressed", function(self) self:ClearFocus() end)
+    eb:SetScript("OnEnterPressed", function(self)
+        linkWizardTarget = self:GetText():match("^%s*(.-)%s*$")
+        UI:_LinkWizardSend()
+    end)
+    eb:SetScript("OnTextChanged", function(self)
+        linkWizardTarget = self:GetText():match("^%s*(.-)%s*$")
+    end)
+    area.editBox = eb
+
+    -- Mode-specific constraint callout
+    local callout = area:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+    callout:SetPoint("TOPLEFT", eb, "BOTTOMLEFT", -4, -16)
+    callout:SetPoint("RIGHT", area, "RIGHT", 0, 0)
+    callout:SetJustifyH("LEFT")
+    callout:SetWordWrap(true)
+    callout:SetSpacing(2)
+    if linkWizardMode == "bnet" then
+        callout:SetTextColor(0.7, 0.9, 0.7)
+        callout:SetText("• They must already be your BattleNet friend.\n• Both of you need to be logged into WoW.\n• Once linked, the connection survives character switches and works cross-realm.")
+    else
+        callout:SetTextColor(0.95, 0.85, 0.5)
+        callout:SetText("• Both characters must be on |cffffffff" .. GetNormalizedRealmName() .. "|r (or a connected realm).\n• Both must be online at the same time for updates to flow.\n• If either logs out, updates queue until you're both online again.\n• This pair is tied to specific characters — changing characters on either side breaks the link.")
+    end
+
+    linkWizardFrame.backBtn:Show()
+    linkWizardFrame.nextBtn:Show()
+    linkWizardFrame.doneBtn:Hide()
+    linkWizardFrame.cancelBtn:Show()
+end
+
+local function LW_RenderStep3(card)
+    card.title:SetText("Link request sent")
+
+    local modeLabel = (linkWizardMode == "whisper") and "same-account" or "BNet friend"
+    card.desc:SetText("A " .. modeLabel .. " link request was sent to |cffffffff" .. (linkWizardTarget or "?") .. "|r.\n\nOpen FlipQueue on the other character and click |cff66cc66Accept|r in Settings > Multi-Account. This wizard will close automatically when the link is established.")
+
+    LW_ClearSettings(card)
+    local area = card.settingsArea
+
+    local status = area:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+    status:SetPoint("TOPLEFT", area, "TOPLEFT", 0, -10)
+    status:SetPoint("RIGHT", area, "RIGHT", 0, 0)
+    status:SetJustifyH("LEFT")
+    status:SetWordWrap(true)
+    status:SetTextColor(0.8, 0.8, 0.8)
+    status:SetText("|cffaaaaaaWaiting for the other side to accept...|r")
+    area.statusText = status
+
+    linkWizardFrame.backBtn:Hide()
+    linkWizardFrame.nextBtn:Hide()
+    linkWizardFrame.doneBtn:Show()
+    linkWizardFrame.cancelBtn:Hide()
+end
+
+function UI:_LinkWizardRender()
+    local f = LW_EnsureFrame()
+    if linkWizardStep == 1 then
+        LW_RenderStep1(f.card)
+    elseif linkWizardStep == 2 then
+        LW_RenderStep2(f.card)
+    elseif linkWizardStep == 3 then
+        LW_RenderStep3(f.card)
+    end
+    f:Show()
+end
+
+function UI:_LinkWizardBack()
+    if linkWizardStep > 1 then
+        linkWizardStep = linkWizardStep - 1
+        UI:_LinkWizardRender()
+    end
+end
+
+function UI:_LinkWizardSend()
+    if not linkWizardTarget or linkWizardTarget == "" then
+        if linkWizardFrame and linkWizardFrame.card and linkWizardFrame.card.settingsArea and linkWizardFrame.card.settingsArea.editBox then
+            linkWizardFrame.card.settingsArea.editBox:SetFocus()
+        end
+        return
+    end
+    if not ns.Sync then return end
+
+    linkWizardPartnerUUIDsBefore = LW_SnapshotPartners()
+    ns.Sync:RequestPair(linkWizardTarget, linkWizardMode)
+
+    linkWizardStep = 3
+    UI:_LinkWizardRender()
+
+    -- Poll for successful link and auto-dismiss
+    if linkWizardPollTicker then linkWizardPollTicker:Cancel() end
+    linkWizardPollTicker = C_Timer.NewTicker(1, function()
+        if not linkWizardFrame or not linkWizardFrame:IsShown() then
+            if linkWizardPollTicker then linkWizardPollTicker:Cancel(); linkWizardPollTicker = nil end
+            return
+        end
+        if LW_NewPartnerAppeared() then
+            if linkWizardFrame.card and linkWizardFrame.card.settingsArea and linkWizardFrame.card.settingsArea.statusText then
+                linkWizardFrame.card.settingsArea.statusText:SetText("|cff66cc66Link established! You can close this window.|r")
+            end
+            if linkWizardPollTicker then linkWizardPollTicker:Cancel(); linkWizardPollTicker = nil end
+        end
+    end)
+end
+
+function UI:ShowLinkWizard()
+    linkWizardStep = 1
+    linkWizardMode = nil
+    linkWizardTarget = nil
+    linkWizardPartnerUUIDsBefore = nil
+    UI:_LinkWizardRender()
+end
+
+function UI:HideLinkWizard()
+    if linkWizardPollTicker then linkWizardPollTicker:Cancel(); linkWizardPollTicker = nil end
+    if linkWizardFrame then linkWizardFrame:Hide() end
+end
+
+function UI:IsLinkWizardShown()
+    return linkWizardFrame and linkWizardFrame:IsShown()
 end

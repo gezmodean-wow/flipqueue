@@ -62,8 +62,11 @@ local titleText = header:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
 titleText:SetPoint("LEFT", titleIcon, "RIGHT", 3, 0)
 titleText:SetText(ns.COLORS.YELLOW .. "FQ" .. ns.COLORS.RESET)
 
+-- Legacy syncDot retained as a hidden fontstring so mailIcon anchor below still works.
+-- Actual sync status now lives in the per-partner strip below the header.
 local syncDot = header:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
 syncDot:SetPoint("LEFT", titleText, "RIGHT", 4, 0)
+syncDot:SetText("")
 syncDot:Hide()
 
 -- Icon buttons (right side of header)
@@ -129,6 +132,12 @@ local collapseBtn = CreateIconButton(header, "Interface\\Buttons\\UI-MinusButton
 end)
 collapseBtn:SetPoint("RIGHT", importBtn, "LEFT", -ICON_SPACING, 0)
 
+-- Services drawer toggle button
+local servicesBtn = CreateIconButton(header, "Interface\\Icons\\INV_Misc_Gear_02", "Toggle services drawer", function()
+    if UI.ToggleServiceDrawer then UI:ToggleServiceDrawer() end
+end)
+servicesBtn:SetPoint("RIGHT", collapseBtn, "LEFT", -ICON_SPACING, 0)
+
 -- Unread mail indicator (left side, next to title). Hidden when no mail.
 local mailIcon = CreateFrame("Frame", nil, header)
 mailIcon:SetSize(ICON_SIZE, ICON_SIZE)
@@ -180,12 +189,228 @@ resizeGrip:SetScript("OnMouseUp", function()
 end)
 
 --------------------------
+-- Partner strip (per-linked-account status, force-sync)
+-- Sits at the BOTTOM of the mini overlay, below the task area.
+-- Each row has a colored backdrop based on transport:
+--   blue  = BNet friend link
+--   green = same-BNet local link
+--------------------------
+
+local PARTNER_STRIP_ROW_HEIGHT = 18
+
+local partnerStrip = CreateFrame("Frame", nil, mini)
+-- Positioned after taskArea creation below; points set once both frames exist.
+partnerStrip:SetHeight(1)
+partnerStrip:Hide()
+
+local partnerRowPool = {}
+
+local function CreatePartnerStripRow(index)
+    local row = CreateFrame("Frame", nil, partnerStrip, "BackdropTemplate")
+    row:SetHeight(PARTNER_STRIP_ROW_HEIGHT - 2)
+    row:SetPoint("TOPLEFT", partnerStrip, "TOPLEFT", 2, -(index - 1) * PARTNER_STRIP_ROW_HEIGHT)
+    row:SetPoint("RIGHT", partnerStrip, "RIGHT", -2, 0)
+    row:SetBackdrop({
+        bgFile = "Interface\\Tooltips\\UI-Tooltip-Background",
+        edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
+        edgeSize = 8,
+        insets = {left = 2, right = 2, top = 2, bottom = 2},
+    })
+
+    row.label = row:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    row.label:SetPoint("LEFT", row, "LEFT", 6, 0)
+    row.label:SetJustifyH("LEFT")
+
+    row.syncBtn = CreateFrame("Button", nil, row, "BackdropTemplate")
+    row.syncBtn:SetSize(44, 14)
+    row.syncBtn:SetPoint("RIGHT", row, "RIGHT", -4, 0)
+    row.syncBtn:SetBackdrop({
+        bgFile = "Interface\\Tooltips\\UI-Tooltip-Background",
+        edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
+        edgeSize = 6,
+        insets = {left = 1, right = 1, top = 1, bottom = 1},
+    })
+    row.syncBtn:SetBackdropColor(0.12, 0.12, 0.16, 0.9)
+    row.syncBtn:SetBackdropBorderColor(0.4, 0.4, 0.5, 0.8)
+    row.syncBtn.text = row.syncBtn:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    row.syncBtn.text:SetPoint("CENTER")
+    row.syncBtn.text:SetText("Sync")
+    row.syncBtn:SetScript("OnEnter", function(self)
+        self:SetBackdropColor(0.2, 0.2, 0.28, 0.95)
+        GameTooltip:SetOwner(self, "ANCHOR_BOTTOM")
+        GameTooltip:SetText("Force a full sync with this partner", 1, 1, 1)
+        GameTooltip:Show()
+    end)
+    row.syncBtn:SetScript("OnLeave", function(self)
+        self:SetBackdropColor(0.12, 0.12, 0.16, 0.9)
+        GameTooltip:Hide()
+    end)
+
+    row.lastSync = row:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+    row.lastSync:SetPoint("RIGHT", row.syncBtn, "LEFT", -6, 0)
+    row.lastSync:SetJustifyH("RIGHT")
+    row.lastSync:SetTextColor(0.85, 0.85, 0.85)
+
+    row:Hide()
+    return row
+end
+
+local function RefreshPartnerStrip()
+    if not (ns.Sync and ns.Sync.GetPartners) then
+        partnerStrip:Hide()
+        partnerStrip:SetHeight(1)
+        return
+    end
+
+    -- Collect and sort partners for stable row assignment
+    local list = {}
+    local whisperSelfName = nil  -- stored "my character" from a whisper partner record
+    for uuid, partner in pairs(ns.Sync:GetPartners()) do
+        list[#list + 1] = { uuid = uuid, partner = partner }
+        if partner.transport == "whisper" and partner.myCharName then
+            -- Take the first whisper partner's myCharName as the self identity.
+            -- All whisper pairs from this account should share the same myCharName
+            -- since you can only pair whisper from one character at a time.
+            whisperSelfName = whisperSelfName or partner.myCharName
+        end
+    end
+    table.sort(list, function(a, b)
+        return (a.partner.label or a.uuid) < (b.partner.label or b.uuid)
+    end)
+
+    -- If any partner is local (whisper), prepend a synthetic "self" row so the
+    -- user sees both halves of the local pair. The stored myCharName is the
+    -- character that established the pair — whisper only works from THAT exact
+    -- character, not whoever you happen to be logged in as right now.
+    if whisperSelfName then
+        -- Determine current character (Name-Realm) for match comparison
+        local myName = (UnitName and UnitName("player")) or ""
+        local myRealm = (GetNormalizedRealmName and GetNormalizedRealmName()) or ""
+        local currentCharName = (myRealm ~= "") and (myName .. "-" .. myRealm) or myName
+        local onThisChar = (currentCharName == whisperSelfName)
+
+        table.insert(list, 1, {
+            uuid = "__self__",
+            partner = {
+                label = whisperSelfName,
+                transport = "whisper",
+                lastFullSync = nil,
+            },
+            isSelf = true,
+            selfOnline = onThisChar,
+        })
+    end
+
+    if #list == 0 then
+        for _, row in ipairs(partnerRowPool) do row:Hide() end
+        partnerStrip:Hide()
+        partnerStrip:SetHeight(1)
+        return
+    end
+
+    partnerStrip:Show()
+    partnerStrip:SetHeight(#list * PARTNER_STRIP_ROW_HEIGHT + 2)
+
+    for i, entry in ipairs(list) do
+        local row = partnerRowPool[i]
+        if not row then
+            row = CreatePartnerStripRow(i)
+            partnerRowPool[i] = row
+        end
+
+        local uuid = entry.uuid
+        local partner = entry.partner
+        local isSelf = entry.isSelf == true
+        local pState
+        if isSelf then
+            pState = entry.selfOnline and "connected" or "disconnected"
+        else
+            pState = ns.Sync:GetPartnerState(uuid)
+        end
+        local isConnected = (pState == "connected" or pState == "syncing")
+        local isLocal = (partner.transport == "whisper")
+
+        -- Transport-colored backdrop
+        if isLocal then
+            -- green (same-BNet local link)
+            if isConnected then
+                row:SetBackdropColor(0.10, 0.30, 0.12, 0.85)
+                row:SetBackdropBorderColor(0.25, 0.55, 0.25, 0.9)
+            else
+                row:SetBackdropColor(0.08, 0.18, 0.10, 0.55)
+                row:SetBackdropBorderColor(0.18, 0.35, 0.18, 0.6)
+            end
+        else
+            -- blue (BNet friend link)
+            if isConnected then
+                row:SetBackdropColor(0.10, 0.20, 0.40, 0.85)
+                row:SetBackdropBorderColor(0.25, 0.45, 0.75, 0.9)
+            else
+                row:SetBackdropColor(0.08, 0.12, 0.22, 0.55)
+                row:SetBackdropBorderColor(0.18, 0.25, 0.45, 0.6)
+            end
+        end
+
+        if isSelf then
+            local tag
+            if entry.selfOnline then
+                tag = "|cffccffccYou|r"
+            else
+                tag = "|cffffcc66Not on this character|r"
+            end
+            row.label:SetText("|cffffffff" .. (partner.label or "You") .. "|r  " .. tag)
+            row.lastSync:SetText("")
+            row.syncBtn:Hide()
+        else
+            row.syncBtn:Show()
+            local stateTag = isConnected and "|cffccffccOnline|r" or "|cffaaaaaaOffline|r"
+            row.label:SetText("|cffffffff" .. (partner.label or "Account") .. "|r  " .. stateTag)
+
+            local lastSync = partner.lastFullSync or 0
+            if lastSync > 0 then
+                row.lastSync:SetText(ns:FormatRelativeTime(lastSync))
+            else
+                row.lastSync:SetText("—")
+            end
+
+            row.syncBtn:SetScript("OnClick", function()
+                if ns.Sync and ns.Sync.ForceSyncByUUID then
+                    ns.Sync:ForceSyncByUUID(uuid)
+                end
+            end)
+            if isConnected then
+                row.syncBtn:Enable()
+                row.syncBtn.text:SetTextColor(1, 1, 1)
+            else
+                row.syncBtn:Disable()
+                row.syncBtn.text:SetTextColor(0.45, 0.45, 0.45)
+            end
+        end
+
+        row:Show()
+    end
+
+    -- Hide unused rows
+    for i = #list + 1, #partnerRowPool do
+        partnerRowPool[i]:Hide()
+    end
+end
+
+--------------------------
 -- Task rows area
 --------------------------
 
 local taskArea = CreateFrame("Frame", nil, mini)
 taskArea:SetPoint("TOPLEFT", header, "BOTTOMLEFT", 0, -2)
 taskArea:SetPoint("RIGHT", mini, "RIGHT", -4, 0)
+
+-- Partner strip anchors below the task area (set here now that taskArea exists)
+partnerStrip:SetPoint("TOPLEFT", taskArea, "BOTTOMLEFT", 0, -2)
+partnerStrip:SetPoint("RIGHT", mini, "RIGHT", -4, 0)
+
+-- Services drawer is a separate floating popout managed by UI/ServiceDrawer.lua.
+-- It anchors itself to the mini's BOTTOM (centered) and toggles visibility via
+-- the header services button. It does NOT extend the mini's height.
 
 local miniRows = {}
 
@@ -245,13 +470,11 @@ function UI:RefreshMini()
         detailItemKey = nil
     end
 
-    -- Update sync status dot
-    if ns.Sync and ns.Sync.IsLinked and ns.Sync:IsLinked() then
-        syncDot:SetText(ns.Sync:IsConnected() and "|cff00ff00\226\151\143|r" or "|cffff0000\226\151\143|r")
-        syncDot:Show()
-    else
-        syncDot:Hide()
-    end
+    -- Update per-partner status strip (replaces the old single sync dot)
+    RefreshPartnerStrip()
+
+    -- Services drawer refresh (it manages its own visibility state)
+    if UI.RefreshServiceDrawer then UI:RefreshServiceDrawer() end
 
     -- Hide all rows and clean up action buttons
     for _, row in ipairs(miniRows) do
@@ -716,10 +939,13 @@ function UI:RefreshMini()
         visibleRows = MAX_MINI_ROWS
     end
 
-    -- Resize frame to fit content, clamped to screen height
+    -- Resize frame to fit content, clamped to screen height.
+    -- NB: the services drawer is a separate floating panel and does NOT extend
+    -- the mini height — it's anchored to the mini's BOTTOM as a popout.
     local contentHeight = math.max(1, visibleRows) * MINI_ROW_HEIGHT
     taskArea:SetHeight(contentHeight)
-    local frameHeight = 24 + contentHeight + 8
+    local stripH = partnerStrip:IsShown() and partnerStrip:GetHeight() or 0
+    local frameHeight = 24 + stripH + contentHeight + 8
     local maxScreenHeight = UIParent:GetHeight() * 0.8
     mini:SetHeight(math.min(frameHeight, maxScreenHeight))
     resizeGrip:SetShown(not miniCollapsed)
@@ -753,6 +979,10 @@ end
 
 function UI:HideMini()
     mini:Hide()
+    -- The services drawer is a child of mini and hides automatically, but we
+    -- explicitly hide it too so its isShown state is clean.
+    local sd = _G["FlipQueueServiceDrawer"]
+    if sd then sd:Hide() end
     if ns.db then ns.db.settings.showMini = false end
 end
 

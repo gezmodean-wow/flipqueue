@@ -59,7 +59,7 @@ local function BuildPostNowData()
 
             -- TSM price data
             if ns.TSM:IsEnabled() then
-                local priceSource = ns.db.settings.tsmPriceSource or "DBMinBuyout"
+                local priceSource = ns.db.settings.tsmPriceSource or "70% DBRegionMarketAvg"
                 local copper = ns.TSM:GetPrice(qi.itemKey, priceSource)
                 if copper then
                     row.ahPrice = ns.TSM:FormatCopper(copper)
@@ -198,7 +198,7 @@ local function BuildTodoData()
 
             -- TSM price data
             if ns.TSM:IsEnabled() and not isBuyTask then
-                local priceSource = ns.db.settings.tsmPriceSource or "DBMinBuyout"
+                local priceSource = ns.db.settings.tsmPriceSource or "70% DBRegionMarketAvg"
                 local copper = ns.TSM:GetPrice(item.itemKey, priceSource)
                 if copper then
                     row.ahPrice = ns.TSM:FormatCopper(copper)

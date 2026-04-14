@@ -394,11 +394,26 @@ SlashCmdList["FLIPQUEUE"] = function(msg)
         UI:Refresh()
 
     elseif msg:sub(1, 5) == "link " then
-        local target = msg:sub(6):match("^%s*(.-)%s*$")
-        if target ~= "" and ns.Sync then
-            ns.Sync:RequestPair(target)
+        -- Syntax:
+        --   /fq link CharName            (auto: try BNet, fall back to whisper)
+        --   /fq link bnet CharName       (explicit: BNet friend)
+        --   /fq link local CharName      (explicit: same BNet account, whisper)
+        local rest = msg:sub(6):match("^%s*(.-)%s*$") or ""
+        local firstWord, remainder = rest:match("^(%S+)%s+(.+)$")
+        local target, transportHint
+        if firstWord == "bnet" then
+            target = remainder and remainder:match("^%s*(.-)%s*$") or ""
+            transportHint = "bnet"
+        elseif firstWord == "local" or firstWord == "whisper" then
+            target = remainder and remainder:match("^%s*(.-)%s*$") or ""
+            transportHint = "whisper"
         else
-            ns:Print("Usage: /fq link CharName-Realm")
+            target = rest
+        end
+        if target ~= "" and ns.Sync then
+            ns.Sync:RequestPair(target, transportHint)
+        else
+            ns:Print("Usage: /fq link [bnet|local] CharName-Realm")
         end
 
     elseif msg == "unlink" then
@@ -439,7 +454,7 @@ SlashCmdList["FLIPQUEUE"] = function(msg)
         print("  /fq debug bankpopup [N|P D E] - Show fake bank popup with N (or P/D/E) rows for UI overflow testing")
         print("  /fq tutorial - Show the first-time tutorial")
         print("  /fq settings - Open settings panel")
-        print("  /fq link <Char-Realm> - Link to another account for sync")
+        print("  /fq link [bnet|local] <Char-Realm> - Link to another account (bnet=friend, local=same BNet)")
         print("  /fq unlink - Disconnect sync link")
         print("  /fq sync - Force full re-sync with linked account")
         print("  /fq dnt add <name> - Add item to Do Not Track")

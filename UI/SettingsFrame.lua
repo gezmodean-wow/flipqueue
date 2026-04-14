@@ -977,60 +977,28 @@ function UI:CreateSettingsPanel(parent)
 
     local ly = 0
 
-    -- Real-Time Sync
+    -- Linked Accounts section header
     local syncLabel = lower:CreateFontString(nil, "OVERLAY", "GameFontNormal")
     syncLabel:SetPoint("TOPLEFT", lower, "TOPLEFT", LEFT_MARGIN, ly)
-    syncLabel:SetTextColor(0.4, 0.95, 0.4)  -- green = recommended
-    syncLabel:SetText("Real-Time Sync (recommended)")
+    syncLabel:SetTextColor(0.4, 0.95, 0.4)
+    syncLabel:SetText("Linked Accounts")
     ly = ly - 18
 
-    -- "What this does" description
+    -- Brief description
     local syncDesc = lower:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
     syncDesc:SetPoint("TOPLEFT", lower, "TOPLEFT", LEFT_MARGIN, ly)
     syncDesc:SetPoint("RIGHT", lower, "RIGHT", RIGHT_MARGIN, 0)
     syncDesc:SetJustifyH("LEFT")
     syncDesc:SetWordWrap(true)
     syncDesc:SetTextColor(DESC_COLOR[1], DESC_COLOR[2], DESC_COLOR[3])
-    syncDesc:SetText("Link to a character on another WoW account through your BattleNet friends list. " ..
-        "Once linked, FlipQueue keeps both accounts in sync in real time — your characters, bag/bank " ..
-        "contents, and to-do tasks all show up on a single unified list, and posting an item on one " ..
-        "account immediately marks it complete on the other.")
-    ly = ly - 48
+    syncDesc:SetText("Link other WoW accounts to keep their characters, bags, bank, and to-dos in sync with this one. " ..
+        "Click |cffffd100Add Linked Account|r to start the guided setup.")
+    ly = ly - 32
 
-    -- Sync status display
-    settingsWidgets.syncStatusText = lower:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-    settingsWidgets.syncStatusText:SetPoint("TOPLEFT", lower, "TOPLEFT", LEFT_MARGIN, ly)
-    settingsWidgets.syncStatusText:SetPoint("RIGHT", lower, "RIGHT", RIGHT_MARGIN, 0)
-    settingsWidgets.syncStatusText:SetJustifyH("LEFT")
-    settingsWidgets.syncStatusText:SetWordWrap(true)
-    ly = ly - 28
-
-    -- Link panel: editbox + button
-    local linkLabel = lower:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-    linkLabel:SetPoint("TOPLEFT", lower, "TOPLEFT", LEFT_MARGIN, ly)
-    linkLabel:SetText("BNet friend's character (Name or Name-Realm):")
-    ly = ly - 16
-
-    settingsWidgets.linkCharBox = CreateFrame("EditBox", nil, lower, "InputBoxTemplate")
-    settingsWidgets.linkCharBox:SetSize(200, 20)
-    settingsWidgets.linkCharBox:SetPoint("TOPLEFT", lower, "TOPLEFT", LEFT_MARGIN + 4, ly)
-    settingsWidgets.linkCharBox:SetAutoFocus(false)
-    settingsWidgets.linkCharBox:SetMaxLetters(0)  -- unlimited: CharName-RealmName can be long (esp. German EU)
-    settingsWidgets.linkCharBox:SetText("")
-    settingsWidgets.linkCharBox:SetScript("OnEscapePressed", function(self) self:ClearFocus() end)
-    settingsWidgets.linkCharBox:SetScript("OnEnterPressed", function(self)
-        local target = self:GetText():match("^%s*(.-)%s*$")
-        if target ~= "" and ns.Sync then
-            ns.Sync:RequestPair(target)
-        end
-        self:ClearFocus()
-    end)
-    ly = ly - 24
-
-    -- Send Link Request button
+    -- Add Linked Account button (opens wizard)
     do
         local btn = CreateFrame("Button", nil, lower, "BackdropTemplate")
-        btn:SetSize(150, 24)
+        btn:SetSize(170, 26)
         btn:SetPoint("TOPLEFT", lower, "TOPLEFT", LEFT_MARGIN, ly)
         btn:SetBackdrop({
             bgFile = "Interface\\Tooltips\\UI-Tooltip-Background",
@@ -1038,24 +1006,116 @@ function UI:CreateSettingsPanel(parent)
             edgeSize = 10,
             insets = {left = 2, right = 2, top = 2, bottom = 2},
         })
-        btn:SetBackdropColor(0.15, 0.15, 0.2, 1)
-        btn:SetBackdropBorderColor(0.3, 0.3, 0.4, 0.8)
-        btn.text = btn:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+        btn:SetBackdropColor(0.10, 0.22, 0.10, 1)
+        btn:SetBackdropBorderColor(0.3, 0.5, 0.3, 0.9)
+        btn.text = btn:CreateFontString(nil, "OVERLAY", "GameFontNormal")
         btn.text:SetPoint("CENTER")
-        btn.text:SetText("Send Link Request")
-        btn:SetScript("OnEnter", function(self) self:SetBackdropColor(0.25, 0.25, 0.35, 1) end)
-        btn:SetScript("OnLeave", function(self) self:SetBackdropColor(0.15, 0.15, 0.2, 1) end)
+        btn.text:SetText("+ Add Linked Account")
+        btn.text:SetTextColor(0.3, 1, 0.3)
+        btn:SetScript("OnEnter", function(self) self:SetBackdropColor(0.14, 0.28, 0.14, 1) end)
+        btn:SetScript("OnLeave", function(self) self:SetBackdropColor(0.10, 0.22, 0.10, 1) end)
         btn:SetScript("OnClick", function()
-            local target = settingsWidgets.linkCharBox and settingsWidgets.linkCharBox:GetText():match("^%s*(.-)%s*$")
-            if target and target ~= "" and ns.Sync then
-                ns.Sync:RequestPair(target)
-            else
-                ns:Print(ns.COLORS.RED .. "Enter a character name first.|r")
-            end
+            if UI.ShowLinkWizard then UI:ShowLinkWizard() end
         end)
-        settingsWidgets.linkBtn = btn
+        settingsWidgets.addLinkedAccountBtn = btn
     end
-    ly = ly - 28 - ITEM_SPACING
+    ly = ly - 34
+
+    -- Partner rows container — fixed height, supports up to MAX_PARTNER_ROWS visible.
+    -- Rows are pooled and assigned in RefreshSettings as partners change.
+    local MAX_PARTNER_ROWS = 5
+    local PARTNER_ROW_HEIGHT = 32
+
+    local partnerListFrame = CreateFrame("Frame", nil, lower)
+    partnerListFrame:SetPoint("TOPLEFT", lower, "TOPLEFT", LEFT_MARGIN, ly)
+    partnerListFrame:SetPoint("RIGHT", lower, "RIGHT", RIGHT_MARGIN, 0)
+    partnerListFrame:SetHeight(MAX_PARTNER_ROWS * PARTNER_ROW_HEIGHT + 20)
+    settingsWidgets.partnerListFrame = partnerListFrame
+
+    -- Empty state text (shown when no partners)
+    settingsWidgets.partnerListEmpty = partnerListFrame:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+    settingsWidgets.partnerListEmpty:SetPoint("TOPLEFT", partnerListFrame, "TOPLEFT", 4, -4)
+    settingsWidgets.partnerListEmpty:SetTextColor(0.5, 0.5, 0.5)
+    settingsWidgets.partnerListEmpty:SetText("No accounts linked yet.")
+
+    -- Build the row widget pool
+    local function BuildPartnerRow(parent, rowIdx)
+        local row = CreateFrame("Frame", nil, parent, "BackdropTemplate")
+        row:SetSize(10, PARTNER_ROW_HEIGHT - 4)
+        row:SetPoint("TOPLEFT", parent, "TOPLEFT", 0, -(rowIdx - 1) * PARTNER_ROW_HEIGHT)
+        row:SetPoint("RIGHT", parent, "RIGHT", -4, 0)
+        row:SetBackdrop({
+            bgFile = "Interface\\Tooltips\\UI-Tooltip-Background",
+            edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
+            edgeSize = 8,
+            insets = {left = 2, right = 2, top = 2, bottom = 2},
+        })
+        row:SetBackdropColor(0.10, 0.10, 0.13, 0.6)
+        row:SetBackdropBorderColor(0.25, 0.25, 0.3, 0.6)
+
+        -- Status dot (left)
+        row.dot = row:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
+        row.dot:SetPoint("LEFT", row, "LEFT", 8, 0)
+        row.dot:SetText("\226\151\143")  -- ●
+
+        -- Label (name + transport tag)
+        row.label = row:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+        row.label:SetPoint("LEFT", row.dot, "RIGHT", 6, 0)
+        row.label:SetJustifyH("LEFT")
+
+        -- Status / last sync text
+        row.status = row:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+        row.status:SetPoint("LEFT", row.label, "RIGHT", 10, 0)
+        row.status:SetJustifyH("LEFT")
+        row.status:SetTextColor(0.7, 0.7, 0.7)
+
+        -- Remove button (right)
+        row.removeBtn = CreateFrame("Button", nil, row, "BackdropTemplate")
+        row.removeBtn:SetSize(70, 20)
+        row.removeBtn:SetPoint("RIGHT", row, "RIGHT", -6, 0)
+        row.removeBtn:SetBackdrop({
+            bgFile = "Interface\\Tooltips\\UI-Tooltip-Background",
+            edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
+            edgeSize = 8,
+            insets = {left = 2, right = 2, top = 2, bottom = 2},
+        })
+        row.removeBtn:SetBackdropColor(0.25, 0.1, 0.1, 1)
+        row.removeBtn:SetBackdropBorderColor(0.5, 0.2, 0.2, 0.8)
+        row.removeBtn.text = row.removeBtn:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+        row.removeBtn.text:SetPoint("CENTER")
+        row.removeBtn.text:SetText("Remove")
+        row.removeBtn:SetScript("OnEnter", function(self) self:SetBackdropColor(0.35, 0.15, 0.15, 1) end)
+        row.removeBtn:SetScript("OnLeave", function(self) self:SetBackdropColor(0.25, 0.1, 0.1, 1) end)
+
+        -- Force Sync button (right of Remove)
+        row.syncBtn = CreateFrame("Button", nil, row, "BackdropTemplate")
+        row.syncBtn:SetSize(80, 20)
+        row.syncBtn:SetPoint("RIGHT", row.removeBtn, "LEFT", -4, 0)
+        row.syncBtn:SetBackdrop({
+            bgFile = "Interface\\Tooltips\\UI-Tooltip-Background",
+            edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
+            edgeSize = 8,
+            insets = {left = 2, right = 2, top = 2, bottom = 2},
+        })
+        row.syncBtn:SetBackdropColor(0.12, 0.18, 0.28, 1)
+        row.syncBtn:SetBackdropBorderColor(0.3, 0.4, 0.6, 0.8)
+        row.syncBtn.text = row.syncBtn:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+        row.syncBtn.text:SetPoint("CENTER")
+        row.syncBtn.text:SetText("Force Sync")
+        row.syncBtn:SetScript("OnEnter", function(self) self:SetBackdropColor(0.18, 0.24, 0.36, 1) end)
+        row.syncBtn:SetScript("OnLeave", function(self) self:SetBackdropColor(0.12, 0.18, 0.28, 1) end)
+
+        return row
+    end
+
+    settingsWidgets.partnerRows = {}
+    for i = 1, MAX_PARTNER_ROWS do
+        local row = BuildPartnerRow(partnerListFrame, i)
+        row:Hide()
+        settingsWidgets.partnerRows[i] = row
+    end
+
+    ly = ly - (MAX_PARTNER_ROWS * PARTNER_ROW_HEIGHT + 28)
 
     -- Incoming pair request display
     settingsWidgets.pairRequestText = lower:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
@@ -1111,56 +1171,6 @@ function UI:CreateSettingsPanel(parent)
             UI:RefreshSettings()
         end)
         settingsWidgets.pairDenyBtn = denyBtn
-    end
-    ly = ly - 26 - ITEM_SPACING
-
-    -- Unlink + Force Re-sync buttons
-    do
-        local unlinkBtn = CreateFrame("Button", nil, lower, "BackdropTemplate")
-        unlinkBtn:SetSize(90, 22)
-        unlinkBtn:SetPoint("TOPLEFT", lower, "TOPLEFT", LEFT_MARGIN, ly)
-        unlinkBtn:SetBackdrop({
-            bgFile = "Interface\\Tooltips\\UI-Tooltip-Background",
-            edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
-            edgeSize = 10,
-            insets = {left = 2, right = 2, top = 2, bottom = 2},
-        })
-        unlinkBtn:SetBackdropColor(0.15, 0.15, 0.2, 1)
-        unlinkBtn:SetBackdropBorderColor(0.3, 0.3, 0.4, 0.8)
-        unlinkBtn.text = unlinkBtn:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-        unlinkBtn.text:SetPoint("CENTER")
-        unlinkBtn.text:SetText("Unlink")
-        unlinkBtn:SetScript("OnEnter", function(self) self:SetBackdropColor(0.25, 0.25, 0.35, 1) end)
-        unlinkBtn:SetScript("OnLeave", function(self) self:SetBackdropColor(0.15, 0.15, 0.2, 1) end)
-        unlinkBtn:SetScript("OnClick", function()
-            if ns.Sync then ns.Sync:Unlink() end
-            UI:RefreshSettings()
-        end)
-        settingsWidgets.unlinkBtn = unlinkBtn
-
-        local resyncBtn = CreateFrame("Button", nil, lower, "BackdropTemplate")
-        resyncBtn:SetSize(110, 22)
-        resyncBtn:SetPoint("LEFT", unlinkBtn, "RIGHT", 6, 0)
-        resyncBtn:SetBackdrop({
-            bgFile = "Interface\\Tooltips\\UI-Tooltip-Background",
-            edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
-            edgeSize = 10,
-            insets = {left = 2, right = 2, top = 2, bottom = 2},
-        })
-        resyncBtn:SetBackdropColor(0.15, 0.15, 0.2, 1)
-        resyncBtn:SetBackdropBorderColor(0.3, 0.3, 0.4, 0.8)
-        resyncBtn.text = resyncBtn:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-        resyncBtn.text:SetPoint("CENTER")
-        resyncBtn.text:SetText("Force Re-sync")
-        resyncBtn:SetScript("OnEnter", function(self) self:SetBackdropColor(0.25, 0.25, 0.35, 1) end)
-        resyncBtn:SetScript("OnLeave", function(self) self:SetBackdropColor(0.15, 0.15, 0.2, 1) end)
-        resyncBtn:SetScript("OnClick", function()
-            if ns.Sync and ns.Sync:IsLinked() then
-                ns.Sync:RequestFullSync()
-                ns:Print("Full sync requested.")
-            end
-        end)
-        settingsWidgets.resyncBtn = resyncBtn
     end
     ly = ly - 26 - ITEM_SPACING
 
@@ -1281,147 +1291,6 @@ function UI:CreateSettingsPanel(parent)
     -- Everything below the sync log goes into belowSync container
     local belowSync = settingsWidgets.belowSyncFrame
     local bsy = 0
-
-    -- External Accounts (manual entry — legacy fallback)
-    local extSubLabel = belowSync:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-    extSubLabel:SetPoint("TOPLEFT", belowSync, "TOPLEFT", LEFT_MARGIN, bsy)
-    extSubLabel:SetTextColor(0.7, 0.7, 0.55)  -- muted = legacy/deprecated
-    extSubLabel:SetText("External Accounts (legacy — use Real-Time Sync above)")
-    bsy = bsy - 18
-
-    local extDesc = belowSync:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
-    extDesc:SetPoint("TOPLEFT", belowSync, "TOPLEFT", LEFT_MARGIN, bsy)
-    extDesc:SetPoint("RIGHT", belowSync, "RIGHT", RIGHT_MARGIN, 0)
-    extDesc:SetJustifyH("LEFT")
-    extDesc:SetWordWrap(true)
-    extDesc:SetTextColor(DESC_COLOR[1], DESC_COLOR[2], DESC_COLOR[3])
-    extDesc:SetText("Quick manual fallback: type in the realms where your other accounts have characters. " ..
-        "FlipQueue won't actually see those characters' inventory or tasks — the realms just get excluded " ..
-        "from \"create a character here\" suggestions. " ..
-        "|cffaaaa55Real-Time Sync above does the same thing automatically and also keeps your data in " ..
-        "sync, so this option will be removed in a future update.|r")
-    bsy = bsy - 56
-
-    -- Label input
-    local lblLabel = belowSync:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-    lblLabel:SetPoint("TOPLEFT", belowSync, "TOPLEFT", LEFT_MARGIN, bsy)
-    lblLabel:SetText("Account label:")
-    bsy = bsy - 16
-
-    local lblBox = CreateFrame("EditBox", nil, belowSync, "InputBoxTemplate")
-    lblBox:SetSize(170, 20)
-    lblBox:SetPoint("TOPLEFT", belowSync, "TOPLEFT", LEFT_MARGIN + 4, bsy)
-    lblBox:SetAutoFocus(false)
-    lblBox:SetMaxLetters(30)
-    lblBox:SetText("")
-    bsy = bsy - 24
-
-    -- Realms input
-    local rlmLabel = belowSync:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-    rlmLabel:SetPoint("TOPLEFT", belowSync, "TOPLEFT", LEFT_MARGIN, bsy)
-    rlmLabel:SetText("Realms (comma-separated):")
-    bsy = bsy - 16
-
-    local rlmBox = CreateFrame("EditBox", nil, belowSync, "InputBoxTemplate")
-    rlmBox:SetSize(280, 20)
-    rlmBox:SetPoint("TOPLEFT", belowSync, "TOPLEFT", LEFT_MARGIN + 4, bsy)
-    rlmBox:SetAutoFocus(false)
-    rlmBox:SetMaxLetters(200)
-    rlmBox:SetText("")
-    bsy = bsy - 26
-
-    -- Add button
-    do
-        local row = CreateFrame("Frame", nil, belowSync)
-        row:SetPoint("TOPLEFT", belowSync, "TOPLEFT", LEFT_MARGIN, bsy)
-        row:SetPoint("RIGHT", belowSync, "RIGHT", RIGHT_MARGIN, 0)
-        row:SetHeight(28)
-
-        local btn = CreateFrame("Button", nil, row, "BackdropTemplate")
-        btn:SetSize(160, 24)
-        btn:SetPoint("TOPLEFT", row, "TOPLEFT", 0, 0)
-        btn:SetBackdrop({
-            bgFile = "Interface\\Tooltips\\UI-Tooltip-Background",
-            edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
-            edgeSize = 10,
-            insets = {left = 2, right = 2, top = 2, bottom = 2},
-        })
-        btn:SetBackdropColor(0.15, 0.15, 0.2, 1)
-        btn:SetBackdropBorderColor(0.3, 0.3, 0.4, 0.8)
-        btn.text = btn:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-        btn.text:SetPoint("CENTER")
-        btn.text:SetText("Add External Account")
-        btn:SetScript("OnEnter", function(self) self:SetBackdropColor(0.25, 0.25, 0.35, 1) end)
-        btn:SetScript("OnLeave", function(self) self:SetBackdropColor(0.15, 0.15, 0.2, 1) end)
-        btn:SetScript("OnClick", function()
-            if not ns.db then return end
-            local label = lblBox:GetText():match("^%s*(.-)%s*$")
-            local realmsStr = rlmBox:GetText():match("^%s*(.-)%s*$")
-            if label == "" or realmsStr == "" then
-                ns:Print(ns.COLORS.RED .. "Both label and realms are required.|r")
-                return
-            end
-            local realms = {}
-            for r in realmsStr:gmatch("([^,]+)") do
-                local trimmed = r:match("^%s*(.-)%s*$")
-                if trimmed ~= "" then
-                    table.insert(realms, trimmed)
-                end
-            end
-            if #realms == 0 then
-                ns:Print(ns.COLORS.RED .. "No valid realm names found.|r")
-                return
-            end
-            table.insert(ns.db.accounts.external, {label = label, realms = realms})
-            ns:Print(ns.COLORS.GREEN .. "Added external account:|r " .. label .. " (" .. #realms .. " realms)")
-            lblBox:SetText("")
-            rlmBox:SetText("")
-            UI:RefreshSettings()
-            UI:Refresh()
-        end)
-    end
-    bsy = bsy - 28 - ITEM_SPACING
-
-    -- List existing external accounts
-    settingsWidgets.extAccountList = belowSync:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-    settingsWidgets.extAccountList:SetPoint("TOPLEFT", belowSync, "TOPLEFT", LEFT_MARGIN, bsy)
-    settingsWidgets.extAccountList:SetPoint("RIGHT", belowSync, "RIGHT", RIGHT_MARGIN, 0)
-    settingsWidgets.extAccountList:SetJustifyH("LEFT")
-    settingsWidgets.extAccountList:SetWordWrap(true)
-    bsy = bsy - 20
-
-    do
-        local row = CreateFrame("Frame", nil, belowSync)
-        row:SetPoint("TOPLEFT", belowSync, "TOPLEFT", LEFT_MARGIN, bsy)
-        row:SetPoint("RIGHT", belowSync, "RIGHT", RIGHT_MARGIN, 0)
-        row:SetHeight(28)
-
-        local btn = CreateFrame("Button", nil, row, "BackdropTemplate")
-        btn:SetSize(160, 24)
-        btn:SetPoint("TOPLEFT", row, "TOPLEFT", 0, 0)
-        btn:SetBackdrop({
-            bgFile = "Interface\\Tooltips\\UI-Tooltip-Background",
-            edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
-            edgeSize = 10,
-            insets = {left = 2, right = 2, top = 2, bottom = 2},
-        })
-        btn:SetBackdropColor(0.15, 0.15, 0.2, 1)
-        btn:SetBackdropBorderColor(0.3, 0.3, 0.4, 0.8)
-        btn.text = btn:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-        btn.text:SetPoint("CENTER")
-        btn.text:SetText("Remove Last Account")
-        btn:SetScript("OnEnter", function(self) self:SetBackdropColor(0.25, 0.25, 0.35, 1) end)
-        btn:SetScript("OnLeave", function(self) self:SetBackdropColor(0.15, 0.15, 0.2, 1) end)
-        btn:SetScript("OnClick", function()
-            if ns.db and #ns.db.accounts.external > 0 then
-                local removed = table.remove(ns.db.accounts.external)
-                ns:Print("Removed external account: " .. removed.label)
-                UI:RefreshSettings()
-                UI:Refresh()
-            end
-        end)
-    end
-    bsy = bsy - 28 - SECTION_SPACING
 
     ------------------------------------------------
     -- Tutorial
@@ -1684,31 +1553,83 @@ function UI:RefreshSettings()
     end
     -- Bank tab selection moved to Characters page config panel
 
-    -- Sync status (multi-partner)
-    if settingsWidgets.syncStatusText then
-        local syncText
-        if ns.Sync and ns.Sync:IsLinked() then
-            local lines = {}
+    -- Partner list rows (per-partner management)
+    if settingsWidgets.partnerRows then
+        -- Collect partners into an ordered list so row assignment is stable
+        local partnersList = {}
+        if ns.Sync and ns.Sync.GetPartners then
             for uuid, partner in pairs(ns.Sync:GetPartners()) do
+                partnersList[#partnersList + 1] = { uuid = uuid, partner = partner }
+            end
+            table.sort(partnersList, function(a, b)
+                return (a.partner.label or a.uuid) < (b.partner.label or b.uuid)
+            end)
+        end
+
+        if settingsWidgets.partnerListEmpty then
+            settingsWidgets.partnerListEmpty:SetShown(#partnersList == 0)
+        end
+
+        for i, row in ipairs(settingsWidgets.partnerRows) do
+            local entry = partnersList[i]
+            if entry then
+                local uuid = entry.uuid
+                local partner = entry.partner
                 local pState = ns.Sync:GetPartnerState(uuid)
-                local statusColor = (pState == "connected" or pState == "syncing") and ns.COLORS.GREEN or ns.COLORS.RED
-                local statusLabel = (pState == "connected" or pState == "syncing") and "Online" or "Offline"
-                local line = ns.COLORS.CYAN .. (partner.label or "Account") .. "|r (" .. statusColor .. statusLabel .. "|r)"
-                local pending = ns.Sync:GetPendingCount(uuid)
-                if pending > 0 then
-                    line = line .. " " .. ns.COLORS.YELLOW .. pending .. " queued|r"
+                local isConnected = (pState == "connected" or pState == "syncing")
+
+                if isConnected then
+                    row.dot:SetTextColor(0.3, 1, 0.3)
+                else
+                    row.dot:SetTextColor(1, 0.3, 0.3)
                 end
+
+                local transportTag = ""
+                if partner.transport == "whisper" then
+                    transportTag = " |cff888888[local]|r"
+                else
+                    transportTag = " |cff888888[bnet]|r"
+                end
+                row.label:SetText((partner.label or "Account") .. transportTag)
+
+                local statusBits = {}
+                statusBits[#statusBits + 1] = isConnected and "|cff66cc66Online|r" or "|cffcc6666Offline|r"
                 local lastSync = partner.lastFullSync or 0
                 if lastSync > 0 then
-                    line = line .. " | Last sync: " .. ns:FormatRelativeTime(lastSync)
+                    statusBits[#statusBits + 1] = "last sync " .. ns:FormatRelativeTime(lastSync)
+                else
+                    statusBits[#statusBits + 1] = "not yet synced"
                 end
-                table.insert(lines, line)
+                local pending = ns.Sync:GetPendingCount(uuid)
+                if pending > 0 then
+                    statusBits[#statusBits + 1] = "|cffffcc66" .. pending .. " queued|r"
+                end
+                row.status:SetText(table.concat(statusBits, "  •  "))
+
+                -- Wire up per-partner button handlers (re-wire each refresh since uuid may change position)
+                row.removeBtn:SetScript("OnClick", function()
+                    if ns.Sync and ns.Sync.UnlinkByUUID then
+                        ns.Sync:UnlinkByUUID(uuid)
+                        UI:RefreshSettings()
+                    end
+                end)
+                row.syncBtn:SetScript("OnClick", function()
+                    if ns.Sync and ns.Sync.ForceSyncByUUID then
+                        ns.Sync:ForceSyncByUUID(uuid)
+                    end
+                end)
+                row.syncBtn:SetEnabled(isConnected)
+                if isConnected then
+                    row.syncBtn.text:SetTextColor(1, 1, 1)
+                else
+                    row.syncBtn.text:SetTextColor(0.5, 0.5, 0.5)
+                end
+
+                row:Show()
+            else
+                row:Hide()
             end
-            syncText = table.concat(lines, "\n")
-        else
-            syncText = ns.COLORS.GRAY .. "Not linked. Enter a BNet friend's character name to connect.|r"
         end
-        settingsWidgets.syncStatusText:SetText(syncText)
     end
 
     -- Pair request display
@@ -1725,25 +1646,6 @@ function UI:RefreshSettings()
         end
     end
 
-    -- Link controls always visible (can add more partners); unlink/resync when linked
-    if settingsWidgets.unlinkBtn then
-        settingsWidgets.unlinkBtn:SetShown(ns.Sync and ns.Sync:IsLinked())
-    end
-    if settingsWidgets.resyncBtn then
-        settingsWidgets.resyncBtn:SetShown(ns.Sync and ns.Sync:IsLinked())
-    end
-
-    if settingsWidgets.extAccountList then
-        if ns.db.accounts.external and #ns.db.accounts.external > 0 then
-            local lines = {}
-            for i, acct in ipairs(ns.db.accounts.external) do
-                table.insert(lines, i .. ". " .. acct.label .. ": " .. table.concat(acct.realms, ", "))
-            end
-            settingsWidgets.extAccountList:SetText(table.concat(lines, "\n"))
-        else
-            settingsWidgets.extAccountList:SetText("|cff888888No external accounts configured.|r")
-        end
-    end
 end
 
 function UI:RefreshSyncLog()

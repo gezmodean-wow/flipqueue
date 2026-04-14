@@ -42,6 +42,7 @@ UI\Shared.lua
 UI\ExportPopup.lua
 UI\UntrackedSection.lua
 UI\BankPopup.lua
+UI\ServiceDrawer.lua
 UI\MiniView.lua
 UI\SettingsFrame.lua
 UI\TSMFrame.lua

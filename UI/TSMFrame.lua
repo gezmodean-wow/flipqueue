@@ -362,7 +362,7 @@ function UI:CreateTSMPanel(parent)
 
     tsmWidgets.priceSource, h = CreateEditBox(content, y,
         "AH Price column shows:",
-        "TSM price source for the AH Price column. Default: DBMinBuyout",
+        "TSM price source for the AH Price column. Default: 70% DBRegionMarketAvg",
         "tsmPriceSource", 220,
         function(val) return ns.TSM:IsValidPriceSource(val) end)
     y = y - h - ITEM_SPACING
