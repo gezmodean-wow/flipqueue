@@ -2,19 +2,9 @@ package-as: flipqueue
 
 enable-nolib-creation: no
 
-externals:
-  Libs/LibStub:
-    url: https://repos.wowace.com/wow/libstub/trunk
-    tag: latest
-  Libs/CallbackHandler-1.0:
-    url: https://repos.wowace.com/wow/callbackhandler/trunk/CallbackHandler-1.0
-    tag: latest
-  Libs/LibDataBroker-1.1:
-    url: https://repos.wowace.com/wow/libdatabroker-1-1
-    tag: latest
-  Libs/LibDBIcon-1.0:
-    url: https://repos.wowace.com/wow/libdbicon-1-0/trunk/LibDBIcon-1.0
-    tag: latest
+# Libraries are vendored directly in Libs/ — no externals fetched at build time.
+# (The previous wowace SVN externals broke builds when repos.wowace.com returned
+# 502/503; vendoring removes the external dependency on a flaky SVN host.)
 
 wowi-archive-previous: no
 
