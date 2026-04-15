@@ -432,10 +432,19 @@ function Tracker:AutoWithdrawGold()
     local shortfallGold = math.ceil(shortfallCopper / 10000)
     local playerGold = math.floor(playerCopper / 10000)
 
+    -- Ensure BankFrame is on the warbank panel before calling C_Bank APIs.
+    -- Without this the call returns "permission denied" when the user's
+    -- last-active panel was the character bank — Phase 6a removed the
+    -- side-effect probe in Scanner that used to keep the panel warm.
+    if ns.BankQueue and ns.BankQueue.SetBankPanelType and Enum and Enum.BankType then
+        ns.BankQueue.SetBankPanelType(Enum.BankType.Account)
+    end
+
     -- Check permission
     local ok6, canWithdraw = pcall(C_Bank.CanWithdrawMoney, Enum.BankType.Account)
     if not ok6 or not canWithdraw then
-        ns:Print(ns.COLORS.YELLOW .. "Cannot withdraw from warbank (permission denied).|r")
+        ns:Print(ns.COLORS.YELLOW .. "Cannot withdraw from warbank|r — bank panel may not be on the warband tab. Click the warbank tab and try again.")
+        ns:PrintDebug("AutoWithdrawGold: CanWithdrawMoney returned false (ok=" .. tostring(ok6) .. ")")
         return
     end
 
@@ -504,16 +513,37 @@ function Tracker:AutoDepositGold()
     local keepCopper = math.max(10000, math.ceil(feesCopper * 1.1)) + bufferCopper
 
     local playerCopper = GetMoney()
-    if playerCopper <= keepCopper then return end
+    if playerCopper <= keepCopper then
+        ns:PrintDebug("AutoDepositGold: nothing to deposit — playerCopper="
+            .. playerCopper .. " <= keepCopper=" .. keepCopper)
+        return
+    end
 
     local excessCopper = playerCopper - keepCopper
     -- Round down to whole gold
     excessCopper = math.floor(excessCopper / 10000) * 10000
-    if excessCopper <= 0 then return end
+    if excessCopper <= 0 then
+        ns:PrintDebug("AutoDepositGold: excessCopper <= 0 after rounding")
+        return
+    end
+
+    -- Ensure BankFrame is on the warbank panel before calling C_Bank APIs.
+    -- C_Bank.CanDepositMoney(Enum.BankType.Account) returns false when the
+    -- active panel is the character bank, even though the warbank itself is
+    -- accessible. Phase 6a removed the side-effect probe in Scanner that
+    -- used to keep the panel warm, so we explicitly switch here.
+    if ns.BankQueue and ns.BankQueue.SetBankPanelType and Enum and Enum.BankType then
+        ns.BankQueue.SetBankPanelType(Enum.BankType.Account)
+    end
 
     -- Check permission
     local ok, canDeposit = pcall(C_Bank.CanDepositMoney, Enum.BankType.Account)
-    if not ok or not canDeposit then return end
+    if not ok or not canDeposit then
+        ns:Print(ns.COLORS.YELLOW .. "Cannot deposit to warbank|r — bank panel may not be on the warband tab. Click the warbank tab and try again.")
+        ns:PrintDebug("AutoDepositGold: CanDepositMoney returned false (ok="
+            .. tostring(ok) .. ", canDeposit=" .. tostring(canDeposit) .. ")")
+        return 0
+    end
 
     local ok2, err = pcall(C_Bank.DepositMoney, Enum.BankType.Account, excessCopper)
     if ok2 then

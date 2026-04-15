@@ -59,6 +59,14 @@ local function SetBankPanelType(bankType)
     end
 end
 
+-- Exported so non-BankQueue callers (e.g. Tracker:AutoDepositGold which
+-- calls C_Bank.DepositMoney directly without going through Process) can
+-- ensure the panel is on the right bank type before issuing a Blizzard
+-- API call. Without this, C_Bank.CanDepositMoney(Account) returns false
+-- when the user's last-active panel was the character bank, and the gold
+-- op silently fails with no debug print.
+BankQueue.SetBankPanelType = SetBankPanelType
+
 -- Wrapper that derives the bank type from a bag ID. For inventory bags this
 -- is a no-op (no bank panel state to set).
 local function EnsureBankType(bagID)
