@@ -50,7 +50,14 @@ local PRIORITY = {
 --------------------------
 
 local partnerStates = {}       -- [accountUUID] = "disconnected" | "connected" | "syncing"
-local sendQueue = {}           -- { {msg, gameAccountID, priority}, ... }
+-- Per-priority send buckets. Each bucket is a ring-style array with
+-- head/tail indices so enqueue and dequeue are both O(1). The previous
+-- single-sorted-array approach did a linear insert (O(N) scan + O(N)
+-- shift) on every Enqueue, which became O(N²) during a full sync and
+-- tripped WoW's "script ran too long" watchdog once the payload was
+-- chunked into a few thousand messages.
+local sendQueues = {}          -- [priority] = { head, tail, [head..tail] = entry }
+local sendQueueCount = 0       -- total pending messages across all buckets
 local reassembly = {}          -- chunk reassembly buffers
 local fullSyncBuffers = {}     -- [accountUUID] = { chunks = {}, expected = N }
 local heartbeatTicker = nil
@@ -130,8 +137,14 @@ function Sync:Init()
     end)
 end
 
--- Append an entry to the sync debug log (ring buffer).
+-- Append an entry to the sync debug log (ring buffer). Defensive
+-- against nil/empty event names so the renderer never produces
+-- invisible rows (the SettingsFrame sync log view wraps the event
+-- in color codes and an empty event disappears visually).
 function Sync:Log(event, detail)
+    if type(event) ~= "string" or event == "" then
+        event = "?"
+    end
     syncLog[#syncLog + 1] = {
         t = time(),
         event = event,
@@ -597,24 +610,48 @@ end
 -- Send Queue
 --------------------------
 
+-- Get-or-create a send bucket for the given priority. Buckets are
+-- lazy so we don't allocate empty tables we never use.
+local function GetSendBucket(priority)
+    local q = sendQueues[priority]
+    if not q then
+        q = { head = 1, tail = 0 }
+        sendQueues[priority] = q
+    end
+    return q
+end
+
 function Sync:Enqueue(msg, target, priority, transport)
     priority = priority or 5
     transport = transport or "bnet"
-    local entry = { msg = msg, target = target, priority = priority, transport = transport }
-    local pos = #sendQueue + 1
-    for i = 1, #sendQueue do
-        if sendQueue[i].priority > priority then
-            pos = i
-            break
-        end
-    end
-    table.insert(sendQueue, pos, entry)
+    local q = GetSendBucket(priority)
+    q.tail = q.tail + 1
+    q[q.tail] = { msg = msg, target = target, priority = priority, transport = transport }
+    sendQueueCount = sendQueueCount + 1
 end
 
 function Sync:DrainQueue()
-    if #sendQueue == 0 then return end
+    if sendQueueCount == 0 then return end
 
-    local entry = table.remove(sendQueue, 1)
+    -- Pop the highest-urgency entry (lowest priority number) first.
+    -- PRIORITY values are all 1..5 per the opcode table at the top
+    -- of the file, so the fixed range is safe.
+    local entry
+    for p = 1, 5 do
+        local q = sendQueues[p]
+        if q and q.head <= q.tail then
+            entry = q[q.head]
+            q[q.head] = nil
+            q.head = q.head + 1
+            -- Reset indices once the bucket drains so they can't
+            -- grow unbounded over a long session.
+            if q.head > q.tail then
+                q.head, q.tail = 1, 0
+            end
+            sendQueueCount = sendQueueCount - 1
+            break
+        end
+    end
     if not entry then return end
 
     local ok, err

@@ -209,6 +209,21 @@ function UI:ShowCopyBlip(entries, anchorFrame)
         eater:Hide()
         copyBlip._eater = eater
 
+        -- ESC dismisses the popup. The edit boxes have their own
+        -- OnEscapePressed for the focused case; this handler covers
+        -- the "nothing focused yet" window between open and first
+        -- click.
+        copyBlip:EnableKeyboard(true)
+        copyBlip:SetPropagateKeyboardInput(true)
+        copyBlip:SetScript("OnKeyDown", function(self, key)
+            if key == "ESCAPE" and self:IsShown() then
+                self:SetPropagateKeyboardInput(false)
+                self:Hide()
+            else
+                self:SetPropagateKeyboardInput(true)
+            end
+        end)
+
         -- Auto-dismiss on mouse-out using an OnUpdate poll. OnLeave is
         -- unreliable here because the popup opens below the clicked row
         -- and the user's mouse may never cross into it — OnLeave would

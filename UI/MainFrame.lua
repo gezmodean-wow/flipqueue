@@ -25,6 +25,24 @@ mainFrame:SetScript("OnDragStop", mainFrame.StopMovingOrSizing)
 mainFrame:SetFrameStrata("HIGH")
 mainFrame:SetClampedToScreen(true)
 mainFrame:SetResizable(true)
+
+-- ESC closes the main window. SetPropagateKeyboardInput(true) by
+-- default so normal keypresses (movement, ability bindings, chat)
+-- flow through to the game; only the ESCAPE key is captured while
+-- the frame is visible, and it consumes the event so Blizzard's
+-- game menu doesn't also open. The mini is deliberately excluded
+-- per user feedback — it's a persistent heads-up display, not a
+-- modal window.
+mainFrame:EnableKeyboard(true)
+mainFrame:SetPropagateKeyboardInput(true)
+mainFrame:SetScript("OnKeyDown", function(self, key)
+    if key == "ESCAPE" and self:IsShown() then
+        self:SetPropagateKeyboardInput(false)
+        self:Hide()
+    else
+        self:SetPropagateKeyboardInput(true)
+    end
+end)
 if mainFrame.SetResizeBounds then
     mainFrame:SetResizeBounds(720, 450, 1200, 900)
 else

@@ -1280,8 +1280,14 @@ function UI:CreateSettingsPanel(parent)
             local lines = {}
             for i = 1, #log do
                 local entry = log[i]
-                local ts = date("%Y-%m-%d %H:%M:%S", entry.t)
-                lines[#lines + 1] = ts .. "  " .. (entry.event or "") .. "  " .. (entry.detail or "")
+                if entry and entry.t then
+                    local ts = date("%Y-%m-%d %H:%M:%S", entry.t)
+                    local ev = entry.event
+                    if type(ev) ~= "string" or ev == "" then ev = "?" end
+                    local detail = entry.detail
+                    if type(detail) ~= "string" then detail = "" end
+                    lines[#lines + 1] = ts .. "  " .. ev .. "  " .. detail
+                end
             end
             if UI.ShowExportPopup then
                 UI:ShowExportPopup(table.concat(lines, "\n"),
@@ -1763,8 +1769,14 @@ function UI:RefreshSyncLog()
     local start = math.max(1, #log - 99) -- last 100 entries
     for i = start, #log do
         local entry = log[i]
-        local ts = date("%H:%M:%S", entry.t)
-        lines[#lines + 1] = "|cff888888" .. ts .. "|r |cff66aaff" .. entry.event .. "|r " .. (entry.detail or "")
+        if entry and entry.t then
+            local ts = date("%H:%M:%S", entry.t)
+            local ev = entry.event
+            if type(ev) ~= "string" or ev == "" then ev = "?" end
+            local detail = entry.detail
+            if type(detail) ~= "string" then detail = "" end
+            lines[#lines + 1] = "|cff888888" .. ts .. "|r |cff66aaff" .. ev .. "|r " .. detail
+        end
     end
     settingsWidgets.syncLogText:SetText(table.concat(lines, "\n"))
 
