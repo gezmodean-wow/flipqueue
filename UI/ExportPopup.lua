@@ -193,15 +193,50 @@ function UI:ShowCopyBlip(entries, anchorFrame)
         measureLabel:Hide()
         copyBlip._measureLabel = measureLabel
 
-        -- Auto-dismiss on mouse leave with a short grace period so
-        -- the user has time to reach an edit box without the popup
-        -- evaporating from under them.
-        copyBlip:SetScript("OnLeave", function(self)
-            C_Timer.After(0.5, function()
-                if copyBlip and copyBlip:IsShown() and not copyBlip:IsMouseOver() then
-                    copyBlip:Hide()
+        -- Click-eater frame sits behind the popup at DIALOG strata and
+        -- catches clicks anywhere on screen. A click anywhere outside
+        -- the popup itself (which lives at TOOLTIP strata above) routes
+        -- to the eater and dismisses the popup. The popup's own child
+        -- frames (rows, edit boxes) intercept their clicks first because
+        -- they live in a higher strata, so clicking inside the popup
+        -- does not reach the eater.
+        local eater = CreateFrame("Button", nil, UIParent)
+        eater:SetFrameStrata("DIALOG")
+        eater:SetAllPoints(UIParent)
+        eater:EnableMouse(true)
+        eater:RegisterForClicks("AnyUp", "AnyDown")
+        eater:SetScript("OnClick", function() copyBlip:Hide() end)
+        eater:Hide()
+        copyBlip._eater = eater
+
+        -- Auto-dismiss on mouse-out using an OnUpdate poll. OnLeave is
+        -- unreliable here because the popup opens below the clicked row
+        -- and the user's mouse may never cross into it — OnLeave would
+        -- never fire, and the popup would linger indefinitely. An
+        -- OnUpdate poll handles all cases: while the mouse is inside
+        -- (IsMouseOver true) reset the timer; while outside, tick until
+        -- the grace period elapses, then hide.
+        local MOUSE_OUT_GRACE = 2.0  -- seconds outside before dismiss
+        copyBlip:SetScript("OnUpdate", function(self, elapsed)
+            if self:IsMouseOver() then
+                self._outElapsed = 0
+            else
+                self._outElapsed = (self._outElapsed or 0) + elapsed
+                if self._outElapsed > MOUSE_OUT_GRACE then
+                    self:Hide()
                 end
-            end)
+            end
+        end)
+
+        -- Showing/hiding the popup toggles the eater too so the eater
+        -- isn't left blocking the screen when the popup is gone.
+        copyBlip:SetScript("OnShow", function(self)
+            self._outElapsed = 0
+            self._eater:Show()
+        end)
+        copyBlip:SetScript("OnHide", function(self)
+            self._eater:Hide()
+            self._outElapsed = 0
         end)
     end
 
