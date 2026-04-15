@@ -7,12 +7,17 @@ ns.ADDON_NAME = "FlipQueue"
 local tocVersion = C_AddOns and C_AddOns.GetAddOnMetadata(addonName, "Version") or "dev"
 ns.VERSION = tocVersion:find("@") and "dev" or tocVersion
 
--- Cogworks suite library (embedded in Libs/Cogworks-1.0). Cache the library
--- reference on the namespace so other files don't repeat the LibStub lookup,
--- and register FlipQueue with the shared addon registry so sibling cogs can
+-- Cogworks suite library (fetched via .pkgmeta external at package time from
+-- github.com/gezmodean-wow/cogworks tag v0.1.0). Cache the library reference
+-- on the namespace so other files don't repeat the LibStub lookup, and
+-- register FlipQueue with the shared addon registry so sibling cogs can
 -- enumerate us. The `true` second arg to GetLibrary returns nil if missing
--- instead of erroring — Cogworks is vendored so it should always be present,
--- but we stay defensive so a bad install doesn't brick the whole addon.
+-- instead of erroring — staying defensive means a bad install doesn't brick
+-- the whole addon, just the Cogworks event fan-out.
+--
+-- Prefix keeps the legacy "FlipQueue:" yellow format so Phase 2 delegation
+-- is invisible to users. The unified "[CogName]" gold prefix is a branding
+-- pass (Phase 5) that lands only after Phases 2-4 are stable.
 do
     local cw = LibStub and LibStub("Cogworks-1.0", true)
     if cw then
@@ -20,7 +25,7 @@ do
         if cw.RegisterAddon then
             cw:RegisterAddon("FlipQueue", {
                 version = ns.VERSION,
-                prefix  = "|cffffd100[FlipQueue]|r ",
+                prefix  = "|cffffff00FlipQueue:|r ",
                 website = "https://github.com/gezmodean-wow/flipqueue",
             })
         end
@@ -54,13 +59,28 @@ ns.COLORS = {
 --------------------------
 -- Print Helpers
 --------------------------
+-- Phase 2 Cogworks refactor: the chat-facing output routes through
+-- ns.cw:Print when the library is present so all suite cogs flow through
+-- one code path. The local fallback (plain `print()`) runs when Cogworks
+-- isn't loaded — defensively, since the library is a packager external
+-- and a bad install could leave it missing. The registered prefix
+-- ("FlipQueue:" in yellow) matches the legacy format so this delegation
+-- is invisible to users; Phase 5 is where the suite-wide branding lands.
 
 function ns:Print(msg)
-    print(ns.COLORS.YELLOW .. "FlipQueue:|r " .. msg)
+    if ns.cw and ns.cw.Print then
+        ns.cw:Print("FlipQueue", msg)
+    else
+        print(ns.COLORS.YELLOW .. "FlipQueue:|r " .. msg)
+    end
 end
 
 function ns:PrintError(msg)
-    print(ns.COLORS.RED .. "FlipQueue:|r " .. msg)
+    if ns.cw and ns.cw.PrintError then
+        ns.cw:PrintError("FlipQueue", msg)
+    else
+        print(ns.COLORS.RED .. "FlipQueue:|r " .. msg)
+    end
 end
 
 -- Ring buffer of recent debug messages, exposed for the in-game debug
@@ -72,7 +92,8 @@ ns._debugLogMax = 500
 
 function ns:PrintDebug(msg)
     -- Push to the ring buffer regardless of the debugMessages setting so the
-    -- in-game debug console always has recent context.
+    -- in-game debug console always has recent context. This side effect is
+    -- FlipQueue-specific and stays local — Cogworks doesn't own debug logs.
     local ts = date("%H:%M:%S")
     ns._debugLog[#ns._debugLog + 1] = ts .. "  " .. tostring(msg)
     if #ns._debugLog > ns._debugLogMax then
@@ -84,6 +105,10 @@ function ns:PrintDebug(msg)
     end
 
     if ns.db and ns.db.settings.debugMessages then
+        -- Debug prints stay on the local print() path even when Cogworks
+        -- is loaded — the "[debug]" suffix and gray coloring are custom
+        -- enough that routing through cw:Print would require a dedicated
+        -- Cogworks API. Not worth the API surface right now.
         print(ns.COLORS.GRAY .. "FlipQueue [debug]:|r " .. msg)
     end
 end
