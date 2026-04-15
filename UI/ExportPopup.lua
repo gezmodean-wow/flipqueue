@@ -272,24 +272,35 @@ end
 
 -- Build the copy-blip entries list for a next-steps row. Returns a
 -- list of { label, text } tables suitable for passing into
--- UI:ShowCopyBlip. Rules:
---   - If _charKey is present, include both the character name and
---     the realm as separate entries, name first (most common copy).
---   - If only _tooltipText is present (unassigned "Create char"),
---     include just the realm.
---   - Empty list if neither is available.
+-- UI:ShowCopyBlip. The user's `copyOnClickMode` setting controls
+-- whether a row yields the character name or the realm:
+--
+--   "realm" (default) — copy the specific server the character is on
+--   "name"            — copy the character name
+--
+-- Unassigned "Create char" entries only have a realm available, so
+-- they always yield the realm regardless of the setting.
+-- Returns an empty list if nothing copyable is present.
 function UI:BuildNextStepCopyEntries(rowData)
     local entries = {}
     if not rowData then return entries end
+
+    local mode = (ns.db and ns.db.settings and ns.db.settings.copyOnClickMode) or "realm"
+
     if rowData._charKey then
         local name  = rowData._charKey:match("^(.-)%-") or rowData._charKey
         local realm = rowData._charKey:match("%-(.+)$") or ""
-        table.insert(entries, { label = "Character:", text = name })
-        if realm ~= "" then
-            table.insert(entries, { label = "Realm:    ", text = realm })
+        if mode == "name" then
+            table.insert(entries, { label = "Character:", text = name })
+        elseif realm ~= "" then
+            table.insert(entries, { label = "Realm:", text = realm })
+        else
+            -- No realm suffix present; fall back to the name so we
+            -- still have something copyable.
+            table.insert(entries, { label = "Character:", text = name })
         end
     elseif rowData._tooltipText and rowData._tooltipText ~= "" then
-        table.insert(entries, { label = "Realm:    ", text = rowData._tooltipText })
+        table.insert(entries, { label = "Realm:", text = rowData._tooltipText })
     end
     return entries
 end

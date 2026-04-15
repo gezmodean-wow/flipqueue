@@ -905,6 +905,19 @@ function UI:CreateSettingsPanel(parent)
         "detailPopupAnchor", detailAnchorOpts)
     sy = sy - h - ITEM_SPACING
 
+    -- Click-to-copy mode: clicking a row in the Next Steps queue
+    -- pops up a small copy dialog with either the realm or the
+    -- character name. Realm is the default because most users paste
+    -- into the realm filter on the character-select screen.
+    local copyModeOpts = {
+        {value = "realm", label = "Realm"},
+        {value = "name",  label = "Character name"},
+    }
+    settingsWidgets.copyOnClickMode, h = CreateSettingsDropdown(sc, sy,
+        "Click-to-copy", "What a click on a Next Steps row copies — realm (to paste into the character-select realm filter) or character name.",
+        "copyOnClickMode", copyModeOpts)
+    sy = sy - h - ITEM_SPACING
+
     settingsWidgets.resetMiniPos, h = CreateSettingsButton(sc, sy,
         "Reset Mini Position", "Move the mini overlay back to its default position.", 160, function()
         if ns.db then
@@ -1605,6 +1618,9 @@ function UI:RefreshSettings()
     end
     if settingsWidgets.detailPopupAnchor then
         settingsWidgets.detailPopupAnchor:SetValue(ns.db.settings.detailPopupAnchor)
+    end
+    if settingsWidgets.copyOnClickMode then
+        settingsWidgets.copyOnClickMode:SetValue(ns.db.settings.copyOnClickMode or "realm")
     end
     -- Batch size slider
     if settingsWidgets.batchSizeSlider then

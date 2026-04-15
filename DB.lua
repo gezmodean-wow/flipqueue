@@ -127,6 +127,11 @@ function ns:InitDB()
             pulls = false, deposits = false, gold = false, extras = false,
         }
     end
+    -- Click-to-copy mode for the Next-steps queue. Controls which value
+    -- the copy blip exposes when a row is clicked. Default "realm"
+    -- because users primarily paste into WoW's realm filter on the
+    -- character-select screen rather than a name search.
+    db.settings.copyOnClickMode = db.settings.copyOnClickMode or "realm"
     -- Generator filter persistence
     db.settings.genFilterMode = db.settings.genFilterMode or "all"
     db.settings.genFilterValue = db.settings.genFilterValue or ""
