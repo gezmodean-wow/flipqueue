@@ -754,34 +754,16 @@ UI.nextStepsTable = UI:CreateScrollTable(tableContainer, {
 })
 UI.nextStepsTable:SetSort("_sortValue", false)
 
--- Click-to-copy: left-click any row to open a small copyable popup with
--- the character name pre-selected (and the realm on a second line for
--- cross-realm searches). Lets users grab the name before logout and
--- paste it directly into WoW's character-select search.
+-- Click-to-copy: left-click a row to open a small copy popup pinned
+-- below the table with the raw character name ready to Ctrl+C (or the
+-- realm name for unassigned "Create char" entries). Shared extraction
+-- lives in UI:GetNextStepCopyText so the mini view can reuse it.
 UI.nextStepsTable:SetRowClickHandler(function(rowData, button)
     if button and button ~= "LeftButton" then return end
-    if not rowData or not UI.ShowExportPopup then return end
-
-    -- Prefer _charKey (character entries); fall back to _tooltipText
-    -- (unassigned "Create char" entries carry the realm name there).
-    local copyText, statusMsg
-    if rowData._charKey then
-        local name  = rowData._charKey:match("^(.-)%-") or rowData._charKey
-        local realm = rowData._charKey:match("%-(.+)$") or ""
-        if realm ~= "" then
-            copyText = name .. "\n" .. realm
-            statusMsg = "Character name + realm — paste into character-select search"
-        else
-            copyText = name
-            statusMsg = "Character name — paste into character-select search"
-        end
-    elseif rowData._tooltipText and rowData._tooltipText ~= "" then
-        copyText = rowData._tooltipText
-        statusMsg = "Realm — paste to find matching characters"
-    end
-
-    if copyText then
-        UI:ShowExportPopup(copyText, statusMsg)
+    if not UI.ShowCopyBlip or not UI.GetNextStepCopyText then return end
+    local text, label = UI:GetNextStepCopyText(rowData)
+    if text then
+        UI:ShowCopyBlip(text, UI.nextStepsTable.scrollFrame, label)
     end
 end)
 

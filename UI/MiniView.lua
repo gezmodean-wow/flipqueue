@@ -806,7 +806,24 @@ function UI:RefreshMini()
             row.tooltipItemID = nil
             row.tooltipItemName = step._tooltipText
             row.tooltipExtra = step._tooltipExtra
-            row:SetScript("OnMouseDown", nil)
+
+            -- Click-to-copy: left-click opens a compact copy popup
+            -- pinned below the mini row, pre-populated with the char
+            -- name (or realm for "Create char" entries). Uses the
+            -- shared UI:GetNextStepCopyText extraction so the mini
+            -- and full TodoPage behave identically. Closure captures
+            -- this specific row's step data — re-installed on every
+            -- refresh since the step index can drift.
+            local capturedStep = step
+            local capturedRow = row
+            row:SetScript("OnMouseDown", function(_, button)
+                if button ~= "LeftButton" then return end
+                if not UI.ShowCopyBlip or not UI.GetNextStepCopyText then return end
+                local text, label = UI:GetNextStepCopyText(capturedStep)
+                if text then
+                    UI:ShowCopyBlip(text, capturedRow, label)
+                end
+            end)
 
             local extraStr = ""
             if step.detail and step.detail ~= "" then
