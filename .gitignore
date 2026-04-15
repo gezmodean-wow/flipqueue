@@ -1,3 +1,8 @@
 .claude/
 .vscode/
 *.bak
+
+# Cogworks-1.0 is fetched at package time via .pkgmeta externals
+# (from github.com/gezmodean-wow/cogworks tag v0.1.0). A local copy
+# may exist here for dev/testing but is not tracked.
+Libs/Cogworks-1.0/

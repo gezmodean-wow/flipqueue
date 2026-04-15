@@ -2,9 +2,19 @@ package-as: flipqueue
 
 enable-nolib-creation: no
 
-# Libraries are vendored directly in Libs/ — no externals fetched at build time.
-# (The previous wowace SVN externals broke builds when repos.wowace.com returned
-# 502/503; vendoring removes the external dependency on a flaky SVN host.)
+# Most libraries are vendored directly in Libs/ — the previous wowace SVN
+# externals broke builds when repos.wowace.com returned 502/503, so we
+# stopped relying on that host. Cogworks-1.0 is fetched from our own
+# GitHub repo via a pinned-tag git external (pins to a tag, not to main,
+# so upgrades are explicit). The `path` directive copies the contents of
+# the Cogworks-1.0 subdirectory of the source repo into Libs/Cogworks-1.0,
+# avoiding the double-nested layout a naive repo-level external would
+# produce.
+externals:
+  Libs/Cogworks-1.0:
+    url: https://github.com/gezmodean-wow/cogworks.git
+    tag: v0.1.0
+    path: Cogworks-1.0
 
 wowi-archive-previous: no
 
