@@ -754,16 +754,18 @@ UI.nextStepsTable = UI:CreateScrollTable(tableContainer, {
 })
 UI.nextStepsTable:SetSort("_sortValue", false)
 
--- Click-to-copy: left-click a row to open a small copy popup pinned
--- below the table with the raw character name ready to Ctrl+C (or the
--- realm name for unassigned "Create char" entries). Shared extraction
--- lives in UI:GetNextStepCopyText so the mini view can reuse it.
+-- Click-to-copy: left-click a row to open a compact dual-entry popup
+-- pinned below the table. The popup exposes both the character name
+-- and the realm as separate labeled rows — clicking either focuses
+-- it and highlights the text so Ctrl+C is one keystroke. Shared
+-- BuildNextStepCopyEntries lives in UI/ExportPopup.lua so the mini
+-- view reuses the same extraction.
 UI.nextStepsTable:SetRowClickHandler(function(rowData, button)
     if button and button ~= "LeftButton" then return end
-    if not UI.ShowCopyBlip or not UI.GetNextStepCopyText then return end
-    local text, label = UI:GetNextStepCopyText(rowData)
-    if text then
-        UI:ShowCopyBlip(text, UI.nextStepsTable.scrollFrame, label)
+    if not UI.ShowCopyBlip or not UI.BuildNextStepCopyEntries then return end
+    local entries = UI:BuildNextStepCopyEntries(rowData)
+    if #entries > 0 then
+        UI:ShowCopyBlip(entries, UI.nextStepsTable.scrollFrame)
     end
 end)
 

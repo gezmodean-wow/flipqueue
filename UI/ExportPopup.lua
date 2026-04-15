@@ -99,19 +99,80 @@ end
 -- ==========================================
 -- COPY BLIP (tiny sized-to-content copy dialog)
 -- ==========================================
--- A small copy dialog that auto-sizes to its text content, optionally
--- anchored to a click source (e.g. a mini-view row). Used for
--- click-to-copy of character/realm names so users can grab them
--- quickly before logout without opening a full-sized export popup.
+-- A small copy dialog that auto-sizes to its content, anchored to a
+-- click source (e.g. a mini-view row or scroll frame). Takes a list
+-- of { label, text } entries and renders one labeled edit box per
+-- entry so the user can click whichever value they want — clicking
+-- an edit box auto-focuses it and highlights the text, making
+-- Ctrl+C a single keystroke.
+--
+-- Typical use: click a next-steps row, blip opens with both the
+-- character name and the realm as separate entries, user clicks
+-- whichever one they need, copies it, moves on.
 
 local copyBlip
+local COPY_ROW_HEIGHT = 22
+local COPY_ROW_SPACING = 2
+local COPY_PADDING_X = 10
+local COPY_PADDING_TOP = 6
+local COPY_PADDING_BOTTOM = 8
 
-function UI:ShowCopyBlip(text, anchorFrame, label)
-    if not text or text == "" then return end
+-- Pool of { rowFrame, label, editBox } tuples — one per entry. Rows
+-- are created lazily and reused across invocations so we don't leak
+-- frames on repeated opens.
+local function GetOrCreateRow(index)
+    copyBlip._rows = copyBlip._rows or {}
+    local row = copyBlip._rows[index]
+    if row then return row end
+
+    row = {}
+    row.frame = CreateFrame("Frame", nil, copyBlip)
+    row.frame:SetHeight(COPY_ROW_HEIGHT)
+    row.frame:EnableMouse(true)
+
+    row.label = row.frame:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+    row.label:SetPoint("TOPLEFT", row.frame, "TOPLEFT", 0, 0)
+    row.label:SetJustifyH("LEFT")
+
+    row.edit = CreateFrame("EditBox", nil, row.frame)
+    row.edit:SetFontObject("ChatFontNormal")
+    row.edit:SetAutoFocus(false)
+    row.edit:SetMaxLetters(200)
+    row.edit:EnableMouse(true)
+    row.edit:SetHeight(16)
+    row.edit:SetPoint("TOPLEFT", row.label, "TOPRIGHT", 6, 0)
+    row.edit:SetPoint("RIGHT", row.frame, "RIGHT", -4, 0)
+    row.edit:SetScript("OnEscapePressed", function(self)
+        self:ClearFocus()
+        copyBlip:Hide()
+    end)
+    row.edit:SetScript("OnEnterPressed", function(self)
+        self:ClearFocus()
+    end)
+    -- Re-highlight on focus so clicking the field primes Ctrl+C
+    row.edit:SetScript("OnEditFocusGained", function(self) self:HighlightText() end)
+    -- Clicking the row (anywhere) focuses its edit box
+    row.frame:SetScript("OnMouseDown", function()
+        row.edit:SetFocus(true)
+        row.edit:HighlightText()
+    end)
+
+    copyBlip._rows[index] = row
+    return row
+end
+
+function UI:ShowCopyBlip(entries, anchorFrame)
+    -- Accept both the new list form { {label, text}, ... } and the
+    -- legacy single-entry form (text, anchor, label) so existing
+    -- callers don't break immediately. Detect by entries type.
+    if type(entries) == "string" then
+        entries = { { label = "Copy", text = entries } }
+    end
+    if type(entries) ~= "table" or #entries == 0 then return end
 
     if not copyBlip then
         copyBlip = CreateFrame("Frame", "FlipQueueCopyBlip", UIParent, "BackdropTemplate")
-        copyBlip:SetFrameStrata("TOOLTIP")  -- above mini, above main frame
+        copyBlip:SetFrameStrata("TOOLTIP")
         copyBlip:SetClampedToScreen(true)
         copyBlip:EnableMouse(true)
         copyBlip:SetBackdrop({
@@ -123,74 +184,74 @@ function UI:ShowCopyBlip(text, anchorFrame, label)
         copyBlip:SetBackdropColor(0.08, 0.08, 0.12, 0.98)
         copyBlip:SetBackdropBorderColor(0.6, 0.5, 0.2, 1)
 
-        -- Label above the edit box (e.g. "Character name" or "Realm")
-        local lbl = copyBlip:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
-        lbl:SetPoint("TOPLEFT", copyBlip, "TOPLEFT", 8, -6)
-        lbl:SetJustifyH("LEFT")
-        copyBlip._label = lbl
-
-        -- EditBox holds the copyable text. Single line, auto-focused on
-        -- show, highlighted so Ctrl+C works in one keystroke.
-        local edit = CreateFrame("EditBox", nil, copyBlip)
-        edit:SetFontObject("ChatFontNormal")
-        edit:SetAutoFocus(false)
-        edit:SetMaxLetters(200)
-        edit:EnableMouse(true)
-        edit:SetPoint("TOPLEFT", lbl, "BOTTOMLEFT", 0, -4)
-        edit:SetHeight(18)
-        edit:SetScript("OnEscapePressed", function(self)
-            self:ClearFocus()
-            copyBlip:Hide()
-        end)
-        edit:SetScript("OnEnterPressed", function(self)
-            self:ClearFocus()
-            copyBlip:Hide()
-        end)
-        -- Reselect on re-focus so Ctrl+A isn't needed
-        edit:SetScript("OnEditFocusGained", function(self) self:HighlightText() end)
-        copyBlip._edit = edit
-
-        -- Hidden FontString used to measure text width, since EditBox
-        -- doesn't expose a direct GetStringWidth for its contents.
+        -- Hidden measuring FontString shared across rows for width calc
         local measure = copyBlip:CreateFontString(nil, "BACKGROUND", "ChatFontNormal")
         measure:Hide()
         copyBlip._measure = measure
 
-        -- Auto-dismiss on mouse leave (after a short grace period so
-        -- users can click to re-focus without the popup evaporating).
+        local measureLabel = copyBlip:CreateFontString(nil, "BACKGROUND", "GameFontDisableSmall")
+        measureLabel:Hide()
+        copyBlip._measureLabel = measureLabel
+
+        -- Auto-dismiss on mouse leave with a short grace period so
+        -- the user has time to reach an edit box without the popup
+        -- evaporating from under them.
         copyBlip:SetScript("OnLeave", function(self)
-            C_Timer.After(0.4, function()
+            C_Timer.After(0.5, function()
                 if copyBlip and copyBlip:IsShown() and not copyBlip:IsMouseOver() then
                     copyBlip:Hide()
                 end
             end)
         end)
-
-        -- Click outside dismisses, but we can't intercept global
-        -- clicks from a Frame. Instead, clicking the edit box stays
-        -- open and any other click via the main UI will naturally
-        -- shift focus elsewhere. The OnLeave handler handles the rest.
     end
 
-    -- Populate
-    copyBlip._label:SetText(label or "Copy")
-    copyBlip._edit:SetText(text)
+    -- Hide any previously-shown rows from a prior invocation
+    if copyBlip._rows then
+        for _, r in ipairs(copyBlip._rows) do
+            r.frame:Hide()
+        end
+    end
 
-    -- Measure and size to content. Add padding for backdrop insets +
-    -- a little breathing room on either side of the text.
-    copyBlip._measure:SetText(text)
-    local textW = copyBlip._measure:GetStringWidth()
-    copyBlip._label:SetText(label or "Copy")
-    local labelW = copyBlip._label:GetStringWidth()
-    local contentW = math.max(textW, labelW) + 24  -- 12 padding each side
-    local width = math.max(120, math.min(contentW, 400))
+    -- Populate rows and compute the widest label + text so the blip
+    -- ends up sized to exactly its content.
+    local maxLabelW, maxTextW = 0, 0
+    for i, entry in ipairs(entries) do
+        copyBlip._measureLabel:SetText(entry.label or "")
+        local lw = copyBlip._measureLabel:GetStringWidth()
+        if lw > maxLabelW then maxLabelW = lw end
+        copyBlip._measure:SetText(entry.text or "")
+        local tw = copyBlip._measure:GetStringWidth()
+        if tw > maxTextW then maxTextW = tw end
+    end
+    -- Edit boxes need a little breathing room beyond the text width so
+    -- the caret and the last character aren't clipped by the right edge.
+    local editInnerW = maxTextW + 16
+    local contentW = maxLabelW + 6 + editInnerW
+    local width = math.max(160, math.min(contentW + COPY_PADDING_X * 2, 480))
+    local height = COPY_PADDING_TOP + COPY_PADDING_BOTTOM
+        + (#entries * COPY_ROW_HEIGHT) + ((#entries - 1) * COPY_ROW_SPACING)
+
     copyBlip:SetWidth(width)
-    copyBlip:SetHeight(48)
-    copyBlip._edit:SetWidth(width - 16)
+    copyBlip:SetHeight(height)
 
-    -- Anchor to the click source if provided, otherwise center screen.
-    -- Position just below-right of the anchor so the popup doesn't
-    -- cover the row being clicked.
+    -- Layout the rows
+    local y = -COPY_PADDING_TOP
+    for i, entry in ipairs(entries) do
+        local row = GetOrCreateRow(i)
+        row.frame:ClearAllPoints()
+        row.frame:SetPoint("TOPLEFT", copyBlip, "TOPLEFT", COPY_PADDING_X, y)
+        row.frame:SetPoint("RIGHT", copyBlip, "RIGHT", -COPY_PADDING_X, 0)
+
+        row.label:SetText(entry.label or "")
+        row.label:SetWidth(maxLabelW)
+        row.edit:SetText(entry.text or "")
+        row.frame:Show()
+
+        y = y - COPY_ROW_HEIGHT - COPY_ROW_SPACING
+    end
+
+    -- Anchor to the click source below its bottom-left, fall back to
+    -- screen center if no anchor was provided.
     copyBlip:ClearAllPoints()
     if anchorFrame then
         copyBlip:SetPoint("TOPLEFT", anchorFrame, "BOTTOMLEFT", 0, -4)
@@ -199,30 +260,38 @@ function UI:ShowCopyBlip(text, anchorFrame, label)
     end
 
     copyBlip:Show()
-    copyBlip._edit:SetFocus(true)
-    copyBlip._edit:HighlightText()
+
+    -- Auto-focus + highlight the first entry so the most-common path
+    -- (copy the character name) is still one keystroke.
+    local firstRow = copyBlip._rows and copyBlip._rows[1]
+    if firstRow and firstRow.edit then
+        firstRow.edit:SetFocus(true)
+        firstRow.edit:HighlightText()
+    end
 end
 
--- Shared extraction: turn a next-steps row's data into the
--- (copyText, label) pair to pass into ShowCopyBlip. Used by both the
--- main TodoPage click handler and the mini-view click handler so the
--- behaviour is identical across both surfaces.
---
--- Rules:
---   - If the row has _charKey ("Name-Realm"), copy just the NAME —
---     that's what the character-select search accepts.
---   - If the row has no _charKey (an unassigned "Create char" entry),
---     copy the realm/server name from _tooltipText instead.
---   - Returns nil when neither field is present.
-function UI:GetNextStepCopyText(rowData)
-    if not rowData then return nil end
+-- Build the copy-blip entries list for a next-steps row. Returns a
+-- list of { label, text } tables suitable for passing into
+-- UI:ShowCopyBlip. Rules:
+--   - If _charKey is present, include both the character name and
+--     the realm as separate entries, name first (most common copy).
+--   - If only _tooltipText is present (unassigned "Create char"),
+--     include just the realm.
+--   - Empty list if neither is available.
+function UI:BuildNextStepCopyEntries(rowData)
+    local entries = {}
+    if not rowData then return entries end
     if rowData._charKey then
-        local name = rowData._charKey:match("^(.-)%-") or rowData._charKey
-        return name, "Character name"
+        local name  = rowData._charKey:match("^(.-)%-") or rowData._charKey
+        local realm = rowData._charKey:match("%-(.+)$") or ""
+        table.insert(entries, { label = "Character:", text = name })
+        if realm ~= "" then
+            table.insert(entries, { label = "Realm:    ", text = realm })
+        end
     elseif rowData._tooltipText and rowData._tooltipText ~= "" then
-        return rowData._tooltipText, "Realm"
+        table.insert(entries, { label = "Realm:    ", text = rowData._tooltipText })
     end
-    return nil
+    return entries
 end
 
 -- ==========================================
