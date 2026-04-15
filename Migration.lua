@@ -7,13 +7,18 @@ local addonName, ns = ...
 --------------------------
 
 -- Current schema version
-local CURRENT_SCHEMA = 5
+local CURRENT_SCHEMA = 7
 
 -- Schema history:
 -- nil/0  = v0.5.0 (stable release): queue array, separate inventory/characters/hiddenCharacters
 -- 1      = v0.6.0-alpha.1: added todoLists with current/queue, items array
 -- 2      = v0.6.x (this change): consolidated characters, imports map, guilds, steps model
 -- 3      = character roles: ignored boolean → role field (both/sell/buy/none)
+-- 4      = ItemResearch refactor
+-- 5      = Multi-partner sync (partner → partners[uuid])
+-- 6      = Dual transport (bnet / whisper)
+-- 7      = v0.11.0: Syndicator becomes hard dep; old inventory caches wiped
+--          and re-populated from Syndicator on next scan.
 
 local function RunMigrations(db)
     db.schemaVersion = db.schemaVersion or 0
@@ -240,6 +245,33 @@ local function RunMigrations(db)
         end
         db.schemaVersion = 6
     end  -- migration 6
+
+    -- Migration 7: v0.11.0 Syndicator migration. Wipe per-character inventory
+    -- blobs and the warbank cache. Syndicator is now the source of truth and
+    -- will re-populate on next scan. Character metadata (gold, class, level,
+    -- role, accountUUID, guild) is preserved — we only drop the items cache.
+    -- Partner-sourced characters that we haven't re-synced yet lose their
+    -- items too, but Sync.lua will replay via full-sync on next reconnect.
+    if db.schemaVersion < 7 then
+        local wipedChars = 0
+        if db.characters then
+            for charKey, charData in pairs(db.characters) do
+                if type(charData) == "table" and charData.inventory then
+                    charData.inventory = nil
+                    wipedChars = wipedChars + 1
+                end
+            end
+        end
+        db.warbank = {}  -- fresh table, no items, no freeSlots — Scanner repopulates
+        -- Stash in a distinct slot so CleanupLegacyData in DB.lua (which
+        -- runs immediately after migrations and sometimes overwrites
+        -- _cleanupSummary) can't clobber the Phase 6a message. Scanner's
+        -- PLAYER_LOGIN handler prints this separately.
+        db._phase6aMessage = "Phase 6a: reset " .. wipedChars ..
+            " character inventor" .. (wipedChars == 1 and "y" or "ies") ..
+            " and the warbank cache. Syndicator is now the inventory source."
+        db.schemaVersion = 7
+    end  -- migration 7
 end  -- RunMigrations
 
 -- Expose for DB.lua

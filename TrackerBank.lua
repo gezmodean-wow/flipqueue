@@ -368,6 +368,14 @@ end
 function Tracker:AutoWithdrawGold()
     if not ns.db or not ns.db.settings.autoWithdrawGold then return end
     if not C_Bank or not C_Bank.WithdrawMoney then return end
+    -- Defer to Warband Miser if installed (see DB.lua ns:IsWarbandMiserActive).
+    -- WM manages per-character gold policy more granularly than we do, so
+    -- when it's loaded we stay out of its way. Users can force us back in
+    -- via the warbandMiserOverride setting.
+    if ns.IsWarbandMiserActive and ns:IsWarbandMiserActive() then
+        ns:PrintDebug("AutoWithdrawGold: deferring to Warband Miser")
+        return
+    end
 
     -- Only withdraw if this character actually has tasks on its realm
     local charKey = ns:GetCharKey()
@@ -480,6 +488,11 @@ end
 function Tracker:AutoDepositGold()
     if not ns.db or not ns.db.settings.autoDepositGold then return end
     if not C_Bank or not C_Bank.DepositMoney then return end
+    -- Defer to Warband Miser (see AutoWithdrawGold above for the rationale).
+    if ns.IsWarbandMiserActive and ns:IsWarbandMiserActive() then
+        ns:PrintDebug("AutoDepositGold: deferring to Warband Miser")
+        return
+    end
 
     local charKey = ns:GetCharKey()
     local currentRealm = charKey:match("%-(.+)$") or GetRealmName()
@@ -631,9 +644,10 @@ function Tracker:AutoDepositToWarbank(onComplete)
         })
     end
 
-    ns.BankQueue:Process(ops, "Depositing to warbank...", function(successNames, errorCount)
+    ns.BankQueue:Process(ops, "Depositing to warbank...", function(successNames, errorCount, deferredNames)
+        local deferredCount = deferredNames and #deferredNames or 0
         if #successNames > 0 then
-            if errorCount == 0 then
+            if errorCount == 0 and deferredCount == 0 then
                 ns:Print(ns.COLORS.CYAN .. "Deposited " .. #successNames ..
                     " item(s) to warbank:|r " .. table.concat(successNames, ", "))
             else
@@ -643,6 +657,11 @@ function Tracker:AutoDepositToWarbank(onComplete)
         end
         if errorCount > 0 then
             ns:Print(ns.COLORS.YELLOW .. errorCount .. " item(s) failed to deposit. Try opening your bank again.|r")
+        end
+        if deferredCount > 0 then
+            ns:Print(ns.COLORS.YELLOW .. deferredCount ..
+                " item(s) deferred — warbank has no accepting slot.|r " ..
+                "Free up space and try again: " .. table.concat(deferredNames, ", "))
         end
         C_Timer.After(1, function()
             if ns.Scanner then
@@ -784,6 +803,38 @@ function Tracker:AutoDepositExtraItems(onComplete)
         return
     end
 
+    -- Runtime interrupt: if the known warbank free-slot count can't absorb
+    -- what autoDepositAll wants to push into it, trim the warbank portion
+    -- of the batch to what fits and warn the user. Bank-only (soulbound)
+    -- moves are unaffected. This is the "constrained runtime" escape
+    -- hatch the scheduling model requests — autoDepositAll isn't part of
+    -- the at-generation-time budget, so we guard it here.
+    if ns.db.warbank and type(ns.db.warbank.freeSlots) == "number"
+        and #warbankMoves > 0 then
+        local freeSlots = ns.db.warbank.freeSlots
+        if freeSlots <= 0 then
+            ns:Print(ns.COLORS.ORANGE .. "Warbank is full|r — deposit-all skipped for warbank items. " ..
+                "Consider pausing Deposit All until space opens up.")
+            warbankMoves = {}
+        elseif #warbankMoves > freeSlots then
+            local skipped = #warbankMoves - freeSlots
+            ns:Print(ns.COLORS.ORANGE .. "Warbank nearly full|r — depositing " ..
+                freeSlots .. " of " .. (#warbankMoves + skipped) ..
+                " extras. " .. skipped .. " held back. " ..
+                "Consider pausing Deposit All.")
+            -- Keep only the first freeSlots entries; stack-merges may still
+            -- succeed for the rest at runtime, but we don't rely on that.
+            local trimmed = {}
+            for i = 1, freeSlots do trimmed[i] = warbankMoves[i] end
+            warbankMoves = trimmed
+        end
+    end
+
+    if #warbankMoves == 0 and #bankOnlyMoves == 0 then
+        if onComplete then onComplete({}, 0) end
+        return
+    end
+
     -- Build queue operations with appropriate destination types
     -- Non-soulbound: "any" (warbank first, bank fallback)
     -- Soulbound: "bank" only
@@ -807,7 +858,8 @@ function Tracker:AutoDepositExtraItems(onComplete)
         })
     end
 
-    ns.BankQueue:Process(ops, "Depositing extras...", function(successNames, errorCount)
+    ns.BankQueue:Process(ops, "Depositing extras...", function(successNames, errorCount, deferredNames)
+        local deferredCount = deferredNames and #deferredNames or 0
         if #successNames > 0 then
             ns:Print(ns.COLORS.CYAN .. "Deposited " .. #successNames ..
                 " extra item(s) to warbank/bank:|r " ..
@@ -816,6 +868,10 @@ function Tracker:AutoDepositExtraItems(onComplete)
         if errorCount > 0 then
             ns:Print(ns.COLORS.YELLOW .. errorCount ..
                 " item(s) failed to deposit.|r")
+        end
+        if deferredCount > 0 then
+            ns:Print(ns.COLORS.YELLOW .. deferredCount ..
+                " item(s) deferred — no accepting slot.|r")
         end
         C_Timer.After(1, function()
             if ns.Scanner then

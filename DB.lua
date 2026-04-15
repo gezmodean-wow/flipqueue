@@ -88,6 +88,10 @@ function ns:InitDB()
     -- Auto-deposit earnings to warbank (off by default — players may want to keep earnings)
     if db.settings.autoDepositGold == nil then db.settings.autoDepositGold = false end
     db.settings.goldBuffer = db.settings.goldBuffer or 50  -- gold to keep on character beyond fees
+    -- Warband Miser override: when true, FlipQueue manages gold even if
+    -- Warband Miser is loaded. Default off — WM owns gold by default when
+    -- installed to avoid fighting it.
+    if db.settings.warbandMiserOverride == nil then db.settings.warbandMiserOverride = false end
     -- Bank tab selection
     if not db.settings.pullTabs then
         db.settings.pullTabs = { mode = "all" }
@@ -514,6 +518,30 @@ function ns:IsRemoteChar(charKey)
     if not charData or not charData.accountUUID then return false end
     if not ns.db.sync then return false end
     return charData.accountUUID ~= ns.db.sync.accountUUID
+end
+
+--------------------------
+-- Warband Miser integration
+--------------------------
+
+-- Warband Miser is a separate addon that manages per-character gold
+-- deposit/withdraw against the warband bank. If a user runs it, FlipQueue's
+-- own auto-gold routines fight it. This helper is the single source of
+-- truth — callers gate their auto-gold behavior on it so WM owns gold
+-- management end-to-end. Users can force FlipQueue to manage gold anyway
+-- via the `warbandMiserOverride` setting (off by default).
+function ns:IsWarbandMiserActive()
+    if ns.db and ns.db.settings and ns.db.settings.warbandMiserOverride then
+        return false
+    end
+    -- Modern retail API; fall back to legacy global for older clients.
+    local loaded = false
+    if C_AddOns and C_AddOns.IsAddOnLoaded then
+        loaded = C_AddOns.IsAddOnLoaded("WarbandMiser") or false
+    elseif IsAddOnLoaded then
+        loaded = IsAddOnLoaded("WarbandMiser") or false
+    end
+    return loaded
 end
 
 --------------------------

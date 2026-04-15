@@ -4,6 +4,7 @@
 ## Author: Gezmodean
 ## Version: @project-version@
 ## SavedVariables: FlipQueueDB
+## Dependencies: Syndicator
 ## OptionalDeps: Auctionator, TradeSkillMaster
 ## IconTexture: Interface\AddOns\flipqueue\Art\flipqueue-icon
 ## X-Category: Auction & Economy
@@ -22,6 +23,7 @@ Migration.lua
 DB.lua
 TSM.lua
 TSMRealms.lua
+ItemLookup.lua
 Scanner.lua
 Import.lua
 Export.lua

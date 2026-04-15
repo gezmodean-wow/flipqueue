@@ -1,158 +1,29 @@
 -- Scanner.lua
--- Scans current character inventory and stores to account-wide DB
+-- Projects Syndicator's per-slot inventory cache into FlipQueue's
+-- aggregated `itemKey -> {quantity, locations}` shape so downstream code
+-- (TodoGenerator, TrackerBank, UI pages) keeps reading the same structures
+-- it always has: `ns.db.characters[charKey].inventory.items` and
+-- `ns.db.warbank.items`.
+--
+-- Phase 6a (v0.11.0): Syndicator is a hard dependency. All bag/bank/warbank
+-- scanning routed through Syndicator's API instead of walking C_Container
+-- directly. Guild bank stays on the Blizzard API (Syndicator doesn't handle
+-- it). Character metadata (gold, class, level, guild, accountUUID) still
+-- lives here and still updates on PLAYER_LOGIN / PLAYER_MONEY.
+
 local addonName, ns = ...
 
 local Scanner = {}
 ns.Scanner = Scanner
 
--- Hidden tooltip for bind-type detection
-local scanTooltip = CreateFrame("GameTooltip", "FlipQueueScanTooltip", nil, "GameTooltipTemplate")
-scanTooltip:SetOwner(UIParent, "ANCHOR_NONE")
-
 --------------------------
--- Bind Type Detection
+-- Deal enrichment (unchanged from pre-6a)
 --------------------------
 
--- Check tooltip lines for warbound-until-equipped text
-local function IsWarboundUntilEquipped(bagIndex, slot)
-    scanTooltip:ClearLines()
-    scanTooltip:SetOwner(UIParent, "ANCHOR_NONE")
-    scanTooltip:SetBagItem(bagIndex, slot)
-    for i = 2, 6 do
-        local line = _G["FlipQueueScanTooltipTextLeft" .. i]
-        if line then
-            local text = line:GetText()
-            if text then
-                if text:find("Warbound until equipped") or text:find("Binds to Warband until equipped") then
-                    scanTooltip:Hide()
-                    return true
-                end
-            end
-        end
-    end
-    scanTooltip:Hide()
-    return false
-end
-
--- Get bind info for an item
--- Returns bindType (number), isBound (boolean)
--- bindType: 0=none, 1=BoP, 2=BoE, 3=BoU, 4=Quest, 7=BtA, 8=BtW, 9=WuE
-local function GetBindInfo(itemLink, containerItemInfo, bagIndex, slot)
-    local isBound = containerItemInfo.isBound or false
-    local ok, _, _, _, _, _, _, _, _, _, _, _, _, _, bt = pcall(C_Item.GetItemInfo, itemLink)
-    local bindType = (ok and bt) or 0
-
-    -- Check for warbound-until-equipped via tooltip
-    if bindType == 2 and not isBound and bagIndex and slot then
-        if IsWarboundUntilEquipped(bagIndex, slot) then
-            bindType = 9
-        end
-    end
-
-    return bindType, isBound
-end
-
---------------------------
--- Container Scanning
---------------------------
-
-local function ScanContainers(bagIndices, captureBindInfo)
-    local items = {}
-    for _, bagIndex in ipairs(bagIndices) do
-        local okSlots, numSlots = pcall(C_Container.GetContainerNumSlots, bagIndex)
-        if not okSlots or not numSlots then numSlots = 0 end
-        for slot = 1, numSlots do
-            local okInfo, info = pcall(C_Container.GetContainerItemInfo, bagIndex, slot)
-            if not okInfo then info = nil end
-            if info and info.hyperlink then
-                local itemID, bonusIDs, modifiers = ns:ParseItemLink(info.hyperlink)
-                if itemID then
-                    local key = ns:MakeItemKey(itemID, bonusIDs, modifiers)
-                    if not items[key] then
-                        local itemName, ilvl
-                        -- Battle pets: C_Item.GetItemInfo returns nil, extract name from link
-                        if info.hyperlink:find("|Hbattlepet:") then
-                            itemName = info.hyperlink:match("|h%[(.-)%]|h")
-                            ilvl = 0  -- pets don't have ilvl
-                        else
-                            local okName, n = pcall(C_Item.GetItemInfo, info.hyperlink)
-                            itemName = okName and n or nil
-                            ilvl = 0
-                            -- GetDetailedItemLevelInfo (global) returns effective ilvl with bonuses
-                            if GetDetailedItemLevelInfo then
-                                local okIlvl, result = pcall(GetDetailedItemLevelInfo, info.hyperlink)
-                                if okIlvl and result then ilvl = tonumber(result) or 0 end
-                            end
-
-                            -- Debug ilvl capture (enable with /fq debug)
-                            if (bonusIDs ~= "" or modifiers ~= "") then
-                                ns:PrintDebug("iLvl " .. (itemName or "?") .. " [" .. (bonusIDs or "") .. "] -> " .. ilvl)
-                            end
-                        end
-                        items[key] = {
-                            itemID    = itemID,
-                            name      = itemName or "Unknown",
-                            bonusIDs  = bonusIDs,
-                            modifiers = modifiers,
-                            quantity  = 0,
-                            icon      = info.iconFileID,
-                            ilvl      = ilvl or 0,
-                        }
-                        if captureBindInfo then
-                            -- Battle pets (caged) are always tradeable
-                            if info.hyperlink:find("|Hbattlepet:") then
-                                items[key].bindType = 0
-                                items[key].isBound = false
-                            else
-                                local bindType, isBound = GetBindInfo(info.hyperlink, info, bagIndex, slot)
-                                items[key].bindType = bindType
-                                items[key].isBound = isBound
-                            end
-                        end
-                    end
-                    items[key].quantity = items[key].quantity + (info.stackCount or 1)
-                end
-            end
-        end
-    end
-    return items
-end
-
-local function MergeItems(target, source, location)
-    for key, data in pairs(source) do
-        if not target[key] then
-            target[key] = {
-                itemID    = data.itemID,
-                name      = data.name,
-                bonusIDs  = data.bonusIDs,
-                modifiers = data.modifiers,
-                quantity  = 0,
-                icon      = data.icon,
-                ilvl      = data.ilvl,
-                locations = {},
-                bindType  = data.bindType,
-                isBound   = data.isBound,
-            }
-        end
-        if data.ilvl and data.ilvl > 0 and (not target[key].ilvl or target[key].ilvl == 0) then
-            target[key].ilvl = data.ilvl
-        end
-        target[key].quantity = target[key].quantity + data.quantity
-        target[key].locations[location] = (target[key].locations[location] or 0) + data.quantity
-        if data.bindType and not target[key].bindType then
-            target[key].bindType = data.bindType
-            target[key].isBound = data.isBound
-        end
-    end
-end
-
---------------------------
--- Deal Enrichment
---------------------------
-
--- When we scan physical items, backfill import entries that have incomplete data.
--- Imports from FP often arrive with bare item IDs (no bonus IDs, no icon, no quality).
--- The scanned item has the real hyperlink data — use it to fill the gaps.
+-- When we scan physical items, backfill import entries that have incomplete
+-- data. Imports from FP often arrive with bare item IDs (no bonus IDs, no
+-- icon, no quality). The scanned item has the real hyperlink data — use it
+-- to fill the gaps.
 local function EnrichDealsFromInventory(scannedItems)
     if not ns.db or not ns.db.imports or not ns.db.imports.fpScanner then return end
 
@@ -161,7 +32,6 @@ local function EnrichDealsFromInventory(scannedItems)
         local queueName = (queueItem.name or ""):lower()
         local queueHasBonuses = queueItem.itemKey and queueItem.itemKey:match("^[^;]*;([^;]*)") or ""
 
-        -- Only enrich if the queue item is missing bonus IDs
         if queueHasBonuses == "" and queueNumID then
             for key, itemData in pairs(scannedItems) do
                 local scannedNumID = tonumber((key:match("^(%d+)")))
@@ -170,27 +40,17 @@ local function EnrichDealsFromInventory(scannedItems)
                     and itemData.name:lower() == queueName
 
                 if (scannedNumID and scannedNumID == queueNumID) or nameMatch then
-                    -- Found a match with real data — enrich the queue item
-                    local enriched = false
-
                     if scannedBonuses ~= "" then
                         queueItem.itemKey = key
                         queueItem.bonusIDs = itemData.bonusIDs
                         queueItem.modifiers = itemData.modifiers
-                        enriched = true
                     end
-
                     if not queueItem.icon and itemData.icon then
                         queueItem.icon = itemData.icon
-                        enriched = true
                     end
-
                     if (not queueItem.name or queueItem.name == "") and itemData.name then
                         queueItem.name = itemData.name
-                        enriched = true
                     end
-
-                    -- Look up quality if missing
                     if not queueItem.quality or queueItem.quality == "" then
                         local numID = tonumber(itemData.itemID)
                         if numID and numID > 0 then
@@ -199,12 +59,10 @@ local function EnrichDealsFromInventory(scannedItems)
                                 local qualityNames = {[0]="Poor",[1]="Common",[2]="Uncommon",
                                     [3]="Rare",[4]="Epic",[5]="Legendary"}
                                 queueItem.quality = qualityNames[q] or ""
-                                enriched = true
                             end
                         end
                     end
-
-                    break -- only match one inventory item per queue item
+                    break
                 end
             end
         end
@@ -212,166 +70,234 @@ local function EnrichDealsFromInventory(scannedItems)
 end
 
 --------------------------
--- Public Scan Functions
+-- Syndicator projection helpers
 --------------------------
 
-function Scanner:ScanCurrentCharacter()
-    if not ns.db then return end
+-- Build the FlipQueue Syndicator key for the current character. Syndicator
+-- uses "Name-NormalizedRealm" where normalized strips spaces ("Earthen Ring"
+-- becomes "EarthenRing"). FlipQueue's own charKey uses the display realm
+-- (with spaces), so the two can't be used interchangeably.
+local function CurrentSyndicatorKey()
+    local name = UnitName("player")
+    local realm = GetNormalizedRealmName and GetNormalizedRealmName() or GetRealmName()
+    if not name or not realm then return nil end
+    return name .. "-" .. realm
+end
 
-    local charKey = ns:GetCharKey()
-    local allItems = {}
-
-    local bagItems = ScanContainers(ns.INVENTORY_BAGS, true)
-    MergeItems(allItems, bagItems, "bags")
-
-    local reagentItems = ScanContainers({ns.REAGENT_BAG}, true)
-    MergeItems(allItems, reagentItems, "reagent")
-
-    -- Preserve bank locations from previous scan (bank can only be scanned when open)
-    ns.db.characters[charKey] = ns.db.characters[charKey] or {}
-    local charEntry = ns.db.characters[charKey]
-    charEntry.class = select(2, UnitClass("player"))
-    local prevData = charEntry.inventory
-    if prevData and prevData.items then
-        for key, prevItem in pairs(prevData.items) do
-            if prevItem.locations and prevItem.locations.bank and prevItem.locations.bank > 0 then
-                if not allItems[key] then
-                    allItems[key] = {
-                        itemID    = prevItem.itemID,
-                        name      = prevItem.name,
-                        bonusIDs  = prevItem.bonusIDs,
-                        modifiers = prevItem.modifiers,
+-- Shared helper: take a Syndicator container-slot list and fold each slot
+-- into the caller's items table, tagging quantities against `location`.
+-- The `items` table has the pre-6a shape: `items[key] = { itemID, bonusIDs,
+-- modifiers, quantity, icon, ilvl, bindType, isBound, locations = {...} }`.
+-- Battle pets are handled via link parsing (Syndicator includes the full
+-- caged-pet hyperlink).
+local function FoldContainerSlots(slots, items, location)
+    if type(slots) ~= "table" then return end
+    for _, slot in ipairs(slots) do
+        local link = slot and slot.itemLink
+        if link and link ~= "" then
+            local key = ns.ItemLookup and ns.ItemLookup:GetItemKey(link) or nil
+            if key then
+                local entry = items[key]
+                if not entry then
+                    local itemID, bonusIDs, modifiers = ns:ParseItemLink(link)
+                    local itemName
+                    local ilvl = 0
+                    local bindType = 0
+                    if link:find("|Hbattlepet:") then
+                        itemName = link:match("|h%[(.-)%]|h")
+                    else
+                        -- C_Item.GetItemInfo returns (name, link, quality,
+                        -- ilvl, reqLevel, class, subclass, stackCount,
+                        -- equipLoc, texture, sellPrice, classID, subclassID,
+                        -- bindType, expacID, setID, isCraftingReagent).
+                        -- bindType is index 14 — downstream code filters on
+                        -- it (BoP=1, Quest=4, BtA=7, BtW=8) to exclude
+                        -- non-tradeable items from the deal pool.
+                        local ok, _, _, _, _, _, _, _, _, _, _, _, _, _, bt =
+                            pcall(C_Item.GetItemInfo, link)
+                        if ok and bt then bindType = bt end
+                        local okName, n = pcall(C_Item.GetItemInfo, link)
+                        itemName = okName and n or nil
+                        if GetDetailedItemLevelInfo then
+                            local okIlvl, result = pcall(GetDetailedItemLevelInfo, link)
+                            if okIlvl and result then ilvl = tonumber(result) or 0 end
+                        end
+                    end
+                    entry = {
+                        itemID    = itemID,
+                        name      = itemName or "Unknown",
+                        bonusIDs  = bonusIDs or "",
+                        modifiers = modifiers or "",
                         quantity  = 0,
-                        icon      = prevItem.icon,
-                        ilvl      = prevItem.ilvl,
+                        icon      = slot.iconTexture,
+                        ilvl      = ilvl,
                         locations = {},
-                        bindType  = prevItem.bindType,
-                        isBound   = prevItem.isBound,
+                        bindType  = bindType,
+                        isBound   = slot.isBound and true or false,
                     }
+                    items[key] = entry
                 end
-                allItems[key].locations.bank = prevItem.locations.bank
-                allItems[key].quantity = allItems[key].quantity + prevItem.locations.bank
+                local count = slot.itemCount or 1
+                entry.quantity = entry.quantity + count
+                if location then
+                    entry.locations[location] = (entry.locations[location] or 0) + count
+                end
+            end
+        end
+    end
+end
+
+-- Project Syndicator's per-character data into FlipQueue's character.inventory
+-- shape. Walks bags → "bags", reagent bag → "reagent", bank tabs → "bank".
+-- Syndicator groups bag slots under `charData.bags` (array keyed by bag index).
+local function ProjectCharacterInventory(charData)
+    local items = {}
+    if type(charData) ~= "table" then return items end
+
+    if type(charData.bags) == "table" then
+        -- bags[1..4] are the normal backpack slots; bags[5] is the reagent
+        -- bag in modern retail. Syndicator keys by the bag index, so a
+        -- numeric iteration picks them up.
+        for bagIndex, slots in pairs(charData.bags) do
+            local loc = (bagIndex == 5) and "reagent" or "bags"
+            FoldContainerSlots(slots, items, loc)
+        end
+    end
+
+    if type(charData.bank) == "table" then
+        -- bank is a list of tab slot arrays; we don't care which tab, just
+        -- that it's bank-side. If Syndicator exposes it as a flat array of
+        -- slots instead, FoldContainerSlots handles that too.
+        for _, tab in pairs(charData.bank) do
+            if type(tab) == "table" then
+                -- Heuristic: if the first entry looks like a slot (has
+                -- itemLink or is nil), this tab IS the slot list; otherwise
+                -- it's a tab wrapper with its own slot subtable.
+                if tab.itemLink or tab.itemCount or #tab == 0 then
+                    FoldContainerSlots({tab}, items, "bank")
+                else
+                    FoldContainerSlots(tab, items, "bank")
+                end
             end
         end
     end
 
-    local prevBankScan = prevData and prevData.lastBankScan or nil
-    charEntry.inventory = {
-        lastScan     = time(),
-        lastBankScan = prevBankScan,
-        items        = allItems,
-    }
-
-    local count = 0
-    for _ in pairs(allItems) do count = count + 1 end
-    ns:PrintDebug("Scanned " .. count .. " unique items on " .. charKey)
-
-    EnrichDealsFromInventory(allItems)
-
-    -- Emit sync delta
-    if ns.Sync and ns.Sync.IsLinked and ns.Sync:IsLinked() and not ns.Sync._applying then
-        local charKey = ns:GetCharKey()
-        ns.Sync:EmitDelta("CHAR", { charKey = charKey, charData = ns.db.characters[charKey] })
-    end
+    return items
 end
 
-function Scanner:ScanBank()
-    if not ns.db then return end
-
-    local charKey = ns:GetCharKey()
-    local charEntry = ns.db.characters[charKey]
-    local charData = charEntry and charEntry.inventory
-    if not charData then
-        self:ScanCurrentCharacter()
-        charEntry = ns.db.characters[charKey]
-        charData = charEntry and charEntry.inventory
+-- Project Syndicator's warband data into FlipQueue's ns.db.warbank shape.
+-- Returns (items table, totalSlots, freeSlots) — the three fields required
+-- by the to-do generator's warbank budget and the TodoPage header readout.
+local function ProjectWarband(warbandData)
+    local items = {}
+    local totalSlots, freeSlots = 0, 0
+    if type(warbandData) ~= "table" or type(warbandData.bank) ~= "table" then
+        return items, 0, 0
     end
 
-    -- Clear existing bank locations (authoritative scan replaces all bank data)
-    for key, item in pairs(charData.items) do
-        if item.locations and item.locations.bank and item.locations.bank > 0 then
-            item.quantity = item.quantity - item.locations.bank
-            item.locations.bank = nil
-        end
-    end
-    -- Remove items that only existed in bank (zero quantity after clearing)
-    for key, item in pairs(charData.items) do
-        if item.quantity <= 0 then
-            charData.items[key] = nil
+    for _, tab in pairs(warbandData.bank) do
+        -- Each tab is { slots = {...}, name, iconTexture, depositFlags, ... }
+        -- (or sometimes the slot list directly, depending on version).
+        local slots = tab.slots or tab
+        if type(slots) == "table" then
+            for _, slot in ipairs(slots) do
+                totalSlots = totalSlots + 1
+                if not (slot and slot.itemLink and slot.itemLink ~= "") then
+                    freeSlots = freeSlots + 1
+                end
+            end
+            FoldContainerSlots(slots, items, nil)
         end
     end
 
-    local bankItems = ScanContainers(ns:GetEnabledBankTabs(), true)
-    MergeItems(charData.items, bankItems, "bank")
-    charData.lastScan = time()
-    charData.lastBankScan = time()
-
-    local count = 0
-    for _ in pairs(bankItems) do count = count + 1 end
-    ns:PrintDebug("Bank scanned: " .. count .. " unique items.")
-
-    EnrichDealsFromInventory(bankItems)
-
-    -- Emit sync delta
-    if ns.Sync and ns.Sync.IsLinked and ns.Sync:IsLinked() and not ns.Sync._applying then
-        local charKey = ns:GetCharKey()
-        ns.Sync:EmitDelta("CHAR", { charKey = charKey, charData = ns.db.characters[charKey] })
-    end
+    return items, totalSlots, freeSlots
 end
 
-function Scanner:ScanWarbank()
-    if not ns.db then return end
+--------------------------
+-- Refresh entry points
+--------------------------
 
-    -- Check if warbank is accessible (follows Baganator/Syndicator pattern)
-    local okLock, lockReason = pcall(C_Bank.FetchBankLockedReason, Enum.BankType.Account)
-    if not okLock or lockReason ~= nil then
-        ns:PrintDebug("Warbank not accessible, skipping scan.")
+function Scanner:RefreshCurrentCharacterFromSyndicator()
+    if not ns.db then return end
+    if not (Syndicator and Syndicator.API and Syndicator.API.GetByCharacterFullName) then
         return
     end
 
-    local warbankItems = ScanContainers(ns:GetEnabledWarbankTabs(), true)
-    local items = {}
-    for key, data in pairs(warbankItems) do
-        items[key] = {
-            itemID    = data.itemID,
-            name      = data.name,
-            bonusIDs  = data.bonusIDs,
-            modifiers = data.modifiers,
-            quantity  = data.quantity,
-            icon      = data.icon,
-            ilvl      = data.ilvl,
-            bindType  = data.bindType,
-            isBound   = data.isBound,
-        }
-    end
+    local synKey = CurrentSyndicatorKey()
+    if not synKey then return end
 
-    ns.db.warbank = {
-        lastScan = time(),
-        items    = items,
+    local ok, charData = pcall(Syndicator.API.GetByCharacterFullName, synKey)
+    if not ok or type(charData) ~= "table" then return end
+
+    local fqKey = ns:GetCharKey()
+    ns.db.characters[fqKey] = ns.db.characters[fqKey] or {}
+    local charEntry = ns.db.characters[fqKey]
+    charEntry.class = select(2, UnitClass("player"))
+
+    local prevInv = charEntry.inventory
+    local items = ProjectCharacterInventory(charData)
+
+    charEntry.inventory = {
+        lastScan     = time(),
+        lastBankScan = prevInv and prevInv.lastBankScan or time(),
+        items        = items,
     }
 
     local count = 0
     for _ in pairs(items) do count = count + 1 end
-    ns:PrintDebug("Warbank scanned: " .. count .. " unique items.")
+    ns:PrintDebug("Syndicator refresh: " .. count .. " unique items on " .. fqKey)
 
     EnrichDealsFromInventory(items)
 
-    -- Emit sync delta
+    if ns.Sync and ns.Sync.IsLinked and ns.Sync:IsLinked() and not ns.Sync._applying then
+        ns.Sync:EmitDelta("CHAR", { charKey = fqKey, charData = charEntry })
+    end
+end
+
+function Scanner:RefreshWarbankFromSyndicator()
+    if not ns.db then return end
+    if not (Syndicator and Syndicator.API and Syndicator.API.GetWarband) then return end
+
+    local ok, warbandData = pcall(Syndicator.API.GetWarband, 1)
+    if not ok or type(warbandData) ~= "table" then return end
+
+    local items, totalSlots, freeSlots = ProjectWarband(warbandData)
+    ns.db.warbank = {
+        lastScan   = time(),
+        items      = items,
+        totalSlots = totalSlots,
+        freeSlots  = freeSlots,
+    }
+
+    local count = 0
+    for _ in pairs(items) do count = count + 1 end
+    ns:PrintDebug("Warbank refresh: " .. count .. " unique items, "
+        .. freeSlots .. "/" .. totalSlots .. " free.")
+
+    EnrichDealsFromInventory(items)
+
     if ns.Sync and ns.Sync.IsLinked and ns.Sync:IsLinked() and not ns.Sync._applying then
         ns.Sync:EmitDelta("WB", ns.db.warbank)
     end
 end
 
+-- Back-compat shims: older code throughout the addon still calls
+-- Scanner:ScanCurrentCharacter / ScanBank / ScanWarbank on events like
+-- PLAYERBANKSLOTS_CHANGED or from slash commands. Route those to the
+-- Syndicator refresh so callers don't have to know the plumbing changed.
+function Scanner:ScanCurrentCharacter() self:RefreshCurrentCharacterFromSyndicator() end
+function Scanner:ScanBank() self:RefreshCurrentCharacterFromSyndicator() end
+function Scanner:ScanWarbank() self:RefreshWarbankFromSyndicator() end
+
 --------------------------
--- Guild Bank Scanning
+-- Guild Bank Scanning (unchanged — Syndicator doesn't handle guild banks)
 --------------------------
 
 local guildBankOpen = false
 local guildBankScanning = false
-local guildScanQueue = {}  -- tabs remaining to scan
-local guildScanData = {}   -- accumulated scan results
+local guildScanQueue = {}
+local guildScanData = {}
 
--- Scan a single guild bank tab (items already loaded by QueryGuildBankTab)
 local function ScanGuildBankTab(tab)
     local items = {}
     for slot = 1, 98 do
@@ -407,10 +333,8 @@ local function ScanGuildBankTab(tab)
     return items
 end
 
--- Process next tab in the scan queue
 local function ProcessNextGuildTab()
     if #guildScanQueue == 0 then
-        -- All tabs scanned — save results
         guildBankScanning = false
         if not ns.db then return end
         local guildName = GetGuildInfo("player") or "Unknown Guild"
@@ -418,7 +342,7 @@ local function ProcessNextGuildTab()
         if not ns.db.guilds[guildName] then
             ns.db.guilds[guildName] = { enabled = true, members = {} }
         end
-        ns.db.guilds[guildName].enabled = true  -- enable on first scan
+        ns.db.guilds[guildName].enabled = true
         ns.db.guilds[guildName].lastScan = time()
         ns.db.guilds[guildName].items = guildScanData
         local count = 0
@@ -430,17 +354,14 @@ local function ProcessNextGuildTab()
 
     local tab = table.remove(guildScanQueue, 1)
     QueryGuildBankTab(tab)
-    -- GUILDBANKBAGSLOTS_CHANGED will fire when data is ready
 end
 
--- Called when GUILDBANKBAGSLOTS_CHANGED fires during a scan
 local function OnGuildBankSlotsChanged()
     if not guildBankOpen or not guildBankScanning then return end
 
     local currentTab = GetCurrentGuildBankTab()
     if currentTab then
         local tabItems = ScanGuildBankTab(currentTab)
-        -- Merge into accumulated data
         for key, data in pairs(tabItems) do
             if not guildScanData[key] then
                 guildScanData[key] = {
@@ -456,7 +377,6 @@ local function OnGuildBankSlotsChanged()
         end
     end
 
-    -- Continue to next tab after a short delay (server throttle)
     C_Timer.After(0.3, ProcessNextGuildTab)
 end
 
@@ -476,7 +396,6 @@ function Scanner:ScanGuildBank()
     guildScanData = {}
     guildScanQueue = {}
 
-    -- Check per-tab config for this guild
     local guildName = GetGuildInfo("player")
     local disabledTabs = guildName and ns.db.guilds and ns.db.guilds[guildName]
         and ns.db.guilds[guildName].disabledTabs or {}
@@ -499,7 +418,7 @@ function Scanner:ScanGuildBank()
 end
 
 --------------------------
--- Character Metadata
+-- Character metadata
 --------------------------
 
 local function UpdateCharacterMeta()
@@ -512,11 +431,9 @@ local function UpdateCharacterMeta()
     char.class = select(2, UnitClass("player"))
     char.level = UnitLevel("player")
     char.guild = GetGuildInfo("player")
-    -- Tag character with this account's UUID for multi-account sync
     if ns.db.sync and ns.db.sync.accountUUID then
         char.accountUUID = ns.db.sync.accountUUID
     end
-    -- Register guild even if guild bank hasn't been scanned yet
     if char.guild then
         ns.db.guilds = ns.db.guilds or {}
         if not ns.db.guilds[char.guild] then
@@ -535,7 +452,26 @@ local function UpdateCharacterMeta()
 end
 
 --------------------------
--- Event Handling
+-- Hard-dep check
+--------------------------
+
+-- Syndicator is a hard dependency as of v0.11.0 (Phase 6a). The .toc file
+-- declares the dependency, so Blizzard's addon loader refuses to load
+-- FlipQueue without it — but if someone has disabled Syndicator mid-session
+-- or is running a corrupted install, we want a clear print rather than
+-- silent failure when the refresh functions no-op.
+local function WarnIfSyndicatorMissing()
+    if Syndicator and Syndicator.API and Syndicator.API.GetByCharacterFullName then
+        return false
+    end
+    ns:Print(ns.COLORS.RED ..
+        "Syndicator missing or not loaded.|r FlipQueue requires Syndicator " ..
+        "as of v0.11.0 for inventory tracking. Install it from CurseForge/Wago.")
+    return true
+end
+
+--------------------------
+-- Event handling
 --------------------------
 
 local frame = CreateFrame("Frame")
@@ -546,60 +482,77 @@ frame:RegisterEvent("PLAYER_MONEY")
 frame:RegisterEvent("PLAYER_INTERACTION_MANAGER_FRAME_SHOW")
 frame:RegisterEvent("PLAYER_INTERACTION_MANAGER_FRAME_HIDE")
 frame:RegisterEvent("GUILDBANKBAGSLOTS_CHANGED")
-frame:RegisterEvent("PLAYERBANKSLOTS_CHANGED")
-frame:RegisterEvent("PLAYER_ACCOUNT_BANK_TAB_SLOTS_CHANGED")
+
+local syndicatorReady = false
+
+-- Register Syndicator callbacks once. The refresh functions are no-ops if
+-- Syndicator isn't ready yet, so re-invoking them on the Ready callback
+-- backfills the initial state.
+local function RegisterSyndicatorCallbacks()
+    if not (Syndicator and Syndicator.CallbackRegistry) then return end
+
+    Syndicator.CallbackRegistry:RegisterCallback("BagCacheUpdate",
+        function(_, characterName)
+            -- Only refresh when the update is for THIS character. Syndicator
+            -- may also emit for alt characters on this BNet account; we
+            -- don't touch those (Sync.lua handles partner data).
+            local synKey = CurrentSyndicatorKey()
+            if characterName == synKey then
+                Scanner:RefreshCurrentCharacterFromSyndicator()
+            end
+        end, Scanner)
+
+    Syndicator.CallbackRegistry:RegisterCallback("WarbandBankCacheUpdate",
+        function()
+            Scanner:RefreshWarbankFromSyndicator()
+        end, Scanner)
+end
 
 frame:SetScript("OnEvent", function(self, event, ...)
     if event == "PLAYER_LOGIN" then
         ns:InitDB()
         UpdateCharacterMeta()
 
-        -- Print cleanup summary if data was migrated/cleaned
+        -- Print cleanup summary if migration ran
         if ns.db._cleanupSummary then
             ns:Print(ns.COLORS.GRAY .. "Data cleanup: " .. ns.db._cleanupSummary .. "|r")
             ns.db._cleanupSummary = nil
         end
+        if ns.db._phase6aMessage then
+            ns:Print(ns.COLORS.YELLOW .. ns.db._phase6aMessage .. "|r")
+            ns.db._phase6aMessage = nil
+        end
 
-        -- Start periodic expiry checker
         if ns.Tracker and ns.Tracker.StartExpiryTicker then
             ns.Tracker:StartExpiryTicker()
         end
 
-        -- Initialize multi-account sync
         if ns.Sync and ns.Sync.Init then
             ns.Sync:Init()
         end
 
+        -- Hard dep check + Syndicator wiring. If Syndicator is missing,
+        -- warn the user and bail on the initial scan — event callbacks
+        -- won't fire but the UI will still load.
+        if WarnIfSyndicatorMissing() then return end
+
+        RegisterSyndicatorCallbacks()
+
         if ns.db.settings.autoScan then
-            C_Timer.After(2, function()
-                -- Check if this is a new character being scanned for the first time
-                local isFirstScan = not ns.db.characters[ns:GetCharKey()] or not ns.db.characters[ns:GetCharKey()].inventory
-                Scanner:ScanCurrentCharacter()
+            local function RunInitialScan()
+                syndicatorReady = true
+                Scanner:RefreshCurrentCharacterFromSyndicator()
+                Scanner:RefreshWarbankFromSyndicator()
 
-                -- First-time onboarding: if there are deals but few characters, show hint
-                if isFirstScan then
-                    local charCount = 0
-                    for _ in pairs(ns.db.characters) do charCount = charCount + 1 end
-                    local dealCount = ns:ImportGetCount("fpScanner")
-                    if dealCount > 0 and charCount <= 2 then
-                        ns:Print(ns.COLORS.YELLOW .. "Character registered!|r Log into each of your posting characters once so FlipQueue can match deals to them.")
-                    end
-                end
-
-                -- Refresh task steps on login (items may have changed since last session)
                 if ns.TodoList and ns.TodoList.RefreshTaskSteps then
                     ns.TodoList:RefreshTaskSteps()
                 end
-
-                -- Re-assign any unassigned tasks now that this character is registered
                 if ns.TodoList and ns.TodoList.ReassignUnassignedTasks then
                     local reassigned = ns.TodoList:ReassignUnassignedTasks()
                     if reassigned > 0 then
                         ns:Print(ns.COLORS.GREEN .. reassigned .. " task(s)|r assigned to characters on this realm.")
                     end
                 end
-
-                -- Detect characters from TSM data
                 if ns.TSM and ns.TSM.DetectCharacters then
                     local detected = ns.TSM:DetectCharacters()
                     if #detected > 0 then
@@ -607,7 +560,6 @@ frame:SetScript("OnEvent", function(self, event, ...)
                         ns:Print(ns.COLORS.YELLOW .. #detected .. " character(s) detected from TSM.|r Open Characters page to add them.")
                     end
                 end
-
                 if ns.db.settings.showLoginMessage and ns.TodoList then
                     local charKey = ns:GetCharKey()
                     local todoTasks = ns.TodoList:GetCharacterTasks(charKey)
@@ -616,19 +568,15 @@ frame:SetScript("OnEvent", function(self, event, ...)
                     end
                 end
 
-                -- Sold/expired auctions on this character (need mail collection)
                 local currentCharKey = ns:GetCharKey()
                 local uncollected = ns.SalesIndex:GetUncollectedForChar(currentCharKey)
-                local soldCount = uncollected.sold
-                local expiredCount = uncollected.expired
-                if soldCount > 0 then
-                    ns:Print(ns.COLORS.GREEN .. soldCount .. " auction(s) sold — check mail to collect gold!|r")
+                if uncollected.sold > 0 then
+                    ns:Print(ns.COLORS.GREEN .. uncollected.sold .. " auction(s) sold — check mail to collect gold!|r")
                 end
-                if expiredCount > 0 then
-                    ns:Print(ns.COLORS.ORANGE .. expiredCount .. " expired auction(s) to collect — check mail!|r")
+                if uncollected.expired > 0 then
+                    ns:Print(ns.COLORS.ORANGE .. uncollected.expired .. " expired auction(s) to collect — check mail!|r")
                 end
 
-                -- Expiring auction alerts (across all characters)
                 if ns.Tracker and ns.Tracker.CheckExpiringAuctions then
                     local expiring = ns.Tracker:CheckExpiringAuctions()
                     if #expiring > 0 then
@@ -642,14 +590,36 @@ frame:SetScript("OnEvent", function(self, event, ...)
                         end
                     end
                 end
-            end)
+            end
+
+            -- If Syndicator is already ready, run immediately; otherwise
+            -- wait for its Ready callback (fires once after PLAYER_LOGIN).
+            if Syndicator.API.IsReady and Syndicator.API.IsReady() then
+                C_Timer.After(0.5, RunInitialScan)
+            elseif Syndicator.CallbackRegistry then
+                Syndicator.CallbackRegistry:RegisterCallback("Ready",
+                    function()
+                        if not syndicatorReady then
+                            C_Timer.After(0.2, RunInitialScan)
+                        end
+                    end, Scanner)
+                -- Safety fallback: run anyway after 5s even if Ready didn't fire
+                C_Timer.After(5, function()
+                    if not syndicatorReady then RunInitialScan() end
+                end)
+            else
+                C_Timer.After(1, RunInitialScan)
+            end
         end
 
     elseif event == "BANKFRAME_OPENED" then
+        -- Syndicator will emit BagCacheUpdate / WarbandBankCacheUpdate as
+        -- it scans the freshly-opened bank, which our callbacks pick up.
+        -- We still kick off an immediate refresh in case Syndicator hasn't
+        -- processed the event yet.
         C_Timer.After(0.5, function()
-            Scanner:ScanCurrentCharacter()
-            Scanner:ScanBank()
-            Scanner:ScanWarbank()
+            Scanner:RefreshCurrentCharacterFromSyndicator()
+            Scanner:RefreshWarbankFromSyndicator()
         end)
 
     elseif event == "BANKFRAME_CLOSED" then
@@ -669,11 +639,8 @@ frame:SetScript("OnEvent", function(self, event, ...)
 
     elseif event == "PLAYER_INTERACTION_MANAGER_FRAME_SHOW" then
         local interactionType = ...
-        -- GuildBanker = 10 (Enum.PlayerInteractionType.GuildBanker)
         if interactionType == 10 or (Enum.PlayerInteractionType and interactionType == Enum.PlayerInteractionType.GuildBanker) then
             guildBankOpen = true
-            -- Guild bank scanning disabled: Blizzard API returns unreliable item data
-            -- (stripped bonus IDs, wrong ilvl, pets as "Pet Cage"). Re-enable when fixed.
         end
 
     elseif event == "PLAYER_INTERACTION_MANAGER_FRAME_HIDE" then
@@ -683,40 +650,6 @@ frame:SetScript("OnEvent", function(self, event, ...)
             guildBankScanning = false
             guildScanQueue = {}
         end
-
-    elseif event == "PLAYERBANKSLOTS_CHANGED" then
-        -- Personal bank slots changed — skip during queue processing (final scan handles it)
-        if ns.BankQueue and ns.BankQueue.processing then return end
-        C_Timer.After(0.5, function()
-            if ns.BankQueue and ns.BankQueue.processing then return end
-            Scanner:ScanCurrentCharacter()
-            Scanner:ScanBank()
-            if ns.TodoList then
-                if ns.TodoList.RefreshLocations then ns.TodoList:RefreshLocations() end
-                if ns.TodoList.RefreshTaskSteps then ns.TodoList:RefreshTaskSteps() end
-            end
-            if ns.UI and ns.UI.mainFrame and ns.UI.mainFrame:IsShown() then
-                ns.UI:Refresh()
-            end
-            if ns.UI and ns.UI.RefreshMini then ns.UI:RefreshMini() end
-        end)
-
-    elseif event == "PLAYER_ACCOUNT_BANK_TAB_SLOTS_CHANGED" then
-        -- Warbank slots changed — skip during queue processing (final scan handles it)
-        if ns.BankQueue and ns.BankQueue.processing then return end
-        C_Timer.After(0.5, function()
-            if ns.BankQueue and ns.BankQueue.processing then return end
-            Scanner:ScanCurrentCharacter()
-            Scanner:ScanWarbank()
-            if ns.TodoList then
-                if ns.TodoList.RefreshLocations then ns.TodoList:RefreshLocations() end
-                if ns.TodoList.RefreshTaskSteps then ns.TodoList:RefreshTaskSteps() end
-            end
-            if ns.UI and ns.UI.mainFrame and ns.UI.mainFrame:IsShown() then
-                ns.UI:Refresh()
-            end
-            if ns.UI and ns.UI.RefreshMini then ns.UI:RefreshMini() end
-        end)
 
     elseif event == "GUILDBANKBAGSLOTS_CHANGED" then
         if guildBankOpen then

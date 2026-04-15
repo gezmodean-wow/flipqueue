@@ -2688,6 +2688,7 @@ function UI:RefreshGeneratorPage(pending)
             local rejCount = previewSource and previewSource.rejected and #previewSource.rejected or 0
             local ovCount = previewSource and previewSource.overflow and #previewSource.overflow or 0
             local ndCount = previewSource and previewSource.noDeals and #previewSource.noDeals or 0
+            local wbHeld = previewSource and previewSource.warbankFull and #previewSource.warbankFull or 0
             local statusText = ns.COLORS.GRAY .. actionableCount .. " tasks across " .. charGroups .. " realm(s)"
             if rejCount > 0 then
                 statusText = statusText .. "  |  " .. ns.COLORS.ORANGE .. rejCount .. " TSM rejected|r"
@@ -2697,6 +2698,10 @@ function UI:RefreshGeneratorPage(pending)
             end
             if ndCount > 0 then
                 statusText = statusText .. "  |  " .. ns.COLORS.RED .. ndCount .. " no deals|r"
+            end
+            if wbHeld > 0 then
+                statusText = statusText .. "  |  " .. ns.COLORS.ORANGE .. wbHeld ..
+                    " held (warbank full)|r"
             end
             statusText = statusText .. "|r"
             s3.statusLabel:SetText(statusText)

@@ -135,12 +135,15 @@ local function LookupItemInfo(itemID, itemKey, itemName)
 end
 
 -- Format gold value for display
+-- Estimates are truncated to whole numbers (no decimals) by design — the
+-- todo-list group headers show approximate gold with a "~" prefix, and
+-- fractional gold amounts make that noisier than it needs to be.
 local function FormatGoldValue(totalGold)
-    if totalGold <= 0 then return "" end
+    if not totalGold or totalGold <= 0 then return "" end
     if totalGold >= 1000 then
-        return string.format("%.1fk gold", totalGold / 1000)
+        return math.floor(totalGold / 1000) .. "k gold"
     end
-    return tostring(totalGold) .. " gold"
+    return math.floor(totalGold) .. " gold"
 end
 
 -- ==========================================
@@ -262,6 +265,20 @@ local function BuildCurrentCharTasks()
                 end
             end
         end
+    end
+
+    -- Warbank scan nag: when we have no scan data AT ALL, the scheduler
+    -- can't enforce capacity and the overfill warning can't compute a
+    -- balance. Ask the user to visit a bank once so we seed the state.
+    -- A stale scan is preferred over no scan, so we only nag when the
+    -- warbank.freeSlots field is missing entirely.
+    if not (ns.db.warbank and type(ns.db.warbank.freeSlots) == "number") then
+        table.insert(tasks, {
+            icon = "Interface\\Icons\\INV_Misc_Bag_EnchantedRunecloth",
+            text = ns.COLORS.YELLOW .. "Visit the warbank|r" ..
+                " — FlipQueue needs a scan to plan around its capacity",
+            sort = 5,
+        })
     end
 
     table.sort(tasks, function(a, b) return a.sort < b.sort end)

@@ -677,6 +677,41 @@ function UI:RefreshTodoPage()
             local displayGroups, missingCount = ns.TodoList:BuildDisplayGroups(
                 currentTodoList.tasks, UI:GetGenSortMode())
 
+            -- Running warbank balance simulation. Walk all groups in display
+            -- order and tag any task whose deposit step would push the
+            -- cumulative usage past the known capacity as _warbankAtRisk.
+            -- This is a soft warning — the UI renders a red icon but the
+            -- user can still click through, matching the soft ordering
+            -- the scheduling model uses elsewhere.
+            if ns.db.warbank and type(ns.db.warbank.freeSlots) == "number" then
+                local balance = ns.db.warbank.freeSlots
+                for _, group in ipairs(displayGroups) do
+                    for _, item in ipairs(group.items) do
+                        item._warbankAtRisk = nil
+                        if item.steps then
+                            local consumes, frees = 0, 0
+                            for _, step in ipairs(item.steps) do
+                                if step.status ~= "done" and step.status ~= "completed" then
+                                    if step.type == "deposit" and step.to == "warbank" then
+                                        consumes = consumes + 1
+                                    elseif step.type == "retrieve" and step.from == "warbank" then
+                                        frees = frees + 1
+                                    end
+                                end
+                            end
+                            -- Apply retrieves first (they run earlier in the
+                            -- sort order), then deposits. A task is at risk
+                            -- when the deposit would drop balance below zero.
+                            balance = balance + frees
+                            if consumes > 0 and balance - consumes < 0 then
+                                item._warbankAtRisk = true
+                            end
+                            balance = balance - consumes
+                        end
+                    end
+                end
+            end
+
             local HDR_H = 22
             local ITEM_H = 18
             local y = 0
@@ -878,6 +913,12 @@ function UI:RefreshTodoPage()
                     if isBuyItem then
                         displayName = ns.COLORS.CYAN .. "[BUY] " .. "|r" .. displayName
                     end
+                    -- Warbank overfill warning: soft indicator only. Running
+                    -- balance simulation flags this task because its deposit
+                    -- step would push cumulative usage past capacity.
+                    if item._warbankAtRisk then
+                        displayName = ns.COLORS.RED .. "[!] |r" .. displayName
+                    end
                     local qtyStr = (item.quantity or 1) > 1 and (" x" .. (item.quantity or 1)) or ""
                     row.text:SetText(displayName .. qtyStr)
 
@@ -1007,10 +1048,59 @@ function UI:RefreshTodoPage()
             for _, g in ipairs(displayGroups) do
                 if g.charKey then assignedCount = assignedCount + #g.items end
             end
+
+            -- Warbank balance readout. Shows used/total free slots and the
+            -- count of pending deposit-to-warbank steps across all tasks so
+            -- users can see capacity pressure without opening the bank. The
+            -- at-risk indicator matches the per-task [!] badge: orange when
+            -- pending deposits exceed free slots, yellow when tight.
+            local warbankReadout = ""
+            if ns.db.warbank and type(ns.db.warbank.freeSlots) == "number" then
+                local freeSlots = ns.db.warbank.freeSlots
+                local totalSlots = ns.db.warbank.totalSlots or 0
+                local pendingDeposits = 0
+                local pendingRetrieves = 0
+                for _, g in ipairs(displayGroups) do
+                    for _, item in ipairs(g.items) do
+                        if item.steps then
+                            for _, step in ipairs(item.steps) do
+                                if step.status ~= "done" and step.status ~= "completed" then
+                                    if step.type == "deposit" and step.to == "warbank" then
+                                        pendingDeposits = pendingDeposits + 1
+                                    elseif step.type == "retrieve" and step.from == "warbank" then
+                                        pendingRetrieves = pendingRetrieves + 1
+                                    end
+                                end
+                            end
+                        end
+                    end
+                end
+                local netDemand = pendingDeposits - pendingRetrieves
+                local color
+                if netDemand > freeSlots then
+                    color = ns.COLORS.ORANGE
+                elseif netDemand > 0 and netDemand >= freeSlots * 0.8 then
+                    color = ns.COLORS.YELLOW
+                else
+                    color = ns.COLORS.GRAY
+                end
+                warbankReadout = "  |  " .. color .. "Warbank " .. freeSlots ..
+                    "/" .. totalSlots .. " free"
+                if pendingDeposits > 0 or pendingRetrieves > 0 then
+                    warbankReadout = warbankReadout ..
+                        ", " .. pendingDeposits .. "↓"
+                    if pendingRetrieves > 0 then
+                        warbankReadout = warbankReadout .. " " .. pendingRetrieves .. "↑"
+                    end
+                end
+                warbankReadout = warbankReadout .. "|r"
+            end
+
             mainFrame.statusText:SetText(
                 "No tasks on " .. charKey:match("^(.-)%-") ..
                 "  |  " .. assignedCount .. " tasks across " .. #displayGroups .. " groups" ..
-                (missingCount > 0 and ("  |  " .. missingCount .. " not in inventory") or ""))
+                (missingCount > 0 and ("  |  " .. missingCount .. " not in inventory") or "") ..
+                warbankReadout)
         else
             -- No to-do list, but there are next steps or queue items
             self._postSummaryFrame:Show()

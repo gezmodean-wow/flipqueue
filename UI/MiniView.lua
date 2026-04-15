@@ -4,7 +4,10 @@ local addonName, ns = ...
 
 local UI = ns.UI
 local MINI_ROW_HEIGHT = 18
-local MINI_WIDTH_DEFAULT = 280
+-- Default width must fit: 16px FQ icon + "FQ Charname-Realm" title +
+-- mail icon + 6 × 16px right-side buttons with spacing. Long realm names
+-- like "DerRatvonDalaran" push the total header content near 340px.
+local MINI_WIDTH_DEFAULT = 340
 local MINI_WIDTH_MIN = 200
 local MINI_WIDTH_MAX = 500
 local COLLAPSED_ROWS = 2

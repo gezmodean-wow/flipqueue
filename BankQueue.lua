@@ -543,7 +543,10 @@ end
 --------------------------
 
 local queue = {}             -- ordered operations awaiting processing
-local stats = { successes = {}, errors = 0 }
+-- stats.deferred: deposit ops that couldn't find a slot this batch.
+-- Distinct from errors — these are "try again later when warbank has room"
+-- and leave the underlying task step untouched so the next run picks it up.
+local stats = { successes = {}, errors = 0, deferred = {} }
 local onComplete = nil
 local progressLabel = ""
 local totalQueued = 0
@@ -564,7 +567,7 @@ local function Finish()
     if onComplete then
         local cb = onComplete
         onComplete = nil
-        cb(stats.successes, stats.errors)
+        cb(stats.successes, stats.errors, stats.deferred)
     end
 end
 
@@ -746,9 +749,12 @@ ProcessNextBatch = function()
             local destBag, destSlot = PickDepositSlot(
                 info, primary, secondary, overflowEnabled, crossStack, allocatedSlots, op.name)
             if not destBag then
-                abortDeposits = true
-                ns:Print(ns.COLORS.RED .. "No accepting " .. (op.destType or "")
-                    .. " slot!|r Skipping remaining deposits.")
+                -- No slot available for THIS op. Defer it (not an error)
+                -- and keep processing the rest of the batch: stack-merge ops
+                -- for other items can still succeed even when a full-slot
+                -- new item can't fit. The underlying task step stays
+                -- "pending" so the next bank open retries.
+                table.insert(stats.deferred, op.name or "?")
                 return false
             end
             EnsureBankType(destBag)
@@ -878,7 +884,7 @@ function BankQueue:Process(ops, label, callback)
     end
 
     queue = ops
-    stats = { successes = {}, errors = 0 }
+    stats = { successes = {}, errors = 0, deferred = {} }
     onComplete = callback
     progressLabel = label
     totalQueued = #ops
@@ -904,7 +910,7 @@ function BankQueue:Abort()
     if onComplete then
         local cb = onComplete
         onComplete = nil
-        cb(stats.successes, stats.errors)
+        cb(stats.successes, stats.errors, stats.deferred)
     end
 end
 

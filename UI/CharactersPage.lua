@@ -168,13 +168,23 @@ local function BuildCharactersData()
 
         local classColor = CLASS_COLORS[inv.class] or "888888"
         local isRemote = ns.IsRemoteChar and ns:IsRemoteChar(charKey)
-        local acctLabel = ns.GetCharAccountLabel and ns:GetCharAccountLabel(charKey)
         local coloredName = "|cff" .. classColor .. name .. "|r"
         if isHidden then
             coloredName = "|cff666666" .. name .. "|r"
         end
-        if isRemote and acctLabel then
-            coloredName = "|cff8866cc[" .. acctLabel .. "]|r " .. coloredName
+        -- Linked-account tag: simple (local)/(remote) indicator instead of
+        -- the partner's full label. "local" = same Battle.net account (whisper
+        -- transport), "remote" = different Battle.net account (bnet transport).
+        if isRemote then
+            local linkTag = "|cff8866cc(remote)|r"
+            local charData = ns.db.characters[charKey]
+            if charData and charData.accountUUID and ns.db.sync and ns.db.sync.partners then
+                local partner = ns.db.sync.partners[charData.accountUUID]
+                if partner and partner.transport == "whisper" then
+                    linkTag = "|cff66cc88(local)|r"
+                end
+            end
+            coloredName = linkTag .. " " .. coloredName
         end
 
         local goldCopper = inv.gold or 0

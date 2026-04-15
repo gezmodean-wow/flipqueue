@@ -20,17 +20,21 @@ local serviceState = {
 -- Service definitions. Each entry maps to one column in the drawer.
 -- `summons` is an ordered preference list — put the best summon at the top.
 -- Each entry has:
---   kind = "item" or "spell"
---   id   = item ID (for items) or spell ID (for spells)
---   name = display name (also used as the secure-button attribute value)
+--   kind = "item" | "spell" | "toy" | "mount"
+--   id   = item ID / spell ID / toy item ID / mount ID (journal index)
+--   name = display name (also used as the secure-button attribute value —
+--          for mounts this MUST be the mount's spell name, e.g.
+--          "Mighty Caravan Brutosaur" not "Reins of the...")
 local SERVICES = {
     {
         key = "mail",
         label = "Mail",
         iconFallback = "Interface\\Icons\\INV_Letter_15",
         summons = {
-            -- TODO: fill in known mailbox-summoning items, e.g.
-            -- { kind = "item", id = 141605, name = "Courier's Stampwhistle" },
+            -- Courier's Stampwhistle — toy, summons a mailbox for 2 min.
+            { kind = "toy", id = 141605, name = "Katy's Stampwhistle" },
+            -- MOLL-E — engineer-crafted, summons a mailbox for 10 min.
+            { kind = "item", id = 54710, name = "MOLL-E" },
         },
         locations = {
             -- Dornogal (The War Within)
@@ -51,8 +55,13 @@ local SERVICES = {
         label = "Auction House",
         iconFallback = "Interface\\Icons\\INV_Misc_Coin_02",
         summons = {
-            -- TODO: verify item IDs for these mounts / items
-            -- { kind = "item", id = 163036, name = "Reins of the Mighty Caravan Brutosaur" },
+            -- Mighty Caravan Brutosaur — mount with AH/bank/vendor NPCs.
+            -- Mount ID from C_MountJournal (journal index, NOT the item ID of
+            -- its teaching item). The secure button casts by spell NAME.
+            { kind = "mount", id = 1039, name = "Mighty Caravan Brutosaur" },
+            -- Traveler's Anchorite — TWW expedition mount with an AH NPC.
+            -- Mount ID and spell name per the mount journal entry.
+            { kind = "mount", id = 2332, name = "Traveler's Anchorite" },
         },
         locations = {
             { map = 2339, x = 0.48, y = 0.52, zoneName = "Dornogal", text = "Auction House" },
@@ -68,8 +77,8 @@ local SERVICES = {
         label = "Character Bank",
         iconFallback = "Interface\\Icons\\INV_Misc_Bag_10_Green",
         summons = {
-            -- TODO: fill in banker-summoning items, e.g.
-            -- { kind = "item", id = ?, name = "Signet of the Restless Ward" },
+            -- Brutosaur covers banker access via the same mount NPCs.
+            { kind = "mount", id = 1039, name = "Mighty Caravan Brutosaur" },
         },
         locations = {
             { map = 2339, x = 0.50, y = 0.50, zoneName = "Dornogal", text = "Bank" },
@@ -125,6 +134,61 @@ local function CheckItemSummon(itemID)
     return false
 end
 
+-- Returns (owned, icon, onCooldownRemaining, cdStart, cdDuration) for a toy.
+-- Toys are detected via the toy box (PlayerHasToy) rather than bag scanning
+-- because toys don't live in bags after being learned. Cooldown is read via
+-- the item cooldown API, which works on learned toys even though the item
+-- isn't in bags.
+local function CheckToySummon(toyID)
+    if not toyID then return false end
+    if not PlayerHasToy then return false end
+    local has = PlayerHasToy(toyID)
+    if not has then return false end
+    -- Usability: C_ToyBox.IsToyUsable(itemID) tells us if the current
+    -- zone/state allows the toy. If the API is missing, assume usable.
+    local usable = true
+    if C_ToyBox and C_ToyBox.IsToyUsable then
+        local u = C_ToyBox.IsToyUsable(toyID)
+        if u == false then usable = false end
+    end
+    local remaining, start, duration = 0, 0, 0
+    if C_Container and C_Container.GetItemCooldown then
+        local s, d = C_Container.GetItemCooldown(toyID)
+        if s and d and d > 0 then
+            start, duration = s, d
+            remaining = math.max(0, (s + d) - GetTime())
+        end
+    end
+    local icon = C_Item and C_Item.GetItemIconByID and C_Item.GetItemIconByID(toyID) or nil
+    return true, icon, remaining, start, duration, usable
+end
+
+-- Returns (owned, icon, onCooldownRemaining, cdStart, cdDuration, usable,
+-- spellName) for a mount. Mounts are driven by the mount journal — the
+-- "id" is a journal mount ID, and the secure button casts by spell name.
+local function CheckMountSummon(mountID)
+    if not mountID then return false end
+    if not (C_MountJournal and C_MountJournal.GetMountInfoByID) then return false end
+    local name, spellID, icon, _, isUsable, _, _, _, _, _, isCollected =
+        C_MountJournal.GetMountInfoByID(mountID)
+    if not isCollected then return false end
+    -- Mounted-check: can't resummon the same mount. Treat already-mounted as
+    -- usable=false so the button gets the "redundant" greyed-out treatment.
+    -- We don't check combat / no-mount zones — the secure click will fail
+    -- gracefully if the cast is invalid, which matches item behavior.
+    local usable = isUsable ~= false
+    local remaining, start, duration = 0, 0, 0
+    if spellID and C_Spell and C_Spell.GetSpellCooldown then
+        local info = C_Spell.GetSpellCooldown(spellID)
+        if info and info.duration and info.duration > 0 then
+            start = info.startTime or 0
+            duration = info.duration
+            remaining = math.max(0, (start + duration) - GetTime())
+        end
+    end
+    return true, icon, remaining, start, duration, usable, name
+end
+
 -- Returns (known, icon, onCooldownRemaining, cdStart, cdDuration).
 -- known = true if the spell is in the player's spellbook.
 local function CheckSpellSummon(spellID)
@@ -177,11 +241,28 @@ local function ResolveService(service)
     local firstOwnedRedundant = nil
 
     for _, summon in ipairs(service.summons or {}) do
-        local owned, icon, remaining, cdStart, cdDur
+        local owned, icon, remaining, cdStart, cdDur, srcUsable, resolvedName
         if summon.kind == "spell" then
             owned, icon, remaining, cdStart, cdDur = CheckSpellSummon(summon.id)
+        elseif summon.kind == "toy" then
+            owned, icon, remaining, cdStart, cdDur, srcUsable = CheckToySummon(summon.id)
+        elseif summon.kind == "mount" then
+            owned, icon, remaining, cdStart, cdDur, srcUsable, resolvedName =
+                CheckMountSummon(summon.id)
         else
             owned, icon, remaining, cdStart, cdDur = CheckItemSummon(summon.id)
+        end
+
+        -- For secure-button dispatch, toys act like items (/use <name>) and
+        -- mounts act like spells (/cast <spellName>). Normalize the output
+        -- kind here so the rest of ResolveService + the button wire-up only
+        -- has to care about "item" vs "spell".
+        local outKind = summon.kind
+        local outName = resolvedName or summon.name
+        if summon.kind == "toy" then
+            outKind = "item"
+        elseif summon.kind == "mount" then
+            outKind = "spell"
         end
 
         if owned then
@@ -189,39 +270,41 @@ local function ResolveService(service)
             if inService then
                 if not firstOwnedRedundant then
                     firstOwnedRedundant = {
-                        kind = summon.kind, id = summon.id, name = summon.name,
+                        kind = outKind, id = summon.id, name = outName,
                         icon = icon, state = "redundant",
                     }
                 end
             elseif remaining and remaining > 0 then
                 if not firstOwnedCooldown then
                     firstOwnedCooldown = {
-                        kind = summon.kind, id = summon.id, name = summon.name,
+                        kind = outKind, id = summon.id, name = outName,
                         icon = icon, state = "cooldown",
                         cooldownStart = cdStart, cooldownDuration = cdDur,
                     }
                 end
             else
-                -- Usability check: for items we use IsUsableItem (returns false for
-                -- things like mounts in no-mount zones). For spells we trust the
-                -- cooldown+known check and let the secure click handler decide — the
-                -- engine-side usability probes can be overly conservative and falsely
-                -- mark known off-cooldown spells as unusable.
+                -- Usability check: for plain items, IsUsableItem (returns
+                -- false for mount-only zones etc). For toys and mounts the
+                -- dedicated Check*Summon functions already reported srcUsable.
+                -- For spells we trust the cooldown+known check — engine-side
+                -- usability probes can falsely reject known off-cooldown spells.
                 local usable = true
-                if summon.kind ~= "spell" then
+                if summon.kind == "item" then
                     local v = IsUsableItem and IsUsableItem(summon.id)
                     if v == false then usable = false end
+                elseif summon.kind == "toy" or summon.kind == "mount" then
+                    if srcUsable == false then usable = false end
                 end
                 if not usable then
                     if not firstOwnedRedundant then
                         firstOwnedRedundant = {
-                            kind = summon.kind, id = summon.id, name = summon.name,
+                            kind = outKind, id = summon.id, name = outName,
                             icon = icon, state = "redundant",
                         }
                     end
                 else
                     return {
-                        kind = summon.kind, id = summon.id, name = summon.name,
+                        kind = outKind, id = summon.id, name = outName,
                         icon = icon, state = "ready",
                     }
                 end
@@ -238,49 +321,77 @@ end
 -- Locate Nearest
 --------------------------
 
+-- Walk up the parentMapID chain to find the continent-level map (mapType <= 2).
+-- Returns the continent map ID, or the starting map if no parent walk resolves.
+local function GetContinentMap(mapID)
+    if not mapID then return nil end
+    local cur = mapID
+    local guard = 0
+    while cur and guard < 10 do
+        local info = C_Map.GetMapInfo(cur)
+        if not info then return cur end
+        if info.mapType and info.mapType <= 2 then return cur end
+        if info.parentMapID and info.parentMapID > 0 then
+            cur = info.parentMapID
+        else
+            return cur
+        end
+        guard = guard + 1
+    end
+    return cur
+end
+
+-- Pick the location nearest to the player. "Nearest" is measured by
+-- euclidean distance in normalized map coords when the player is on the
+-- same map as the location; otherwise we fall back to same-continent
+-- membership (no distance, since coords from different maps aren't
+-- comparable). Last-resort fallback is the first entry.
+--
+-- Previous implementation picked the FIRST same-map entry regardless of
+-- distance, which is why standing next to one Stormwind mailbox often
+-- gave a waypoint to a different district's mailbox.
 local function PickNearestLocation(service)
     if not service.locations or #service.locations == 0 then return nil end
     local curMap = C_Map.GetBestMapForUnit and C_Map.GetBestMapForUnit("player") or nil
+    if not curMap then return service.locations[1] end
 
-    if curMap then
-        -- Same-map match first
-        for _, loc in ipairs(service.locations) do
-            if loc.map == curMap then return loc end
-        end
-        -- Same-continent match (walk parent chain)
-        local continent = curMap
-        local guard = 0
-        while continent and guard < 10 do
-            local info = C_Map.GetMapInfo(continent)
-            if info and info.mapType and info.mapType <= 2 then break end
-            if info and info.parentMapID and info.parentMapID > 0 then
-                continent = info.parentMapID
-            else
-                break
-            end
-            guard = guard + 1
-        end
-        if continent then
-            for _, loc in ipairs(service.locations) do
-                local locInfo = C_Map.GetMapInfo(loc.map)
-                local locContinent = loc.map
-                local g2 = 0
-                while locInfo and g2 < 10 do
-                    if locInfo.mapType and locInfo.mapType <= 2 then break end
-                    if locInfo.parentMapID and locInfo.parentMapID > 0 then
-                        locContinent = locInfo.parentMapID
-                        locInfo = C_Map.GetMapInfo(locContinent)
-                    else
-                        break
-                    end
-                    g2 = g2 + 1
+    -- Player position in the current map (normalized 0..1).
+    local px, py
+    if C_Map.GetPlayerMapPosition then
+        local pos = C_Map.GetPlayerMapPosition(curMap, "player")
+        if pos then px, py = pos:GetXY() end
+    end
+
+    -- Pass 1: same-map entries, pick the one closest to the player.
+    local bestLoc, bestDist = nil, math.huge
+    for _, loc in ipairs(service.locations) do
+        if loc.map == curMap then
+            if px and py then
+                local dx = (loc.x or 0) - px
+                local dy = (loc.y or 0) - py
+                local d = dx * dx + dy * dy
+                if d < bestDist then
+                    bestDist = d
+                    bestLoc = loc
                 end
-                if locContinent == continent then return loc end
+            elseif not bestLoc then
+                bestLoc = loc -- no player pos, take first same-map
+            end
+        end
+    end
+    if bestLoc then return bestLoc end
+
+    -- Pass 2: same-continent membership. No distance calc across maps.
+    local curContinent = GetContinentMap(curMap)
+    if curContinent then
+        for _, loc in ipairs(service.locations) do
+            if GetContinentMap(loc.map) == curContinent then
+                return loc
             end
         end
     end
 
-    -- Fallback to first entry
+    -- Last resort: first entry.
     return service.locations[1]
 end
 

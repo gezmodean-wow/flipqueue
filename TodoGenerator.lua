@@ -676,9 +676,33 @@ function TodoList:BuildDisplayGroups(items, sortMode)
         return a.totalGold > b.totalGold
     end)
 
-    -- Sort items within each group by gold desc
+    -- Sort items within each group:
+    --   1. Warbank-freeing retrieves first (so executing them opens space
+    --      for subsequent deposits — this is the "do retrievals before
+    --      deposits" ordering the scheduling model wants).
+    --   2. Neutral tasks (no warbank touch) next.
+    --   3. Warbank-consuming deposits last.
+    --   4. Within each bucket, highest gold first.
+    local function WarbankBucket(item)
+        if not item.steps then return 1 end -- neutral
+        local frees, consumes = false, false
+        for _, step in ipairs(item.steps) do
+            if step.status ~= "done" and step.status ~= "completed" then
+                if step.type == "retrieve" and step.from == "warbank" then
+                    frees = true
+                elseif step.type == "deposit" and step.to == "warbank" then
+                    consumes = true
+                end
+            end
+        end
+        if frees and not consumes then return 0 end
+        if consumes and not frees then return 2 end
+        return 1
+    end
     for _, group in ipairs(groups) do
         table.sort(group.items, function(a, b)
+            local ab, bb = WarbankBucket(a), WarbankBucket(b)
+            if ab ~= bb then return ab < bb end
             return ns:ParseGoldValue(a.expectedPrice or "") > ns:ParseGoldValue(b.expectedPrice or "")
         end)
     end
@@ -754,7 +778,50 @@ function TodoList:GenerateTodoList(source, allocationOrder, opts)
         rejected  = {},  -- TSM-rejected deals (shown separately for visibility)
         overflow  = {},  -- deals that exceeded available stock (more deals than items)
         noDeals   = {},  -- inventory items that had zero matching deals
+        warbankFull = {}, -- cross-realm buys held back because warbank has no free slots
     }
+
+    -- Warbank free-slot budget for cross-realm buy tasks.
+    --
+    -- Starts from the last scanned free slot count and is then adjusted by
+    -- pending retrieves from warbank — existing tasks that will FREE a slot
+    -- when executed. A retrieve only credits if the item is physically in
+    -- warbank right now (per the last scan); we don't credit against items
+    -- that *will* arrive via a new flip pair, because deferring that pair
+    -- would also defer the retrieve and the credit wouldn't materialize.
+    --
+    -- When we have no scan data at all, leave the budget nil and let the
+    -- runtime defer in BankQueue catch any genuine overfill. Callers can
+    -- also render a "visit the warbank" nag in that case.
+    local warbankBudget = nil
+    local warbankCredits = 0  -- retrieves counted, for debug output
+    if ns.db.warbank and type(ns.db.warbank.freeSlots) == "number" then
+        warbankBudget = ns.db.warbank.freeSlots
+        local wbItems = ns.db.warbank.items or {}
+        local activeTasks = ns.db.todoLists and ns.db.todoLists.active
+            and ns.db.todoLists.active.tasks or {}
+        for _, task in ipairs(activeTasks) do
+            if task.status ~= "completed" and task.steps then
+                for _, step in ipairs(task.steps) do
+                    if step.type == "retrieve"
+                        and step.from == "warbank"
+                        and step.status == "pending"
+                    then
+                        -- Credit only if the item is actually in warbank.
+                        -- wbItems is keyed by itemKey; presence with qty>0
+                        -- is sufficient — we don't try to match per-unit,
+                        -- because a task deposit/retrieve consumes one slot
+                        -- regardless of stack size.
+                        local wbEntry = wbItems[task.itemKey]
+                        if wbEntry and (wbEntry.quantity or 0) > 0 then
+                            warbankBudget = warbankBudget + 1
+                            warbankCredits = warbankCredits + 1
+                        end
+                    end
+                end
+            end
+        end
+    end
 
     if #deals == 0 then
         if opts.listMode == "separate" then
@@ -817,6 +884,13 @@ function TodoList:GenerateTodoList(source, allocationOrder, opts)
     local debugGen = ns.db.settings.debugMessages
     if debugGen then
         ns:PrintDebug("Generate: " .. #deals .. " deals, " .. #pool .. " pool items, source=" .. source)
+        if warbankBudget ~= nil then
+            ns:PrintDebug("  Warbank budget: " .. warbankBudget .. " free slots"
+                .. " (" .. (ns.db.warbank.freeSlots or 0) .. " scanned + "
+                .. warbankCredits .. " pending retrieves)")
+        else
+            ns:PrintDebug("  Warbank budget: unknown (no scan data) — not enforcing")
+        end
     end
 
     for _, deal in ipairs(deals) do
@@ -1109,7 +1183,33 @@ function TodoList:GenerateTodoList(source, allocationOrder, opts)
                 -- Skip entire flip if either side is unassigned and setting is on
                 local skipFlip = ns.db.settings.skipUnassigned and (not buyAssignment or not sellAssignment)
 
-                if not skipFlip then
+                -- Skip (hold back) if we'd overfill the warbank. The buy task
+                -- needs one free slot to land on completion; we track a
+                -- running budget seeded from the last warbank scan.
+                local warbankHold = false
+                if not skipFlip and warbankBudget ~= nil and warbankBudget < 1 then
+                    warbankHold = true
+                    table.insert(preview.warbankFull, {
+                        itemKey       = deal.itemKey,
+                        itemID        = deal.itemID,
+                        name          = deal.name,
+                        icon          = deal.icon,
+                        quality       = deal.quality,
+                        targetRealm   = deal.targetRealm,
+                        buyRealm      = deal.buyRealm,
+                        buyPrice      = deal.buyPrice,
+                        expectedPrice = deal.expectedPrice,
+                        profitAmount  = deal.profitAmount,
+                        profitPct     = deal.profitPct,
+                    })
+                    if debugGen then
+                        ns:PrintDebug("  WARBANK FULL: held back " .. (deal.name or "?") ..
+                            " (budget exhausted)")
+                    end
+                end
+
+                if not skipFlip and not warbankHold then
+                if warbankBudget ~= nil then warbankBudget = warbankBudget - 1 end
                 local dealQty = math.max(deal.quantity or 1, defaultQty)
                 table.insert(preview.items, {
                     itemKey       = deal.itemKey,
@@ -1184,7 +1284,7 @@ function TodoList:GenerateTodoList(source, allocationOrder, opts)
                     },
                     currentStep = 1,
                 })
-                end -- not skipFlip
+                end -- not skipFlip and not warbankHold
             else
                 -- No pool match: all inventory for this item is allocated to
                 -- higher-priority deals. Track as overflow for transparency.

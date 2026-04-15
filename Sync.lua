@@ -954,7 +954,7 @@ function Sync:OnPairRequest(payload, senderID)
         self:StartHeartbeat()
         self:RequestFullSyncWith(remoteUUID)
         ns:Print(ns.COLORS.GREEN .. "Sync partner reconnected.|r")
-        if ns.UI and ns.UI.RefreshSettings then ns.UI:RefreshSettings() end
+        self:NotifyPartnerStateChanged()
         return
     end
 
@@ -976,9 +976,7 @@ function Sync:OnPairRequest(payload, senderID)
 
     ns:Print(ns.COLORS.CYAN .. displayName .. " wants to link FlipQueue.|r Open Settings > Multi-Account to accept.")
 
-    if ns.UI and ns.UI.RefreshSettings then
-        ns.UI:RefreshSettings()
-    end
+    self:NotifyPartnerStateChanged()
 end
 
 function Sync:AcceptPair(senderID)
@@ -1033,7 +1031,7 @@ function Sync:AcceptPair(senderID)
 
     ns:Print(ns.COLORS.GREEN .. "Linked to " .. label .. "|r")
     self:StartHeartbeat()
-    if ns.UI and ns.UI.RefreshSettings then ns.UI:RefreshSettings() end
+    self:NotifyPartnerStateChanged()
 
     -- Trigger full sync after short delay
     C_Timer.After(1, function()
@@ -1138,7 +1136,7 @@ function Sync:OnPairAck(payload, senderID)
 
     ns:Print(ns.COLORS.GREEN .. "Linked to " .. label .. "|r")
     self:StartHeartbeat()
-    if ns.UI and ns.UI.RefreshSettings then ns.UI:RefreshSettings() end
+    self:NotifyPartnerStateChanged()
 
     C_Timer.After(1, function()
         self:RequestFullSyncWith(remoteUUID)
@@ -1204,7 +1202,7 @@ function Sync:Unlink(accountUUID)
         self:StopHeartbeat()
     end
 
-    if ns.UI and ns.UI.RefreshSettings then ns.UI:RefreshSettings() end
+    self:NotifyPartnerStateChanged()
     if ns.UI and ns.UI.Refresh then ns.UI:Refresh() end
 end
 
@@ -1234,7 +1232,7 @@ function Sync:OnUnlink(senderGameAccountID)
     end
 
     ns:Print(ns.COLORS.YELLOW .. label .. " unlinked FlipQueue sync.|r")
-    if ns.UI and ns.UI.RefreshSettings then ns.UI:RefreshSettings() end
+    self:NotifyPartnerStateChanged()
     if ns.UI and ns.UI.Refresh then ns.UI:Refresh() end
 end
 
@@ -1263,7 +1261,7 @@ function Sync:StartHeartbeat()
                         if missedPings[uuid] >= 3 then
                             partnerStates[uuid] = "disconnected"
                             ns:PrintDebug("Partner " .. (partner.label or uuid) .. " timed out.")
-                            if ns.UI and ns.UI.RefreshSettings then ns.UI:RefreshSettings() end
+                            self:NotifyPartnerStateChanged()
                         end
                     end
                 else
@@ -1328,7 +1326,7 @@ function Sync:OnPing(senderID, payload)
             self:RequestFullSyncWith(senderUUID)
         end
 
-        if ns.UI and ns.UI.RefreshSettings then ns.UI:RefreshSettings() end
+        self:NotifyPartnerStateChanged()
     end
 end
 
@@ -1354,8 +1352,23 @@ function Sync:OnPong(senderID, payload)
         ns:Print(ns.COLORS.GREEN .. (partner.label or "Partner") .. " reconnected.|r")
         self:StartHeartbeat()
         self:RequestFullSyncWith(senderUUID)
-        if ns.UI and ns.UI.RefreshSettings then ns.UI:RefreshSettings() end
+        self:NotifyPartnerStateChanged()
     end
+end
+
+--------------------------
+-- UI refresh helper
+--------------------------
+
+-- Call this whenever partnerStates changes so every widget showing partner
+-- status stays in sync. Before this existed, only RefreshSettings was called
+-- and the MiniView partner strip would show stale "Offline" until the user
+-- manually reopened it.
+function Sync:NotifyPartnerStateChanged()
+    if not ns.UI then return end
+    if ns.UI.RefreshSettings then ns.UI:RefreshSettings() end
+    if ns.UI.RefreshMini then ns.UI:RefreshMini() end
+    if ns.UI.RefreshServiceDrawer then ns.UI:RefreshServiceDrawer() end
 end
 
 --------------------------
@@ -1400,14 +1413,14 @@ function Sync:OnFriendInfoChanged()
                     self:RequestFullSyncWith(uuid)
                 end
 
-                if ns.UI and ns.UI.RefreshSettings then ns.UI:RefreshSettings() end
+                self:NotifyPartnerStateChanged()
 
             elseif not gameAccountID and (pState == "connected" or pState == "syncing") then
                 -- Partner went offline
                 partnerStates[uuid] = "disconnected"
                 self:Log("FRIEND_OFFLINE", (partner.label or uuid))
                 ns:PrintDebug((partner.label or "Partner") .. " went offline.")
-                if ns.UI and ns.UI.RefreshSettings then ns.UI:RefreshSettings() end
+                self:NotifyPartnerStateChanged()
 
             elseif not gameAccountID and pState == "disconnected" then
                 -- Still disconnected and can't resolve — may need a retry
@@ -1595,7 +1608,7 @@ function Sync:OnFullSyncEnd(senderGameAccountID)
 
     if ns.UI and ns.UI.Refresh then ns.UI:Refresh() end
     if ns.UI and ns.UI.RefreshMini then ns.UI:RefreshMini() end
-    if ns.UI and ns.UI.RefreshSettings then ns.UI:RefreshSettings() end
+    self:NotifyPartnerStateChanged()
 end
 
 --------------------------

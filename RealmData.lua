@@ -156,7 +156,7 @@ local EU_GROUPS = {
     {"nethersturm", "alexstrasza", "madmortem", "proudmoore"},
     {"nefarian", "gilneas", "destromath", "ulduar", "mannoroth", "gorgonnash", "nera'thor"},
     {"scarshield legion", "sporeggar", "earthen ring", "defias brotherhood", "ravenholdt", "darkmoon faire", "the venture co"},
-    {"grim batol", "aggra (portugues)", "aggra (portuguus)", "frostmane"},
+    {"grim batol", "aggra (portugues)", "frostmane"},
     {"drak'thul", "burning blade"},
     {"arthas", "blutkessel", "wrathbringer", "durotan", "kel'thuzad", "vek'lor", "tirion"},
     {"garona", "sargeras", "ner'zhul"},

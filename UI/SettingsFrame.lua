@@ -555,6 +555,47 @@ function UI:CreateSettingsPanel(parent)
     sc = secBank.content
     sy = 0
 
+    -- Warband Miser detection banner. If the addon is loaded, FlipQueue's
+    -- auto-gold routines defer to it. Show a note so users know why the
+    -- checkboxes below don't appear to do anything, and expose the override.
+    if ns.IsWarbandMiserActive and
+       C_AddOns and C_AddOns.IsAddOnLoaded and C_AddOns.IsAddOnLoaded("WarbandMiser") then
+        local banner = CreateFrame("Frame", nil, sc, "BackdropTemplate")
+        banner:SetPoint("TOPLEFT", sc, "TOPLEFT", LEFT_MARGIN, sy)
+        banner:SetPoint("RIGHT", sc, "RIGHT", RIGHT_MARGIN, 0)
+        banner:SetHeight(48)
+        banner:SetBackdrop({
+            bgFile = "Interface\\Tooltips\\UI-Tooltip-Background",
+            edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
+            edgeSize = 10,
+            insets = {left = 2, right = 2, top = 2, bottom = 2},
+        })
+        banner:SetBackdropColor(0.15, 0.12, 0.05, 0.9)
+        banner:SetBackdropBorderColor(0.6, 0.5, 0.2, 0.8)
+
+        local text = banner:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+        text:SetPoint("TOPLEFT", banner, "TOPLEFT", 8, -6)
+        text:SetPoint("RIGHT", banner, "RIGHT", -8, 0)
+        text:SetJustifyH("LEFT")
+        text:SetText(ns.COLORS.YELLOW ..
+            "Warband Miser detected.|r FlipQueue's auto-gold settings " ..
+            "are disabled while it's running.")
+
+        local overrideCB = CreateFrame("CheckButton", nil, banner, "UICheckButtonTemplate")
+        overrideCB:SetSize(18, 18)
+        overrideCB:SetPoint("BOTTOMLEFT", banner, "BOTTOMLEFT", 6, 4)
+        overrideCB:SetChecked(ns.db and ns.db.settings and ns.db.settings.warbandMiserOverride or false)
+        overrideCB:SetScript("OnClick", function(self)
+            if ns.db then ns.db.settings.warbandMiserOverride = self:GetChecked() and true or false end
+        end)
+        local cbLabel = banner:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+        cbLabel:SetPoint("LEFT", overrideCB, "RIGHT", 2, 0)
+        cbLabel:SetText("Let FlipQueue manage gold anyway")
+
+        settingsWidgets.wmOverride = overrideCB
+        sy = sy - 48 - ITEM_SPACING
+    end
+
     -- Withdraw gold for AH fees
     settingsWidgets.autoGold, h = CreateSettingsCheckbox(sc, sy,
         "Withdraw gold from the warbank to cover listing fees",
@@ -1192,6 +1233,49 @@ function UI:CreateSettingsPanel(parent)
         toggleBtn.text:SetText("Show Sync Log")
         toggleBtn:SetScript("OnEnter", function(self) self:SetBackdropColor(0.2, 0.2, 0.25, 1) end)
         toggleBtn:SetScript("OnLeave", function(self) self:SetBackdropColor(0.1, 0.1, 0.15, 1) end)
+
+        -- Copy button: opens the existing Export popup preloaded with the
+        -- sync log in plain text so the user can Ctrl+A / Ctrl+C it. The
+        -- inline EditBox in this panel can't reliably hold focus for copy,
+        -- so we piggyback on the export popup infrastructure that already
+        -- handles selection, focus, and pipe-escaping correctly.
+        local copyBtn = CreateFrame("Button", nil, lower, "BackdropTemplate")
+        copyBtn:SetSize(80, 20)
+        copyBtn:SetPoint("LEFT", toggleBtn, "RIGHT", 6, 0)
+        copyBtn:SetBackdrop({
+            bgFile = "Interface\\Tooltips\\UI-Tooltip-Background",
+            edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
+            edgeSize = 10,
+            insets = {left = 2, right = 2, top = 2, bottom = 2},
+        })
+        copyBtn:SetBackdropColor(0.1, 0.1, 0.15, 1)
+        copyBtn:SetBackdropBorderColor(0.3, 0.3, 0.4, 0.8)
+        copyBtn.text = copyBtn:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+        copyBtn.text:SetPoint("CENTER")
+        copyBtn.text:SetText("Copy Log")
+        copyBtn:SetScript("OnEnter", function(self) self:SetBackdropColor(0.2, 0.2, 0.25, 1) end)
+        copyBtn:SetScript("OnLeave", function(self) self:SetBackdropColor(0.1, 0.1, 0.15, 1) end)
+        copyBtn:SetScript("OnClick", function()
+            if not (ns.Sync and ns.Sync.GetSyncLog) then return end
+            local log = ns.Sync:GetSyncLog()
+            if #log == 0 then
+                if UI.ShowExportPopup then
+                    UI:ShowExportPopup("(no sync events yet)", "Sync log")
+                end
+                return
+            end
+            local lines = {}
+            for i = 1, #log do
+                local entry = log[i]
+                local ts = date("%Y-%m-%d %H:%M:%S", entry.t)
+                lines[#lines + 1] = ts .. "  " .. (entry.event or "") .. "  " .. (entry.detail or "")
+            end
+            if UI.ShowExportPopup then
+                UI:ShowExportPopup(table.concat(lines, "\n"),
+                    "Sync log (" .. #log .. " entries)")
+            end
+        end)
+        settingsWidgets.syncLogCopyBtn = copyBtn
 
         ly = ly - 24
 
