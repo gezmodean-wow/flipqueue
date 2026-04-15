@@ -763,6 +763,11 @@ frame:SetScript("OnEvent", function(self, event)
                     Tracker:UpdateLogExpiry()
                 end
             end)
+            -- Fire the shared Cogworks event so sibling cogs (a future
+            -- Ledger, etc.) can react to auction state changes.
+            if ns.cw and ns.cw.Fire then
+                ns.cw:Fire(ns.cw.Events.AuctionsChanged, ns:GetCharKey())
+            end
         end
 
     elseif event == "AUCTION_CANCELED" then

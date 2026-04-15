@@ -7,6 +7,26 @@ ns.ADDON_NAME = "FlipQueue"
 local tocVersion = C_AddOns and C_AddOns.GetAddOnMetadata(addonName, "Version") or "dev"
 ns.VERSION = tocVersion:find("@") and "dev" or tocVersion
 
+-- Cogworks suite library (embedded in Libs/Cogworks-1.0). Cache the library
+-- reference on the namespace so other files don't repeat the LibStub lookup,
+-- and register FlipQueue with the shared addon registry so sibling cogs can
+-- enumerate us. The `true` second arg to GetLibrary returns nil if missing
+-- instead of erroring — Cogworks is vendored so it should always be present,
+-- but we stay defensive so a bad install doesn't brick the whole addon.
+do
+    local cw = LibStub and LibStub("Cogworks-1.0", true)
+    if cw then
+        ns.cw = cw
+        if cw.RegisterAddon then
+            cw:RegisterAddon("FlipQueue", {
+                version = ns.VERSION,
+                prefix  = "|cffffd100[FlipQueue]|r ",
+                website = "https://github.com/gezmodean-wow/flipqueue",
+            })
+        end
+    end
+end
+
 -- Bag index constants (TWW 12.0+)
 ns.INVENTORY_BAGS = {0, 1, 2, 3, 4}      -- player bags (general use)
 ns.REAGENT_BAG = 5                        -- dedicated reagent bag slot

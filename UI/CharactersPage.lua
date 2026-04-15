@@ -187,6 +187,50 @@ local function BuildCharactersData()
             coloredName = linkTag .. " " .. coloredName
         end
 
+        -- Phase 6a migration indicator. Tells the user whether this char's
+        -- inventory is flowing through Syndicator yet, or whether they still
+        -- need to log in once to seed it. Remote chars get the existing
+        -- (remote)/(local) tag above and aren't tagged here.
+        --   Live    — Syndicator projection has run for this char at least
+        --             once since the migration (green)
+        --   Ready   — Syndicator has data cached but FlipQueue hasn't
+        --             projected it yet. Will happen automatically on next
+        --             login (or next bulk-project pass if the realm alias
+        --             is known) (blue)
+        --   Pending — Syndicator doesn't have data either. The user needs
+        --             to log in on that character once while Syndicator is
+        --             running (yellow)
+        if not isRemote and not isHidden then
+            local charData = ns.db.characters[charKey]
+            local badge
+            if charData and charData.syndicatorBacked then
+                badge = "|cff44dd44[Live]|r"
+            else
+                -- Fast existence check against Syndicator's known-chars
+                -- list. The list is cached by Syndicator so the pcall is
+                -- cheap. Match by name + normalized-realm translation
+                -- when we have an alias, otherwise by name alone (safe
+                -- because WoW character names are unique per server and
+                -- the Characters tab is grouped by realm anyway).
+                local isReady = false
+                if Syndicator and Syndicator.API and Syndicator.API.GetAllCharacters then
+                    local ok, allChars = pcall(Syndicator.API.GetAllCharacters)
+                    if ok and type(allChars) == "table" then
+                        for _, synKey in ipairs(allChars) do
+                            local synName = synKey:match("^(.-)%-")
+                            if synName == name then isReady = true; break end
+                        end
+                    end
+                end
+                if isReady then
+                    badge = "|cff66aaff[Ready]|r"
+                else
+                    badge = "|cffddcc44[Pending]|r"
+                end
+            end
+            coloredName = coloredName .. "  " .. badge
+        end
+
         local goldCopper = inv.gold or 0
         local goldStr = ns:FormatGold(goldCopper)
         local lastLoginTime = inv.lastLogin or 0

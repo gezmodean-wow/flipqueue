@@ -217,22 +217,49 @@ end
 -- Refresh entry points
 --------------------------
 
-function Scanner:RefreshCurrentCharacterFromSyndicator()
+-- Session-local debounce for the bulk-projection pass. The actual projection
+-- cost per alt is small (one table walk) but we still cap it at one run per
+-- 30s to avoid pounding Syndicator's API on every BagCacheUpdate burst.
+local lastBulkProjectAt = 0
+local BULK_PROJECT_DEBOUNCE = 30
+
+-- Record a normalized-realm → display-realm alias into the persistent map.
+-- This lets alt bulk-projection translate Syndicator's keys ("Jimmy-EarthenRing")
+-- back to FlipQueue's display-realm keys ("Jimmy-Earthen Ring") without a
+-- realm database lookup. The map only grows — entries are never deleted,
+-- and collisions overwrite with the most recent display name.
+local function RecordRealmAlias()
     if not ns.db then return end
-    if not (Syndicator and Syndicator.API and Syndicator.API.GetByCharacterFullName) then
-        return
+    ns.db.realmAliases = ns.db.realmAliases or {}
+    local display = GetRealmName and GetRealmName() or nil
+    local normalized = GetNormalizedRealmName and GetNormalizedRealmName() or nil
+    if display and normalized then
+        ns.db.realmAliases[normalized] = display
     end
+end
 
-    local synKey = CurrentSyndicatorKey()
-    if not synKey then return end
+-- Given a Syndicator-format key "Name-NormalizedRealm", return the
+-- FlipQueue-format key "Name-DisplayRealm" if the realm is in our alias
+-- map. Returns nil when the realm is unknown — caller should skip the
+-- char rather than guessing, since writing to the wrong key would split
+-- the character's data across two records.
+local function TranslateSyndicatorKey(synKey)
+    if not synKey or not ns.db or not ns.db.realmAliases then return nil end
+    local name, normalized = synKey:match("^(.-)%-(.+)$")
+    if not name or not normalized then return nil end
+    local display = ns.db.realmAliases[normalized]
+    if not display then return nil end
+    return name .. "-" .. display
+end
 
-    local ok, charData = pcall(Syndicator.API.GetByCharacterFullName, synKey)
-    if not ok or type(charData) ~= "table" then return end
-
-    local fqKey = ns:GetCharKey()
+-- Core projection writer: projects Syndicator's charData into
+-- ns.db.characters[fqKey].inventory, stamps the syndicatorBacked flag,
+-- emits the sync delta, and fires the shared Cogworks event. Used by
+-- both current-character refresh and alt bulk-projection.
+local function WriteProjectedInventory(fqKey, charData, sourceLabel)
+    if not ns.db then return end
     ns.db.characters[fqKey] = ns.db.characters[fqKey] or {}
     local charEntry = ns.db.characters[fqKey]
-    charEntry.class = select(2, UnitClass("player"))
 
     local prevInv = charEntry.inventory
     local items = ProjectCharacterInventory(charData)
@@ -242,16 +269,99 @@ function Scanner:RefreshCurrentCharacterFromSyndicator()
         lastBankScan = prevInv and prevInv.lastBankScan or time(),
         items        = items,
     }
+    -- Migration indicator: this character's inventory came from a
+    -- Syndicator projection, not from the old C_Container scanner.
+    -- The Characters tab reads this flag to render a "Live" badge.
+    charEntry.syndicatorBacked = true
 
     local count = 0
     for _ in pairs(items) do count = count + 1 end
-    ns:PrintDebug("Syndicator refresh: " .. count .. " unique items on " .. fqKey)
+    ns:PrintDebug("Syndicator refresh (" .. sourceLabel .. "): " .. count
+        .. " unique items on " .. fqKey)
 
     EnrichDealsFromInventory(items)
 
     if ns.Sync and ns.Sync.IsLinked and ns.Sync:IsLinked() and not ns.Sync._applying then
         ns.Sync:EmitDelta("CHAR", { charKey = fqKey, charData = charEntry })
     end
+
+    -- Fire the shared Cogworks event so sibling cogs (a future Ledger,
+    -- cross-cog dashboards) can react to inventory changes without knowing
+    -- FlipQueue exists. Guarded by the nil-check in case Cogworks-1.0
+    -- failed to load for any reason.
+    if ns.cw and ns.cw.Fire then
+        ns.cw:Fire(ns.cw.Events.InventoryChanged, fqKey)
+    end
+end
+
+-- Walk Syndicator's known characters and project any whose normalized
+-- realm is already in our alias map (meaning the user has logged into
+-- that realm at least once). Skips the current character (already
+-- refreshed) and any char outside the alias coverage. Debounced.
+local function BulkProjectKnownAlts()
+    if not (Syndicator and Syndicator.API and Syndicator.API.GetAllCharacters
+        and Syndicator.API.GetByCharacterFullName) then
+        return
+    end
+    local now = time()
+    if now - lastBulkProjectAt < BULK_PROJECT_DEBOUNCE then return end
+    lastBulkProjectAt = now
+
+    local ok, allChars = pcall(Syndicator.API.GetAllCharacters)
+    if not ok or type(allChars) ~= "table" then return end
+
+    local currentSyn = CurrentSyndicatorKey()
+    local projected, skipped = 0, 0
+
+    for _, synKey in ipairs(allChars) do
+        if synKey ~= currentSyn then
+            local fqKey = TranslateSyndicatorKey(synKey)
+            if fqKey then
+                local okChar, charData = pcall(Syndicator.API.GetByCharacterFullName, synKey)
+                if okChar and type(charData) == "table" then
+                    WriteProjectedInventory(fqKey, charData, "alt")
+                    projected = projected + 1
+                end
+            else
+                skipped = skipped + 1
+            end
+        end
+    end
+
+    if projected > 0 or skipped > 0 then
+        ns:PrintDebug("Bulk-project: " .. projected .. " alt(s) refreshed, "
+            .. skipped .. " skipped (realm not in alias map)")
+    end
+end
+
+function Scanner:RefreshCurrentCharacterFromSyndicator()
+    if not ns.db then return end
+    if not (Syndicator and Syndicator.API and Syndicator.API.GetByCharacterFullName) then
+        return
+    end
+
+    -- Refresh the alias map every time we successfully read for the
+    -- current char. Cheap, and ensures the map reflects realm renames
+    -- or connected-realm promotions.
+    RecordRealmAlias()
+
+    local synKey = CurrentSyndicatorKey()
+    if not synKey then return end
+
+    local ok, charData = pcall(Syndicator.API.GetByCharacterFullName, synKey)
+    if not ok or type(charData) ~= "table" then return end
+
+    local fqKey = ns:GetCharKey()
+    ns.db.characters[fqKey] = ns.db.characters[fqKey] or {}
+    ns.db.characters[fqKey].class = select(2, UnitClass("player"))
+
+    WriteProjectedInventory(fqKey, charData, "current")
+
+    -- Opportunistic pass over Syndicator's other known characters. Only
+    -- touches alts whose realm we've already got a display-name alias for,
+    -- so the first login after migration projects current char's alts and
+    -- subsequent logins reach further as the alias map grows.
+    BulkProjectKnownAlts()
 end
 
 function Scanner:RefreshWarbankFromSyndicator()
@@ -632,8 +742,14 @@ frame:SetScript("OnEvent", function(self, event, ...)
     elseif event == "PLAYER_MONEY" then
         if ns.db then
             local charKey = ns:GetCharKey()
-            if ns.db.characters[charKey] then
-                ns.db.characters[charKey].gold = GetMoney()
+            local charEntry = ns.db.characters[charKey]
+            if charEntry then
+                local oldGold = charEntry.gold or 0
+                local newGold = GetMoney()
+                charEntry.gold = newGold
+                if ns.cw and ns.cw.Fire and newGold ~= oldGold then
+                    ns.cw:Fire(ns.cw.Events.GoldChanged, charKey, newGold, newGold - oldGold)
+                end
             end
         end
 
