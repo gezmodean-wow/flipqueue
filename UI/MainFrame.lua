@@ -754,6 +754,37 @@ UI.nextStepsTable = UI:CreateScrollTable(tableContainer, {
 })
 UI.nextStepsTable:SetSort("_sortValue", false)
 
+-- Click-to-copy: left-click any row to open a small copyable popup with
+-- the character name pre-selected (and the realm on a second line for
+-- cross-realm searches). Lets users grab the name before logout and
+-- paste it directly into WoW's character-select search.
+UI.nextStepsTable:SetRowClickHandler(function(rowData, button)
+    if button and button ~= "LeftButton" then return end
+    if not rowData or not UI.ShowExportPopup then return end
+
+    -- Prefer _charKey (character entries); fall back to _tooltipText
+    -- (unassigned "Create char" entries carry the realm name there).
+    local copyText, statusMsg
+    if rowData._charKey then
+        local name  = rowData._charKey:match("^(.-)%-") or rowData._charKey
+        local realm = rowData._charKey:match("%-(.+)$") or ""
+        if realm ~= "" then
+            copyText = name .. "\n" .. realm
+            statusMsg = "Character name + realm — paste into character-select search"
+        else
+            copyText = name
+            statusMsg = "Character name — paste into character-select search"
+        end
+    elseif rowData._tooltipText and rowData._tooltipText ~= "" then
+        copyText = rowData._tooltipText
+        statusMsg = "Realm — paste to find matching characters"
+    end
+
+    if copyText then
+        UI:ShowExportPopup(copyText, statusMsg)
+    end
+end)
+
 -- Generator preview table
 UI.generatorPreviewTable = UI:CreateScrollTable(tableContainer, {
     {key = "name",      label = "Item",      width = 170, sortable = true},
