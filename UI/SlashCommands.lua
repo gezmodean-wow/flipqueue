@@ -72,7 +72,7 @@ SlashCmdList["FLIPQUEUE"] = function(msg)
     elseif msg == "gold" then
         if ns.db then
             ns.db.settings.autoWithdrawGold = not ns.db.settings.autoWithdrawGold
-            ns:Print("Auto-withdraw gold for AH fees: " .. (ns.db.settings.autoWithdrawGold and "ON" or "OFF"))
+            ns:Print("Auto-withdraw gold for AH fees + purchases: " .. (ns.db.settings.autoWithdrawGold and "ON" or "OFF"))
         end
 
     elseif msg == "dnt" or msg == "donottrack" then

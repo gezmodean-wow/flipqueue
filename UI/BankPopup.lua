@@ -54,13 +54,12 @@ local function GetPopup()
             elseif anchor == "right" then
                 f:SetPoint("TOPLEFT", mini, "TOPRIGHT", 4, 0)
             else
-                -- Anchor below the mini. If the services drawer popout is visible,
-                -- shift down by its height + a little padding so the popup stays
-                -- right-aligned to the mini and doesn't cover the drawer.
-                local drawer = _G["FlipQueueServiceDrawer"]
+                -- Anchor below the mini. Shift down by the services drawer
+                -- clip height so the popup doesn't cover it.
+                local drawerClip = _G["FlipQueueServiceClip"]
                 local extraOffset = 0
-                if drawer and drawer:IsShown() and drawer:GetHeight() > 1 then
-                    extraOffset = drawer:GetHeight() + 6
+                if drawerClip and drawerClip:IsShown() then
+                    extraOffset = drawerClip:GetHeight() + 2
                 end
                 f:SetPoint("TOPRIGHT", mini, "BOTTOMRIGHT", 0, -4 - extraOffset)
             end
@@ -535,7 +534,8 @@ function UI:ShowBankPopup(ops, onExecute)
         if not IsCollapsed("gold") then
             if hasGoldWithdraw then
                 local goldStr = ns.FormatGold and ns:FormatGold(ops.goldWithdraw) or (math.floor(ops.goldWithdraw / 10000) .. "g")
-                idx = AddItemRow(f, idx, "Interface\\Icons\\INV_Misc_Coin_01", "Withdraw " .. goldStr, "for posting fees")
+                local goldLabel = ops.hasBuyCosts and "for fees + purchases" or "for posting fees"
+                idx = AddItemRow(f, idx, "Interface\\Icons\\INV_Misc_Coin_01", "Withdraw " .. goldStr, goldLabel)
             end
             if hasGoldDeposit then
                 local goldStr = ns.FormatGold and ns:FormatGold(ops.goldDeposit) or (math.floor(ops.goldDeposit / 10000) .. "g")

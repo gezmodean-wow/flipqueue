@@ -159,7 +159,7 @@ function Tracker:ShowBankOpsPopup()
     end
 
     local charKey = ns:GetCharKey()
-    local isAuto = ns.db and ns:GetCharSetting(charKey, "autoPullBank")
+    local isAuto = ns.db and ns:GetCharSetting(charKey, "autoPullBank") and not ns._automationPaused
 
     -- Collect pull operations (reuse AutoPullFromBank's logic but don't execute)
     local pullOps = Tracker:BuildPullOps()
@@ -175,6 +175,7 @@ function Tracker:ShowBankOpsPopup()
     local charKey = ns:GetCharKey()
     local currentRealm = charKey:match("%-(.+)$") or GetRealmName()
     local goldWithdraw, goldDeposit = 0, 0
+    local hasBuyCosts = false
 
     -- Estimate withdrawal need (show in popup regardless of auto setting)
     if ns.db then
@@ -191,7 +192,10 @@ function Tracker:ShowBankOpsPopup()
             end
         end
         if hasTasks then
-            local totalFees = Tracker:CalculateRequiredGold(charKey, currentRealm)
+            local totalFees, _, details = Tracker:CalculateRequiredGold(charKey, currentRealm)
+            for _, d in ipairs(details) do
+                if d.duration == "buy" then hasBuyCosts = true; break end
+            end
             local playerCopper = GetMoney()
             local needed = math.max(10000, math.ceil(totalFees * 1.1))
             if playerCopper < needed then
@@ -344,6 +348,7 @@ function Tracker:ShowBankOpsPopup()
         extras = extraOps,
         goldWithdraw = goldWithdraw,
         goldDeposit = goldDeposit,
+        hasBuyCosts = hasBuyCosts,
         isAuto = isAuto,
     }, ExecuteAllOps)
 end
@@ -782,20 +787,45 @@ end)
 -- Detect when the player buys an item on the AH (non-commodity and commodity)
 -- and advance buy task steps immediately (browse → buy → collect).
 
--- Non-commodity buyout: PlaceBid with bidAmount matching buyout = purchase
+-- Cache auction info as the player browses, so we have it when PlaceBid
+-- fires (GetAuctionInfoByID may return nil after the purchase is consumed).
+local _auctionInfoCache = {}
+if C_AuctionHouse then
+    local cacheFrame = CreateFrame("Frame")
+    cacheFrame:RegisterEvent("AUCTION_HOUSE_BROWSE_RESULTS_UPDATED")
+    cacheFrame:RegisterEvent("AUCTION_HOUSE_NEW_RESULTS_RECEIVED")
+    cacheFrame:SetScript("OnEvent", function()
+        -- Snapshot all visible auctions into the cache
+        if not C_AuctionHouse.GetBrowseResults then return end
+        local ok, results = pcall(C_AuctionHouse.GetBrowseResults)
+        if ok and results then
+            for _, result in ipairs(results) do
+                if result.itemKey and result.itemKey.itemID then
+                    _auctionInfoCache[result.itemKey.itemID] = result.itemKey
+                end
+            end
+        end
+    end)
+end
+
 if C_AuctionHouse and C_AuctionHouse.PlaceBid then
     hooksecurefunc(C_AuctionHouse, "PlaceBid", function(auctionID, bidAmount)
         if not ns.TodoList or not ns.TodoList.OnItemPurchased then return end
-        -- Look up the auction info to get the item
         local info = C_AuctionHouse.GetAuctionInfoByID(auctionID)
+        local itemID, itemName
         if info and info.itemKey then
-            local itemID = info.itemKey.itemID
-            local itemName
-            if itemID then
-                local ok, n = pcall(C_Item.GetItemInfo, itemID)
-                itemName = ok and n or nil
-            end
+            itemID = info.itemKey.itemID
+        end
+        if itemID then
+            local ok, n = pcall(C_Item.GetItemInfo, itemID)
+            itemName = ok and n or nil
+        end
+        ns:PrintDebug("[buy-hook] PlaceBid auc=" .. auctionID ..
+            " id=" .. tostring(itemID) .. " name=" .. tostring(itemName))
+        if itemID then
             ns.TodoList:OnItemPurchased(itemID, itemName)
+        else
+            ns:PrintDebug("[buy-hook] PlaceBid — no auction info, will detect via bags")
         end
     end)
 end
@@ -809,6 +839,8 @@ if C_AuctionHouse and C_AuctionHouse.ConfirmCommoditiesPurchase then
             local ok, n = pcall(C_Item.GetItemInfo, itemID)
             itemName = ok and n or nil
         end
+        ns:PrintDebug("[buy-hook] CommodityPurchase id=" .. tostring(itemID) ..
+            " name=" .. tostring(itemName) .. " qty=" .. tostring(quantity))
         ns.TodoList:OnItemPurchased(itemID, itemName)
     end)
 end

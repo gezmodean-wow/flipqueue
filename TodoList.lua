@@ -769,6 +769,23 @@ function TodoList:AdvanceStep(taskIndex)
         if task.importSource and task.importKey then
             ns:ImportRemove(task.importSource, task.importKey)
         end
+        -- When a buy task completes, unblock the correlated sell task
+        if task.action == "buy" then
+            local buyChar = task.assignedChar
+            local buyKey = task.itemKey or ""
+            local buyName = task.name and task.name:lower() or ""
+            for _, other in ipairs(ns.db.todoLists.active.tasks) do
+                if other.status == "pending" and other.action == "sell"
+                        and other.blockedBy == buyChar
+                        and ((buyKey ~= "" and other.itemKey == buyKey)
+                          or (buyName ~= "" and other.name and other.name:lower() == buyName)) then
+                    other.blockedBy = nil
+                    other.depositFrom = nil
+                    other.deferredAt = nil
+                    ns:PrintDebug("[buy-complete] unblocked sell task: " .. (other.name or "?"))
+                end
+            end
+        end
     end
 
     return true
@@ -1006,13 +1023,15 @@ function TodoList:RefreshTaskSteps()
         current._realmsCleaned = true
     end
 
-    -- Build quick bag lookup for current character
+    -- Build quick bag lookup for current character (includes reagent bag)
     local bagsItemKeys = {}
     local bagsItemIDs = {}
-    local bagsPetSpecies = {} -- speciesID -> count (for battle pet matching)
-    local bagsItemNames = {} -- lowercase name -> count (fallback for pets/edge cases)
+    local bagsPetSpecies = {}
+    local bagsItemNames = {}       -- exact lowercase name -> count
+    local bagsNormNames = {}       -- normalized (alphanumeric only) -> count
+    local bagsNameToID = {}        -- lowercase name -> numeric itemID (for backfill)
     pcall(function()
-        for _, bagIdx in ipairs(ns.INVENTORY_BAGS) do
+        for _, bagIdx in ipairs(ns.ALL_PLAYER_BAGS or ns.INVENTORY_BAGS) do
             local numSlots = C_Container.GetContainerNumSlots(bagIdx)
             for slot = 1, numSlots do
                 local info = C_Container.GetContainerItemInfo(bagIdx, slot)
@@ -1025,17 +1044,20 @@ function TodoList:RefreshTaskSteps()
                         if numID then
                             bagsItemIDs[numID] = (bagsItemIDs[numID] or 0) + (info.stackCount or 1)
                         end
-                        -- Track battle pets by species ID for cross-format matching
                         local speciesID = itemID:match("^pet:(%d+)") or itemID:match("^pet_(%d+)")
                         if speciesID then
                             bagsPetSpecies[speciesID] = (bagsPetSpecies[speciesID] or 0) + 1
                         end
-                    end
-                    -- Track item names for fallback matching (especially pets)
-                    local itemName = info.hyperlink:match("|h%[(.-)%]|h")
-                    if itemName and itemName ~= "" then
-                        local lname = itemName:lower()
-                        bagsItemNames[lname] = (bagsItemNames[lname] or 0) + (info.stackCount or 1)
+                        local itemName = info.hyperlink:match("|h%[(.-)%]|h")
+                        if itemName and itemName ~= "" then
+                            local lname = itemName:lower()
+                            bagsItemNames[lname] = (bagsItemNames[lname] or 0) + (info.stackCount or 1)
+                            local norm = lname:gsub("[^%w]", "")
+                            if norm ~= "" then
+                                bagsNormNames[norm] = (bagsNormNames[norm] or 0) + (info.stackCount or 1)
+                            end
+                            if numID then bagsNameToID[lname] = numID end
+                        end
                     end
                 end
             end
@@ -1049,20 +1071,36 @@ function TodoList:RefreshTaskSteps()
             local stepType = self:GetCurrentStepType(task)
             local itemKey = task.itemKey or ""
             local itemNumID = tonumber(task.itemID) or tonumber(itemKey:match("^(%d+)"))
-            -- Extract pet species ID from any format: "pet:267", "pet_267", "pet:267;q0;"
             local taskPetSpecies = ExtractPetSpecies(itemKey)
                 or (task.itemID and ExtractPetSpecies(task.itemID))
             local taskNameLower = task.name and task.name:lower() or nil
+            local taskNormName = taskNameLower and taskNameLower:gsub("[^%w]", "") or nil
             local inBags = (bagsItemKeys[itemKey] and bagsItemKeys[itemKey] > 0)
                 or (itemNumID and bagsItemIDs[itemNumID] and bagsItemIDs[itemNumID] > 0)
                 or (taskPetSpecies and bagsPetSpecies[taskPetSpecies] and bagsPetSpecies[taskPetSpecies] > 0)
                 or (taskNameLower and bagsItemNames[taskNameLower] and bagsItemNames[taskNameLower] > 0)
+                or (taskNormName and bagsNormNames[taskNormName] and bagsNormNames[taskNormName] > 0)
 
-            -- Buy tasks have different step logic
+            -- Backfill itemID from bag scan when matched by name (so future
+            -- checks can use the faster numeric-ID path).
+            if inBags and (not task.itemID or task.itemID == "") and taskNameLower then
+                local resolvedID = bagsNameToID[taskNameLower]
+                if resolvedID then
+                    task.itemID = tostring(resolvedID)
+                end
+            end
+
             local isBuyTask = task.action == "buy"
 
             local justAdvanced = false
             if isBuyTask then
+                if not inBags and (stepType == "browse" or stepType == "buy" or stepType == "collect") then
+                    ns:PrintDebug("[buy-step] " .. (task.name or "?") .. " step=" .. tostring(stepType) ..
+                        " inBags=false key=" .. tostring(task.itemKey) ..
+                        " id=" .. tostring(task.itemID) ..
+                        " name=" .. tostring(taskNameLower) ..
+                        " norm=" .. tostring(taskNormName))
+                end
                 -- Buy task steps: browse → buy → collect → deposit
                 if stepType == "browse" then
                     -- Item appeared in bags (bought + collected from mail without hook)
@@ -1410,30 +1448,43 @@ function TodoList:OnItemPurchased(itemID, itemName)
     local numID = tonumber(itemID)
     local lname = itemName and itemName:lower() or nil
 
+    ns:PrintDebug("[buy-hook] OnItemPurchased id=" .. tostring(itemID) ..
+        " name=" .. tostring(itemName))
+
     for taskIdx, task in ipairs(current.tasks) do
         if task.status == "pending" and task.action == "buy"
                 and task.assignedChar == charKey
                 and ns:RealmMatches(task.buyRealm or "", currentRealm)
                 and task.steps and task.currentStep then
             local stepType = self:GetCurrentStepType(task)
-            if stepType == "browse" then
-                -- Match by numeric ID or name
+            if stepType == "browse" or stepType == "buy" then
                 local taskNumID = tonumber(task.itemID) or tonumber((task.itemKey or ""):match("^(%d+)"))
                 local matched = (numID and taskNumID and numID == taskNumID)
                     or (lname and task.name and task.name:lower() == lname)
+                ns:PrintDebug("[buy-hook] check " .. (task.name or "?") ..
+                    " taskID=" .. tostring(taskNumID) ..
+                    " step=" .. tostring(stepType) ..
+                    " matched=" .. tostring(matched))
                 if matched then
-                    self:AdvanceStep(taskIdx) -- browse → buy
+                    -- Backfill numeric itemID so RefreshTaskSteps can match by ID
+                    if numID and (not task.itemID or task.itemID == "") then
+                        task.itemID = tostring(numID)
+                    end
+                    if stepType == "browse" then
+                        self:AdvanceStep(taskIdx) -- browse → buy
+                    end
                     self:AdvanceStep(taskIdx) -- buy → collect (waiting for mail)
                     ns:Print(ns.COLORS.GREEN .. "Purchased:|r " .. (task.name or "?") .. " — collect from mail")
                     if ns.UI then
                         if ns.UI.Refresh then ns.UI:Refresh() end
                         if ns.UI.RefreshMini then ns.UI:RefreshMini() end
                     end
-                    return -- one purchase = one task advancement
+                    return
                 end
             end
         end
     end
+    ns:PrintDebug("[buy-hook] no matching buy task found")
 end
 
 -- Skip a task (TSM below threshold, user skip, etc.)

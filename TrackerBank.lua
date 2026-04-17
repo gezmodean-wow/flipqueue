@@ -327,22 +327,30 @@ function Tracker:CalculatePurchaseCosts(charKey, currentRealm)
     local details = {}
 
     for _, task in ipairs(buyTasks) do
-        if task.item.action == "buy"
-                and ns:RealmMatches(task.item.buyRealm or "", currentRealm) then
-            local buyPriceGold = ns:ParseGoldValue(task.item.buyPrice or "")
-            if buyPriceGold > 0 then
-                local qty = task.item.quantity or 1
-                local costCopper = math.ceil(buyPriceGold * 10000) * qty -- ParseGoldValue returns gold, convert to copper
-                totalCopper = totalCopper + costCopper
-                itemCount = itemCount + 1
-                table.insert(details, {
-                    name = task.item.name or tostring(task.item.itemID),
-                    vendorCopper = 0,
-                    duration = "buy",
-                    mult = 1,
-                    deposit = costCopper,
-                    qty = qty,
-                })
+        if task.item.action == "buy" then
+            if not ns:RealmMatches(task.item.buyRealm or "", currentRealm) then
+                ns:PrintDebug("[gold] buy skip (realm): " .. (task.item.name or "?")
+                    .. " buyRealm=" .. tostring(task.item.buyRealm)
+                    .. " current=" .. currentRealm)
+            else
+                local buyPriceGold = ns:ParseGoldValue(task.item.buyPrice or "")
+                if buyPriceGold <= 0 then
+                    ns:PrintDebug("[gold] buy skip (no price): " .. (task.item.name or "?")
+                        .. " buyPrice=" .. tostring(task.item.buyPrice))
+                else
+                    local qty = task.item.quantity or 1
+                    local costCopper = math.ceil(buyPriceGold * 10000) * qty
+                    totalCopper = totalCopper + costCopper
+                    itemCount = itemCount + 1
+                    table.insert(details, {
+                        name = task.item.name or tostring(task.item.itemID),
+                        vendorCopper = 0,
+                        duration = "buy",
+                        mult = 1,
+                        deposit = costCopper,
+                        qty = qty,
+                    })
+                end
             end
         end
     end
@@ -404,21 +412,28 @@ function Tracker:AutoWithdrawGold()
 
     if itemCount == 0 then return end
 
-    -- Print deposit breakdown (debug only)
-    ns:PrintDebug(ns.COLORS.YELLOW .. "AH fee calc for " .. itemCount .. " task(s):|r")
+    -- Print breakdown (debug only)
+    local hasBuyCosts = false
+    ns:PrintDebug(ns.COLORS.YELLOW .. "Gold calc for " .. itemCount .. " task(s):|r")
     for _, d in ipairs(depositDetails) do
-        local vendorStr = ns:FormatGold(d.vendorCopper)
         local depositStr = ns:FormatGold(d.deposit)
-        ns:PrintDebug("  " .. d.name .. ": vendor=" .. vendorStr ..
-            " x" .. d.qty .. " @ " .. d.duration ..
-            " (" .. string.format("%.0f%%", d.mult * 100) .. ") = " .. depositStr)
+        if d.duration == "buy" then
+            hasBuyCosts = true
+            ns:PrintDebug("  " .. d.name .. ": buy x" .. d.qty .. " = " .. depositStr)
+        else
+            local vendorStr = ns:FormatGold(d.vendorCopper)
+            ns:PrintDebug("  " .. d.name .. ": vendor=" .. vendorStr ..
+                " x" .. d.qty .. " @ " .. d.duration ..
+                " (" .. string.format("%.0f%%", d.mult * 100) .. ") = " .. depositStr)
+        end
     end
 
     -- Add a small buffer (1g minimum, 10% extra for rounding)
     local estimatedFeesCopper = math.max(10000, math.ceil(totalDepositCopper * 1.1))
     local estimatedFeesGold = math.ceil(estimatedFeesCopper / 10000)
 
-    ns:PrintDebug("  Total deposit: " .. ns:FormatGold(totalDepositCopper) ..
+    local totalLabel = hasBuyCosts and "Total (fees + purchases)" or "Total deposit"
+    ns:PrintDebug("  " .. totalLabel .. ": " .. ns:FormatGold(totalDepositCopper) ..
         " + 10% buffer = " .. ns:FormatGold(estimatedFeesCopper))
 
     -- Account for what we've already withdrawn this session
@@ -480,8 +495,9 @@ function Tracker:AutoWithdrawGold()
     local ok8, err = pcall(C_Bank.WithdrawMoney, Enum.BankType.Account, shortfallCopper)
     if ok8 then
         sessionWithdrawnCopper = sessionWithdrawnCopper + shortfallCopper
+        local costLabel = hasBuyCosts and "fees + purchases" or "fees"
         ns:Print(ns.COLORS.GREEN .. "Withdrew " .. shortfallGold .. "g|r from warbank" ..
-            " (est. " .. estimatedFeesGold .. "g fees for " .. itemCount .. " items, had " .. playerGold .. "g)")
+            " (est. " .. estimatedFeesGold .. "g " .. costLabel .. " for " .. itemCount .. " items, had " .. playerGold .. "g)")
         return shortfallCopper
     else
         ns:Print(ns.COLORS.RED .. "Failed to withdraw: " .. tostring(err) .. "|r")

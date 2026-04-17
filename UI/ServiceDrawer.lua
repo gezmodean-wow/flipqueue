@@ -31,8 +31,8 @@ local SERVICES = {
         label = "Mail",
         iconFallback = "Interface\\Icons\\INV_Letter_15",
         summons = {
-            -- Courier's Stampwhistle — toy, summons a mailbox for 2 min.
-            { kind = "toy", id = 141605, name = "Katy's Stampwhistle" },
+            -- Katy's Stampwhistle — toy, summons a mailbox for 10 min.
+            { kind = "toy", id = 156833, name = "Katy's Stampwhistle" },
             -- MOLL-E — engineer-crafted, summons a mailbox for 10 min.
             { kind = "item", id = 54710, name = "MOLL-E" },
         },
@@ -139,18 +139,14 @@ end
 -- because toys don't live in bags after being learned. Cooldown is read via
 -- the item cooldown API, which works on learned toys even though the item
 -- isn't in bags.
+-- Returns (owned, icon, onCooldownRemaining, cdStart, cdDuration, usable, localizedName).
+-- localizedName is resolved via GetItemInfo so the secure button works on
+-- any client language (the hardcoded English name in SERVICES is a fallback).
 local function CheckToySummon(toyID)
     if not toyID then return false end
     if not PlayerHasToy then return false end
     local has = PlayerHasToy(toyID)
     if not has then return false end
-    -- Usability: C_ToyBox.IsToyUsable(itemID) tells us if the current
-    -- zone/state allows the toy. If the API is missing, assume usable.
-    local usable = true
-    if C_ToyBox and C_ToyBox.IsToyUsable then
-        local u = C_ToyBox.IsToyUsable(toyID)
-        if u == false then usable = false end
-    end
     local remaining, start, duration = 0, 0, 0
     if C_Container and C_Container.GetItemCooldown then
         local s, d = C_Container.GetItemCooldown(toyID)
@@ -160,7 +156,12 @@ local function CheckToySummon(toyID)
         end
     end
     local icon = C_Item and C_Item.GetItemIconByID and C_Item.GetItemIconByID(toyID) or nil
-    return true, icon, remaining, start, duration, usable
+    local localName = nil
+    if C_Item and C_Item.GetItemInfo then
+        local ok, n = pcall(C_Item.GetItemInfo, toyID)
+        if ok and n then localName = n end
+    end
+    return true, icon, remaining, start, duration, true, localName
 end
 
 -- Returns (owned, icon, onCooldownRemaining, cdStart, cdDuration, usable,
@@ -221,13 +222,19 @@ local function CheckSpellSummon(spellID)
     end
 
     local icon = nil
+    local localName = nil
     if C_Spell and C_Spell.GetSpellTexture then
         icon = C_Spell.GetSpellTexture(spellID)
     elseif GetSpellTexture then
         icon = GetSpellTexture(spellID)
     end
+    if C_Spell and C_Spell.GetSpellName then
+        localName = C_Spell.GetSpellName(spellID)
+    elseif GetSpellInfo then
+        localName = GetSpellInfo(spellID)
+    end
 
-    return true, icon, remaining, start, duration
+    return true, icon, remaining, start, duration, nil, localName
 end
 
 -- Decide which summon (if any) to show for a given service, and in which state.
@@ -243,9 +250,9 @@ local function ResolveService(service)
     for _, summon in ipairs(service.summons or {}) do
         local owned, icon, remaining, cdStart, cdDur, srcUsable, resolvedName
         if summon.kind == "spell" then
-            owned, icon, remaining, cdStart, cdDur = CheckSpellSummon(summon.id)
+            owned, icon, remaining, cdStart, cdDur, srcUsable, resolvedName = CheckSpellSummon(summon.id)
         elseif summon.kind == "toy" then
-            owned, icon, remaining, cdStart, cdDur, srcUsable = CheckToySummon(summon.id)
+            owned, icon, remaining, cdStart, cdDur, srcUsable, resolvedName = CheckToySummon(summon.id)
         elseif summon.kind == "mount" then
             owned, icon, remaining, cdStart, cdDur, srcUsable, resolvedName =
                 CheckMountSummon(summon.id)
@@ -417,26 +424,50 @@ end
 -- Drawer frame construction
 --------------------------
 
-local drawer = nil
 local serviceCols = {}
+local serviceClip = nil
+local serviceInner = nil
+local serviceThumb = nil
 
+local DRAWER_ICON_SIZE = 32
+local DRAWER_ICON_SPACING = 4
 local DRAWER_PAD = 4
-local ICON_SIZE = 32
 local LOCATE_BTN_HEIGHT = 16
-local COL_WIDTH = 44
-local COL_SPACING = 4
+local THUMB_HEIGHT = 12
+local COL_HEIGHT = DRAWER_ICON_SIZE + 2 + LOCATE_BTN_HEIGHT
+local ICON_AREA_HEIGHT = DRAWER_PAD * 2 + COL_HEIGHT
+local FULL_HEIGHT = ICON_AREA_HEIGHT + THUMB_HEIGHT
+local ANIM_DURATION = 0.15
 
-local function CreateServiceColumn(parent, service, index)
+local drawerOpen = false
+local animating = false
+local animTarget = THUMB_HEIGHT
+
+local DRAWER_BACKDROP = {
+    bgFile = "Interface\\Tooltips\\UI-Tooltip-Background",
+    edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
+    edgeSize = 14,
+    insets = {left = 3, right = 3, top = 3, bottom = 3},
+}
+
+local function GetDrawerWidth()
+    local m = _G["FlipQueueMiniFrame"]
+    if not m then return 170 end
+    local minW = DRAWER_PAD * 2 + #SERVICES * DRAWER_ICON_SIZE + (#SERVICES - 1) * DRAWER_ICON_SPACING
+    return math.max(math.floor(m:GetWidth() / 2), minW)
+end
+
+local function CreateServiceColumn(parent, service, index, totalW)
+    local totalIconsW = #SERVICES * DRAWER_ICON_SIZE + (#SERVICES - 1) * DRAWER_ICON_SPACING
+    local startX = math.floor((totalW - totalIconsW) / 2)
+    local x = startX + (index - 1) * (DRAWER_ICON_SIZE + DRAWER_ICON_SPACING)
+
     local col = CreateFrame("Frame", nil, parent)
-    col:SetSize(COL_WIDTH, ICON_SIZE + 2 + LOCATE_BTN_HEIGHT)
-    col:SetPoint("TOPLEFT", parent, "TOPLEFT",
-        DRAWER_PAD + (index - 1) * (COL_WIDTH + COL_SPACING),
-        -DRAWER_PAD)
+    col:SetSize(DRAWER_ICON_SIZE, COL_HEIGHT)
+    col:SetPoint("TOPLEFT", parent, "TOPLEFT", x, -DRAWER_PAD)
 
-    -- Secure summon button (icon row). The "type" attribute is set per-refresh
-    -- based on whether the resolved summon is an item or a spell.
     local btn = CreateFrame("Button", "FlipQueueServiceBtn_" .. service.key, col, "SecureActionButtonTemplate, BackdropTemplate")
-    btn:SetSize(ICON_SIZE, ICON_SIZE)
+    btn:SetSize(DRAWER_ICON_SIZE, DRAWER_ICON_SIZE)
     btn:SetPoint("TOP", col, "TOP", 0, 0)
     btn:RegisterForClicks("LeftButtonUp", "LeftButtonDown")
 
@@ -476,18 +507,17 @@ local function CreateServiceColumn(parent, service, index)
             GameTooltip:AddLine("On cooldown.", 0.9, 0.7, 0.3)
         elseif res and res.state == "redundant" then
             GameTooltip:SetText("|cffaaaaaa" .. service.label .. "|r: " .. (res.name or "?"), 1, 1, 1)
-            GameTooltip:AddLine("Not usable right now (already in service or restricted).", 0.7, 0.7, 0.7)
+            GameTooltip:AddLine("Not usable right now.", 0.7, 0.7, 0.7)
         else
             GameTooltip:SetText("|cff888888" .. service.label .. "|r", 1, 1, 1)
-            GameTooltip:AddLine("No summon available. Use Find below.", 0.7, 0.7, 0.7)
+            GameTooltip:AddLine("No summon available.", 0.7, 0.7, 0.7)
         end
         GameTooltip:Show()
     end)
     btn:SetScript("OnLeave", function() GameTooltip:Hide() end)
 
-    -- Locate Nearest button (text row)
     local locBtn = CreateFrame("Button", nil, col, "BackdropTemplate")
-    locBtn:SetSize(COL_WIDTH, LOCATE_BTN_HEIGHT)
+    locBtn:SetSize(DRAWER_ICON_SIZE, LOCATE_BTN_HEIGHT)
     locBtn:SetPoint("TOP", btn, "BOTTOM", 0, -2)
     locBtn:SetBackdrop({
         bgFile = "Interface\\Tooltips\\UI-Tooltip-Background",
@@ -505,12 +535,9 @@ local function CreateServiceColumn(parent, service, index)
         self:SetBackdropColor(0.18, 0.22, 0.32, 1)
         GameTooltip:SetOwner(self, "ANCHOR_TOPRIGHT")
         GameTooltip:SetText("Locate Nearest " .. service.label, 1, 1, 1)
-        local maxShown = 3
-        local shown = 0
-        for _, loc in ipairs(service.locations or {}) do
-            if shown >= maxShown then break end
-            GameTooltip:AddLine("• " .. loc.zoneName .. " — " .. loc.text, 0.8, 0.8, 0.8)
-            shown = shown + 1
+        for i2, loc in ipairs(service.locations or {}) do
+            if i2 > 3 then break end
+            GameTooltip:AddLine("  " .. loc.zoneName .. " - " .. loc.text, 0.8, 0.8, 0.8)
         end
         GameTooltip:AddLine("Click to set a map waypoint.", 0.6, 0.8, 0.6)
         GameTooltip:Show()
@@ -527,39 +554,86 @@ local function CreateServiceColumn(parent, service, index)
 end
 
 local function EnsureDrawer()
-    if drawer then return drawer end
+    if serviceClip then return true end
 
     local mini = _G["FlipQueueMiniFrame"]
-    if not mini then return nil end
+    if not mini then return false end
 
-    -- Floating popout: fixed width, anchored TOP-center to mini's BOTTOM-center.
-    -- It's a child of the mini so it moves with the mini, but its width is independent.
-    drawer = CreateFrame("Frame", "FlipQueueServiceDrawer", mini, "BackdropTemplate")
+    local drawerWidth = GetDrawerWidth()
 
-    local totalW = DRAWER_PAD * 2 + #SERVICES * COL_WIDTH + (#SERVICES - 1) * COL_SPACING
-    local totalH = DRAWER_PAD * 2 + ICON_SIZE + 4 + LOCATE_BTN_HEIGHT
+    serviceClip = CreateFrame("Frame", "FlipQueueServiceClip", mini)
+    serviceClip:SetClipsChildren(true)
+    serviceClip:SetSize(drawerWidth, THUMB_HEIGHT)
+    serviceClip:SetPoint("TOPRIGHT", mini, "BOTTOMRIGHT", 0, 3)
+    serviceClip:SetFrameStrata("MEDIUM")
 
-    drawer:SetSize(totalW, totalH)
-    drawer:ClearAllPoints()
-    drawer:SetPoint("TOP", mini, "BOTTOM", 0, -4)
-    drawer:SetFrameStrata("MEDIUM")
-
-    drawer:SetBackdrop({
-        bgFile = "Interface\\Tooltips\\UI-Tooltip-Background",
-        edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
-        edgeSize = 14,
-        insets = {left = 3, right = 3, top = 3, bottom = 3},
-    })
-    drawer:SetBackdropColor(0.05, 0.05, 0.1, 0.95)
-    drawer:SetBackdropBorderColor(0.3, 0.3, 0.4, 0.9)
+    serviceInner = CreateFrame("Frame", "FlipQueueServiceContent", serviceClip, "BackdropTemplate")
+    serviceInner:SetSize(drawerWidth, FULL_HEIGHT)
+    serviceInner:SetPoint("BOTTOMLEFT", serviceClip, "BOTTOMLEFT", 0, 0)
+    serviceInner:SetPoint("BOTTOMRIGHT", serviceClip, "BOTTOMRIGHT", 0, 0)
+    serviceInner:SetBackdrop(DRAWER_BACKDROP)
+    serviceInner:SetBackdropColor(0.05, 0.05, 0.1, 0.9)
+    serviceInner:SetBackdropBorderColor(0.3, 0.3, 0.4, 0.8)
 
     for i, svc in ipairs(SERVICES) do
-        serviceCols[i] = CreateServiceColumn(drawer, svc, i)
+        serviceCols[i] = CreateServiceColumn(serviceInner, svc, i, drawerWidth)
     end
 
-    drawer.minContentWidth = totalW
-    drawer:Hide()
-    return drawer
+    serviceThumb = CreateFrame("Button", "FlipQueueServiceTab", serviceInner)
+    serviceThumb:SetHeight(THUMB_HEIGHT)
+    serviceThumb:SetPoint("BOTTOMLEFT", serviceInner, "BOTTOMLEFT", 4, 3)
+    serviceThumb:SetPoint("BOTTOMRIGHT", serviceInner, "BOTTOMRIGHT", -4, 3)
+
+    -- Grip lines (horizontal bars) as a drag-handle visual.
+    for j = 1, 3 do
+        local grip = serviceThumb:CreateTexture(nil, "ARTWORK")
+        grip:SetHeight(1)
+        grip:SetWidth(16)
+        grip:SetPoint("CENTER", serviceThumb, "CENTER", 0, (j - 2) * 3)
+        grip:SetColorTexture(0.4, 0.4, 0.5, 0.6)
+    end
+
+    serviceThumb.highlight = serviceThumb:CreateTexture(nil, "HIGHLIGHT")
+    serviceThumb.highlight:SetAllPoints()
+    serviceThumb.highlight:SetColorTexture(1, 1, 1, 0.06)
+
+    serviceThumb:SetScript("OnClick", function()
+        if InCombatLockdown() then return end
+        UI:ToggleServiceDrawer()
+    end)
+
+    local animSpeed = ICON_AREA_HEIGHT / ANIM_DURATION
+    serviceClip:SetScript("OnUpdate", function(self, elapsed)
+        if not animating then return end
+        local cur = self:GetHeight()
+        local diff = animTarget - cur
+        local step = animSpeed * elapsed
+        if math.abs(diff) <= step then
+            self:SetHeight(animTarget)
+            animating = false
+        else
+            self:SetHeight(cur + (diff > 0 and step or -step))
+        end
+    end)
+
+    return true
+end
+
+local function UpdateDrawerWidth()
+    if not serviceClip then return end
+    local w = GetDrawerWidth()
+    serviceClip:SetWidth(w)
+    serviceInner:SetWidth(w)
+    serviceInner:SetHeight(FULL_HEIGHT)
+    local totalIconsW = #SERVICES * DRAWER_ICON_SIZE + (#SERVICES - 1) * DRAWER_ICON_SPACING
+    local startX = math.floor((w - totalIconsW) / 2)
+    for i, col in ipairs(serviceCols) do
+        if col then
+            col:ClearAllPoints()
+            local x = startX + (i - 1) * (DRAWER_ICON_SIZE + DRAWER_ICON_SPACING)
+            col:SetPoint("TOPLEFT", serviceInner, "TOPLEFT", x, -DRAWER_PAD)
+        end
+    end
 end
 
 --------------------------
@@ -567,11 +641,12 @@ end
 --------------------------
 
 function UI:GetServiceDrawer()
-    return drawer or EnsureDrawer()
+    EnsureDrawer()
+    return serviceInner
 end
 
 function UI:IsServiceDrawerShown()
-    return drawer and drawer:IsShown() or false
+    return drawerOpen
 end
 
 local function SaveDrawerShown(shown)
@@ -581,22 +656,38 @@ local function SaveDrawerShown(shown)
 end
 
 function UI:ShowServiceDrawer()
-    local d = EnsureDrawer()
-    if not d then return end
+    if not EnsureDrawer() then return end
     local mini = _G["FlipQueueMiniFrame"]
     if not mini or not mini:IsShown() then return end
-    d:Show()
+
+    drawerOpen = true
+    animTarget = FULL_HEIGHT
+    animating = true
+
     SaveDrawerShown(true)
     if UI.RefreshServiceDrawer then UI:RefreshServiceDrawer() end
 end
 
 function UI:HideServiceDrawer()
-    if drawer then drawer:Hide() end
+    if not serviceClip then return end
+    drawerOpen = false
+    animTarget = THUMB_HEIGHT
+    animating = true
+
     SaveDrawerShown(false)
+    if not (InCombatLockdown and InCombatLockdown()) then
+        for _, col in ipairs(serviceCols) do
+            if col and col.btn then
+                col.btn:SetAttribute("type", nil)
+                col.btn:SetAttribute("item", nil)
+                col.btn:SetAttribute("spell", nil)
+            end
+        end
+    end
 end
 
 function UI:ToggleServiceDrawer()
-    if UI:IsServiceDrawerShown() then
+    if drawerOpen then
         UI:HideServiceDrawer()
     else
         UI:ShowServiceDrawer()
@@ -604,32 +695,33 @@ function UI:ToggleServiceDrawer()
 end
 
 function UI:RefreshServiceDrawer()
-    local d = EnsureDrawer()
-    if not d then return end
+    if not EnsureDrawer() then return end
 
     local mini = _G["FlipQueueMiniFrame"]
     if not mini or not mini:IsShown() then
-        d:Hide()
+        if serviceClip then serviceClip:Hide() end
         return
     end
 
-    -- Restore saved visibility on first refresh after load.
-    -- If the user explicitly hid the drawer, stay hidden.
-    if ns.db and ns.db.settings and ns.db.settings.serviceDrawerShown == false then
-        d:Hide()
-        return
+    serviceClip:Show()
+    UpdateDrawerWidth()
+
+    -- Restore saved state on first refresh after login.
+    if ns.db and ns.db.settings then
+        local saved = ns.db.settings.serviceDrawerShown
+        if saved == true and not drawerOpen and not animating then
+            drawerOpen = true
+            serviceClip:SetHeight(FULL_HEIGHT)
+            animTarget = FULL_HEIGHT
+        elseif (saved == false or saved == nil) and not drawerOpen then
+            serviceClip:SetHeight(THUMB_HEIGHT)
+        end
     end
 
-    -- Default: if the setting has never been set, drawer stays hidden until the
-    -- user clicks the header toggle button.
-    if ns.db and ns.db.settings and ns.db.settings.serviceDrawerShown == nil then
-        d:Hide()
-        return
-    end
 
-    d:Show()
+    if not drawerOpen then return end
 
-    -- Cannot re-assign secure attributes during combat — defer refresh in that case
+    -- Cannot re-assign secure attributes during combat
     local inCombat = InCombatLockdown and InCombatLockdown()
 
     for i, svc in ipairs(SERVICES) do
@@ -639,10 +731,8 @@ function UI:RefreshServiceDrawer()
             local btn = col.btn
             btn.resolution = res
 
-            -- Icon
             btn.tex:SetTexture(res.icon or svc.iconFallback)
 
-            -- Visual state
             if res.state == "ready" then
                 btn.tex:SetDesaturated(false)
                 btn.tex:SetVertexColor(1, 1, 1)
@@ -661,16 +751,13 @@ function UI:RefreshServiceDrawer()
                 btn:SetBackdropBorderColor(0.25, 0.25, 0.3, 0.6)
             end
 
-            -- Cooldown swipe
             if res.state == "cooldown" and res.cooldownStart and res.cooldownDuration then
                 btn.cooldown:SetCooldown(res.cooldownStart, res.cooldownDuration)
             else
                 btn.cooldown:Clear()
             end
 
-            -- Secure attribute (combat-safe). Item vs spell uses different keys.
             if not inCombat then
-                -- Clear both possible attribute keys before re-assigning
                 btn:SetAttribute("type", nil)
                 btn:SetAttribute("item", nil)
                 btn:SetAttribute("spell", nil)
@@ -684,10 +771,14 @@ function UI:RefreshServiceDrawer()
                     end
                     btn:Enable()
                 end
-                -- Non-ready states leave type/item/spell unset (button becomes a no-op on click)
             end
         end
     end
+end
+
+-- Called when the mini resizes so the drawer tracks 1/3 width.
+function UI:UpdateServiceDrawerWidth()
+    UpdateDrawerWidth()
 end
 
 --------------------------
@@ -722,7 +813,6 @@ evt:SetScript("OnEvent", function(_, event)
     elseif event == "BANKFRAME_CLOSED" then
         serviceState.bankOpen = false
     elseif event == "PLAYER_ENTERING_WORLD" then
-        -- All service frames are closed on zone transitions
         serviceState.mailOpen = false
         serviceState.auctionOpen = false
         serviceState.bankOpen = false

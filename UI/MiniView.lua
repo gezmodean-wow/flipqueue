@@ -135,12 +135,6 @@ local collapseBtn = CreateIconButton(header, "Interface\\Buttons\\UI-MinusButton
 end)
 collapseBtn:SetPoint("RIGHT", importBtn, "LEFT", -ICON_SPACING, 0)
 
--- Services drawer toggle button
-local servicesBtn = CreateIconButton(header, "Interface\\Icons\\INV_Misc_Gear_02", "Toggle services drawer", function()
-    if UI.ToggleServiceDrawer then UI:ToggleServiceDrawer() end
-end)
-servicesBtn:SetPoint("RIGHT", collapseBtn, "LEFT", -ICON_SPACING, 0)
-
 -- Unread mail indicator (left side, next to title). Hidden when no mail.
 local mailIcon = CreateFrame("Frame", nil, header)
 mailIcon:SetSize(ICON_SIZE, ICON_SIZE)
@@ -188,6 +182,8 @@ resizeGrip:SetScript("OnMouseUp", function()
     if ns.db then
         ns.db.settings.miniWidth = math.floor(mini:GetWidth() + 0.5)
     end
+    if UI.UpdateServiceDrawerWidth then UI:UpdateServiceDrawerWidth() end
+    if UI.UpdateActionDrawerWidth then UI:UpdateActionDrawerWidth() end
     UI:RefreshMini()
 end)
 
@@ -411,9 +407,9 @@ taskArea:SetPoint("RIGHT", mini, "RIGHT", -4, 0)
 partnerStrip:SetPoint("TOPLEFT", taskArea, "BOTTOMLEFT", 0, -2)
 partnerStrip:SetPoint("RIGHT", mini, "RIGHT", -4, 0)
 
--- Services drawer is a separate floating popout managed by UI/ServiceDrawer.lua.
--- It anchors itself to the mini's BOTTOM (centered) and toggles visibility via
--- the header services button. It does NOT extend the mini's height.
+-- Services drawer is managed by UI/ServiceDrawer.lua. A tab at the mini's
+-- bottom-right toggles the drawer open/closed with a slide animation.
+-- The drawer takes 1/3 of the mini's width.
 
 local miniRows = {}
 
@@ -476,8 +472,9 @@ function UI:RefreshMini()
     -- Update per-partner status strip (replaces the old single sync dot)
     RefreshPartnerStrip()
 
-    -- Services drawer refresh (it manages its own visibility state)
+    -- Drawer refreshes (they manage their own visibility state)
     if UI.RefreshServiceDrawer then UI:RefreshServiceDrawer() end
+    if UI.RefreshActionDrawer then UI:RefreshActionDrawer() end
 
     -- Hide all rows and clean up action buttons
     for _, row in ipairs(miniRows) do
@@ -960,8 +957,7 @@ function UI:RefreshMini()
     end
 
     -- Resize frame to fit content, clamped to screen height.
-    -- NB: the services drawer is a separate floating panel and does NOT extend
-    -- the mini height — it's anchored to the mini's BOTTOM as a popout.
+    -- The services drawer tab + content hang below the mini's BOTTOM edge.
     local contentHeight = math.max(1, visibleRows) * MINI_ROW_HEIGHT
     taskArea:SetHeight(contentHeight)
     local stripH = partnerStrip:IsShown() and partnerStrip:GetHeight() or 0
@@ -999,10 +995,6 @@ end
 
 function UI:HideMini()
     mini:Hide()
-    -- The services drawer is a child of mini and hides automatically, but we
-    -- explicitly hide it too so its isShown state is clean.
-    local sd = _G["FlipQueueServiceDrawer"]
-    if sd then sd:Hide() end
     if ns.db then ns.db.settings.showMini = false end
 end
 

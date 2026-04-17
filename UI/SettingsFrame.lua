@@ -596,9 +596,9 @@ function UI:CreateSettingsPanel(parent)
         sy = sy - 48 - ITEM_SPACING
     end
 
-    -- Withdraw gold for AH fees
+    -- Withdraw gold for AH fees + purchases
     settingsWidgets.autoGold, h = CreateSettingsCheckbox(sc, sy,
-        "Withdraw gold from the warbank to cover listing fees",
+        "Withdraw gold from the warbank for fees and purchases",
         "When you open the bank, take just enough gold from the warbank to pay estimated AH listing fees and any 'buy item' tasks for this character.",
         "autoWithdrawGold")
     sy = sy - h - ITEM_SPACING
