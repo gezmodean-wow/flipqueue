@@ -429,14 +429,16 @@ end
 -- Drawer constants
 --------------------------
 
-local THUMB_WIDTH    = 12
-local ICON_SIZE      = 32
-local ICON_SPACING   = 4
-local PAD            = 4
-local CONTENT_WIDTH  = PAD + ICON_SIZE + PAD          -- 40
-local FULL_WIDTH     = CONTENT_WIDTH + THUMB_WIDTH     -- 52
-local HEADER_HEIGHT  = 16
-local CONTENT_HEIGHT = HEADER_HEIGHT + 4 * ICON_SIZE + 3 * ICON_SPACING  -- 156
+local THUMB_WIDTH       = 12
+local ICON_SIZE         = 32
+local ICON_SPACING      = 4
+local LOCATE_BTN_HEIGHT = 16
+local PAD               = 4
+local CONTENT_WIDTH     = PAD + ICON_SIZE + PAD          -- 40
+local FULL_WIDTH        = CONTENT_WIDTH + THUMB_WIDTH     -- 52
+local HEADER_HEIGHT     = 16
+local SERVICE_BLOCK     = ICON_SIZE + 2 + LOCATE_BTN_HEIGHT  -- 50
+local CONTENT_HEIGHT    = HEADER_HEIGHT + 4 * SERVICE_BLOCK + 3 * ICON_SPACING  -- 228
 local ANIM_DURATION  = 0.15
 
 local DRAWER_BACKDROP = {
@@ -459,10 +461,9 @@ local drawerOpen = false
 local animating  = false
 local animTarget = THUMB_WIDTH
 
--- Create a single service icon button inside the content area.
--- Buttons are stacked vertically: index 1 at the top, index 4 at the bottom.
+-- Create a service icon button + Find button, stacked vertically.
 local function CreateServiceButton(parent, service, index)
-    local yOff = -(HEADER_HEIGHT + (index - 1) * (ICON_SIZE + ICON_SPACING))
+    local yOff = -(HEADER_HEIGHT + (index - 1) * (SERVICE_BLOCK + ICON_SPACING))
 
     local btn = CreateFrame("Button", "FlipQueueToolBtn_" .. service.key,
         parent, "SecureActionButtonTemplate, BackdropTemplate")
@@ -520,6 +521,40 @@ local function CreateServiceButton(parent, service, index)
     end)
     btn:SetScript("OnLeave", function() GameTooltip:Hide() end)
 
+    -- Find / Locate Nearest button below the icon
+    local locBtn = CreateFrame("Button", nil, parent, "BackdropTemplate")
+    locBtn:SetSize(ICON_SIZE, LOCATE_BTN_HEIGHT)
+    locBtn:SetPoint("TOP", btn, "BOTTOM", 0, -2)
+    locBtn:SetBackdrop({
+        bgFile = "Interface\\Tooltips\\UI-Tooltip-Background",
+        edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
+        edgeSize = 6,
+        insets = {left = 1, right = 1, top = 1, bottom = 1},
+    })
+    locBtn:SetBackdropColor(0.12, 0.14, 0.20, 0.9)
+    locBtn:SetBackdropBorderColor(0.3, 0.35, 0.5, 0.8)
+    locBtn.text = locBtn:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    locBtn.text:SetPoint("CENTER")
+    locBtn.text:SetText("Find")
+    locBtn.text:SetTextColor(0.8, 0.85, 1)
+    locBtn:SetScript("OnEnter", function(self)
+        self:SetBackdropColor(0.18, 0.22, 0.32, 1)
+        GameTooltip:SetOwner(self, "ANCHOR_LEFT")
+        GameTooltip:SetText("Locate Nearest " .. service.label, 1, 1, 1)
+        for i2, loc in ipairs(service.locations or {}) do
+            if i2 > 3 then break end
+            GameTooltip:AddLine("  " .. loc.zoneName .. " - " .. loc.text, 0.8, 0.8, 0.8)
+        end
+        GameTooltip:AddLine("Click to set a map waypoint.", 0.6, 0.8, 0.6)
+        GameTooltip:Show()
+    end)
+    locBtn:SetScript("OnLeave", function(self)
+        self:SetBackdropColor(0.12, 0.14, 0.20, 0.9)
+        GameTooltip:Hide()
+    end)
+    locBtn:SetScript("OnClick", function() LocateNearest(service) end)
+
+    btn.locBtn = locBtn
     return btn
 end
 

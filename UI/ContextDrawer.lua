@@ -24,6 +24,9 @@ local PAD            = 4
 local HEADER_HEIGHT  = 16
 local ANIM_DURATION  = 0.15
 
+local DEFAULT_CONTENT_H = HEADER_HEIGHT + PAD + BTN_HEIGHT + PAD  -- 42
+local DEFAULT_FULL_H    = DEFAULT_CONTENT_H + THUMB_HEIGHT  -- 54
+
 local BANK_CONTENT_H = HEADER_HEIGHT + PAD + 3 * BTN_HEIGHT + 2 * BTN_SPACING + PAD  -- 82
 local BANK_FULL_H    = BANK_CONTENT_H + THUMB_HEIGHT  -- 94
 
@@ -141,17 +144,21 @@ local function IsBankOpen()
            (BankFrame and BankFrame:IsShown()) or false
 end
 
-local function RefreshPauseButton()
-    local btn = bankButtons.pause
-    if not btn then return end
-    if ns._automationPaused then
-        btn.label:SetText("|cffff8800Unpause|r")
-        btn._tooltip = "Resume automation (currently paused)"
-        btn:SetBackdropBorderColor(0.7, 0.5, 0.2, 0.9)
-    else
-        btn.label:SetText("Pause")
-        btn._tooltip = "Temporarily pause all bank automation"
-        btn:SetBackdropBorderColor(0.3, 0.35, 0.5, 0.8)
+local function RefreshPauseButton(specificBtn)
+    local buttons = {}
+    if bankButtons.pause then table.insert(buttons, bankButtons.pause) end
+    if specificBtn then table.insert(buttons, specificBtn) end
+    if defaultFrame and defaultFrame._pauseBtn then table.insert(buttons, defaultFrame._pauseBtn) end
+    for _, btn in ipairs(buttons) do
+        if ns._automationPaused then
+            btn.label:SetText("|cffff8800Unpause|r")
+            btn._tooltip = "Resume automation (currently paused)"
+            btn:SetBackdropBorderColor(0.7, 0.5, 0.2, 0.9)
+        else
+            btn.label:SetText("Pause")
+            btn._tooltip = "Temporarily pause all bank automation"
+            btn:SetBackdropBorderColor(0.3, 0.35, 0.5, 0.8)
+        end
     end
 end
 
@@ -949,9 +956,38 @@ end
 -- Context switching
 --------------------------
 
+local defaultFrame = nil
+
+local function BuildDefaultContent(parent)
+    if defaultFrame then return defaultFrame end
+
+    defaultFrame = CreateFrame("Frame", nil, parent)
+    defaultFrame:SetPoint("TOPLEFT", parent, "TOPLEFT", PAD, -PAD)
+    defaultFrame:SetPoint("TOPRIGHT", parent, "TOPRIGHT", -PAD, -PAD)
+    defaultFrame:SetHeight(DEFAULT_CONTENT_H - PAD)
+
+    local hdr = defaultFrame:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    hdr:SetPoint("TOPLEFT", defaultFrame, "TOPLEFT", 0, 0)
+    hdr:SetText("|cffffffffFlipQueue|r")
+
+    local pauseBtn = CreateActionButton(defaultFrame, "Pause",
+        "Temporarily pause all bank automation", DoPause)
+    pauseBtn:SetPoint("TOPLEFT", defaultFrame, "TOPLEFT", 0,
+        -(HEADER_HEIGHT + PAD))
+    pauseBtn:SetPoint("RIGHT", defaultFrame, "RIGHT", 0, 0)
+
+    defaultFrame._pauseBtn = pauseBtn
+    defaultFrame:SetScript("OnShow", function()
+        RefreshPauseButton(pauseBtn)
+    end)
+
+    return defaultFrame
+end
+
 local function HideAllContextContent()
     if bankFrame then bankFrame:Hide() end
     if ahContentFrame then ahContentFrame:Hide() end
+    if defaultFrame then defaultFrame:Hide() end
 end
 
 local function ShowContext(ctx)
@@ -975,9 +1011,11 @@ local function ShowContext(ctx)
         RefreshAHScanRows()
         RefreshAHOwnedRows()
     else
-        -- default: collapsed to just the thumb
-        currentFullH = THUMB_HEIGHT
-        contextContent:SetHeight(THUMB_HEIGHT)
+        -- default: pause button only
+        local df = BuildDefaultContent(contextContent)
+        df:Show()
+        currentFullH = DEFAULT_FULL_H
+        contextContent:SetHeight(DEFAULT_FULL_H)
     end
 end
 
@@ -1065,13 +1103,7 @@ function UI:RefreshContextDrawer()
         -- Restore saved open/closed state or auto-open for non-default
         if ns.db and ns.db.settings then
             local saved = ns.db.settings.contextDrawerShown
-            if ctx == "default" then
-                -- Collapse in default context
-                drawerOpen = false
-                contextClip:SetHeight(THUMB_HEIGHT)
-                animTarget = THUMB_HEIGHT
-                animating = false
-            elseif saved == true then
+            if saved == true then
                 drawerOpen = true
                 contextClip:SetHeight(currentFullH)
                 animTarget = currentFullH
