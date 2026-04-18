@@ -21,9 +21,26 @@ local DURATION_HOURS = { [1] = 12, [2] = 24, [3] = 48 }
 function AuctionPost:IsCommodity(itemID)
     local numID = tonumber(itemID)
     if not numID then return false end
-    local ok, status = pcall(C_AuctionHouse.GetItemCommodityStatus, numID)
-    if not ok then return false end
-    return status == Enum.ItemCommodityStatus.Commodity
+
+    -- Primary: use the AH API
+    if C_AuctionHouse and C_AuctionHouse.GetItemCommodityStatus then
+        local ok, status = pcall(C_AuctionHouse.GetItemCommodityStatus, numID)
+        if ok and status == Enum.ItemCommodityStatus.Commodity then
+            return true
+        elseif ok and status == Enum.ItemCommodityStatus.Item then
+            return false
+        end
+    end
+
+    -- Fallback for Unknown status: check if item is stackable (max stack > 1)
+    if C_Item and C_Item.GetItemMaxStackSizeByID then
+        local ok2, maxStack = pcall(C_Item.GetItemMaxStackSizeByID, numID)
+        if ok2 and maxStack and maxStack > 1 then
+            return true
+        end
+    end
+
+    return false
 end
 
 --------------------------
@@ -316,22 +333,22 @@ function AuctionPost:PostItem(scanResult, callback)
 
     local unitPrice = scanResult.pricing.normalCopper
     local quantity = scanResult.postQty or 1
-    -- Duration: TSM uses 1=12h, 2=24h, 3=48h — same values as WoW API
     local duration = tonumber(scanResult.pricing.duration) or 3
+    local isCommodity = scanResult.isCommodity
 
     ns:PrintDebug("[AuctionPost] PostItem: " .. (scanResult.name or "?") ..
         " qty=" .. quantity .. " price=" .. unitPrice ..
-        " dur=" .. duration .. " commodity=" .. tostring(scanResult.isCommodity) ..
+        " dur=" .. duration .. " commodity=" .. tostring(isCommodity) ..
         " bag=" .. slotInfo.bag .. " slot=" .. slotInfo.slot)
 
     local ok, err
-    if scanResult.isCommodity then
+    if isCommodity then
         -- PostCommodity(itemLocation, duration, quantity, unitPrice)
         ok, err = pcall(C_AuctionHouse.PostCommodity, itemLoc, duration, quantity, unitPrice)
     else
         -- PostItem(itemLocation, duration, quantity, bid, buyout)
-        -- Both bid and buyout set to unitPrice for a standard buyout auction
-        ok, err = pcall(C_AuctionHouse.PostItem, itemLoc, duration, quantity, unitPrice, unitPrice)
+        -- Non-commodity: post one at a time, per-unit buyout price
+        ok, err = pcall(C_AuctionHouse.PostItem, itemLoc, duration, 1, nil, unitPrice)
     end
 
     if not ok then
