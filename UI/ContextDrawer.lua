@@ -1130,6 +1130,9 @@ local function EnsureDrawer()
             self:SetHeight(animTarget)
             contextContent:SetHeight(animTarget)
             animating = false
+            if animTarget <= THUMB_HEIGHT then
+                HideAllContextContent()
+            end
         else
             local newH = cur + (diff > 0 and step or -step)
             self:SetHeight(newH)
@@ -1227,8 +1230,10 @@ function UI:ShowContextDrawer()
     local mini = _G["FlipQueueMiniFrame"]
     if not mini or not mini:IsShown() then return end
 
-    -- Rebuild content at full height so it's ready when the clip reveals it
-    if currentContext then ShowContext(currentContext) end
+    -- Rebuild content at full height so it's ready when clip reveals it
+    local ctx = GetContext()
+    currentContext = ctx
+    ShowContext(ctx)
     drawerOpen = true
     animTarget = currentFullH
     animating  = true
@@ -1240,6 +1245,7 @@ function UI:HideContextDrawer()
     drawerOpen = false
     animTarget = THUMB_HEIGHT
     animating  = true
+    HideAllContextContent()
     SaveDrawerShown(false)
 end
 
