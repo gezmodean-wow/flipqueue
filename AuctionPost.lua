@@ -76,18 +76,14 @@ function AuctionPost:ResolvePostPrice(itemKey, itemID)
         ns:PrintDebug("[AuctionPost] ResolvePostPrice: no op for " .. tostring(itemKey) .. ", trying DBMinBuyout")
     end
 
-    -- Fallback chain: try several TSM price sources when no operation exists
-    -- or normalPrice couldn't be evaluated.
+    -- Fallback: use the player's configured tsmPriceSource setting
     if not normalCopper then
-        local sources = {"DBMinBuyout", "DBMarket", "DBRegionMarketAvg"}
-        for _, src in ipairs(sources) do
-            local fallback = ns.TSM:GetPrice(itemKey, src)
-            if fallback and fallback > 0 then
-                normalCopper = fallback
-                if not opName then opName = src end
-                ns:PrintDebug("[AuctionPost]   fallback " .. src .. " = " .. tostring(fallback))
-                break
-            end
+        local priceSrc = ns.db and ns.db.settings.tsmPriceSource or "DBMinBuyout"
+        local fallback = ns.TSM:GetPrice(itemKey, priceSrc)
+        if fallback and fallback > 0 then
+            normalCopper = fallback
+            if not opName then opName = priceSrc end
+            ns:PrintDebug("[AuctionPost]   fallback " .. priceSrc .. " = " .. tostring(fallback))
         end
     end
 
