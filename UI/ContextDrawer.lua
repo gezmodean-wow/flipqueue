@@ -151,7 +151,7 @@ local function RefreshPauseButton(specificBtn)
     if defaultFrame and defaultFrame._pauseBtn then table.insert(buttons, defaultFrame._pauseBtn) end
     for _, btn in ipairs(buttons) do
         if ns._automationPaused then
-            btn.label:SetText("|cffff8800Unpause|r")
+            btn.label:SetText("|cffff8800Resume Automation|r")
             btn._tooltip = "Resume automation (currently paused)"
             btn:SetBackdropBorderColor(0.7, 0.5, 0.2, 0.9)
         else
