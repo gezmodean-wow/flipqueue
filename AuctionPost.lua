@@ -313,18 +313,27 @@ function AuctionPost:PostItem(scanResult, callback)
 
     local unitPrice = scanResult.pricing.normalCopper
     local quantity = scanResult.postQty or 1
-    -- Duration: TSM uses 1/2/3, same as WoW API
-    local duration = scanResult.pricing.duration or 3 -- default 48h
+    -- Duration: TSM uses 1=12h, 2=24h, 3=48h — same values as WoW API
+    local duration = tonumber(scanResult.pricing.duration) or 3
+
+    ns:PrintDebug("[AuctionPost] PostItem: " .. (scanResult.name or "?") ..
+        " qty=" .. quantity .. " price=" .. unitPrice ..
+        " dur=" .. duration .. " commodity=" .. tostring(scanResult.isCommodity) ..
+        " bag=" .. slotInfo.bag .. " slot=" .. slotInfo.slot)
 
     local ok, err
     if scanResult.isCommodity then
+        -- PostCommodity(itemLocation, duration, quantity, unitPrice)
         ok, err = pcall(C_AuctionHouse.PostCommodity, itemLoc, duration, quantity, unitPrice)
     else
-        ok, err = pcall(C_AuctionHouse.PostItem, itemLoc, duration, quantity, unitPrice)
+        -- PostItem(itemLocation, duration, quantity, bid, buyout)
+        -- Both bid and buyout set to unitPrice for a standard buyout auction
+        ok, err = pcall(C_AuctionHouse.PostItem, itemLoc, duration, quantity, unitPrice, unitPrice)
     end
 
     if not ok then
-        ns:PrintDebug("PostItem failed: " .. tostring(err))
+        ns:PrintDebug("[AuctionPost] PostItem pcall failed: " .. tostring(err))
+        ns:Print(ns.COLORS.RED .. "Post failed: " .. tostring(err) .. "|r")
         cb(false, tostring(err))
         return
     end
