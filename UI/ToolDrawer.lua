@@ -497,18 +497,18 @@ local function CreateServiceButton(parent, service, index)
 
     -- Waypoint arrow overlay (shown when no summon, centered above Find text)
     btn.findArrow = btn:CreateTexture(nil, "OVERLAY")
-    btn.findArrow:SetSize(16, 16)
+    btn.findArrow:SetSize(20, 20)
     btn.findArrow:SetPoint("CENTER", btn, "CENTER", 0, 5)
-    btn.findArrow:SetTexture("Interface\\Minimap\\TRACKING\\None")
-    btn.findArrow:SetVertexColor(0.6, 0.8, 1.0)
+    btn.findArrow:SetTexture("Interface\\QuestFrame\\UI-QuestMap_arrowup")
+    btn.findArrow:SetVertexColor(0.8, 0.9, 1.0)
     btn.findArrow:Hide()
 
     -- "Find" label (shown when no summon available, centered below arrow)
     btn.findLabel = btn:CreateFontString(nil, "OVERLAY")
     btn.findLabel:SetFont(STANDARD_TEXT_FONT, 10, "OUTLINE")
-    btn.findLabel:SetPoint("CENTER", btn, "CENTER", 0, -8)
-    btn.findLabel:SetText("Find")
-    btn.findLabel:SetTextColor(0.6, 0.8, 1.0)
+    btn.findLabel:SetPoint("CENTER", btn, "CENTER", 0, -10)
+    btn.findLabel:SetText("FIND")
+    btn.findLabel:SetTextColor(1, 1, 1)
     btn.findLabel:Hide()
 
     btn.service = service
@@ -748,9 +748,9 @@ function UI:RefreshToolDrawer()
                 btn.findArrow:Hide()
                 btn.findLabel:Hide()
             else
-                -- No summon available — show as "Find" mode
-                btn.tex:SetDesaturated(false)
-                btn.tex:SetVertexColor(0.6, 0.7, 0.9)
+                -- No summon available — show as "Find" mode with dimmed icon
+                btn.tex:SetDesaturated(true)
+                btn.tex:SetVertexColor(0.3, 0.3, 0.4)
                 btn:SetBackdropBorderColor(0.3, 0.4, 0.6, 0.8)
                 btn.findArrow:Show()
                 btn.findLabel:Show()
