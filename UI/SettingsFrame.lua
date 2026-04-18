@@ -650,6 +650,13 @@ function UI:CreateSettingsPanel(parent)
         "autoDepositGold")
     sy = sy - h - ITEM_SPACING
 
+    -- Auto-scan AH on open
+    settingsWidgets.ahAutoScan, h = CreateSettingsCheckbox(sc, sy,
+        "Auto-scan inventory when the Auction House opens",
+        "Automatically run a to-do scan when you open the AH, populating the posting drawer with items ready to post.",
+        "ahAutoScanOnOpen")
+    sy = sy - h - ITEM_SPACING
+
     -- Gold buffer input
     do
         local row = CreateFrame("Frame", nil, sc)
@@ -1581,6 +1588,9 @@ function UI:RefreshSettings()
     end
     if settingsWidgets.autoDepositGold then
         settingsWidgets.autoDepositGold:SetChecked(ns.db.settings.autoDepositGold)
+    end
+    if settingsWidgets.ahAutoScan then
+        settingsWidgets.ahAutoScan:SetChecked(ns.db.settings.ahAutoScanOnOpen)
     end
     if settingsWidgets.goldBufferBox then
         local val = ns.db.settings.goldBuffer or 0

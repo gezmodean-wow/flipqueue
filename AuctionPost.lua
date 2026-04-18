@@ -73,17 +73,38 @@ function AuctionPost:ResolvePostPrice(itemKey, itemID)
             maxCopper = ok and val or nil
         end
     else
-        ns:PrintDebug("[AuctionPost] ResolvePostPrice: no op for " .. tostring(itemKey) .. ", trying DBMinBuyout")
+        ns:PrintDebug("[AuctionPost] ResolvePostPrice: no op for " .. tostring(itemKey) .. ", using settings fallback")
     end
 
-    -- Fallback: use the player's configured tsmPriceSource setting
+    -- Fallback chain when no auctioning operation or normalPrice eval failed:
+    -- 1. Try the player's tsmPriceSource setting (e.g., "70% DBRegionMarketAvg")
+    -- 2. Try DBMinBuyout (current AH price)
+    -- 3. Try DBMarket
+    -- 4. Try DBRegionMarketAvg
     if not normalCopper then
         local priceSrc = ns.db and ns.db.settings.tsmPriceSource or "DBMinBuyout"
-        local fallback = ns.TSM:GetPrice(itemKey, priceSrc)
-        if fallback and fallback > 0 then
-            normalCopper = fallback
-            if not opName then opName = priceSrc end
-            ns:PrintDebug("[AuctionPost]   fallback " .. priceSrc .. " = " .. tostring(fallback))
+        local sources = {priceSrc, "DBMinBuyout", "DBMarket", "DBRegionMarketAvg"}
+        local seen = {}
+        for _, src in ipairs(sources) do
+            if not seen[src] then
+                seen[src] = true
+                local val = ns.TSM:GetPrice(itemKey, src)
+                if val and val > 0 then
+                    normalCopper = val
+                    if not opName then opName = src end
+                    ns:PrintDebug("[AuctionPost]   fallback " .. src .. " = " .. tostring(val))
+                    break
+                end
+            end
+        end
+    end
+
+    -- Also resolve a minPrice threshold if we don't have one from an op
+    if not minCopper and normalCopper then
+        local minSrc = ns.db and ns.db.settings.tsmMinPriceSource
+        if minSrc and minSrc ~= "" then
+            local val = ns.TSM:GetPrice(itemKey, minSrc)
+            if val and val > 0 then minCopper = val end
         end
     end
 

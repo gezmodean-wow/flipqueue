@@ -1192,14 +1192,18 @@ local function ShowContext(ctx)
         currentFullH = BANK_FULL_H
         contextContent:SetHeight(BANK_FULL_H)
     elseif ctx == "auction" then
-        -- Re-resolve AuctionPost each time (may have loaded late)
         local af = BuildAHContent(contextContent)
         af:Show()
-        -- Recalculate AH height based on current data
+        -- Auto-scan on AH open if enabled
+        if ns.db and ns.db.settings.ahAutoScanOnOpen then
+            local ap = ns.AuctionPost
+            if ap and ap.ScanBags then
+                currentScanResults = ap:ScanBags(true) or {}
+            end
+        end
         local ahH = CalculateAHHeight() + THUMB_HEIGHT
         currentFullH = ahH
         contextContent:SetHeight(ahH)
-        -- Refresh scan/owned rows
         RefreshAHScanRows()
         RefreshAHOwnedRows()
     else
