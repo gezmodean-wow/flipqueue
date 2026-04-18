@@ -144,11 +144,14 @@ local function IsBankOpen()
            (BankFrame and BankFrame:IsShown()) or false
 end
 
+-- Forward-declared; set by BuildDefaultContent later in the file.
+local _defaultPauseBtn = nil
+
 local function RefreshPauseButton(specificBtn)
     local buttons = {}
     if bankButtons.pause then table.insert(buttons, bankButtons.pause) end
     if specificBtn then table.insert(buttons, specificBtn) end
-    if defaultFrame and defaultFrame._pauseBtn then table.insert(buttons, defaultFrame._pauseBtn) end
+    if _defaultPauseBtn then table.insert(buttons, _defaultPauseBtn) end
     for _, btn in ipairs(buttons) do
         if ns._automationPaused then
             btn.label:SetText("|cffff8800Resume Automation|r")
@@ -779,8 +782,9 @@ local function RefreshAHScanRows()
 
         local capturedI = i
         row.postBtn:SetScript("OnClick", function()
-            if AP and AP.PostItem then
-                AP:PostItem(result, function(ok)
+            local ap = ns.AuctionPost
+            if ap and ap.PostItem then
+                ap:PostItem(result, function(ok)
                     if ok then
                         table.remove(currentScanResults, capturedI)
                         RefreshAHScanRows()
@@ -832,8 +836,9 @@ local function RefreshAHOwnedRows()
 
         local capturedI = i
         row.cancelBtn:SetScript("OnClick", function()
-            if AP and AP.CancelAuction and auction.auctionID then
-                AP:CancelAuction(auction.auctionID, function(ok)
+            local ap = ns.AuctionPost
+            if ap and ap.CancelAuction and auction.auctionID then
+                ap:CancelAuction(auction.auctionID, function(ok)
                     if ok then
                         table.remove(currentOwnedAuctions, capturedI)
                         RefreshAHOwnedRows()
@@ -881,20 +886,26 @@ local function BuildAHContent(parent)
     -- Top row: [Scan To-Do] [Scan All]
     ahScanTodo = CreateActionButton(ahContentFrame, "Scan To-Do",
         "Scan bags for items on your to-do list", function()
-            if AP and AP.ScanBags then
-                currentScanResults = AP:ScanBags(true) or {}
+            local ap = ns.AuctionPost
+            if ap and ap.ScanBags then
+                currentScanResults = ap:ScanBags(true) or {}
                 RefreshAHScanRows()
                 UI:RefreshContextDrawer()
+            else
+                ns:Print(ns.COLORS.RED .. "AuctionPost module not loaded.|r")
             end
         end)
     ahScanTodo:SetPoint("TOPLEFT", ahContentFrame, "TOPLEFT", 0, -HEADER_HEIGHT)
 
     ahScanAll = CreateActionButton(ahContentFrame, "Scan All",
         "Scan all bag items for posting", function()
-            if AP and AP.ScanBags then
-                currentScanResults = AP:ScanBags(false) or {}
+            local ap = ns.AuctionPost
+            if ap and ap.ScanBags then
+                currentScanResults = ap:ScanBags(false) or {}
                 RefreshAHScanRows()
                 UI:RefreshContextDrawer()
+            else
+                ns:Print(ns.COLORS.RED .. "AuctionPost module not loaded.|r")
             end
         end)
     ahScanAll:SetPoint("LEFT", ahScanTodo, "RIGHT", BTN_SPACING, 0)
@@ -902,8 +913,9 @@ local function BuildAHContent(parent)
     -- Post All button (positioned dynamically)
     ahPostAll = CreateActionButton(ahContentFrame, "Post All",
         "Post all scanned items", function()
-            if AP and AP.PostAll and #currentScanResults > 0 then
-                AP:PostAll(currentScanResults,
+            local ap = ns.AuctionPost
+            if ap and ap.PostAll and #currentScanResults > 0 then
+                ap:PostAll(currentScanResults,
                     function(i, total) -- onProgress
                         ahPostAll.label:SetText("Posting " .. i .. "/" .. total)
                     end,
@@ -931,6 +943,7 @@ local function BuildAHContent(parent)
     -- Cancel Undercuts
     ahCancelUnder = CreateActionButton(ahContentFrame, "Cancel Undercuts",
         "Cancel all undercut auctions", function()
+            local AP = ns.AuctionPost
             if AP and AP.CancelAuction then
                 local toCancel = {}
                 for _, a in ipairs(currentOwnedAuctions) do
@@ -1017,8 +1030,9 @@ local function BuildAHContent(parent)
     C_Timer.After(0, LayoutAH)
 
     -- Fetch owned auctions on first build
-    if AP and AP.GetOwnedAuctions then
-        currentOwnedAuctions = AP:GetOwnedAuctions() or {}
+    local ap2 = ns.AuctionPost
+    if ap2 and ap2.GetOwnedAuctions then
+        currentOwnedAuctions = ap2:GetOwnedAuctions() or {}
         RefreshAHOwnedRows()
     end
 
@@ -1120,6 +1134,7 @@ local function BuildDefaultContent(parent)
     pauseBtn:SetPoint("RIGHT", defaultFrame, "RIGHT", 0, 0)
 
     defaultFrame._pauseBtn = pauseBtn
+    _defaultPauseBtn = pauseBtn
     defaultFrame:SetScript("OnShow", function()
         RefreshPauseButton(pauseBtn)
     end)

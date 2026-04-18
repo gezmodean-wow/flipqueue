@@ -499,7 +499,7 @@ local function CreateServiceButton(parent, service, index)
     btn.findArrow = btn:CreateTexture(nil, "OVERLAY")
     btn.findArrow:SetSize(20, 20)
     btn.findArrow:SetPoint("CENTER", btn, "CENTER", 0, 5)
-    btn.findArrow:SetTexture("Interface\\QuestFrame\\UI-QuestMap_arrowup")
+    btn.findArrow:SetTexture("Interface\\Minimap\\MiniMap-QuestArrow")
     btn.findArrow:SetVertexColor(0.8, 0.9, 1.0)
     btn.findArrow:Hide()
 
