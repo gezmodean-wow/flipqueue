@@ -1139,9 +1139,10 @@ local function EnsureDrawer()
         UI:ToggleContextDrawer()
     end)
 
-    -- Animation via OnUpdate. Content height tracks clip height so the
-    -- backdrop (which isn't clipped by SetClipsChildren) doesn't extend
-    -- above the clip rect.
+    -- Animation: only the clip height changes. The content stays at full
+    -- size (anchored to clip TOP) and is revealed/hidden by the clip.
+    -- The backdrop issue (extending above clip) is handled by hiding
+    -- content frames when collapsed.
     local animSpeed = 300 / ANIM_DURATION
     contextClip:SetScript("OnUpdate", function(self, elapsed)
         if not animating then return end
@@ -1150,15 +1151,12 @@ local function EnsureDrawer()
         local step = animSpeed * elapsed
         if math.abs(diff) <= step then
             self:SetHeight(animTarget)
-            contextContent:SetHeight(animTarget)
             animating = false
             if animTarget <= THUMB_HEIGHT then
                 HideAllContextContent()
             end
         else
-            local newH = cur + (diff > 0 and step or -step)
-            self:SetHeight(newH)
-            contextContent:SetHeight(newH)
+            self:SetHeight(cur + (diff > 0 and step or -step))
         end
     end)
 
@@ -1221,10 +1219,22 @@ local function ShowContext(ctx)
             local ap = ns.AuctionPost
             if ap and ap.ScanBags then
                 currentScanResults = ap:ScanBags(true) or {}
+                if #currentScanResults > 0 then
+                    ns:Print(ns.COLORS.GREEN .. #currentScanResults .. " item(s)|r ready to post")
+                end
             end
         end
+        -- Fetch owned auctions
+        local ap2 = ns.AuctionPost
+        if ap2 and ap2.GetOwnedAuctions then
+            currentOwnedAuctions = ap2:GetOwnedAuctions() or {}
+        end
+        -- Calculate and set height AFTER scan results are populated
         local ahH = CalculateAHHeight() + THUMB_HEIGHT
         currentFullH = ahH
+        -- Set content to full height immediately — the animation will
+        -- handle the clip reveal, but the content must be full-sized
+        -- so rows have room to render.
         contextContent:SetHeight(ahH)
         RefreshAHScanRows()
         RefreshAHOwnedRows()
@@ -1335,9 +1345,9 @@ function UI:RefreshContextDrawer()
             elseif saved == false then
                 drawerOpen = false
                 contextClip:SetHeight(THUMB_HEIGHT)
-                contextContent:SetHeight(THUMB_HEIGHT)
                 animTarget = THUMB_HEIGHT
                 animating = false
+                HideAllContextContent()
             else
                 -- First time: auto-open when a service is detected
                 drawerOpen = true
