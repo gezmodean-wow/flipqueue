@@ -343,18 +343,13 @@ function AuctionPost:PostItem(scanResult, callback)
 
     -- All items post via PostItem. For commodities, quantity is the stack
     -- count to post. For non-commodities, quantity is always 1.
+    -- IMPORTANT: must NOT use pcall — it strips the hardware event context
+    -- that C_AuctionHouse.PostItem requires to actually post.
     local postQty = isCommodity and quantity or 1
     ns:PrintDebug("[AuctionPost] calling PostItem: dur=" .. duration ..
         " qty=" .. postQty .. " buyout=" .. unitPrice ..
         " commodity=" .. tostring(isCommodity))
-    local ok, err = pcall(C_AuctionHouse.PostItem, itemLoc, duration, postQty, nil, unitPrice)
-
-    if not ok then
-        ns:PrintDebug("[AuctionPost] PostItem pcall failed: " .. tostring(err))
-        ns:Print(ns.COLORS.RED .. "Post failed: " .. tostring(err) .. "|r")
-        cb(false, tostring(err))
-        return
-    end
+    C_AuctionHouse.PostItem(itemLoc, duration, postQty, nil, unitPrice)
 
     -- Log the posting
     if ns.db then
