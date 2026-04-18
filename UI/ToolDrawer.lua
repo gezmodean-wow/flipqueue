@@ -722,8 +722,9 @@ function UI:RefreshToolDrawer()
             local res = ResolveService(svc)
             btn.resolution = res
 
-            -- Always show the service category icon
-            btn.tex:SetTexture(svc.iconFallback)
+            -- Show the resolved summon's icon if available, otherwise the
+            -- category fallback (mail envelope, coin, bag, etc.)
+            btn.tex:SetTexture(res.icon or svc.iconFallback)
 
             local isFindMode = (res.state == "unowned")
             btn._isFindMode = isFindMode
