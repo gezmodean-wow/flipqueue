@@ -341,21 +341,13 @@ function AuctionPost:PostItem(scanResult, callback)
         " dur=" .. duration .. " commodity=" .. tostring(isCommodity) ..
         " bag=" .. slotInfo.bag .. " slot=" .. slotInfo.slot)
 
-    local ok, err
-    if isCommodity then
-        -- PostCommodity(itemLocation, duration, quantity, unitPrice)
-        -- For commodities, unitPrice must be in copper per single unit.
-        -- Quantity is how many units to post from this stack.
-        ns:PrintDebug("[AuctionPost] calling PostCommodity: dur=" .. duration ..
-            " qty=" .. quantity .. " unitPrice=" .. unitPrice)
-        ok, err = pcall(C_AuctionHouse.PostCommodity, itemLoc, duration, quantity, unitPrice)
-    else
-        -- PostItem(itemLocation, duration, quantity, bid, buyout)
-        -- Non-commodity: post one at a time, buyout-only (bid=nil)
-        ns:PrintDebug("[AuctionPost] calling PostItem: dur=" .. duration ..
-            " qty=1 buyout=" .. unitPrice)
-        ok, err = pcall(C_AuctionHouse.PostItem, itemLoc, duration, 1, nil, unitPrice)
-    end
+    -- All items post via PostItem. For commodities, quantity is the stack
+    -- count to post. For non-commodities, quantity is always 1.
+    local postQty = isCommodity and quantity or 1
+    ns:PrintDebug("[AuctionPost] calling PostItem: dur=" .. duration ..
+        " qty=" .. postQty .. " buyout=" .. unitPrice ..
+        " commodity=" .. tostring(isCommodity))
+    local ok, err = pcall(C_AuctionHouse.PostItem, itemLoc, duration, postQty, nil, unitPrice)
 
     if not ok then
         ns:PrintDebug("[AuctionPost] PostItem pcall failed: " .. tostring(err))
