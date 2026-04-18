@@ -55,22 +55,25 @@ function AuctionPost:ResolvePostPrice(itemKey, itemID)
         ns:PrintDebug("[AuctionPost] ResolvePostPrice: " .. tostring(itemKey) ..
             " tsmStr=" .. tostring(tsmStr) .. " op=" .. tostring(opName))
 
-        if op.normalPrice and op.normalPrice ~= "" and type(TSM_API) == "table" then
-            local ok, val = pcall(TSM_API.GetCustomPriceValue, op.normalPrice, tsmStr)
-            normalCopper = ok and val or nil
-            if not ok then
-                ns:PrintDebug("[AuctionPost]   normalPrice eval failed: " .. tostring(val))
+        if type(TSM_API) == "table" then
+            if op.normalPrice and op.normalPrice ~= "" then
+                local ok, val = pcall(TSM_API.GetCustomPriceValue, op.normalPrice, tsmStr)
+                normalCopper = ok and val or nil
+                ns:PrintDebug("[AuctionPost]   normal=\"" .. op.normalPrice .. "\" -> " ..
+                    (ok and tostring(val) or ("ERR: " .. tostring(val))))
+            else
+                ns:PrintDebug("[AuctionPost]   normalPrice is empty/nil")
             end
-        end
 
-        if op.minPrice and op.minPrice ~= "" and type(TSM_API) == "table" then
-            local ok, val = pcall(TSM_API.GetCustomPriceValue, op.minPrice, tsmStr)
-            minCopper = ok and val or nil
-        end
+            if op.minPrice and op.minPrice ~= "" then
+                local ok, val = pcall(TSM_API.GetCustomPriceValue, op.minPrice, tsmStr)
+                minCopper = ok and val or nil
+            end
 
-        if op.maxPrice and op.maxPrice ~= "" and type(TSM_API) == "table" then
-            local ok, val = pcall(TSM_API.GetCustomPriceValue, op.maxPrice, tsmStr)
-            maxCopper = ok and val or nil
+            if op.maxPrice and op.maxPrice ~= "" then
+                local ok, val = pcall(TSM_API.GetCustomPriceValue, op.maxPrice, tsmStr)
+                maxCopper = ok and val or nil
+            end
         end
     else
         ns:PrintDebug("[AuctionPost] ResolvePostPrice: no op for " .. tostring(itemKey) .. ", using settings fallback")

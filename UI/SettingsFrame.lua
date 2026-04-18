@@ -650,13 +650,6 @@ function UI:CreateSettingsPanel(parent)
         "autoDepositGold")
     sy = sy - h - ITEM_SPACING
 
-    -- Auto-scan AH on open
-    settingsWidgets.ahAutoScan, h = CreateSettingsCheckbox(sc, sy,
-        "Auto-scan inventory when the Auction House opens",
-        "Automatically run a to-do scan when you open the AH, populating the posting drawer with items ready to post.",
-        "ahAutoScanOnOpen")
-    sy = sy - h - ITEM_SPACING
-
     -- Gold buffer input
     do
         local row = CreateFrame("Frame", nil, sc)
@@ -830,6 +823,23 @@ function UI:CreateSettingsPanel(parent)
     sy = sy - 68 - SECTION_SPACING
 
     secBank.contentHeight = math.abs(sy)
+
+    ------------------------------------------------
+    -- Section: Auction House
+    ------------------------------------------------
+    local secAH = CreateCollapsibleSection(content, y, "auctionhouse",
+        "Auction House",
+        "Posting drawer and AH behavior")
+    sc = secAH.content
+    sy = 0
+
+    settingsWidgets.ahAutoScan, h = CreateSettingsCheckbox(sc, sy,
+        "Auto-scan inventory when the Auction House opens",
+        "Automatically run a to-do scan when you open the AH, populating the posting drawer with items ready to post.",
+        "ahAutoScanOnOpen")
+    sy = sy - h - SECTION_SPACING
+
+    secAH.contentHeight = math.abs(sy)
 
     ------------------------------------------------
     -- Section: Notifications
