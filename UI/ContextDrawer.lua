@@ -962,6 +962,13 @@ local function BuildAHContent(parent)
             if not ap or not ap.PostNext then return end
             local didPost = ap:PostNext(currentScanResults, function(success, item)
                 if success then
+                    -- Remove posted item from results
+                    for ri = #currentScanResults, 1, -1 do
+                        if currentScanResults[ri] == item then
+                            table.remove(currentScanResults, ri)
+                            break
+                        end
+                    end
                     RefreshAHScanRows()
                     local remaining = ap:CountReady(currentScanResults)
                     if remaining > 0 then

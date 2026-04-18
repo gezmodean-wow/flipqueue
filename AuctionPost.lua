@@ -344,10 +344,16 @@ function AuctionPost:PostItem(scanResult, callback)
     local ok, err
     if isCommodity then
         -- PostCommodity(itemLocation, duration, quantity, unitPrice)
+        -- For commodities, unitPrice must be in copper per single unit.
+        -- Quantity is how many units to post from this stack.
+        ns:PrintDebug("[AuctionPost] calling PostCommodity: dur=" .. duration ..
+            " qty=" .. quantity .. " unitPrice=" .. unitPrice)
         ok, err = pcall(C_AuctionHouse.PostCommodity, itemLoc, duration, quantity, unitPrice)
     else
         -- PostItem(itemLocation, duration, quantity, bid, buyout)
-        -- Non-commodity: post one at a time, per-unit buyout price
+        -- Non-commodity: post one at a time, buyout-only (bid=nil)
+        ns:PrintDebug("[AuctionPost] calling PostItem: dur=" .. duration ..
+            " qty=1 buyout=" .. unitPrice)
         ok, err = pcall(C_AuctionHouse.PostItem, itemLoc, duration, 1, nil, unitPrice)
     end
 
