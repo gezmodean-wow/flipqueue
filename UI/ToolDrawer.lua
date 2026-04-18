@@ -469,7 +469,7 @@ local function CreateServiceButton(parent, service, index)
     local btn = CreateFrame("Button", "FlipQueueToolBtn_" .. service.key,
         parent, "SecureActionButtonTemplate, BackdropTemplate")
     btn:SetSize(ICON_SIZE, ICON_SIZE)
-    btn:SetPoint("TOPLEFT", parent, "TOPLEFT", PAD, yOff)
+    btn:SetPoint("TOPLEFT", parent, "TOPLEFT", THUMB_WIDTH + PAD, yOff)
     btn:RegisterForClicks("LeftButtonUp", "LeftButtonDown")
 
     btn:SetBackdrop({
@@ -569,14 +569,14 @@ local function EnsureDrawer()
     -- portion of inner is revealed.
     innerFrame = CreateFrame("Frame", "FlipQueueToolContent", clipFrame, "BackdropTemplate")
     innerFrame:SetSize(FULL_WIDTH, CONTENT_HEIGHT)
-    innerFrame:SetPoint("TOPRIGHT", clipFrame, "TOPRIGHT", 0, 0)
+    innerFrame:SetPoint("TOPLEFT", clipFrame, "TOPLEFT", 0, 0)
     innerFrame:SetBackdrop(DRAWER_BACKDROP)
     innerFrame:SetBackdropColor(0.05, 0.05, 0.1, 0.9)
     innerFrame:SetBackdropBorderColor(0.3, 0.3, 0.4, 0.8)
 
     -- Header label at the top of the content area.
     local header = innerFrame:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-    header:SetPoint("TOPLEFT", innerFrame, "TOPLEFT", PAD, -2)
+    header:SetPoint("TOPLEFT", innerFrame, "TOPLEFT", THUMB_WIDTH + PAD, -2)
     header:SetWidth(ICON_SIZE)
     header:SetJustifyH("CENTER")
     header:SetText("Tools")
@@ -590,8 +590,8 @@ local function EnsureDrawer()
     -- Thumb grip on the RIGHT edge of inner (closest to mini, always visible).
     thumbFrame = CreateFrame("Button", "FlipQueueToolTab", innerFrame)
     thumbFrame:SetWidth(THUMB_WIDTH)
-    thumbFrame:SetPoint("TOPRIGHT", innerFrame, "TOPRIGHT", 0, 0)
-    thumbFrame:SetPoint("BOTTOMRIGHT", innerFrame, "BOTTOMRIGHT", 0, 0)
+    thumbFrame:SetPoint("TOPLEFT", innerFrame, "TOPLEFT", 0, 0)
+    thumbFrame:SetPoint("BOTTOMLEFT", innerFrame, "BOTTOMLEFT", 0, 0)
 
     -- Grip lines: 3 vertical bars (1px wide, 16px tall, 3px apart).
     for j = 1, 3 do
