@@ -956,21 +956,30 @@ local function BuildAHContent(parent)
     ahScanAll:SetPoint("LEFT", ahScanTodo, "RIGHT", BTN_SPACING, 0)
 
     -- Post All button (positioned dynamically)
-    ahPostAll = CreateActionButton(ahContentFrame, "Post All",
-        "Post all scanned items", function()
+    ahPostAll = CreateActionButton(ahContentFrame, "Post Next",
+        "Post the next ready item (one per click — AH requires hardware event)", function()
             local ap = ns.AuctionPost
-            if ap and ap.PostAll and #currentScanResults > 0 then
-                ap:PostAll(currentScanResults,
-                    function(i, total) -- onProgress
-                        ahPostAll.label:SetText("Posting " .. i .. "/" .. total)
-                    end,
-                    function() -- onComplete
-                        ahPostAll.label:SetText("Post All")
-                        currentScanResults = {}
-                        RefreshAHScanRows()
-                        UI:RefreshContextDrawer()
+            if not ap or not ap.PostNext then return end
+            local didPost = ap:PostNext(currentScanResults, function(success, item)
+                if success then
+                    RefreshAHScanRows()
+                    local remaining = ap:CountReady(currentScanResults)
+                    if remaining > 0 then
+                        ahPostAll.label:SetText("Post Next (" .. remaining .. ")")
+                    else
+                        ahPostAll.label:SetText("Post Next")
+                        ahPostAll:Hide()
                     end
-                )
+                    local ahH = CalculateAHHeight() + THUMB_HEIGHT
+                    currentFullH = ahH
+                    contextContent:SetHeight(ahH)
+                    if contextClip and drawerOpen then
+                        contextClip:SetHeight(ahH)
+                    end
+                end
+            end)
+            if not didPost then
+                ns:Print("Nothing left to post.")
             end
         end)
     ahPostAll:Hide()

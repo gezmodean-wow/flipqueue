@@ -391,79 +391,36 @@ end
 -- Post All
 --------------------------
 
--- Post all ready items sequentially, waiting for a bag update between
--- each post to confirm the server processed it (same pattern as
--- BankQueue's inter-move delay to avoid "internal auction error").
-local POST_SETTLE_DELAY = 0.3
+-- Post the next ready item from a scan result set. Must be called from
+-- a hardware event (button click) because C_AuctionHouse.PostItem is
+-- protected. Returns true if an item was posted, false if none remain.
+-- The caller should re-invoke on the next button click.
+function AuctionPost:PostNext(scanResults, onPosted)
+    if not scanResults then return false end
 
-function AuctionPost:PostAll(scanResults, onProgress, onComplete)
-    if not scanResults or #scanResults == 0 then
-        if onComplete then onComplete(0, 0, 0) end
-        return
-    end
-
-    local readyItems = {}
-    local skipped = 0
-    for _, item in ipairs(scanResults) do
+    -- Find the first ready item
+    for i, item in ipairs(scanResults) do
         if item.status == "ready" then
-            readyItems[#readyItems + 1] = item
-        else
-            skipped = skipped + 1
+            self:PostItem(item, function(success, errMsg)
+                if success then
+                    item.status = "posted"
+                end
+                if onPosted then onPosted(success, item, errMsg) end
+            end)
+            return true
         end
     end
+    return false
+end
 
-    if #readyItems == 0 then
-        if onComplete then onComplete(0, skipped, 0) end
-        return
+-- Count remaining ready items in a scan result set.
+function AuctionPost:CountReady(scanResults)
+    if not scanResults then return 0 end
+    local count = 0
+    for _, item in ipairs(scanResults) do
+        if item.status == "ready" then count = count + 1 end
     end
-
-    local total = #readyItems
-    local posted = 0
-    local failed = 0
-    local index = 0
-
-    -- Wait for BAG_UPDATE (item leaves bags) before posting the next item
-    local waitFrame = CreateFrame("Frame")
-    local waitTimeout = nil
-
-    local function PostNext()
-        index = index + 1
-        if index > total then
-            waitFrame:UnregisterAllEvents()
-            if onComplete then onComplete(posted, skipped, failed) end
-            return
-        end
-
-        local item = readyItems[index]
-        if onProgress then
-            onProgress(index, total, item)
-        end
-
-        self:PostItem(item, function(success, errMsg)
-            if success then
-                posted = posted + 1
-                -- Wait for bag update confirmation before next post
-                waitFrame:RegisterEvent("BAG_UPDATE_DELAYED")
-                waitFrame:SetScript("OnEvent", function()
-                    waitFrame:UnregisterAllEvents()
-                    if waitTimeout then waitTimeout:Cancel(); waitTimeout = nil end
-                    C_Timer.After(POST_SETTLE_DELAY, PostNext)
-                end)
-                -- Timeout in case BAG_UPDATE doesn't fire
-                waitTimeout = C_Timer.NewTimer(2.0, function()
-                    waitFrame:UnregisterAllEvents()
-                    waitTimeout = nil
-                    PostNext()
-                end)
-            else
-                failed = failed + 1
-                ns:PrintDebug("PostAll: failed " .. (item.name or "?") .. ": " .. (errMsg or "unknown"))
-                C_Timer.After(POST_SETTLE_DELAY, PostNext)
-            end
-        end)
-    end
-
-    PostNext()
+    return count
 end
 
 --------------------------
