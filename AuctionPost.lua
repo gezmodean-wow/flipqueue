@@ -163,8 +163,11 @@ function AuctionPost:ScanBags(filterToTodo)
                 if ok2 and info and info.hyperlink then
                     local itemID, bonusIDs, modifiers = ns:ParseItemLink(info.hyperlink)
                     if itemID then
+                        -- Skip soulbound items (can't be posted)
+                        if info.isBound then
+                            -- silently skip
                         -- Skip Do Not Track items
-                        if ns:IsDoNotTrack(itemID) then
+                        elseif ns:IsDoNotTrack(itemID) then
                             -- Still record for "dnt" status if not filtering
                             if not filterToTodo then
                                 local key = ns:MakeItemKey(itemID, bonusIDs, modifiers)
