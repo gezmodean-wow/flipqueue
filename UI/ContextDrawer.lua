@@ -1081,12 +1081,12 @@ local function EnsureDrawer()
     -- Resolve Tracker now that Core has loaded
     Tracker = ns.Tracker
 
-    -- Clip frame: full width, flush below the mini (no overlap)
+    -- Clip frame: full width, overlapping mini border by 3px for seamless look
     contextClip = CreateFrame("Frame", "FlipQueueContextClip", mini)
     contextClip:SetClipsChildren(true)
     contextClip:SetHeight(THUMB_HEIGHT)
-    contextClip:SetPoint("TOPLEFT",  mini, "BOTTOMLEFT",  0, 0)
-    contextClip:SetPoint("TOPRIGHT", mini, "BOTTOMRIGHT", 0, 0)
+    contextClip:SetPoint("TOPLEFT",  mini, "BOTTOMLEFT",  0, 3)
+    contextClip:SetPoint("TOPRIGHT", mini, "BOTTOMRIGHT", 0, 3)
     contextClip:SetFrameStrata("MEDIUM")
 
     -- Content frame: anchored to TOP of clip (grows downward with clip).
@@ -1104,8 +1104,8 @@ local function EnsureDrawer()
     -- Thumb (grip tab at bottom)
     contextThumb = CreateFrame("Button", "FlipQueueContextTab", contextContent)
     contextThumb:SetHeight(THUMB_HEIGHT)
-    contextThumb:SetPoint("BOTTOMLEFT",  contextContent, "BOTTOMLEFT",  4, 3)
-    contextThumb:SetPoint("BOTTOMRIGHT", contextContent, "BOTTOMRIGHT", -4, 3)
+    contextThumb:SetPoint("BOTTOMLEFT",  contextContent, "BOTTOMLEFT",  0, 0)
+    contextThumb:SetPoint("BOTTOMRIGHT", contextContent, "BOTTOMRIGHT", 0, 0)
 
     for j = 1, 3 do
         local grip = contextThumb:CreateTexture(nil, "ARTWORK")
