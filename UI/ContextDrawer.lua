@@ -742,8 +742,11 @@ local function RefreshAHScanRows()
     end
     local scanCount = math.min(#currentScanResults, MAX_SCAN_ROWS)
     ns:PrintDebug("[ContextDrawer] RefreshAHScanRows: " .. #currentScanResults ..
-        " results, showing " .. scanCount .. " rows, frame shown=" ..
-        tostring(ahContentFrame:IsShown()))
+        " results, showing " .. scanCount .. " rows, frame=" ..
+        tostring(ahContentFrame:IsShown()) ..
+        " parent=" .. tostring(ahContentFrame:GetParent() and ahContentFrame:GetParent():IsShown()) ..
+        " clipH=" .. tostring(contextClip and contextClip:GetHeight() or "nil") ..
+        " contentH=" .. tostring(contextContent and contextContent:GetHeight() or "nil"))
     local AP = ns.AuctionPost
 
     for i = 1, MAX_SCAN_ROWS do
