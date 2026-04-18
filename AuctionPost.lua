@@ -349,7 +349,7 @@ function AuctionPost:PostItem(scanResult, callback)
     ns:PrintDebug("[AuctionPost] calling PostItem: dur=" .. duration ..
         " qty=" .. postQty .. " buyout=" .. unitPrice ..
         " commodity=" .. tostring(isCommodity))
-    C_AuctionHouse.PostItem(itemLoc, duration, postQty, nil, unitPrice)
+    C_AuctionHouse.PostItem(itemLoc, duration, postQty, unitPrice, unitPrice)
 
     -- Log the posting
     if ns.db then
