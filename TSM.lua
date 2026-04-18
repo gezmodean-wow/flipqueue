@@ -193,14 +193,23 @@ function TSM:GetItemAuctioningOp(fqKey)
             ok, groupPath = pcall(TSM_API.GetGroupPathByItem, TSM_API, baseStr)
         end
     end
-    if not ok or not groupPath then return nil end
 
-    -- Walk group hierarchy to find the effective Auctioning operation
     local groupsDB = self:GetGroupsDB(profile)
     local opsDB = self:GetOperationsDB(profile)
-    if not groupsDB or not opsDB or not opsDB["Auctioning"] then return nil end
+    if not opsDB or not opsDB["Auctioning"] then return nil end
 
-    local opName = self:ResolveGroupOperation(groupsDB, groupPath, "Auctioning")
+    local opName
+    if ok and groupPath and groupsDB then
+        opName = self:ResolveGroupOperation(groupsDB, groupPath, "Auctioning")
+    end
+
+    -- Fallback: use the player's configured fallback operation for ungrouped items
+    if not opName then
+        local fallback = ns.db and ns.db.settings.tsmFallbackOp or ""
+        if fallback ~= "" and opsDB["Auctioning"][fallback] then
+            opName = fallback
+        end
+    end
     if not opName then return nil end
 
     local opSettings = opsDB["Auctioning"][opName]

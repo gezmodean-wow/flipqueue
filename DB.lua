@@ -64,6 +64,7 @@ function ns:InitDB()
     db.settings.dfPriceSource      = db.settings.dfPriceSource or "deal"  -- deal, DBMinBuyout, DBMarket, DBRegionMarketAvg, DBRegionSaleAvg
     if db.settings.tsmShowColumns == nil then db.settings.tsmShowColumns = false end
     if db.settings.ahAutoScanOnOpen == nil then db.settings.ahAutoScanOnOpen = false end
+    db.settings.tsmFallbackOp = db.settings.tsmFallbackOp or ""
     if db.settings.tsmAutoUpdatePrice == nil then db.settings.tsmAutoUpdatePrice = false end
     db.settings.tsmPriceMaxAge     = db.settings.tsmPriceMaxAge or 3600
     -- Transform page defaults
