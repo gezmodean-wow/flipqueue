@@ -429,16 +429,14 @@ end
 -- Drawer constants
 --------------------------
 
-local THUMB_WIDTH       = 12
-local ICON_SIZE         = 32
-local ICON_SPACING      = 4
-local LOCATE_BTN_HEIGHT = 16
-local PAD               = 4
-local CONTENT_WIDTH     = PAD + ICON_SIZE + PAD          -- 40
-local FULL_WIDTH        = CONTENT_WIDTH + THUMB_WIDTH     -- 52
-local HEADER_HEIGHT     = 16
-local SERVICE_BLOCK     = ICON_SIZE + 2 + LOCATE_BTN_HEIGHT  -- 50
-local CONTENT_HEIGHT    = HEADER_HEIGHT + 4 * SERVICE_BLOCK + 3 * ICON_SPACING  -- 228
+local THUMB_WIDTH    = 12
+local ICON_SIZE      = 32
+local ICON_SPACING   = 4
+local PAD            = 4
+local CONTENT_WIDTH  = PAD + ICON_SIZE + PAD          -- 40
+local FULL_WIDTH     = CONTENT_WIDTH + THUMB_WIDTH     -- 52
+local HEADER_HEIGHT  = 16
+local CONTENT_HEIGHT = HEADER_HEIGHT + 4 * ICON_SIZE + 3 * ICON_SPACING  -- 156
 local ANIM_DURATION  = 0.15
 
 local DRAWER_BACKDROP = {
@@ -461,9 +459,12 @@ local drawerOpen = false
 local animating  = false
 local animTarget = THUMB_WIDTH
 
--- Create a service icon button + Find button, stacked vertically.
+-- Create a service button. Always shows the service category icon (mail
+-- envelope, coin, bag, etc). When a summon is available, left-click uses it
+-- via SecureActionButton. When no summon is available, the icon gets a
+-- small waypoint arrow overlay and left-click calls LocateNearest.
 local function CreateServiceButton(parent, service, index)
-    local yOff = -(HEADER_HEIGHT + (index - 1) * (SERVICE_BLOCK + ICON_SPACING))
+    local yOff = -(HEADER_HEIGHT + (index - 1) * (ICON_SIZE + ICON_SPACING))
 
     local btn = CreateFrame("Button", "FlipQueueToolBtn_" .. service.key,
         parent, "SecureActionButtonTemplate, BackdropTemplate")
@@ -484,6 +485,7 @@ local function CreateServiceButton(parent, service, index)
     btn.tex:SetPoint("TOPLEFT", btn, "TOPLEFT", 3, -3)
     btn.tex:SetPoint("BOTTOMRIGHT", btn, "BOTTOMRIGHT", -3, 3)
     btn.tex:SetTexCoord(0.08, 0.92, 0.08, 0.92)
+    btn.tex:SetTexture(service.iconFallback)
 
     btn.cooldown = CreateFrame("Cooldown", nil, btn, "CooldownFrameTemplate")
     btn.cooldown:SetPoint("TOPLEFT", btn.tex, "TOPLEFT", 0, 0)
@@ -493,8 +495,25 @@ local function CreateServiceButton(parent, service, index)
     btn.highlight:SetAllPoints(btn.tex)
     btn.highlight:SetColorTexture(1, 1, 1, 0.2)
 
+    -- Waypoint arrow overlay (shown when no summon, acts as "Find" indicator)
+    btn.findArrow = btn:CreateTexture(nil, "OVERLAY")
+    btn.findArrow:SetSize(12, 12)
+    btn.findArrow:SetPoint("BOTTOMRIGHT", btn, "BOTTOMRIGHT", -1, 1)
+    btn.findArrow:SetTexture("Interface\\Minimap\\TRACKING\\None")
+    btn.findArrow:SetVertexColor(0.5, 0.7, 1.0)
+    btn.findArrow:Hide()
+
+    -- "Find" label (shown when no summon available)
+    btn.findLabel = btn:CreateFontString(nil, "OVERLAY")
+    btn.findLabel:SetFont(STANDARD_TEXT_FONT, 7, "OUTLINE")
+    btn.findLabel:SetPoint("BOTTOMLEFT", btn, "BOTTOMLEFT", 2, 2)
+    btn.findLabel:SetText("Find")
+    btn.findLabel:SetTextColor(0.5, 0.7, 1.0)
+    btn.findLabel:Hide()
+
     btn.service = service
     btn.resolution = nil
+    btn._isFindMode = false
 
     btn:SetScript("OnEnter", function(self)
         GameTooltip:SetOwner(self, "ANCHOR_LEFT")
@@ -509,52 +528,25 @@ local function CreateServiceButton(parent, service, index)
             GameTooltip:SetText("|cffaaaaaa" .. service.label .. "|r: " .. (res.name or "?"), 1, 1, 1)
             GameTooltip:AddLine("Not usable right now.", 0.7, 0.7, 0.7)
         else
-            GameTooltip:SetText("|cff888888" .. service.label .. "|r", 1, 1, 1)
-            GameTooltip:AddLine("No summon available.", 0.7, 0.7, 0.7)
+            GameTooltip:SetText("|cff8888ff" .. service.label .. "|r", 1, 1, 1)
+            GameTooltip:AddLine("Click to set a waypoint to the nearest " .. service.label:lower() .. ".", 0.5, 0.7, 1.0)
         end
-        -- Nearest location hint.
         local nearest = PickNearestLocation(service)
         if nearest then
-            GameTooltip:AddLine("Nearest: " .. nearest.zoneName, 0.5, 0.7, 1.0)
+            GameTooltip:AddLine("Nearest: " .. nearest.zoneName .. " - " .. nearest.text, 0.5, 0.7, 1.0)
         end
         GameTooltip:Show()
     end)
     btn:SetScript("OnLeave", function() GameTooltip:Hide() end)
 
-    -- Find / Locate Nearest button below the icon
-    local locBtn = CreateFrame("Button", nil, parent, "BackdropTemplate")
-    locBtn:SetSize(ICON_SIZE, LOCATE_BTN_HEIGHT)
-    locBtn:SetPoint("TOP", btn, "BOTTOM", 0, -2)
-    locBtn:SetBackdrop({
-        bgFile = "Interface\\Tooltips\\UI-Tooltip-Background",
-        edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
-        edgeSize = 6,
-        insets = {left = 1, right = 1, top = 1, bottom = 1},
-    })
-    locBtn:SetBackdropColor(0.12, 0.14, 0.20, 0.9)
-    locBtn:SetBackdropBorderColor(0.3, 0.35, 0.5, 0.8)
-    locBtn.text = locBtn:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-    locBtn.text:SetPoint("CENTER")
-    locBtn.text:SetText("Find")
-    locBtn.text:SetTextColor(0.8, 0.85, 1)
-    locBtn:SetScript("OnEnter", function(self)
-        self:SetBackdropColor(0.18, 0.22, 0.32, 1)
-        GameTooltip:SetOwner(self, "ANCHOR_LEFT")
-        GameTooltip:SetText("Locate Nearest " .. service.label, 1, 1, 1)
-        for i2, loc in ipairs(service.locations or {}) do
-            if i2 > 3 then break end
-            GameTooltip:AddLine("  " .. loc.zoneName .. " - " .. loc.text, 0.8, 0.8, 0.8)
+    -- PostClick fires after the secure action. If no secure type is set
+    -- (find mode), we handle the click as a locate action here.
+    btn:HookScript("PostClick", function(self)
+        if self._isFindMode then
+            LocateNearest(service)
         end
-        GameTooltip:AddLine("Click to set a map waypoint.", 0.6, 0.8, 0.6)
-        GameTooltip:Show()
     end)
-    locBtn:SetScript("OnLeave", function(self)
-        self:SetBackdropColor(0.12, 0.14, 0.20, 0.9)
-        GameTooltip:Hide()
-    end)
-    locBtn:SetScript("OnClick", function() LocateNearest(service) end)
 
-    btn.locBtn = locBtn
     return btn
 end
 
@@ -730,24 +722,37 @@ function UI:RefreshToolDrawer()
             local res = ResolveService(svc)
             btn.resolution = res
 
-            btn.tex:SetTexture(res.icon or svc.iconFallback)
+            -- Always show the service category icon
+            btn.tex:SetTexture(svc.iconFallback)
+
+            local isFindMode = (res.state == "unowned")
+            btn._isFindMode = isFindMode
 
             if res.state == "ready" then
                 btn.tex:SetDesaturated(false)
                 btn.tex:SetVertexColor(1, 1, 1)
                 btn:SetBackdropBorderColor(0.4, 0.8, 0.4, 0.9)
+                btn.findArrow:Hide()
+                btn.findLabel:Hide()
             elseif res.state == "cooldown" then
                 btn.tex:SetDesaturated(false)
                 btn.tex:SetVertexColor(1, 1, 1)
                 btn:SetBackdropBorderColor(0.9, 0.7, 0.3, 0.9)
+                btn.findArrow:Hide()
+                btn.findLabel:Hide()
             elseif res.state == "redundant" then
                 btn.tex:SetDesaturated(true)
                 btn.tex:SetVertexColor(0.6, 0.6, 0.6)
                 btn:SetBackdropBorderColor(0.3, 0.3, 0.4, 0.8)
+                btn.findArrow:Hide()
+                btn.findLabel:Hide()
             else
-                btn.tex:SetDesaturated(true)
-                btn.tex:SetVertexColor(0.45, 0.45, 0.45)
-                btn:SetBackdropBorderColor(0.25, 0.25, 0.3, 0.6)
+                -- No summon available — show as "Find" mode
+                btn.tex:SetDesaturated(false)
+                btn.tex:SetVertexColor(0.6, 0.7, 0.9)
+                btn:SetBackdropBorderColor(0.3, 0.4, 0.6, 0.8)
+                btn.findArrow:Show()
+                btn.findLabel:Show()
             end
 
             if res.state == "cooldown" and res.cooldownStart and res.cooldownDuration then
@@ -760,6 +765,7 @@ function UI:RefreshToolDrawer()
                 btn:SetAttribute("type", nil)
                 btn:SetAttribute("item", nil)
                 btn:SetAttribute("spell", nil)
+                btn._isFindMode = isFindMode
                 if res.state == "ready" and res.name then
                     if res.kind == "spell" then
                         btn:SetAttribute("type", "spell")

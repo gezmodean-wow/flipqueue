@@ -144,25 +144,21 @@ function AuctionPost:ScanBags(filterToTodo)
                             local name = info.hyperlink:match("|h%[(.-)%]|h") or ("Item " .. itemID)
 
                             -- Filter to todo tasks if requested
+                            local todoMatched = true
                             if filterToTodo and todoTasks then
-                                local matched = false
+                                todoMatched = false
                                 for _, task in ipairs(todoTasks) do
                                     if task.status == "pending" or task.status == "skipped" then
                                         local m = ns:ItemsMatch(key, name, task, nil)
                                         if m then
-                                            matched = true
+                                            todoMatched = true
                                             break
                                         end
                                     end
                                 end
-                                if not matched then
-                                    -- Skip items not in the todo list
-                                    -- luacheck: ignore 631
-                                    goto continue
-                                end
                             end
 
-                            if not byKey[key] then
+                            if todoMatched and not byKey[key] then
                                 local iconOk, icon = pcall(C_Item.GetItemIconByID, tonumber(itemID))
                                 local pricing = self:ResolvePostPrice(key, itemID)
                                 local isCommodity = self:IsCommodity(itemID)
@@ -193,11 +189,10 @@ function AuctionPost:ScanBags(filterToTodo)
                                     status      = status,
                                 }
                                 order[#order + 1] = key
-                            else
+                            elseif todoMatched then
                                 local entry = byKey[key]
                                 entry.slots[#entry.slots + 1] = {bag = bagIndex, slot = slot, count = info.stackCount or 1}
                                 entry.totalCount = entry.totalCount + (info.stackCount or 1)
-                                -- Update postQty to respect total available vs postCap
                                 if entry.pricing and entry.pricing.postCap and entry.pricing.postCap > 0 then
                                     entry.postQty = math.min(entry.totalCount, entry.pricing.postCap)
                                 else
@@ -207,7 +202,6 @@ function AuctionPost:ScanBags(filterToTodo)
                         end
                     end
                 end
-                ::continue::
             end
         end
     end

@@ -155,7 +155,7 @@ local function RefreshPauseButton(specificBtn)
             btn._tooltip = "Resume automation (currently paused)"
             btn:SetBackdropBorderColor(0.7, 0.5, 0.2, 0.9)
         else
-            btn.label:SetText("Pause")
+            btn.label:SetText("Pause Automation")
             btn._tooltip = "Temporarily pause all bank automation"
             btn:SetBackdropBorderColor(0.3, 0.35, 0.5, 0.8)
         end
@@ -520,7 +520,7 @@ local function BuildBankContent(parent)
     end
 
     -- Row 1: [Pause] [Pull Items] [Deposit Items] [Deposit Extras]
-    bankButtons.pause = CreateActionButton(bankFrame, "Pause",
+    bankButtons.pause = CreateActionButton(bankFrame, "Pause Automation",
         "Temporarily pause all bank automation", DoPause)
     bankButtons.pause:SetPoint("TOPLEFT", bankFrame, "TOPLEFT", 0, RowY(1))
 
@@ -970,7 +970,7 @@ local function BuildDefaultContent(parent)
     hdr:SetPoint("TOPLEFT", defaultFrame, "TOPLEFT", 0, 0)
     hdr:SetText("|cffffffffFlipQueue|r")
 
-    local pauseBtn = CreateActionButton(defaultFrame, "Pause",
+    local pauseBtn = CreateActionButton(defaultFrame, "Pause Automation",
         "Temporarily pause all bank automation", DoPause)
     pauseBtn:SetPoint("TOPLEFT", defaultFrame, "TOPLEFT", 0,
         -(HEADER_HEIGHT + PAD))
