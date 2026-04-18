@@ -736,8 +736,14 @@ local function FindDealPrice(itemKey, itemName)
 end
 
 local function RefreshAHScanRows()
-    if not ahContentFrame then return end
+    if not ahContentFrame then
+        ns:PrintDebug("[ContextDrawer] RefreshAHScanRows: ahContentFrame nil")
+        return
+    end
     local scanCount = math.min(#currentScanResults, MAX_SCAN_ROWS)
+    ns:PrintDebug("[ContextDrawer] RefreshAHScanRows: " .. #currentScanResults ..
+        " results, showing " .. scanCount .. " rows, frame shown=" ..
+        tostring(ahContentFrame:IsShown()))
     local AP = ns.AuctionPost
 
     for i = 1, MAX_SCAN_ROWS do
@@ -1234,10 +1240,11 @@ function UI:ShowContextDrawer()
     local mini = _G["FlipQueueMiniFrame"]
     if not mini or not mini:IsShown() then return end
 
-    -- Rebuild content at full height so it's ready when clip reveals it
+    -- Always rebuild content when opening (it may have been hidden on close)
     local ctx = GetContext()
-    currentContext = ctx
+    currentContext = nil  -- force ShowContext to rebuild
     ShowContext(ctx)
+    currentContext = ctx
     drawerOpen = true
     animTarget = currentFullH
     animating  = true
@@ -1328,7 +1335,8 @@ function UI:RefreshContextDrawer()
         if ctx == "bank" then
             RefreshBankLabels()
         elseif ctx == "auction" then
-            if ahContentFrame and ahContentFrame:IsShown() then
+            if ahContentFrame then
+                ahContentFrame:Show()
                 RefreshAHScanRows()
                 RefreshAHOwnedRows()
                 -- Recalculate height in case data changed
