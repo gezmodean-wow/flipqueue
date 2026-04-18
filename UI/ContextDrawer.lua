@@ -923,7 +923,7 @@ local function BuildAHContent(parent)
                 currentScanResults = ap:ScanBags(true) or {}
                 ns:PrintDebug("[ContextDrawer] Scan To-Do: " .. #currentScanResults .. " results")
                 RefreshAHScanRows()
-                -- Recalculate and resize
+                if ahContentFrame._layoutAH then ahContentFrame._layoutAH() end
                 local ahH = CalculateAHHeight() + THUMB_HEIGHT
                 currentFullH = ahH
                 contextContent:SetHeight(ahH)
@@ -943,6 +943,7 @@ local function BuildAHContent(parent)
                 currentScanResults = ap:ScanBags(false) or {}
                 ns:PrintDebug("[ContextDrawer] Scan All: " .. #currentScanResults .. " results")
                 RefreshAHScanRows()
+                if ahContentFrame._layoutAH then ahContentFrame._layoutAH() end
                 local ahH = CalculateAHHeight() + THUMB_HEIGHT
                 currentFullH = ahH
                 contextContent:SetHeight(ahH)
@@ -977,6 +978,7 @@ local function BuildAHContent(parent)
                         ahPostAll.label:SetText("Post Next")
                         ahPostAll:Hide()
                     end
+                    if ahContentFrame._layoutAH then ahContentFrame._layoutAH() end
                     local ahH = CalculateAHHeight() + THUMB_HEIGHT
                     currentFullH = ahH
                     contextContent:SetHeight(ahH)
@@ -1087,6 +1089,7 @@ local function BuildAHContent(parent)
         end
     end
 
+    ahContentFrame._layoutAH = LayoutAH
     ahContentFrame:SetScript("OnShow", LayoutAH)
     C_Timer.After(0, LayoutAH)
 
@@ -1379,17 +1382,13 @@ function UI:RefreshContextDrawer()
         elseif ctx == "auction" then
             if ahContentFrame then
                 ahContentFrame:Show()
-                RefreshAHScanRows()
-                RefreshAHOwnedRows()
-                -- Recalculate height in case data changed
+                -- Only recalculate height, don't re-render rows
+                -- (scan buttons handle row rendering + height themselves)
                 local ahH = CalculateAHHeight() + THUMB_HEIGHT
-                if ahH ~= currentFullH then
+                if ahH > currentFullH and drawerOpen then
                     currentFullH = ahH
                     contextContent:SetHeight(ahH)
-                    if drawerOpen then
-                        animTarget = currentFullH
-                        animating = true
-                    end
+                    contextClip:SetHeight(ahH)
                 end
             end
         end
