@@ -381,6 +381,7 @@ local function GetOrCreateScanRow(parent, index)
 
     local row = CreateFrame("Frame", nil, parent)
     row:SetHeight(ROW_HEIGHT)
+    row:EnableMouse(true)
 
     row.icon = row:CreateTexture(nil, "ARTWORK")
     row.icon:SetSize(16, 16)
@@ -401,18 +402,64 @@ local function GetOrCreateScanRow(parent, index)
     row.price:SetJustifyH("RIGHT")
     row.price:SetTextColor(0.9, 0.85, 0.6)
 
+    row.info = row:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    row.info:SetJustifyH("LEFT")
+    row.info:SetTextColor(0.7, 0.6, 0.5)
+
     row.postBtn = CreateActionButton(row, "Post", "Post this item", nil)
     row.postBtn:SetSize(36, ROW_HEIGHT - 2)
 
     row.skipBtn = CreateActionButton(row, "Skip", "Skip this item", nil)
     row.skipBtn:SetSize(36, ROW_HEIGHT - 2)
 
-    -- Anchors: [icon][name...][qty][price][Post][Skip]
+    -- Anchors: [icon][name][info...][qty][price][Post][Skip]
     row.skipBtn:SetPoint("RIGHT", row, "RIGHT", 0, 0)
     row.postBtn:SetPoint("RIGHT", row.skipBtn, "LEFT", -BTN_SPACING, 0)
     row.price:SetPoint("RIGHT", row.postBtn, "LEFT", -4, 0)
-    row.qty:SetPoint("RIGHT", row.price, "LEFT", -4, 0)
-    row.name:SetPoint("RIGHT", row.qty, "LEFT", -4, 0)
+    row.qty:SetPoint("RIGHT", row.price, "LEFT", -2, 0)
+    row.info:SetPoint("LEFT", row.name, "RIGHT", 4, 0)
+    row.info:SetPoint("RIGHT", row.qty, "LEFT", -4, 0)
+
+    row._result = nil
+    row:SetScript("OnEnter", function(self)
+        local r = self._result
+        if not r then return end
+        GameTooltip:SetOwner(self, "ANCHOR_TOPRIGHT")
+        local numID = tonumber(r.itemID)
+        if numID and numID > 0 then
+            GameTooltip:SetItemByID(numID)
+        else
+            GameTooltip:SetText(r.name or "?", 1, 1, 1)
+        end
+        if r.pricing then
+            GameTooltip:AddLine(" ")
+            if r.pricing.normalCopper then
+                GameTooltip:AddDoubleLine("Post price:", ns:FormatGold(r.pricing.normalCopper), 0.7, 0.7, 0.7, 1, 1, 1)
+            end
+            if r.pricing.minCopper then
+                GameTooltip:AddDoubleLine("Min price:", ns:FormatGold(r.pricing.minCopper), 0.7, 0.7, 0.7, 0.9, 0.7, 0.3)
+            end
+            if r.pricing.maxCopper then
+                GameTooltip:AddDoubleLine("Max price:", ns:FormatGold(r.pricing.maxCopper), 0.7, 0.7, 0.7, 0.9, 0.7, 0.3)
+            end
+            if r.pricing.opName then
+                GameTooltip:AddDoubleLine("TSM operation:", r.pricing.opName, 0.7, 0.7, 0.7, 0.5, 0.7, 1)
+            end
+            if r.pricing.postCap then
+                GameTooltip:AddDoubleLine("Post cap:", tostring(r.pricing.postCap), 0.7, 0.7, 0.7, 0.7, 0.7, 0.7)
+            end
+        end
+        if r.dealPrice then
+            GameTooltip:AddDoubleLine("Deal price:", r.dealPrice, 0.7, 0.7, 0.7, 0.4, 0.9, 0.4)
+        end
+        if r.status == "below_threshold" then
+            GameTooltip:AddLine("Cheapest auction below min price", 1, 0.4, 0.3)
+        elseif r.status == "no_price" then
+            GameTooltip:AddLine("No TSM pricing data", 0.7, 0.7, 0.7)
+        end
+        GameTooltip:Show()
+    end)
+    row:SetScript("OnLeave", function() GameTooltip:Hide() end)
 
     scanRows[index] = row
     return row
@@ -423,6 +470,7 @@ local function GetOrCreateOwnedRow(parent, index)
 
     local row = CreateFrame("Frame", nil, parent)
     row:SetHeight(ROW_HEIGHT)
+    row:EnableMouse(true)
 
     row.icon = row:CreateTexture(nil, "ARTWORK")
     row.icon:SetSize(16, 16)
@@ -444,12 +492,45 @@ local function GetOrCreateOwnedRow(parent, index)
     row.price:SetTextColor(0.9, 0.85, 0.6)
 
     row.undercut = row:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-    row.undercut:SetWidth(12)
-    row.undercut:SetJustifyH("CENTER")
-    row.undercut:SetTextColor(1, 0.3, 0.3)
+    row.undercut:SetJustifyH("LEFT")
+    row.undercut:SetTextColor(1, 0.4, 0.3)
 
     row.cancelBtn = CreateActionButton(row, "Cancel", "Cancel this auction", nil)
     row.cancelBtn:SetSize(46, ROW_HEIGHT - 2)
+
+    row._auction = nil
+    row:SetScript("OnEnter", function(self)
+        local a = self._auction
+        if not a then return end
+        GameTooltip:SetOwner(self, "ANCHOR_TOPRIGHT")
+        local numID = tonumber(a.itemID)
+        if numID and numID > 0 then
+            GameTooltip:SetItemByID(numID)
+        else
+            GameTooltip:SetText(a.name or "?", 1, 1, 1)
+        end
+        GameTooltip:AddLine(" ")
+        if a.totalBuyout then
+            GameTooltip:AddDoubleLine("Your price:", ns:FormatGold(a.totalBuyout), 0.7, 0.7, 0.7, 1, 1, 1)
+        end
+        if a.buyoutPerUnit and a.quantity and a.quantity > 1 then
+            GameTooltip:AddDoubleLine("Per unit:", ns:FormatGold(a.buyoutPerUnit), 0.7, 0.7, 0.7, 0.7, 0.7, 0.7)
+        end
+        if a.marketPrice then
+            GameTooltip:AddDoubleLine("Market (DBMinBuyout):", ns:FormatGold(a.marketPrice), 0.7, 0.7, 0.7, 0.5, 0.8, 1)
+        end
+        if a.isUndercut then
+            local diff = (a.undercutBy and a.undercutBy > 0) and ns:FormatGold(a.undercutBy) or "?"
+            GameTooltip:AddLine("Undercut by " .. diff, 1, 0.3, 0.3)
+        end
+        if a.timeLeft then
+            local hrs = math.floor(a.timeLeft / 3600)
+            local mins = math.floor((a.timeLeft % 3600) / 60)
+            GameTooltip:AddDoubleLine("Time left:", hrs .. "h " .. mins .. "m", 0.7, 0.7, 0.7, 0.7, 0.7, 0.7)
+        end
+        GameTooltip:Show()
+    end)
+    row:SetScript("OnLeave", function() GameTooltip:Hide() end)
 
     -- Anchors: [icon][name...][qty][price][undercut][Cancel]
     row.cancelBtn:SetPoint("RIGHT", row, "RIGHT", 0, 0)
@@ -623,6 +704,22 @@ local function CalculateAHHeight()
     return math.min(h, 280)
 end
 
+local function FindDealPrice(itemKey, itemName)
+    if not ns.TodoList then return nil end
+    local list = ns.TodoList:GetCurrentList()
+    if not list or not list.tasks then return nil end
+    local lname = itemName and itemName:lower() or nil
+    for _, task in ipairs(list.tasks) do
+        if task.status == "pending" and task.expectedPrice and task.expectedPrice ~= "" then
+            if task.itemKey == itemKey
+                or (lname and task.name and task.name:lower() == lname) then
+                return task.expectedPrice
+            end
+        end
+    end
+    return nil
+end
+
 local function RefreshAHScanRows()
     if not ahContentFrame then return end
     local scanCount = math.min(#currentScanResults, MAX_SCAN_ROWS)
@@ -642,21 +739,57 @@ local function RefreshAHScanRows()
 
         if result.icon then row.icon:SetTexture(result.icon) end
         row.name:SetText(result.name or "?")
-        row.qty:SetText(result.qty and ("x" .. result.qty) or "")
-        row.price:SetText(result.price and ns:FormatGold(result.price) or "")
+        row.qty:SetText("x" .. (result.postQty or result.totalCount or 1))
 
+        -- Price display
+        local priceCopper = result.pricing and result.pricing.normalCopper
+        if priceCopper then
+            row.price:SetText(ns:FormatGold(priceCopper))
+        else
+            row.price:SetText("|cff888888?|r")
+        end
+
+        -- Status info
+        if result.status == "below_threshold" then
+            row.info:SetText("|cffff6644below min|r")
+            row.name:SetTextColor(0.7, 0.5, 0.5)
+        elseif result.status == "no_price" then
+            row.info:SetText("|cff888888no price|r")
+            row.name:SetTextColor(0.6, 0.6, 0.6)
+        elseif result.status == "dnt" then
+            row.info:SetText("|cffff8800DNT|r")
+            row.name:SetTextColor(0.6, 0.5, 0.4)
+        else
+            row.info:SetText("")
+            row.name:SetTextColor(0.85, 0.85, 0.9)
+        end
+
+        -- Store result + deal price for tooltip
+        result.dealPrice = FindDealPrice(result.itemKey, result.name)
+        row._result = result
+
+        -- Disable Post for non-ready items
+        if result.status ~= "ready" then
+            row.postBtn:Disable()
+            row.postBtn.label:SetTextColor(0.4, 0.4, 0.4)
+        else
+            row.postBtn:Enable()
+            row.postBtn.label:SetTextColor(0.85, 0.85, 0.9)
+        end
+
+        local capturedI = i
         row.postBtn:SetScript("OnClick", function()
             if AP and AP.PostItem then
                 AP:PostItem(result, function(ok)
                     if ok then
-                        table.remove(currentScanResults, i)
+                        table.remove(currentScanResults, capturedI)
                         RefreshAHScanRows()
                     end
                 end)
             end
         end)
         row.skipBtn:SetScript("OnClick", function()
-            table.remove(currentScanResults, i)
+            table.remove(currentScanResults, capturedI)
             RefreshAHScanRows()
         end)
         row:Show()
@@ -684,15 +817,25 @@ local function RefreshAHOwnedRows()
 
         if auction.icon then row.icon:SetTexture(auction.icon) end
         row.name:SetText(auction.name or "?")
-        row.qty:SetText(auction.qty and ("x" .. auction.qty) or "")
-        row.price:SetText(auction.price and ns:FormatGold(auction.price) or "")
-        row.undercut:SetText(auction.isUndercut and "!" or "")
+        row.qty:SetText(auction.quantity and ("x" .. auction.quantity) or "")
+        row.price:SetText(auction.buyoutPerUnit and ns:FormatGold(auction.buyoutPerUnit) or "")
 
+        if auction.isUndercut then
+            row.undercut:SetText("|cffff4433undercut|r")
+            row.name:SetTextColor(1, 0.5, 0.4)
+        else
+            row.undercut:SetText("")
+            row.name:SetTextColor(0.85, 0.85, 0.9)
+        end
+
+        row._auction = auction
+
+        local capturedI = i
         row.cancelBtn:SetScript("OnClick", function()
             if AP and AP.CancelAuction and auction.auctionID then
                 AP:CancelAuction(auction.auctionID, function(ok)
                     if ok then
-                        table.remove(currentOwnedAuctions, i)
+                        table.remove(currentOwnedAuctions, capturedI)
                         RefreshAHOwnedRows()
                     end
                 end)
