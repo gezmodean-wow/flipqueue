@@ -223,8 +223,9 @@ function AuctionPost:ScanBags(filterToTodo)
 
                                 -- Determine post quantity from TSM postCap or default
                                 local postQty = info.stackCount or 1
-                                if pricing and pricing.postCap and pricing.postCap > 0 then
-                                    postQty = math.min(info.stackCount or 1, pricing.postCap)
+                                local cap = pricing and tonumber(pricing.postCap) or 0
+                                if cap > 0 then
+                                    postQty = math.min(info.stackCount or 1, cap)
                                 end
 
                                 byKey[key] = {
@@ -244,8 +245,9 @@ function AuctionPost:ScanBags(filterToTodo)
                                 local entry = byKey[key]
                                 entry.slots[#entry.slots + 1] = {bag = bagIndex, slot = slot, count = info.stackCount or 1}
                                 entry.totalCount = entry.totalCount + (info.stackCount or 1)
-                                if entry.pricing and entry.pricing.postCap and entry.pricing.postCap > 0 then
-                                    entry.postQty = math.min(entry.totalCount, entry.pricing.postCap)
+                                local entryCap = entry.pricing and tonumber(entry.pricing.postCap) or 0
+                                if entryCap > 0 then
+                                    entry.postQty = math.min(entry.totalCount, entryCap)
                                 else
                                     entry.postQty = entry.totalCount
                                 end
