@@ -1,6 +1,8 @@
--- UI/ServiceDrawer.lua
--- Services drawer for the mini overlay: one-click summon of mail / AH / bank / warband
--- access items, or a "locate nearest" waypoint fallback for the nearest static NPC.
+-- UI/ToolDrawer.lua
+-- Left-extending tools drawer for the mini overlay: one-click summon of
+-- mail / AH / bank / warband access items. Replaces the downward-extending
+-- ServiceDrawer with a horizontal clip animation that reveals leftward from
+-- the mini's left edge.
 local addonName, ns = ...
 
 local UI = ns.UI
@@ -13,16 +15,19 @@ local serviceState = {
     bankOpen = false,
 }
 
+-- Export for ContextDrawer and other files that need bank/AH open state.
+ns._serviceState = serviceState
+
 --------------------------
 -- Data tables
 --------------------------
 
--- Service definitions. Each entry maps to one column in the drawer.
--- `summons` is an ordered preference list — put the best summon at the top.
+-- Service definitions. Each entry maps to one icon button in the drawer.
+-- `summons` is an ordered preference list -- put the best summon at the top.
 -- Each entry has:
 --   kind = "item" | "spell" | "toy" | "mount"
 --   id   = item ID / spell ID / toy item ID / mount ID (journal index)
---   name = display name (also used as the secure-button attribute value —
+--   name = display name (also used as the secure-button attribute value --
 --          for mounts this MUST be the mount's spell name, e.g.
 --          "Mighty Caravan Brutosaur" not "Reins of the...")
 local SERVICES = {
@@ -31,9 +36,9 @@ local SERVICES = {
         label = "Mail",
         iconFallback = "Interface\\Icons\\INV_Letter_15",
         summons = {
-            -- Katy's Stampwhistle — toy, summons a mailbox for 10 min.
+            -- Katy's Stampwhistle -- toy, summons a mailbox for 10 min.
             { kind = "toy", id = 156833, name = "Katy's Stampwhistle" },
-            -- MOLL-E — engineer-crafted, summons a mailbox for 10 min.
+            -- MOLL-E -- engineer-crafted, summons a mailbox for 10 min.
             { kind = "item", id = 54710, name = "MOLL-E" },
         },
         locations = {
@@ -55,11 +60,11 @@ local SERVICES = {
         label = "Auction House",
         iconFallback = "Interface\\Icons\\INV_Misc_Coin_02",
         summons = {
-            -- Mighty Caravan Brutosaur — mount with AH/bank/vendor NPCs.
+            -- Mighty Caravan Brutosaur -- mount with AH/bank/vendor NPCs.
             -- Mount ID from C_MountJournal (journal index, NOT the item ID of
             -- its teaching item). The secure button casts by spell NAME.
             { kind = "mount", id = 1039, name = "Mighty Caravan Brutosaur" },
-            -- Traveler's Anchorite — TWW expedition mount with an AH NPC.
+            -- Traveler's Anchorite -- TWW expedition mount with an AH NPC.
             -- Mount ID and spell name per the mount journal entry.
             { kind = "mount", id = 2332, name = "Traveler's Anchorite" },
         },
@@ -94,7 +99,7 @@ local SERVICES = {
         label = "Warband Bank",
         iconFallback = "Interface\\Icons\\INV_Misc_Bag_EnchantedRunecloth",
         summons = {
-            -- Warband Bank Distance Inhibitor — quest reward spell from
+            -- Warband Bank Distance Inhibitor -- quest reward spell from
             -- "Warbands: Spacetime is Money". Once learned, castable from spellbook.
             { kind = "spell", id = 460905, name = "Warband Bank Distance Inhibitor" },
         },
@@ -165,7 +170,7 @@ local function CheckToySummon(toyID)
 end
 
 -- Returns (owned, icon, onCooldownRemaining, cdStart, cdDuration, usable,
--- spellName) for a mount. Mounts are driven by the mount journal — the
+-- spellName) for a mount. Mounts are driven by the mount journal -- the
 -- "id" is a journal mount ID, and the secure button casts by spell name.
 local function CheckMountSummon(mountID)
     if not mountID then return false end
@@ -175,7 +180,7 @@ local function CheckMountSummon(mountID)
     if not isCollected then return false end
     -- Mounted-check: can't resummon the same mount. Treat already-mounted as
     -- usable=false so the button gets the "redundant" greyed-out treatment.
-    -- We don't check combat / no-mount zones — the secure click will fail
+    -- We don't check combat / no-mount zones -- the secure click will fail
     -- gracefully if the cast is invalid, which matches item behavior.
     local usable = isUsable ~= false
     local remaining, start, duration = 0, 0, 0
@@ -293,7 +298,7 @@ local function ResolveService(service)
                 -- Usability check: for plain items, IsUsableItem (returns
                 -- false for mount-only zones etc). For toys and mounts the
                 -- dedicated Check*Summon functions already reported srcUsable.
-                -- For spells we trust the cooldown+known check — engine-side
+                -- For spells we trust the cooldown+known check -- engine-side
                 -- usability probes can falsely reject known off-cooldown spells.
                 local usable = true
                 if summon.kind == "item" then
@@ -417,65 +422,59 @@ local function LocateNearest(service)
             pcall(C_SuperTrack.SetSuperTrackedUserWaypoint, true)
         end
     end
-    ns:Print(ns.COLORS.CYAN .. "Waypoint:|r " .. loc.zoneName .. " — " .. loc.text)
+    ns:Print(ns.COLORS.CYAN .. "Waypoint:|r " .. loc.zoneName .. " -- " .. loc.text)
 end
 
 --------------------------
--- Drawer frame construction
+-- Drawer constants
 --------------------------
 
-local serviceCols = {}
-local serviceClip = nil
-local serviceInner = nil
-local serviceThumb = nil
-
-local DRAWER_ICON_SIZE = 32
-local DRAWER_ICON_SPACING = 4
-local DRAWER_PAD = 4
-local LOCATE_BTN_HEIGHT = 16
-local THUMB_HEIGHT = 12
-local COL_HEIGHT = DRAWER_ICON_SIZE + 2 + LOCATE_BTN_HEIGHT
-local ICON_AREA_HEIGHT = DRAWER_PAD * 2 + COL_HEIGHT
-local FULL_HEIGHT = ICON_AREA_HEIGHT + THUMB_HEIGHT
-local ANIM_DURATION = 0.15
-
-local drawerOpen = false
-local animating = false
-local animTarget = THUMB_HEIGHT
+local THUMB_WIDTH    = 12
+local ICON_SIZE      = 32
+local ICON_SPACING   = 4
+local PAD            = 4
+local CONTENT_WIDTH  = PAD + ICON_SIZE + PAD          -- 40
+local FULL_WIDTH     = CONTENT_WIDTH + THUMB_WIDTH     -- 52
+local HEADER_HEIGHT  = 16
+local CONTENT_HEIGHT = HEADER_HEIGHT + 4 * ICON_SIZE + 3 * ICON_SPACING  -- 156
+local ANIM_DURATION  = 0.15
 
 local DRAWER_BACKDROP = {
     bgFile = "Interface\\Tooltips\\UI-Tooltip-Background",
     edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
     edgeSize = 14,
-    insets = {left = 3, right = 3, top = 3, bottom = 3},
+    insets = { left = 3, right = 3, top = 3, bottom = 3 },
 }
 
-local function GetDrawerWidth()
-    local m = _G["FlipQueueMiniFrame"]
-    if not m then return 170 end
-    local minW = DRAWER_PAD * 2 + #SERVICES * DRAWER_ICON_SIZE + (#SERVICES - 1) * DRAWER_ICON_SPACING
-    return math.max(math.floor(m:GetWidth() / 2), minW)
-end
+--------------------------
+-- Drawer frame construction
+--------------------------
 
-local function CreateServiceColumn(parent, service, index, totalW)
-    local totalIconsW = #SERVICES * DRAWER_ICON_SIZE + (#SERVICES - 1) * DRAWER_ICON_SPACING
-    local startX = math.floor((totalW - totalIconsW) / 2)
-    local x = startX + (index - 1) * (DRAWER_ICON_SIZE + DRAWER_ICON_SPACING)
+local serviceButtons = {}
+local clipFrame   = nil
+local innerFrame  = nil
+local thumbFrame  = nil
 
-    local col = CreateFrame("Frame", nil, parent)
-    col:SetSize(DRAWER_ICON_SIZE, COL_HEIGHT)
-    col:SetPoint("TOPLEFT", parent, "TOPLEFT", x, -DRAWER_PAD)
+local drawerOpen = false
+local animating  = false
+local animTarget = THUMB_WIDTH
 
-    local btn = CreateFrame("Button", "FlipQueueServiceBtn_" .. service.key, col, "SecureActionButtonTemplate, BackdropTemplate")
-    btn:SetSize(DRAWER_ICON_SIZE, DRAWER_ICON_SIZE)
-    btn:SetPoint("TOP", col, "TOP", 0, 0)
+-- Create a single service icon button inside the content area.
+-- Buttons are stacked vertically: index 1 at the top, index 4 at the bottom.
+local function CreateServiceButton(parent, service, index)
+    local yOff = -(HEADER_HEIGHT + (index - 1) * (ICON_SIZE + ICON_SPACING))
+
+    local btn = CreateFrame("Button", "FlipQueueToolBtn_" .. service.key,
+        parent, "SecureActionButtonTemplate, BackdropTemplate")
+    btn:SetSize(ICON_SIZE, ICON_SIZE)
+    btn:SetPoint("TOPLEFT", parent, "TOPLEFT", PAD, yOff)
     btn:RegisterForClicks("LeftButtonUp", "LeftButtonDown")
 
     btn:SetBackdrop({
         bgFile = "Interface\\Tooltips\\UI-Tooltip-Background",
         edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
         edgeSize = 8,
-        insets = {left = 2, right = 2, top = 2, bottom = 2},
+        insets = { left = 2, right = 2, top = 2, bottom = 2 },
     })
     btn:SetBackdropColor(0.10, 0.10, 0.14, 0.9)
     btn:SetBackdropBorderColor(0.3, 0.3, 0.4, 0.8)
@@ -497,7 +496,7 @@ local function CreateServiceColumn(parent, service, index, totalW)
     btn.resolution = nil
 
     btn:SetScript("OnEnter", function(self)
-        GameTooltip:SetOwner(self, "ANCHOR_TOPRIGHT")
+        GameTooltip:SetOwner(self, "ANCHOR_LEFT")
         local res = self.resolution
         if res and res.state == "ready" then
             GameTooltip:SetText("|cff66cc66" .. service.label .. "|r: " .. (res.name or "?"), 1, 1, 1)
@@ -512,223 +511,188 @@ local function CreateServiceColumn(parent, service, index, totalW)
             GameTooltip:SetText("|cff888888" .. service.label .. "|r", 1, 1, 1)
             GameTooltip:AddLine("No summon available.", 0.7, 0.7, 0.7)
         end
+        -- Nearest location hint.
+        local nearest = PickNearestLocation(service)
+        if nearest then
+            GameTooltip:AddLine("Nearest: " .. nearest.zoneName, 0.5, 0.7, 1.0)
+        end
         GameTooltip:Show()
     end)
     btn:SetScript("OnLeave", function() GameTooltip:Hide() end)
 
-    local locBtn = CreateFrame("Button", nil, col, "BackdropTemplate")
-    locBtn:SetSize(DRAWER_ICON_SIZE, LOCATE_BTN_HEIGHT)
-    locBtn:SetPoint("TOP", btn, "BOTTOM", 0, -2)
-    locBtn:SetBackdrop({
-        bgFile = "Interface\\Tooltips\\UI-Tooltip-Background",
-        edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
-        edgeSize = 6,
-        insets = {left = 1, right = 1, top = 1, bottom = 1},
-    })
-    locBtn:SetBackdropColor(0.12, 0.14, 0.20, 0.9)
-    locBtn:SetBackdropBorderColor(0.3, 0.35, 0.5, 0.8)
-    locBtn.text = locBtn:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-    locBtn.text:SetPoint("CENTER")
-    locBtn.text:SetText("Find")
-    locBtn.text:SetTextColor(0.8, 0.85, 1)
-    locBtn:SetScript("OnEnter", function(self)
-        self:SetBackdropColor(0.18, 0.22, 0.32, 1)
-        GameTooltip:SetOwner(self, "ANCHOR_TOPRIGHT")
-        GameTooltip:SetText("Locate Nearest " .. service.label, 1, 1, 1)
-        for i2, loc in ipairs(service.locations or {}) do
-            if i2 > 3 then break end
-            GameTooltip:AddLine("  " .. loc.zoneName .. " - " .. loc.text, 0.8, 0.8, 0.8)
-        end
-        GameTooltip:AddLine("Click to set a map waypoint.", 0.6, 0.8, 0.6)
-        GameTooltip:Show()
-    end)
-    locBtn:SetScript("OnLeave", function(self)
-        self:SetBackdropColor(0.12, 0.14, 0.20, 0.9)
-        GameTooltip:Hide()
-    end)
-    locBtn:SetScript("OnClick", function() LocateNearest(service) end)
-
-    col.btn = btn
-    col.locBtn = locBtn
-    return col
+    return btn
 end
 
 local function EnsureDrawer()
-    if serviceClip then return true end
+    if clipFrame then return true end
 
     local mini = _G["FlipQueueMiniFrame"]
     if not mini then return false end
 
-    local drawerWidth = GetDrawerWidth()
+    -- Clip frame: anchored TOPRIGHT to mini's TOPLEFT with 3px overlap.
+    -- Width starts at THUMB_WIDTH (collapsed) and animates to FULL_WIDTH.
+    clipFrame = CreateFrame("Frame", "FlipQueueToolClip", mini)
+    clipFrame:SetClipsChildren(true)
+    clipFrame:SetSize(THUMB_WIDTH, CONTENT_HEIGHT)
+    clipFrame:SetPoint("TOPRIGHT", mini, "TOPLEFT", 3, 0)
+    clipFrame:SetFrameStrata("MEDIUM")
 
-    serviceClip = CreateFrame("Frame", "FlipQueueServiceClip", mini)
-    serviceClip:SetClipsChildren(true)
-    serviceClip:SetSize(drawerWidth, THUMB_HEIGHT)
-    serviceClip:SetPoint("TOPRIGHT", mini, "BOTTOMRIGHT", 0, 3)
-    serviceClip:SetFrameStrata("MEDIUM")
+    -- Inner content frame: fixed width = FULL_WIDTH, anchored RIGHT to
+    -- clip's RIGHT so it extends leftward. As clip width grows, the left
+    -- portion of inner is revealed.
+    innerFrame = CreateFrame("Frame", "FlipQueueToolContent", clipFrame, "BackdropTemplate")
+    innerFrame:SetSize(FULL_WIDTH, CONTENT_HEIGHT)
+    innerFrame:SetPoint("TOPRIGHT", clipFrame, "TOPRIGHT", 0, 0)
+    innerFrame:SetBackdrop(DRAWER_BACKDROP)
+    innerFrame:SetBackdropColor(0.05, 0.05, 0.1, 0.9)
+    innerFrame:SetBackdropBorderColor(0.3, 0.3, 0.4, 0.8)
 
-    serviceInner = CreateFrame("Frame", "FlipQueueServiceContent", serviceClip, "BackdropTemplate")
-    serviceInner:SetSize(drawerWidth, FULL_HEIGHT)
-    serviceInner:SetPoint("BOTTOMLEFT", serviceClip, "BOTTOMLEFT", 0, 0)
-    serviceInner:SetPoint("BOTTOMRIGHT", serviceClip, "BOTTOMRIGHT", 0, 0)
-    serviceInner:SetBackdrop(DRAWER_BACKDROP)
-    serviceInner:SetBackdropColor(0.05, 0.05, 0.1, 0.9)
-    serviceInner:SetBackdropBorderColor(0.3, 0.3, 0.4, 0.8)
+    -- Header label at the top of the content area.
+    local header = innerFrame:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    header:SetPoint("TOPLEFT", innerFrame, "TOPLEFT", PAD, -2)
+    header:SetWidth(ICON_SIZE)
+    header:SetJustifyH("CENTER")
+    header:SetText("Tools")
+    header:SetTextColor(0.8, 0.85, 1)
 
+    -- Service icon buttons stacked vertically in the content area.
     for i, svc in ipairs(SERVICES) do
-        serviceCols[i] = CreateServiceColumn(serviceInner, svc, i, drawerWidth)
+        serviceButtons[i] = CreateServiceButton(innerFrame, svc, i)
     end
 
-    serviceThumb = CreateFrame("Button", "FlipQueueServiceTab", serviceInner)
-    serviceThumb:SetHeight(THUMB_HEIGHT)
-    serviceThumb:SetPoint("BOTTOMLEFT", serviceInner, "BOTTOMLEFT", 4, 3)
-    serviceThumb:SetPoint("BOTTOMRIGHT", serviceInner, "BOTTOMRIGHT", -4, 3)
+    -- Thumb grip on the RIGHT edge of inner (closest to mini, always visible).
+    thumbFrame = CreateFrame("Button", "FlipQueueToolTab", innerFrame)
+    thumbFrame:SetWidth(THUMB_WIDTH)
+    thumbFrame:SetPoint("TOPRIGHT", innerFrame, "TOPRIGHT", 0, 0)
+    thumbFrame:SetPoint("BOTTOMRIGHT", innerFrame, "BOTTOMRIGHT", 0, 0)
 
-    -- Grip lines (horizontal bars) as a drag-handle visual.
+    -- Grip lines: 3 vertical bars (1px wide, 16px tall, 3px apart).
     for j = 1, 3 do
-        local grip = serviceThumb:CreateTexture(nil, "ARTWORK")
-        grip:SetHeight(1)
-        grip:SetWidth(16)
-        grip:SetPoint("CENTER", serviceThumb, "CENTER", 0, (j - 2) * 3)
+        local grip = thumbFrame:CreateTexture(nil, "ARTWORK")
+        grip:SetSize(1, 16)
+        grip:SetPoint("CENTER", thumbFrame, "CENTER", (j - 2) * 3, 0)
         grip:SetColorTexture(0.4, 0.4, 0.5, 0.6)
     end
 
-    serviceThumb.highlight = serviceThumb:CreateTexture(nil, "HIGHLIGHT")
-    serviceThumb.highlight:SetAllPoints()
-    serviceThumb.highlight:SetColorTexture(1, 1, 1, 0.06)
+    thumbFrame.highlight = thumbFrame:CreateTexture(nil, "HIGHLIGHT")
+    thumbFrame.highlight:SetAllPoints()
+    thumbFrame.highlight:SetColorTexture(1, 1, 1, 0.06)
 
-    serviceThumb:SetScript("OnClick", function()
+    thumbFrame:SetScript("OnClick", function()
         if InCombatLockdown() then return end
-        UI:ToggleServiceDrawer()
+        UI:ToggleToolDrawer()
     end)
 
-    local animSpeed = ICON_AREA_HEIGHT / ANIM_DURATION
-    serviceClip:SetScript("OnUpdate", function(self, elapsed)
+    -- Width animation: interpolates clip width between THUMB_WIDTH and FULL_WIDTH.
+    local animSpeed = CONTENT_WIDTH / ANIM_DURATION
+    clipFrame:SetScript("OnUpdate", function(self, elapsed)
         if not animating then return end
-        local cur = self:GetHeight()
+        local cur = self:GetWidth()
         local diff = animTarget - cur
         local step = animSpeed * elapsed
         if math.abs(diff) <= step then
-            self:SetHeight(animTarget)
+            self:SetWidth(animTarget)
             animating = false
         else
-            self:SetHeight(cur + (diff > 0 and step or -step))
+            self:SetWidth(cur + (diff > 0 and step or -step))
         end
     end)
 
     return true
 end
 
-local function UpdateDrawerWidth()
-    if not serviceClip then return end
-    local w = GetDrawerWidth()
-    serviceClip:SetWidth(w)
-    serviceInner:SetWidth(w)
-    serviceInner:SetHeight(FULL_HEIGHT)
-    local totalIconsW = #SERVICES * DRAWER_ICON_SIZE + (#SERVICES - 1) * DRAWER_ICON_SPACING
-    local startX = math.floor((w - totalIconsW) / 2)
-    for i, col in ipairs(serviceCols) do
-        if col then
-            col:ClearAllPoints()
-            local x = startX + (i - 1) * (DRAWER_ICON_SIZE + DRAWER_ICON_SPACING)
-            col:SetPoint("TOPLEFT", serviceInner, "TOPLEFT", x, -DRAWER_PAD)
-        end
-    end
-end
-
 --------------------------
 -- Public API
 --------------------------
 
-function UI:GetServiceDrawer()
-    EnsureDrawer()
-    return serviceInner
-end
-
-function UI:IsServiceDrawerShown()
-    return drawerOpen
-end
-
 local function SaveDrawerShown(shown)
     if ns.db and ns.db.settings then
-        ns.db.settings.serviceDrawerShown = shown and true or false
+        ns.db.settings.toolDrawerShown = shown and true or false
     end
 end
 
-function UI:ShowServiceDrawer()
+function UI:ShowToolDrawer()
     if not EnsureDrawer() then return end
     local mini = _G["FlipQueueMiniFrame"]
     if not mini or not mini:IsShown() then return end
 
     drawerOpen = true
-    animTarget = FULL_HEIGHT
+    animTarget = FULL_WIDTH
     animating = true
 
     SaveDrawerShown(true)
-    if UI.RefreshServiceDrawer then UI:RefreshServiceDrawer() end
+    if UI.RefreshToolDrawer then UI:RefreshToolDrawer() end
 end
 
-function UI:HideServiceDrawer()
-    if not serviceClip then return end
+function UI:HideToolDrawer()
+    if not clipFrame then return end
     drawerOpen = false
-    animTarget = THUMB_HEIGHT
+    animTarget = THUMB_WIDTH
     animating = true
 
     SaveDrawerShown(false)
     if not (InCombatLockdown and InCombatLockdown()) then
-        for _, col in ipairs(serviceCols) do
-            if col and col.btn then
-                col.btn:SetAttribute("type", nil)
-                col.btn:SetAttribute("item", nil)
-                col.btn:SetAttribute("spell", nil)
+        for _, btn in ipairs(serviceButtons) do
+            if btn then
+                btn:SetAttribute("type", nil)
+                btn:SetAttribute("item", nil)
+                btn:SetAttribute("spell", nil)
             end
         end
     end
 end
 
-function UI:ToggleServiceDrawer()
+function UI:ToggleToolDrawer()
     if drawerOpen then
-        UI:HideServiceDrawer()
+        UI:HideToolDrawer()
     else
-        UI:ShowServiceDrawer()
+        UI:ShowToolDrawer()
     end
 end
 
-function UI:RefreshServiceDrawer()
+function UI:IsToolDrawerShown()
+    return drawerOpen
+end
+
+function UI:UpdateToolDrawerHeight()
+    -- Called when mini height changes. Update clip height to match content.
+    if not clipFrame then return end
+    clipFrame:SetHeight(CONTENT_HEIGHT)
+    innerFrame:SetHeight(CONTENT_HEIGHT)
+end
+
+function UI:RefreshToolDrawer()
     if not EnsureDrawer() then return end
 
     local mini = _G["FlipQueueMiniFrame"]
     if not mini or not mini:IsShown() then
-        if serviceClip then serviceClip:Hide() end
+        if clipFrame then clipFrame:Hide() end
         return
     end
 
-    serviceClip:Show()
-    UpdateDrawerWidth()
+    clipFrame:Show()
 
     -- Restore saved state on first refresh after login.
     if ns.db and ns.db.settings then
-        local saved = ns.db.settings.serviceDrawerShown
+        local saved = ns.db.settings.toolDrawerShown
         if saved == true and not drawerOpen and not animating then
             drawerOpen = true
-            serviceClip:SetHeight(FULL_HEIGHT)
-            animTarget = FULL_HEIGHT
+            clipFrame:SetWidth(FULL_WIDTH)
+            animTarget = FULL_WIDTH
         elseif (saved == false or saved == nil) and not drawerOpen then
-            serviceClip:SetHeight(THUMB_HEIGHT)
+            clipFrame:SetWidth(THUMB_WIDTH)
         end
     end
 
-
     if not drawerOpen then return end
 
-    -- Cannot re-assign secure attributes during combat
+    -- Cannot re-assign secure attributes during combat.
     local inCombat = InCombatLockdown and InCombatLockdown()
 
     for i, svc in ipairs(SERVICES) do
-        local col = serviceCols[i]
-        if col then
+        local btn = serviceButtons[i]
+        if btn then
             local res = ResolveService(svc)
-            local btn = col.btn
             btn.resolution = res
 
             btn.tex:SetTexture(res.icon or svc.iconFallback)
@@ -776,11 +740,6 @@ function UI:RefreshServiceDrawer()
     end
 end
 
--- Called when the mini resizes so the drawer tracks 1/3 width.
-function UI:UpdateServiceDrawerWidth()
-    UpdateDrawerWidth()
-end
-
 --------------------------
 -- Event handling
 --------------------------
@@ -817,5 +776,5 @@ evt:SetScript("OnEvent", function(_, event)
         serviceState.auctionOpen = false
         serviceState.bankOpen = false
     end
-    if UI.RefreshServiceDrawer then UI:RefreshServiceDrawer() end
+    if UI.RefreshToolDrawer then UI:RefreshToolDrawer() end
 end)

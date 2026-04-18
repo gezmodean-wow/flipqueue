@@ -787,27 +787,6 @@ end)
 -- Detect when the player buys an item on the AH (non-commodity and commodity)
 -- and advance buy task steps immediately (browse → buy → collect).
 
--- Cache auction info as the player browses, so we have it when PlaceBid
--- fires (GetAuctionInfoByID may return nil after the purchase is consumed).
-local _auctionInfoCache = {}
-if C_AuctionHouse then
-    local cacheFrame = CreateFrame("Frame")
-    cacheFrame:RegisterEvent("AUCTION_HOUSE_BROWSE_RESULTS_UPDATED")
-    cacheFrame:RegisterEvent("AUCTION_HOUSE_NEW_RESULTS_RECEIVED")
-    cacheFrame:SetScript("OnEvent", function()
-        -- Snapshot all visible auctions into the cache
-        if not C_AuctionHouse.GetBrowseResults then return end
-        local ok, results = pcall(C_AuctionHouse.GetBrowseResults)
-        if ok and results then
-            for _, result in ipairs(results) do
-                if result.itemKey and result.itemKey.itemID then
-                    _auctionInfoCache[result.itemKey.itemID] = result.itemKey
-                end
-            end
-        end
-    end)
-end
-
 if C_AuctionHouse and C_AuctionHouse.PlaceBid then
     hooksecurefunc(C_AuctionHouse, "PlaceBid", function(auctionID, bidAmount)
         if not ns.TodoList or not ns.TodoList.OnItemPurchased then return end

@@ -1405,7 +1405,7 @@ function Sync:NotifyPartnerStateChanged()
     if not ns.UI then return end
     if ns.UI.RefreshSettings then ns.UI:RefreshSettings() end
     if ns.UI.RefreshMini then ns.UI:RefreshMini() end
-    if ns.UI.RefreshServiceDrawer then ns.UI:RefreshServiceDrawer() end
+    if ns.UI.RefreshToolDrawer then ns.UI:RefreshToolDrawer() end
 end
 
 --------------------------

@@ -182,8 +182,8 @@ resizeGrip:SetScript("OnMouseUp", function()
     if ns.db then
         ns.db.settings.miniWidth = math.floor(mini:GetWidth() + 0.5)
     end
-    if UI.UpdateServiceDrawerWidth then UI:UpdateServiceDrawerWidth() end
-    if UI.UpdateActionDrawerWidth then UI:UpdateActionDrawerWidth() end
+    if UI.UpdateToolDrawerHeight then UI:UpdateToolDrawerHeight() end
+    if UI.UpdateContextDrawerWidth then UI:UpdateContextDrawerWidth() end
     UI:RefreshMini()
 end)
 
@@ -407,9 +407,8 @@ taskArea:SetPoint("RIGHT", mini, "RIGHT", -4, 0)
 partnerStrip:SetPoint("TOPLEFT", taskArea, "BOTTOMLEFT", 0, -2)
 partnerStrip:SetPoint("RIGHT", mini, "RIGHT", -4, 0)
 
--- Services drawer is managed by UI/ServiceDrawer.lua. A tab at the mini's
--- bottom-right toggles the drawer open/closed with a slide animation.
--- The drawer takes 1/3 of the mini's width.
+-- Tool drawer (left): extends from mini's left edge, managed by UI/ToolDrawer.lua.
+-- Context drawer (bottom): full width, bank/AH context, managed by UI/ContextDrawer.lua.
 
 local miniRows = {}
 
@@ -473,8 +472,8 @@ function UI:RefreshMini()
     RefreshPartnerStrip()
 
     -- Drawer refreshes (they manage their own visibility state)
-    if UI.RefreshServiceDrawer then UI:RefreshServiceDrawer() end
-    if UI.RefreshActionDrawer then UI:RefreshActionDrawer() end
+    if UI.RefreshToolDrawer then UI:RefreshToolDrawer() end
+    if UI.RefreshContextDrawer then UI:RefreshContextDrawer() end
 
     -- Hide all rows and clean up action buttons
     for _, row in ipairs(miniRows) do
@@ -957,7 +956,7 @@ function UI:RefreshMini()
     end
 
     -- Resize frame to fit content, clamped to screen height.
-    -- The services drawer tab + content hang below the mini's BOTTOM edge.
+    -- Tool drawer extends left, context drawer hangs below.
     local contentHeight = math.max(1, visibleRows) * MINI_ROW_HEIGHT
     taskArea:SetHeight(contentHeight)
     local stripH = partnerStrip:IsShown() and partnerStrip:GetHeight() or 0
