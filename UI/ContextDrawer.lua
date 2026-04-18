@@ -1075,12 +1075,12 @@ local function EnsureDrawer()
     -- Resolve Tracker now that Core has loaded
     Tracker = ns.Tracker
 
-    -- Clip frame: full width, anchored to bottom of mini with 3px overlap
+    -- Clip frame: full width, flush below the mini (no overlap)
     contextClip = CreateFrame("Frame", "FlipQueueContextClip", mini)
     contextClip:SetClipsChildren(true)
     contextClip:SetHeight(THUMB_HEIGHT)
-    contextClip:SetPoint("TOPLEFT",  mini, "BOTTOMLEFT",  0, 3)
-    contextClip:SetPoint("TOPRIGHT", mini, "BOTTOMRIGHT", 0, 3)
+    contextClip:SetPoint("TOPLEFT",  mini, "BOTTOMLEFT",  0, 0)
+    contextClip:SetPoint("TOPRIGHT", mini, "BOTTOMRIGHT", 0, 0)
     contextClip:SetFrameStrata("MEDIUM")
 
     -- Content frame: inner backdrop, anchored to BOTTOM of clip

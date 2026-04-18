@@ -38,42 +38,60 @@ function AuctionPost:ResolvePostPrice(itemKey, itemID)
         return nil
     end
 
-    local op = ns.TSM:GetItemAuctioningOp(itemKey)
-    if not op then
-        ns:PrintDebug("[AuctionPost] ResolvePostPrice: no op for " .. tostring(itemKey))
-        return nil
-    end
-
     local tsmStr = ns.TSM:ItemKeyToTSMString(itemKey)
     if not tsmStr then
         tsmStr = "i:" .. tostring(itemID)
     end
 
-    ns:PrintDebug("[AuctionPost] ResolvePostPrice: " .. tostring(itemKey) ..
-        " tsmStr=" .. tostring(tsmStr) .. " op=" .. tostring(op.opName))
-
+    local op = ns.TSM:GetItemAuctioningOp(itemKey)
     local normalCopper, minCopper, maxCopper
+    local opName, postCap, duration
 
-    if op.normalPrice and op.normalPrice ~= "" and type(TSM_API) == "table" then
-        local ok, val = pcall(TSM_API.GetCustomPriceValue, op.normalPrice, tsmStr)
-        normalCopper = ok and val or nil
-        if not ok then
-            ns:PrintDebug("[AuctionPost]   normalPrice eval failed: " .. tostring(val))
+    if op then
+        opName = op.opName
+        postCap = op.postCap
+        duration = op.duration
+
+        ns:PrintDebug("[AuctionPost] ResolvePostPrice: " .. tostring(itemKey) ..
+            " tsmStr=" .. tostring(tsmStr) .. " op=" .. tostring(opName))
+
+        if op.normalPrice and op.normalPrice ~= "" and type(TSM_API) == "table" then
+            local ok, val = pcall(TSM_API.GetCustomPriceValue, op.normalPrice, tsmStr)
+            normalCopper = ok and val or nil
+            if not ok then
+                ns:PrintDebug("[AuctionPost]   normalPrice eval failed: " .. tostring(val))
+            end
+        end
+
+        if op.minPrice and op.minPrice ~= "" and type(TSM_API) == "table" then
+            local ok, val = pcall(TSM_API.GetCustomPriceValue, op.minPrice, tsmStr)
+            minCopper = ok and val or nil
+        end
+
+        if op.maxPrice and op.maxPrice ~= "" and type(TSM_API) == "table" then
+            local ok, val = pcall(TSM_API.GetCustomPriceValue, op.maxPrice, tsmStr)
+            maxCopper = ok and val or nil
+        end
+    else
+        ns:PrintDebug("[AuctionPost] ResolvePostPrice: no op for " .. tostring(itemKey) .. ", trying DBMinBuyout")
+    end
+
+    -- Fallback: if no operation or normalPrice couldn't be evaluated,
+    -- use DBMinBuyout as the posting price reference.
+    if not normalCopper then
+        local fallback = ns.TSM:GetPrice(itemKey, "DBMinBuyout")
+        if fallback and fallback > 0 then
+            normalCopper = fallback
+            if not opName then opName = "DBMinBuyout" end
         end
     end
 
-    if op.minPrice and op.minPrice ~= "" and type(TSM_API) == "table" then
-        local ok, val = pcall(TSM_API.GetCustomPriceValue, op.minPrice, tsmStr)
-        minCopper = ok and val or nil
-    end
-
-    if op.maxPrice and op.maxPrice ~= "" and type(TSM_API) == "table" then
-        local ok, val = pcall(TSM_API.GetCustomPriceValue, op.maxPrice, tsmStr)
-        maxCopper = ok and val or nil
+    if not normalCopper then
+        return nil
     end
 
     local belowThreshold = false
-    if normalCopper and minCopper and normalCopper < minCopper then
+    if minCopper and normalCopper < minCopper then
         belowThreshold = true
     end
 
@@ -81,9 +99,9 @@ function AuctionPost:ResolvePostPrice(itemKey, itemID)
         normalCopper   = normalCopper,
         minCopper      = minCopper,
         maxCopper      = maxCopper,
-        postCap        = op.postCap,
-        duration       = op.duration,
-        opName         = op.opName,
+        postCap        = postCap,
+        duration       = duration,
+        opName         = opName,
         belowThreshold = belowThreshold,
     }
 end
