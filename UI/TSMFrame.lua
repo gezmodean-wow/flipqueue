@@ -465,40 +465,12 @@ function UI:CreateTSMPanel(parent)
     y = y - h - ITEM_SPACING
 
     -- Fallback Auctioning operation for ungrouped items
-    do
-        local row = CreateFrame("Frame", nil, content)
-        row:SetPoint("TOPLEFT", content, "TOPLEFT", LEFT_MARGIN, y)
-        row:SetPoint("RIGHT", content, "RIGHT", RIGHT_MARGIN, 0)
-        row:SetHeight(52)
-
-        local lbl = row:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-        lbl:SetPoint("TOPLEFT", row, "TOPLEFT", 0, 0)
-        lbl:SetText("Fallback Auctioning operation for ungrouped items")
-        lbl:SetTextColor(1, 1, 1)
-
-        local desc = row:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-        desc:SetPoint("TOPLEFT", lbl, "BOTTOMLEFT", 0, -2)
-        desc:SetPoint("RIGHT", row, "RIGHT", -80, 0)
-        desc:SetText("TSM operation name to use when an item isn't in any TSM group. Leave blank to skip ungrouped items.")
-        desc:SetTextColor(0.7, 0.7, 0.7)
-        desc:SetJustifyH("LEFT")
-        desc:SetWordWrap(true)
-
-        local box = CreateFrame("EditBox", nil, row, "InputBoxTemplate")
-        box:SetSize(70, 20)
-        box:SetPoint("TOPRIGHT", row, "TOPRIGHT", -4, -2)
-        box:SetAutoFocus(false)
-        box:SetText(ns.db.settings.tsmFallbackOp or "")
-        box:SetScript("OnEnterPressed", function(self)
-            ns.db.settings.tsmFallbackOp = strtrim(self:GetText())
-            self:ClearFocus()
+    tsmWidgets.fallbackOpDropdown, h = CreateDropdown(content, y,
+        "Fallback Auctioning operation for ungrouped items", 200,
+        function(val)
+            ns.db.settings.tsmFallbackOp = val
         end)
-        box:SetScript("OnEscapePressed", function(self) self:ClearFocus() end)
-        tsmWidgets.fallbackOpBox = box
-
-        y = y - 52 - ITEM_SPACING
-    end
-    y = y - SECTION_SPACING
+    y = y - h - SECTION_SPACING
 
     ------------------------------------------------
     -- Price Auto-Update
@@ -693,8 +665,16 @@ function UI:RefreshTSMPage()
     if tsmWidgets.autoSkipRejected then
         tsmWidgets.autoSkipRejected:SetChecked(ns.db.settings.tsmAutoSkipRejected)
     end
-    if tsmWidgets.fallbackOpBox then
-        tsmWidgets.fallbackOpBox:SetText(ns.db.settings.tsmFallbackOp or "")
+    if tsmWidgets.fallbackOpDropdown then
+        local ops = ns.TSM and ns.TSM:GetAuctioningOperations() or {}
+        local items = {{value = "", label = "(None — skip ungrouped)"}}
+        for _, name in ipairs(ops) do
+            items[#items + 1] = {value = name, label = name}
+        end
+        local current = ns.db.settings.tsmFallbackOp or ""
+        tsmWidgets.fallbackOpDropdown:SetItems(items, current)
+        local displayText = current ~= "" and current or "(None)"
+        tsmWidgets.fallbackOpDropdown.text:SetText(displayText)
     end
     if tsmWidgets.autoUpdate then
         tsmWidgets.autoUpdate:SetChecked(ns.db.settings.tsmAutoUpdatePrice)
