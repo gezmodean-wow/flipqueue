@@ -429,14 +429,14 @@ end
 -- Drawer constants
 --------------------------
 
-local THUMB_WIDTH    = 12
-local ICON_SIZE      = 32
-local ICON_SPACING   = 4
-local PAD            = 4
-local CONTENT_WIDTH  = PAD + ICON_SIZE + PAD          -- 40
-local FULL_WIDTH     = CONTENT_WIDTH + THUMB_WIDTH     -- 52
-local HEADER_HEIGHT  = 16
-local CONTENT_HEIGHT = HEADER_HEIGHT + 4 * ICON_SIZE + 3 * ICON_SPACING  -- 156
+local THUMB_WIDTH    = 14
+local ICON_SIZE      = 40
+local ICON_SPACING   = 6
+local PAD            = 6
+local CONTENT_WIDTH  = PAD + ICON_SIZE + PAD          -- 52
+local FULL_WIDTH     = CONTENT_WIDTH + THUMB_WIDTH     -- 66
+local HEADER_HEIGHT  = 18
+local CONTENT_HEIGHT = HEADER_HEIGHT + 4 * ICON_SIZE + 3 * ICON_SPACING  -- 196
 local ANIM_DURATION  = 0.15
 
 local DRAWER_BACKDROP = {
@@ -497,18 +497,18 @@ local function CreateServiceButton(parent, service, index)
 
     -- Waypoint arrow overlay (shown when no summon, acts as "Find" indicator)
     btn.findArrow = btn:CreateTexture(nil, "OVERLAY")
-    btn.findArrow:SetSize(12, 12)
-    btn.findArrow:SetPoint("BOTTOMRIGHT", btn, "BOTTOMRIGHT", -1, 1)
+    btn.findArrow:SetSize(14, 14)
+    btn.findArrow:SetPoint("TOPRIGHT", btn, "TOPRIGHT", -1, -1)
     btn.findArrow:SetTexture("Interface\\Minimap\\TRACKING\\None")
     btn.findArrow:SetVertexColor(0.5, 0.7, 1.0)
     btn.findArrow:Hide()
 
     -- "Find" label (shown when no summon available)
     btn.findLabel = btn:CreateFontString(nil, "OVERLAY")
-    btn.findLabel:SetFont(STANDARD_TEXT_FONT, 7, "OUTLINE")
-    btn.findLabel:SetPoint("BOTTOMLEFT", btn, "BOTTOMLEFT", 2, 2)
+    btn.findLabel:SetFont(STANDARD_TEXT_FONT, 9, "OUTLINE")
+    btn.findLabel:SetPoint("BOTTOM", btn, "BOTTOM", 0, 2)
     btn.findLabel:SetText("Find")
-    btn.findLabel:SetTextColor(0.5, 0.7, 1.0)
+    btn.findLabel:SetTextColor(0.6, 0.8, 1.0)
     btn.findLabel:Hide()
 
     btn.service = service
