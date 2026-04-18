@@ -374,8 +374,14 @@ function Tracker:CalculateRequiredGold(charKey, currentRealm)
 end
 
 function Tracker:AutoWithdrawGold()
-    if not ns.db or not ns.db.settings.autoWithdrawGold then return end
-    if not C_Bank or not C_Bank.WithdrawMoney then return end
+    if not ns.db or not ns.db.settings.autoWithdrawGold then
+        ns:PrintDebug("AutoWithdrawGold: skipped — setting disabled")
+        return
+    end
+    if not C_Bank or not C_Bank.WithdrawMoney then
+        ns:PrintDebug("AutoWithdrawGold: skipped — C_Bank.WithdrawMoney unavailable")
+        return
+    end
     -- Defer to Warband Miser if installed (see DB.lua ns:IsWarbandMiserActive).
     -- WM manages per-character gold policy more granularly than we do, so
     -- when it's loaded we stay out of its way. Users can force us back in
@@ -400,7 +406,10 @@ function Tracker:AutoWithdrawGold()
             end
         end
     end
-    if not hasTasks then return end
+    if not hasTasks then
+        ns:PrintDebug("AutoWithdrawGold: skipped — no tasks on realm " .. currentRealm)
+        return
+    end
 
     -- Reset session tracker if realm changed
     if sessionWithdrawnRealm ~= currentRealm then
@@ -410,7 +419,10 @@ function Tracker:AutoWithdrawGold()
 
     local totalDepositCopper, itemCount, depositDetails = self:CalculateRequiredGold(charKey, currentRealm)
 
-    if itemCount == 0 then return end
+    if itemCount == 0 then
+        ns:PrintDebug("AutoWithdrawGold: skipped — CalculateRequiredGold returned 0 items")
+        return
+    end
 
     -- Print breakdown (debug only)
     local hasBuyCosts = false
@@ -440,8 +452,16 @@ function Tracker:AutoWithdrawGold()
     local playerCopper = GetMoney()
     local effectiveCopper = playerCopper + sessionWithdrawnCopper
 
-    if effectiveCopper >= estimatedFeesCopper then return end
-    if playerCopper >= estimatedFeesCopper then return end
+    if effectiveCopper >= estimatedFeesCopper then
+        ns:PrintDebug("AutoWithdrawGold: skipped — already covered (effective="
+            .. effectiveCopper .. " >= needed=" .. estimatedFeesCopper .. ")")
+        return
+    end
+    if playerCopper >= estimatedFeesCopper then
+        ns:PrintDebug("AutoWithdrawGold: skipped — player has enough ("
+            .. playerCopper .. " >= " .. estimatedFeesCopper .. ")")
+        return
+    end
 
     local shortfallCopper = estimatedFeesCopper - playerCopper
     local shortfallGold = math.ceil(shortfallCopper / 10000)
@@ -511,8 +531,14 @@ end
 
 -- Deposit excess gold to warbank, keeping only AH fees + buffer.
 function Tracker:AutoDepositGold()
-    if not ns.db or not ns.db.settings.autoDepositGold then return end
-    if not C_Bank or not C_Bank.DepositMoney then return end
+    if not ns.db or not ns.db.settings.autoDepositGold then
+        ns:PrintDebug("AutoDepositGold: skipped — setting disabled")
+        return
+    end
+    if not C_Bank or not C_Bank.DepositMoney then
+        ns:PrintDebug("AutoDepositGold: skipped — C_Bank.DepositMoney unavailable")
+        return
+    end
     -- Defer to Warband Miser (see AutoWithdrawGold above for the rationale).
     if ns.IsWarbandMiserActive and ns:IsWarbandMiserActive() then
         ns:PrintDebug("AutoDepositGold: deferring to Warband Miser")

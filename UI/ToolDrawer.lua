@@ -36,6 +36,8 @@ local SERVICES = {
         label = "Mail",
         iconFallback = "Interface\\Icons\\INV_Letter_15",
         summons = {
+            -- Trader's Gilded Brutosaur -- shop mount with AH + mailbox NPCs.
+            { kind = "mount", id = 2265, name = "Trader's Gilded Brutosaur" },
             -- Katy's Stampwhistle -- toy, summons a mailbox for 10 min.
             { kind = "toy", id = 156833, name = "Katy's Stampwhistle" },
             -- MOLL-E -- engineer-crafted, summons a mailbox for 10 min.
@@ -64,6 +66,8 @@ local SERVICES = {
             -- Mount ID from C_MountJournal (journal index, NOT the item ID of
             -- its teaching item). The secure button casts by spell NAME.
             { kind = "mount", id = 1039, name = "Mighty Caravan Brutosaur" },
+            -- Trader's Gilded Brutosaur -- shop mount with AH + mailbox NPCs.
+            { kind = "mount", id = 2265, name = "Trader's Gilded Brutosaur" },
             -- Traveler's Anchorite -- TWW expedition mount with an AH NPC.
             -- Mount ID and spell name per the mount journal entry.
             { kind = "mount", id = 2332, name = "Traveler's Anchorite" },
