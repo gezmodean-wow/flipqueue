@@ -54,14 +54,14 @@ local function GetPopup()
             elseif anchor == "right" then
                 f:SetPoint("TOPLEFT", mini, "TOPRIGHT", 4, 0)
             else
-                -- Anchor below the mini. Shift down by the context drawer
-                -- clip height so the popup doesn't cover it.
+                -- Anchor below the context drawer if visible, otherwise
+                -- below the mini directly.
                 local drawerClip = _G["FlipQueueContextClip"]
-                local extraOffset = 0
-                if drawerClip and drawerClip:IsShown() then
-                    extraOffset = drawerClip:GetHeight() + 2
+                if drawerClip and drawerClip:IsShown() and drawerClip:GetHeight() > 1 then
+                    f:SetPoint("TOPRIGHT", drawerClip, "BOTTOMRIGHT", 0, -4)
+                else
+                    f:SetPoint("TOPRIGHT", mini, "BOTTOMRIGHT", 0, -4)
                 end
-                f:SetPoint("TOPRIGHT", mini, "BOTTOMRIGHT", 0, -4 - extraOffset)
             end
         else
             f:SetPoint("TOP", UIParent, "TOP", 0, -100)
