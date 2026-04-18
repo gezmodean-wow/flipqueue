@@ -1083,11 +1083,14 @@ local function EnsureDrawer()
     contextClip:SetPoint("TOPRIGHT", mini, "BOTTOMRIGHT", 0, 0)
     contextClip:SetFrameStrata("MEDIUM")
 
-    -- Content frame: inner backdrop, anchored to BOTTOM of clip
+    -- Content frame: anchored to TOP of clip (grows downward with clip).
+    -- Using TOP anchor instead of BOTTOM avoids the backdrop extending
+    -- above the clip rect (SetClipsChildren doesn't clip a frame's own
+    -- backdrop, only its children).
     contextContent = CreateFrame("Frame", "FlipQueueContextContent", contextClip, "BackdropTemplate")
     contextContent:SetHeight(THUMB_HEIGHT)
-    contextContent:SetPoint("BOTTOMLEFT",  contextClip, "BOTTOMLEFT",  0, 0)
-    contextContent:SetPoint("BOTTOMRIGHT", contextClip, "BOTTOMRIGHT", 0, 0)
+    contextContent:SetPoint("TOPLEFT",  contextClip, "TOPLEFT",  0, 0)
+    contextContent:SetPoint("TOPRIGHT", contextClip, "TOPRIGHT", 0, 0)
     contextContent:SetBackdrop(DRAWER_BACKDROP)
     contextContent:SetBackdropColor(0.05, 0.05, 0.1, 0.9)
     contextContent:SetBackdropBorderColor(0.3, 0.3, 0.4, 0.8)
@@ -1114,8 +1117,10 @@ local function EnsureDrawer()
         UI:ToggleContextDrawer()
     end)
 
-    -- Animation via OnUpdate
-    local animSpeed = 300 / ANIM_DURATION  -- generous speed for any context
+    -- Animation via OnUpdate. Content height tracks clip height so the
+    -- backdrop (which isn't clipped by SetClipsChildren) doesn't extend
+    -- above the clip rect.
+    local animSpeed = 300 / ANIM_DURATION
     contextClip:SetScript("OnUpdate", function(self, elapsed)
         if not animating then return end
         local cur = self:GetHeight()
@@ -1123,9 +1128,12 @@ local function EnsureDrawer()
         local step = animSpeed * elapsed
         if math.abs(diff) <= step then
             self:SetHeight(animTarget)
+            contextContent:SetHeight(animTarget)
             animating = false
         else
-            self:SetHeight(cur + (diff > 0 and step or -step))
+            local newH = cur + (diff > 0 and step or -step)
+            self:SetHeight(newH)
+            contextContent:SetHeight(newH)
         end
     end)
 
@@ -1219,6 +1227,8 @@ function UI:ShowContextDrawer()
     local mini = _G["FlipQueueMiniFrame"]
     if not mini or not mini:IsShown() then return end
 
+    -- Rebuild content at full height so it's ready when the clip reveals it
+    if currentContext then ShowContext(currentContext) end
     drawerOpen = true
     animTarget = currentFullH
     animating  = true
@@ -1292,6 +1302,7 @@ function UI:RefreshContextDrawer()
             elseif saved == false then
                 drawerOpen = false
                 contextClip:SetHeight(THUMB_HEIGHT)
+                contextContent:SetHeight(THUMB_HEIGHT)
                 animTarget = THUMB_HEIGHT
                 animating = false
             else
