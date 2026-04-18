@@ -921,8 +921,15 @@ local function BuildAHContent(parent)
             local ap = ns.AuctionPost
             if ap and ap.ScanBags then
                 currentScanResults = ap:ScanBags(true) or {}
+                ns:PrintDebug("[ContextDrawer] Scan To-Do: " .. #currentScanResults .. " results")
                 RefreshAHScanRows()
-                UI:RefreshContextDrawer()
+                -- Recalculate and resize
+                local ahH = CalculateAHHeight() + THUMB_HEIGHT
+                currentFullH = ahH
+                contextContent:SetHeight(ahH)
+                if contextClip and drawerOpen then
+                    contextClip:SetHeight(ahH)
+                end
             else
                 ns:Print(ns.COLORS.RED .. "AuctionPost module not loaded.|r")
             end
@@ -934,8 +941,14 @@ local function BuildAHContent(parent)
             local ap = ns.AuctionPost
             if ap and ap.ScanBags then
                 currentScanResults = ap:ScanBags(false) or {}
+                ns:PrintDebug("[ContextDrawer] Scan All: " .. #currentScanResults .. " results")
                 RefreshAHScanRows()
-                UI:RefreshContextDrawer()
+                local ahH = CalculateAHHeight() + THUMB_HEIGHT
+                currentFullH = ahH
+                contextContent:SetHeight(ahH)
+                if contextClip and drawerOpen then
+                    contextClip:SetHeight(ahH)
+                end
             else
                 ns:Print(ns.COLORS.RED .. "AuctionPost module not loaded.|r")
             end
