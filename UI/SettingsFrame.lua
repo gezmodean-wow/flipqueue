@@ -310,7 +310,7 @@ end
 --------------------------
 
 -- Section ordering for reflow
-local sectionOrder = { "automation", "bankops", "notifications", "miniview", "data", "multiaccount" }
+local sectionOrder = { "automation", "bankops", "auctionhouse", "notifications", "miniview", "data", "multiaccount" }
 
 function UI:ReflowSettings()
     if not settingsWidgets.contentFrame then return end
