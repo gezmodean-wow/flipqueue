@@ -377,51 +377,63 @@ end
 -- Scroll row factory
 --------------------------
 
-local ROW_HEIGHT = 18
+local ROW_HEIGHT = 34
 
 local function GetOrCreateScanRow(parent, index)
     if scanRows[index] then return scanRows[index] end
 
-    local row = CreateFrame("Frame", nil, parent)
+    local row = CreateFrame("Frame", nil, parent, "BackdropTemplate")
     row:SetHeight(ROW_HEIGHT)
     row:EnableMouse(true)
+    row:SetBackdrop({
+        bgFile = "Interface\\Tooltips\\UI-Tooltip-Background",
+        edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
+        edgeSize = 6,
+        insets = {left = 1, right = 1, top = 1, bottom = 1},
+    })
+    row:SetBackdropColor(0.08, 0.08, 0.12, 0.6)
+    row:SetBackdropBorderColor(0.2, 0.2, 0.3, 0.5)
 
+    -- Line 1: [icon] Name                          x5
     row.icon = row:CreateTexture(nil, "ARTWORK")
     row.icon:SetSize(16, 16)
-    row.icon:SetPoint("LEFT", row, "LEFT", 0, 0)
+    row.icon:SetPoint("TOPLEFT", row, "TOPLEFT", 4, -2)
 
     row.name = row:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
     row.name:SetPoint("LEFT", row.icon, "RIGHT", 4, 0)
     row.name:SetJustifyH("LEFT")
     row.name:SetTextColor(0.85, 0.85, 0.9)
+    row.name:SetWordWrap(false)
 
     row.qty = row:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-    row.qty:SetWidth(30)
+    row.qty:SetPoint("TOPRIGHT", row, "TOPRIGHT", -78, -4)
     row.qty:SetJustifyH("RIGHT")
     row.qty:SetTextColor(0.7, 0.7, 0.7)
 
-    row.price = row:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-    row.price:SetWidth(60)
-    row.price:SetJustifyH("RIGHT")
-    row.price:SetTextColor(0.9, 0.85, 0.6)
+    row.name:SetPoint("RIGHT", row.qty, "LEFT", -4, 0)
+
+    -- Line 2: Deal: 500g  Post: 450g  [status]    [Post][Skip]
+    row.dealPrice = row:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    row.dealPrice:SetPoint("BOTTOMLEFT", row, "BOTTOMLEFT", 4, 3)
+    row.dealPrice:SetJustifyH("LEFT")
+    row.dealPrice:SetTextColor(0.5, 0.8, 0.5)
+
+    row.postPrice = row:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    row.postPrice:SetPoint("LEFT", row.dealPrice, "RIGHT", 6, 0)
+    row.postPrice:SetJustifyH("LEFT")
+    row.postPrice:SetTextColor(0.9, 0.85, 0.5)
 
     row.info = row:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    row.info:SetPoint("LEFT", row.postPrice, "RIGHT", 6, 0)
     row.info:SetJustifyH("LEFT")
-    row.info:SetTextColor(0.7, 0.6, 0.5)
 
     row.postBtn = CreateActionButton(row, "Post", "Post this item", nil)
-    row.postBtn:SetSize(36, ROW_HEIGHT - 2)
+    row.postBtn:SetSize(34, 14)
+    row.postBtn:SetPoint("TOPRIGHT", row, "TOPRIGHT", -2, -2)
 
     row.skipBtn = CreateActionButton(row, "Skip", "Skip this item", nil)
-    row.skipBtn:SetSize(36, ROW_HEIGHT - 2)
-
-    -- Anchors: [icon][name][info...][qty][price][Post][Skip]
-    row.skipBtn:SetPoint("RIGHT", row, "RIGHT", 0, 0)
-    row.postBtn:SetPoint("RIGHT", row.skipBtn, "LEFT", -BTN_SPACING, 0)
-    row.price:SetPoint("RIGHT", row.postBtn, "LEFT", -4, 0)
-    row.qty:SetPoint("RIGHT", row.price, "LEFT", -2, 0)
-    row.info:SetPoint("LEFT", row.name, "RIGHT", 4, 0)
-    row.info:SetPoint("RIGHT", row.qty, "LEFT", -4, 0)
+    row.skipBtn:SetSize(34, 14)
+    row.skipBtn:SetPoint("BOTTOMRIGHT", row, "BOTTOMRIGHT", -2, 2)
 
     row._result = nil
     row:SetScript("OnEnter", function(self)
@@ -667,8 +679,8 @@ local ahOwnedHeader  = nil
 local ahCancelUnder  = nil
 local ahNoModule     = nil
 
-local MAX_SCAN_ROWS  = 8
-local MAX_OWNED_ROWS = 6
+local MAX_SCAN_ROWS  = 6
+local MAX_OWNED_ROWS = 4
 
 local function CalculateAHHeight()
     -- Header + top row
@@ -703,8 +715,8 @@ local function CalculateAHHeight()
         h = h + BTN_HEIGHT + BTN_SPACING
     end
 
-    h = h + PAD * 2  -- top/bottom padding
-    return math.min(h, 280)
+    h = h + PAD * 2
+    return math.min(h, 400)
 end
 
 local function FindDealPrice(itemKey, itemName)
@@ -744,32 +756,43 @@ local function RefreshAHScanRows()
         row.name:SetText(result.name or "?")
         row.qty:SetText("x" .. (result.postQty or result.totalCount or 1))
 
-        -- Price display
-        local priceCopper = result.pricing and result.pricing.normalCopper
-        if priceCopper then
-            row.price:SetText(ns:FormatGold(priceCopper))
+        -- Deal price from todo list
+        local dealStr = FindDealPrice(result.itemKey, result.name)
+        result.dealPrice = dealStr
+        row._result = result
+
+        if dealStr then
+            row.dealPrice:SetText("|cff88bb88Deal:|r " .. dealStr)
         else
-            row.price:SetText("|cff888888?|r")
+            row.dealPrice:SetText("")
         end
 
-        -- Status info
+        -- Post price from TSM operation
+        local priceCopper = result.pricing and result.pricing.normalCopper
+        if priceCopper then
+            row.postPrice:SetText("|cffddcc66Post:|r " .. ns:FormatGold(priceCopper))
+        else
+            row.postPrice:SetText("")
+        end
+
+        -- Status info and row coloring
         if result.status == "below_threshold" then
-            row.info:SetText("|cffff6644below min|r")
+            row.info:SetText("|cffff6644Below min price|r")
             row.name:SetTextColor(0.7, 0.5, 0.5)
+            row:SetBackdropBorderColor(0.5, 0.2, 0.2, 0.7)
         elseif result.status == "no_price" then
-            row.info:SetText("|cff888888no price|r")
+            row.info:SetText("|cff888888No TSM data|r")
             row.name:SetTextColor(0.6, 0.6, 0.6)
+            row:SetBackdropBorderColor(0.3, 0.3, 0.3, 0.5)
         elseif result.status == "dnt" then
-            row.info:SetText("|cffff8800DNT|r")
+            row.info:SetText("|cffff8800Do Not Track|r")
             row.name:SetTextColor(0.6, 0.5, 0.4)
+            row:SetBackdropBorderColor(0.5, 0.35, 0.1, 0.7)
         else
             row.info:SetText("")
             row.name:SetTextColor(0.85, 0.85, 0.9)
+            row:SetBackdropBorderColor(0.2, 0.2, 0.3, 0.5)
         end
-
-        -- Store result + deal price for tooltip
-        result.dealPrice = FindDealPrice(result.itemKey, result.name)
-        row._result = result
 
         -- Disable Post for non-ready items
         if result.status ~= "ready" then
