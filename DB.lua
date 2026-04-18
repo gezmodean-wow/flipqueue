@@ -32,6 +32,7 @@ function ns:InitDB()
     db.sync.accountUUID   = db.sync.accountUUID or string.format("%x%x", time(), math.random(0, 0xFFFFFF))
     db.sync.lastSentSeq   = db.sync.lastSentSeq or 0
     db.sync.partners      = db.sync.partners or {}
+    db.knownLocations = db.knownLocations or {}
     db.accounts     = db.accounts or {}
     db.accounts.primary  = db.accounts.primary or { syncKey = nil, characters = {} }
     db.accounts.external = db.accounts.external or {}

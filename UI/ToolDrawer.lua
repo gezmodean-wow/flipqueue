@@ -44,16 +44,16 @@ local SERVICES = {
             { kind = "item", id = 54710, name = "MOLL-E" },
         },
         locations = {
-            -- Dornogal (The War Within)
             { map = 2339, x = 0.56, y = 0.45, zoneName = "Dornogal", text = "Mailbox near Earthenfall Hall" },
-            -- Valdrakken (Dragonflight)
             { map = 2112, x = 0.58, y = 0.57, zoneName = "Valdrakken", text = "Seat of the Aspects mailbox" },
-            -- Oribos (Shadowlands)
             { map = 1670, x = 0.49, y = 0.28, zoneName = "Oribos", text = "Ring of Transference mailbox" },
-            -- Stormwind (Alliance)
-            { map = 84, x = 0.60, y = 0.65, zoneName = "Stormwind", text = "Trade District mailbox" },
-            -- Orgrimmar (Horde)
-            { map = 85, x = 0.54, y = 0.55, zoneName = "Orgrimmar", text = "Valley of Strength mailbox" },
+            { map = 627,  x = 0.50, y = 0.50, zoneName = "Dalaran", text = "Magus Commerce Exchange mailbox" },
+            { map = 1161, x = 0.73, y = 0.12, zoneName = "Boralus", text = "Tradewinds Market mailbox", faction = "Alliance" },
+            { map = 1165, x = 0.53, y = 0.88, zoneName = "Dazar'alor", text = "The Great Seal mailbox", faction = "Horde" },
+            { map = 84,   x = 0.60, y = 0.65, zoneName = "Stormwind", text = "Trade District mailbox", faction = "Alliance" },
+            { map = 85,   x = 0.54, y = 0.55, zoneName = "Orgrimmar", text = "Valley of Strength mailbox", faction = "Horde" },
+            { map = 87,   x = 0.27, y = 0.07, zoneName = "Ironforge", text = "The Commons mailbox", faction = "Alliance" },
+            { map = 88,   x = 0.46, y = 0.58, zoneName = "Thunder Bluff", text = "Lower Rise mailbox", faction = "Horde" },
         },
         inServiceCheck = function() return serviceState.mailOpen end,
     },
@@ -76,8 +76,12 @@ local SERVICES = {
             { map = 2339, x = 0.48, y = 0.52, zoneName = "Dornogal", text = "Auction House" },
             { map = 2112, x = 0.40, y = 0.56, zoneName = "Valdrakken", text = "Auction House" },
             { map = 1670, x = 0.45, y = 0.28, zoneName = "Oribos", text = "Auction House" },
-            { map = 84, x = 0.60, y = 0.70, zoneName = "Stormwind", text = "Trade District Auction House" },
-            { map = 85, x = 0.54, y = 0.58, zoneName = "Orgrimmar", text = "Valley of Strength Auction House" },
+            { map = 1161, x = 0.73, y = 0.10, zoneName = "Boralus", text = "Tradewinds Market Auction House", faction = "Alliance" },
+            { map = 1165, x = 0.53, y = 0.88, zoneName = "Dazar'alor", text = "The Great Seal Auction House", faction = "Horde" },
+            { map = 84,   x = 0.60, y = 0.70, zoneName = "Stormwind", text = "Trade District Auction House", faction = "Alliance" },
+            { map = 85,   x = 0.54, y = 0.58, zoneName = "Orgrimmar", text = "Valley of Strength Auction House", faction = "Horde" },
+            { map = 87,   x = 0.25, y = 0.07, zoneName = "Ironforge", text = "The Commons Auction House", faction = "Alliance" },
+            { map = 88,   x = 0.46, y = 0.58, zoneName = "Thunder Bluff", text = "Lower Rise Auction House", faction = "Horde" },
         },
         inServiceCheck = function() return serviceState.auctionOpen end,
     },
@@ -93,8 +97,13 @@ local SERVICES = {
             { map = 2339, x = 0.50, y = 0.50, zoneName = "Dornogal", text = "Bank" },
             { map = 2112, x = 0.39, y = 0.55, zoneName = "Valdrakken", text = "Bank" },
             { map = 1670, x = 0.47, y = 0.30, zoneName = "Oribos", text = "Bank" },
-            { map = 84, x = 0.60, y = 0.62, zoneName = "Stormwind", text = "Trade District Bank" },
-            { map = 85, x = 0.55, y = 0.58, zoneName = "Orgrimmar", text = "Valley of Strength Bank" },
+            { map = 627,  x = 0.36, y = 0.44, zoneName = "Dalaran", text = "Dalaran Bank" },
+            { map = 1161, x = 0.73, y = 0.12, zoneName = "Boralus", text = "Tradewinds Market Bank", faction = "Alliance" },
+            { map = 1165, x = 0.53, y = 0.88, zoneName = "Dazar'alor", text = "The Great Seal Bank", faction = "Horde" },
+            { map = 84,   x = 0.60, y = 0.62, zoneName = "Stormwind", text = "Trade District Bank", faction = "Alliance" },
+            { map = 85,   x = 0.55, y = 0.58, zoneName = "Orgrimmar", text = "Valley of Strength Bank", faction = "Horde" },
+            { map = 87,   x = 0.36, y = 0.60, zoneName = "Ironforge", text = "The Vault Bank", faction = "Alliance" },
+            { map = 88,   x = 0.45, y = 0.50, zoneName = "Thunder Bluff", text = "High Rise Bank", faction = "Horde" },
         },
         inServiceCheck = function() return serviceState.bankOpen end,
     },
@@ -110,6 +119,14 @@ local SERVICES = {
         locations = {
             { map = 2339, x = 0.50, y = 0.50, zoneName = "Dornogal", text = "Warband Bank (bank NPC)" },
             { map = 2112, x = 0.39, y = 0.55, zoneName = "Valdrakken", text = "Warband Bank (bank NPC)" },
+            { map = 1670, x = 0.47, y = 0.30, zoneName = "Oribos", text = "Warband Bank (bank NPC)" },
+            { map = 627,  x = 0.36, y = 0.44, zoneName = "Dalaran", text = "Warband Bank (Dalaran Bank)" },
+            { map = 1161, x = 0.73, y = 0.12, zoneName = "Boralus", text = "Warband Bank (Tradewinds Market)", faction = "Alliance" },
+            { map = 1165, x = 0.53, y = 0.88, zoneName = "Dazar'alor", text = "Warband Bank (Great Seal)", faction = "Horde" },
+            { map = 84,   x = 0.60, y = 0.62, zoneName = "Stormwind", text = "Warband Bank (Trade District)", faction = "Alliance" },
+            { map = 85,   x = 0.55, y = 0.58, zoneName = "Orgrimmar", text = "Warband Bank (Valley of Strength)", faction = "Horde" },
+            { map = 87,   x = 0.36, y = 0.60, zoneName = "Ironforge", text = "Warband Bank (The Vault)", faction = "Alliance" },
+            { map = 88,   x = 0.45, y = 0.50, zoneName = "Thunder Bluff", text = "Warband Bank (High Rise)", faction = "Horde" },
         },
         inServiceCheck = function() return serviceState.bankOpen end,
     },
@@ -357,62 +374,192 @@ local function GetContinentMap(mapID)
     return cur
 end
 
--- Pick the location nearest to the player. "Nearest" is measured by
--- euclidean distance in normalized map coords when the player is on the
--- same map as the location; otherwise we fall back to same-continent
--- membership (no distance, since coords from different maps aren't
--- comparable). Last-resort fallback is the first entry.
---
--- Previous implementation picked the FIRST same-map entry regardless of
--- distance, which is why standing next to one Stormwind mailbox often
--- gave a waypoint to a different district's mailbox.
-local function PickNearestLocation(service)
-    if not service.locations or #service.locations == 0 then return nil end
-    local curMap = C_Map.GetBestMapForUnit and C_Map.GetBestMapForUnit("player") or nil
-    if not curMap then return service.locations[1] end
+-- Translate a map-local position to world coordinates (yards). Returns
+-- wx, wy or nil if the API is unavailable or the map has no world frame.
+local function MapToWorld(mapID, x, y)
+    if not C_Map.GetWorldPosFromMapPos then return nil end
+    local ok, _, worldPos = pcall(C_Map.GetWorldPosFromMapPos, mapID, CreateVector2D(x, y))
+    if ok and worldPos then return worldPos:GetXY() end
+    return nil
+end
 
-    -- Player position in the current map (normalized 0..1).
+--------------------------
+-- Location Learning
+--------------------------
+
+-- Service key → the service type names we care about in learned locations.
+local SERVICE_LEARN_KEY = {
+    mail         = "mail",
+    auctionHouse = "auctionHouse",
+    bank         = "bank",
+    warbank      = "bank",  -- warbank uses the same bank NPCs
+}
+
+-- Timestamp of the last time a summon item/toy/mount button was clicked.
+-- Used to suppress recording player-spawned temporary locations.
+local lastSummonClickTime = 0
+local SUMMON_SUPPRESS_WINDOW = 120  -- seconds
+
+-- Record the player's current position as a known service location.
+-- Deduplicates by proximity (within 2% map distance of an existing entry).
+local function LearnCurrentLocation(serviceKey)
+    if not ns.db then return end
+    local mapID = C_Map.GetBestMapForUnit and C_Map.GetBestMapForUnit("player")
+    if not mapID then return end
+
+    local pos = C_Map.GetPlayerMapPosition and C_Map.GetPlayerMapPosition(mapID, "player")
+    if not pos then return end
+    local px, py = pos:GetXY()
+    if not px or px == 0 then return end
+
+    -- Suppress if a summon was used recently (temporary mailbox/bank)
+    if GetTime() - lastSummonClickTime < SUMMON_SUPPRESS_WINDOW then return end
+
+    local db = ns.db.knownLocations
+    db[serviceKey] = db[serviceKey] or {}
+    db[serviceKey][mapID] = db[serviceKey][mapID] or {}
+    local mapLocs = db[serviceKey][mapID]
+
+    -- Deduplicate: skip if within 2% of an existing entry
+    local DEDUP = 0.02
+    for _, loc in ipairs(mapLocs) do
+        local dx = loc.x - px
+        local dy = loc.y - py
+        if dx * dx + dy * dy < DEDUP * DEDUP then return end
+    end
+
+    -- Cap at 15 entries per map per service
+    if #mapLocs >= 15 then return end
+
+    local mapInfo = C_Map.GetMapInfo(mapID)
+    local zoneName = mapInfo and mapInfo.name or "Unknown"
+    mapLocs[#mapLocs + 1] = { x = px, y = py, zoneName = zoneName }
+end
+
+-- Query learned locations for a service on a given map.
+-- Returns array of {map, x, y, zoneName, text} matching the static format.
+local function GetLearnedLocations(serviceKey, mapID)
+    if not ns.db or not ns.db.knownLocations then return {} end
+    local db = ns.db.knownLocations[serviceKey]
+    if not db then return {} end
+
+    local results = {}
+    -- If a specific map is requested, return only that map's entries.
+    -- If mapID is nil, return all learned locations.
+    local maps = mapID and { [mapID] = db[mapID] } or db
+    for mID, locs in pairs(maps) do
+        if type(locs) == "table" then
+            for _, loc in ipairs(locs) do
+                results[#results + 1] = {
+                    map = mID,
+                    x = loc.x,
+                    y = loc.y,
+                    zoneName = loc.zoneName or "Learned",
+                    text = "Learned location",
+                    learned = true,
+                }
+            end
+        end
+    end
+    return results
+end
+
+-- Unified location picker: merges learned locations with static locations,
+-- then applies faction filtering and distance ranking.
+local function FindNearestService(service)
+    local serviceKey = SERVICE_LEARN_KEY[service.key] or service.key
+    local curMap = C_Map.GetBestMapForUnit and C_Map.GetBestMapForUnit("player") or nil
+    local playerFaction = UnitFactionGroup and UnitFactionGroup("player") or nil
+
+    -- Merge: learned locations for the current map first, then all learned,
+    -- then static locations. Learned same-map entries get priority.
+    local allLocs = {}
+
+    -- Tier 1: learned locations on the current map
+    if curMap then
+        for _, loc in ipairs(GetLearnedLocations(serviceKey, curMap)) do
+            allLocs[#allLocs + 1] = loc
+        end
+    end
+
+    -- Tier 2: static locations (faction-filtered)
+    for _, loc in ipairs(service.locations or {}) do
+        if not loc.faction or loc.faction == playerFaction then
+            allLocs[#allLocs + 1] = loc
+        end
+    end
+
+    -- Tier 3: learned locations on other maps (for cross-map fallback)
+    for _, loc in ipairs(GetLearnedLocations(serviceKey, nil)) do
+        if loc.map ~= curMap then
+            allLocs[#allLocs + 1] = loc
+        end
+    end
+
+    if #allLocs == 0 then return nil end
+    if not curMap then return allLocs[1] end
+
+    -- Player position
     local px, py
     if C_Map.GetPlayerMapPosition then
         local pos = C_Map.GetPlayerMapPosition(curMap, "player")
         if pos then px, py = pos:GetXY() end
     end
 
-    -- Pass 1: same-map entries, pick the one closest to the player.
+    -- Pass 1: same-map entries by map-space distance
     local bestLoc, bestDist = nil, math.huge
-    for _, loc in ipairs(service.locations) do
-        if loc.map == curMap then
-            if px and py then
-                local dx = (loc.x or 0) - px
-                local dy = (loc.y or 0) - py
-                local d = dx * dx + dy * dy
-                if d < bestDist then
-                    bestDist = d
-                    bestLoc = loc
-                end
-            elseif not bestLoc then
-                bestLoc = loc -- no player pos, take first same-map
+    for _, loc in ipairs(allLocs) do
+        if loc.map == curMap and px and py then
+            local dx = (loc.x or 0) - px
+            local dy = (loc.y or 0) - py
+            local d = dx * dx + dy * dy
+            if d < bestDist then
+                bestDist = d
+                bestLoc = loc
             end
+        elseif loc.map == curMap and not bestLoc then
+            bestLoc = loc
         end
     end
     if bestLoc then return bestLoc end
 
-    -- Pass 2: same-continent membership. No distance calc across maps.
-    local curContinent = GetContinentMap(curMap)
-    if curContinent then
-        for _, loc in ipairs(service.locations) do
+    -- Pass 2: cross-map by world coordinates
+    local pwx, pwy = MapToWorld(curMap, px or 0.5, py or 0.5)
+    if pwx then
+        local curContinent = GetContinentMap(curMap)
+        bestLoc, bestDist = nil, math.huge
+        for _, loc in ipairs(allLocs) do
             if GetContinentMap(loc.map) == curContinent then
+                local lwx, lwy = MapToWorld(loc.map, loc.x or 0.5, loc.y or 0.5)
+                if lwx then
+                    local dx = lwx - pwx
+                    local dy = lwy - pwy
+                    local d = dx * dx + dy * dy
+                    if d < bestDist then
+                        bestDist = d
+                        bestLoc = loc
+                    end
+                end
+            end
+        end
+        if bestLoc then return bestLoc end
+    end
+
+    -- Pass 3: same-continent fallback
+    local curContinent2 = GetContinentMap(curMap)
+    if curContinent2 then
+        for _, loc in ipairs(allLocs) do
+            if GetContinentMap(loc.map) == curContinent2 then
                 return loc
             end
         end
     end
 
-    -- Last resort: first entry.
-    return service.locations[1]
+    return allLocs[1]
 end
 
 local function LocateNearest(service)
-    local loc = PickNearestLocation(service)
+    local loc = FindNearestService(service)
     if not loc then
         ns:Print(ns.COLORS.RED .. "No known locations for " .. service.label .. ".|r")
         return
@@ -426,7 +573,8 @@ local function LocateNearest(service)
             pcall(C_SuperTrack.SetSuperTrackedUserWaypoint, true)
         end
     end
-    ns:Print(ns.COLORS.CYAN .. "Waypoint:|r " .. loc.zoneName .. " -- " .. loc.text)
+    local source = loc.learned and " (learned)" or ""
+    ns:Print(ns.COLORS.CYAN .. "Waypoint:|r " .. loc.zoneName .. " -- " .. loc.text .. source)
 end
 
 --------------------------
@@ -535,19 +683,24 @@ local function CreateServiceButton(parent, service, index)
             GameTooltip:SetText("|cff8888ff" .. service.label .. "|r", 1, 1, 1)
             GameTooltip:AddLine("Click to set a waypoint to the nearest " .. service.label:lower() .. ".", 0.5, 0.7, 1.0)
         end
-        local nearest = PickNearestLocation(service)
+        local nearest = FindNearestService(service)
         if nearest then
-            GameTooltip:AddLine("Nearest: " .. nearest.zoneName .. " - " .. nearest.text, 0.5, 0.7, 1.0)
+            local tag = nearest.learned and " (learned)" or ""
+            GameTooltip:AddLine("Nearest: " .. nearest.zoneName .. " - " .. nearest.text .. tag, 0.5, 0.7, 1.0)
         end
         GameTooltip:Show()
     end)
     btn:SetScript("OnLeave", function() GameTooltip:Hide() end)
 
     -- PostClick fires after the secure action. If no secure type is set
-    -- (find mode), we handle the click as a locate action here.
+    -- (find mode), we handle the click as a locate action here. If a
+    -- summon was used, record the time so LearnCurrentLocation can
+    -- suppress recording player-spawned temporary services.
     btn:HookScript("PostClick", function(self)
         if self._isFindMode then
             LocateNearest(service)
+        else
+            lastSummonClickTime = GetTime()
         end
     end)
 
@@ -807,14 +960,17 @@ evt:RegisterEvent("PLAYER_ENTERING_WORLD")
 evt:SetScript("OnEvent", function(_, event)
     if event == "MAIL_SHOW" then
         serviceState.mailOpen = true
+        LearnCurrentLocation("mail")
     elseif event == "MAIL_CLOSED" then
         serviceState.mailOpen = false
     elseif event == "AUCTION_HOUSE_SHOW" then
         serviceState.auctionOpen = true
+        LearnCurrentLocation("auctionHouse")
     elseif event == "AUCTION_HOUSE_CLOSED" then
         serviceState.auctionOpen = false
     elseif event == "BANKFRAME_OPENED" then
         serviceState.bankOpen = true
+        LearnCurrentLocation("bank")
     elseif event == "BANKFRAME_CLOSED" then
         serviceState.bankOpen = false
     elseif event == "PLAYER_ENTERING_WORLD" then
