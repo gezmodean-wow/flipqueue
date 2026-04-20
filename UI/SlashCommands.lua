@@ -462,6 +462,13 @@ SlashCmdList["FLIPQUEUE"] = function(msg)
         print("")
         print("  Inventory: Right-click by status (DNT/remove DNT/queue info)")
         print("  To-Do: Right-click = posted, Shift+Right = skip")
+    elseif msg == "testpost" then
+        if ns.AuctionPost and ns.AuctionPost.TestPost then
+            ns.AuctionPost:TestPost()
+        else
+            ns:Print(ns.COLORS.RED .. "AuctionPost module not loaded.|r")
+        end
+
     else
         -- Toggle main window
         if UI.mainFrame:IsShown() then

@@ -498,6 +498,17 @@ function ns:IsCharHidden(charKey)
     return self:GetCharRole(charKey) == "none"
 end
 
+-- A "phantom" character has no class and has never logged in with FQ active.
+-- These entries come from TSM/Syndicator data for characters the user may not
+-- own (deleted characters, other WoW accounts on the same Battle.net).
+-- Phantom characters should not receive task assignments.
+function ns:IsPhantomChar(charKey)
+    if not self.db or not self.db.characters then return false end
+    local charData = self.db.characters[charKey]
+    if not charData then return false end
+    return not charData.class and not charData.lastLogin
+end
+
 -- Check if two roles overlap for shared AH detection.
 -- Characters with overlapping roles on the same AH cluster are duplicates.
 function ns:RolesOverlap(role1, role2)

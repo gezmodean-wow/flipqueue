@@ -825,6 +825,22 @@ local function RefreshAHScanRows()
             end
         end)
         row.skipBtn:SetScript("OnClick", function()
+            -- Mark linked to-do task as skipped
+            if ns.TodoList then
+                local currentList = ns.TodoList:GetCurrentList()
+                if currentList and currentList.tasks then
+                    for ti, task in ipairs(currentList.tasks) do
+                        if task.status == "pending" then
+                            local matched = ns:ItemsMatch(result.itemKey, result.name, task, nil)
+                            if matched then
+                                task.status = "skipped"
+                                task.failReason = "Skipped from AH drawer"
+                                break
+                            end
+                        end
+                    end
+                end
+            end
             table.remove(currentScanResults, capturedI)
             RefreshAHScanRows()
         end)
@@ -1103,6 +1119,10 @@ local function BuildAHContent(parent)
     return ahContentFrame
 end
 
+-- Forward declaration: defined after BuildDefaultContent, called from the
+-- animation OnUpdate closure inside EnsureContextDrawer.
+local HideAllContextContent
+
 --------------------------
 -- Drawer construction
 --------------------------
@@ -1136,11 +1156,13 @@ local function EnsureDrawer()
     contextContent:SetBackdropColor(0.05, 0.05, 0.1, 0.9)
     contextContent:SetBackdropBorderColor(0.3, 0.3, 0.4, 0.8)
 
-    -- Thumb (grip tab at bottom)
-    contextThumb = CreateFrame("Button", "FlipQueueContextTab", contextContent)
+    -- Thumb (grip tab at bottom). Parented to contextClip so it always sits
+    -- at the visible bottom edge regardless of contextContent's height.
+    contextThumb = CreateFrame("Button", "FlipQueueContextTab", contextClip)
     contextThumb:SetHeight(THUMB_HEIGHT)
-    contextThumb:SetPoint("BOTTOMLEFT",  contextContent, "BOTTOMLEFT",  0, 0)
-    contextThumb:SetPoint("BOTTOMRIGHT", contextContent, "BOTTOMRIGHT", 0, 0)
+    contextThumb:SetPoint("BOTTOMLEFT",  contextClip, "BOTTOMLEFT",  0, 0)
+    contextThumb:SetPoint("BOTTOMRIGHT", contextClip, "BOTTOMRIGHT", 0, 0)
+    contextThumb:SetFrameLevel(contextContent:GetFrameLevel() + 5)
 
     for j = 1, 3 do
         local grip = contextThumb:CreateTexture(nil, "ARTWORK")
@@ -1215,7 +1237,7 @@ local function BuildDefaultContent(parent)
     return defaultFrame
 end
 
-local function HideAllContextContent()
+HideAllContextContent = function()
     if bankFrame then bankFrame:Hide() end
     if ahContentFrame then ahContentFrame:Hide() end
     if defaultFrame then defaultFrame:Hide() end

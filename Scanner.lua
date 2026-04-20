@@ -657,12 +657,29 @@ frame:SetScript("OnEvent", function(self, event, ...)
                 if ns.TodoList and ns.TodoList.RefreshTaskSteps then
                     ns.TodoList:RefreshTaskSteps()
                 end
+                if ns.TodoList and ns.TodoList.ResolveUnknownNames then
+                    ns.TodoList:ResolveUnknownNames()
+                end
                 if ns.TodoList and ns.TodoList.ReassignUnassignedTasks then
                     local reassigned = ns.TodoList:ReassignUnassignedTasks()
                     if reassigned > 0 then
                         ns:Print(ns.COLORS.GREEN .. reassigned .. " task(s)|r assigned to characters on this realm.")
                     end
                 end
+                -- Auto-hide phantom characters (no class + never logged in)
+                if ns.db and ns.db.characters then
+                    local hidden = 0
+                    for charKey, charData in pairs(ns.db.characters) do
+                        if ns:IsPhantomChar(charKey) and (charData.role or "both") ~= "none" then
+                            charData.role = "none"
+                            hidden = hidden + 1
+                        end
+                    end
+                    if hidden > 0 then
+                        ns:Print(ns.COLORS.GRAY .. "Hid " .. hidden .. " phantom character(s) (no class, never logged in).|r")
+                    end
+                end
+
                 if ns.TSM and ns.TSM.DetectCharacters then
                     local detected = ns.TSM:DetectCharacters()
                     if #detected > 0 then

@@ -6,6 +6,94 @@ local AuctionPost = {}
 ns.AuctionPost = AuctionPost
 
 --------------------------
+-- Post Result Tracking
+--------------------------
+
+-- Listen for server responses to PostItem/PostCommodity to verify success.
+local postResultFrame = CreateFrame("Frame")
+postResultFrame:RegisterEvent("AUCTION_HOUSE_AUCTION_CREATED")
+postResultFrame:RegisterEvent("AUCTION_HOUSE_SHOW_ERROR")
+postResultFrame:RegisterEvent("AUCTION_HOUSE_SHOW_FORMATTED_NOTIFICATION")
+postResultFrame:RegisterEvent("UI_ERROR_MESSAGE")
+postResultFrame:RegisterEvent("ADDON_ACTION_BLOCKED")
+postResultFrame:SetScript("OnEvent", function(_, event, ...)
+    if event == "AUCTION_HOUSE_AUCTION_CREATED" then
+        ns:PrintDebug("[AuctionPost] Server confirmed: auction created")
+    elseif event == "AUCTION_HOUSE_SHOW_ERROR" then
+        local errIdx = ...
+        ns:PrintDebug("[AuctionPost] Server error: " .. tostring(errIdx))
+    elseif event == "AUCTION_HOUSE_SHOW_FORMATTED_NOTIFICATION" then
+        local notification = ...
+        ns:PrintDebug("[AuctionPost] Server notification: " .. tostring(notification))
+    elseif event == "UI_ERROR_MESSAGE" then
+        local errType, msg = ...
+        if msg then
+            ns:PrintDebug("[AuctionPost] UI error: [" .. tostring(errType) .. "] " .. tostring(msg))
+        end
+    elseif event == "ADDON_ACTION_BLOCKED" then
+        local addonName, funcName = ...
+        ns:PrintDebug("[AuctionPost] ACTION BLOCKED: addon=" .. tostring(addonName) ..
+            " func=" .. tostring(funcName))
+    end
+end)
+
+--------------------------
+-- Minimal Post Test
+--------------------------
+
+-- /fq testpost — minimal direct call to PostItem/PostCommodity for the
+-- first item in bag 0. Use this to diagnose whether the API works at all
+-- from our addon, bypassing all scan/drawer logic.
+function AuctionPost:TestPost()
+    ns:Print("[TestPost] Starting minimal post test...")
+
+    -- Find first postable item in bags
+    for bag = 0, 4 do
+        local numSlots = C_Container.GetContainerNumSlots(bag)
+        for slot = 1, (numSlots or 0) do
+            local info = C_Container.GetContainerItemInfo(bag, slot)
+            if info and info.hyperlink and not info.isBound then
+                local itemLoc = ItemLocation:CreateFromBagAndSlot(bag, slot)
+                if C_Item.DoesItemExist(itemLoc) then
+                    local itemID = C_Item.GetItemID(itemLoc)
+                    local name = info.hyperlink:match("|h%[(.-)%]|h") or "?"
+                    local isCommodity = C_AuctionHouse.GetItemCommodityStatus(itemID)
+                        == Enum.ItemCommodityStatus.Commodity
+
+                    -- Use TSM pattern: get price from DBMinBuyout
+                    local price
+                    if ns.TSM and ns.TSM.GetPrice then
+                        price = ns.TSM:GetPrice(tostring(itemID) .. ";;", "DBMinBuyout")
+                    end
+                    if not price or price <= 0 then
+                        price = 10000 -- 1g fallback for testing
+                    end
+
+                    -- Round to silver (AH silently rejects copper)
+                    price = math.floor(price / 100) * 100
+                    if price <= 0 then price = 100 end
+
+                    ns:Print("[TestPost] Item: " .. name .. " bag=" .. bag ..
+                        " slot=" .. slot .. " commodity=" .. tostring(isCommodity) ..
+                        " price=" .. price)
+
+                    if isCommodity then
+                        ns:Print("[TestPost] Calling PostCommodity...")
+                        C_AuctionHouse.PostCommodity(itemLoc, 1, info.stackCount or 1, price)
+                    else
+                        ns:Print("[TestPost] Calling PostItem...")
+                        C_AuctionHouse.PostItem(itemLoc, 1, 1, price, price)
+                    end
+                    ns:Print("[TestPost] Call returned. Watch for server events...")
+                    return
+                end
+            end
+        end
+    end
+    ns:Print("[TestPost] No postable items found in bags.")
+end
+
+--------------------------
 -- Duration Mapping
 --------------------------
 
@@ -341,15 +429,21 @@ function AuctionPost:PostItem(scanResult, callback)
         " dur=" .. duration .. " commodity=" .. tostring(isCommodity) ..
         " bag=" .. slotInfo.bag .. " slot=" .. slotInfo.slot)
 
-    -- All items post via PostItem. For commodities, quantity is the stack
-    -- count to post. For non-commodities, quantity is always 1.
-    -- IMPORTANT: must NOT use pcall — it strips the hardware event context
-    -- that C_AuctionHouse.PostItem requires to actually post.
-    local postQty = isCommodity and quantity or 1
-    ns:PrintDebug("[AuctionPost] calling PostItem: dur=" .. duration ..
-        " qty=" .. postQty .. " buyout=" .. unitPrice ..
-        " commodity=" .. tostring(isCommodity))
-    C_AuctionHouse.PostItem(itemLoc, duration, postQty, unitPrice, unitPrice)
+    -- WoW AH silently rejects prices with non-zero copper — round to silver.
+    local COPPER_PER_SILVER = 100
+    unitPrice = math.floor(unitPrice / COPPER_PER_SILVER) * COPPER_PER_SILVER
+
+    -- Commodities use PostCommodity (unitPrice only, no bid).
+    -- Non-commodities use PostItem (bid + buyout).
+    if isCommodity then
+        ns:PrintDebug("[AuctionPost] calling PostCommodity: dur=" .. duration ..
+            " qty=" .. quantity .. " unitPrice=" .. unitPrice)
+        C_AuctionHouse.PostCommodity(itemLoc, duration, quantity, unitPrice)
+    else
+        ns:PrintDebug("[AuctionPost] calling PostItem: dur=" .. duration ..
+            " qty=1 bid=" .. unitPrice .. " buyout=" .. unitPrice)
+        C_AuctionHouse.PostItem(itemLoc, duration, 1, unitPrice, unitPrice)
+    end
 
     -- Log the posting
     if ns.db then

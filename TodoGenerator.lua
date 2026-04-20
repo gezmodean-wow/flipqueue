@@ -79,9 +79,9 @@ function TodoList:BuildItemPool()
         end
     end
 
-    -- Character inventories (skip hidden characters)
+    -- Character inventories (skip hidden and phantom characters)
     for charKey, charData in pairs(ns.db.characters or {}) do
-        if (charData.role or "both") ~= "none" and charData.inventory and charData.inventory.items then
+        if (charData.role or "both") ~= "none" and not ns:IsPhantomChar(charKey) and charData.inventory and charData.inventory.items then
             for itemKey, itemData in pairs(charData.inventory.items) do
                 local numID = tonumber(itemData.itemID)
                 local isDNT = numID and ns:IsDoNotTrack(numID)
@@ -264,7 +264,7 @@ function TodoList:GetKnownRealms()
 
     local seen = {}  -- normalizedRealm -> displayRealm
     for charKey, charData in pairs(ns.db.characters) do
-        if (charData.role or "both") ~= "none" then
+        if (charData.role or "both") ~= "none" and not ns:IsPhantomChar(charKey) then
             local realm = charKey:match("%-(.+)$")
             if realm and realm ~= "" then
                 local normalized = ns:NormalizeRealmKey(realm)
@@ -316,7 +316,7 @@ function TodoList:CountInventoryForDeal(deal)
 
     -- Character inventories
     for charKey, charData in pairs(ns.db.characters or {}) do
-        if (charData.role or "both") ~= "none" and charData.inventory and charData.inventory.items then
+        if (charData.role or "both") ~= "none" and not ns:IsPhantomChar(charKey) and charData.inventory and charData.inventory.items then
             for key, itemData in pairs(charData.inventory.items) do
                 local matched = ns:ItemsMatch(key, itemData.name, deal, resolvedID or false)
                 if matched then
@@ -368,7 +368,7 @@ local function FindBestAssignment(poolItem, targetRealm, inventory)
         local charRealm = charKey:match("%-(.+)$")
         if charRealm and ns:RealmMatches(targetRealm, charRealm) then
             local role = type(charData) == "table" and (charData.role or "both") or "both"
-            if role == "both" or role == "sell" then
+            if (role == "both" or role == "sell") and not ns:IsPhantomChar(charKey) then
                 table.insert(realmChars, charKey)
             end
         end
@@ -1162,7 +1162,8 @@ function TodoList:GenerateTodoList(source, allocationOrder, opts)
                     local charRealm = charKey:match("%-(.+)$")
                     local role = type(charData) == "table" and (charData.role or "both") or "both"
                     if charRealm and ns:RealmMatches(deal.buyRealm, charRealm)
-                        and (role == "both" or role == "buy") then
+                        and (role == "both" or role == "buy")
+                        and not ns:IsPhantomChar(charKey) then
                         buyAssignment = charKey
                         break
                     end
@@ -1174,7 +1175,8 @@ function TodoList:GenerateTodoList(source, allocationOrder, opts)
                     local charRealm = charKey:match("%-(.+)$")
                     local role = type(charData) == "table" and (charData.role or "both") or "both"
                     if charRealm and ns:RealmMatches(deal.targetRealm, charRealm)
-                        and (role == "both" or role == "sell") then
+                        and (role == "both" or role == "sell")
+                        and not ns:IsPhantomChar(charKey) then
                         sellAssignment = charKey
                         break
                     end

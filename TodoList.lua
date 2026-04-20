@@ -1819,3 +1819,91 @@ function TodoList:ReassignUnassignedTasks()
 
     return reassigned
 end
+
+--------------------------
+-- Unknown Name Resolution
+--------------------------
+
+-- Scan all tasks for name "Unknown" and request item data from the server.
+-- When GET_ITEM_INFO_RECEIVED fires, update the task names and refresh the UI.
+local pendingNameRequests = {}  -- itemID -> true
+
+function TodoList:ResolveUnknownNames()
+    if not ns.db or not ns.db.todoLists then return end
+
+    local lists = { ns.db.todoLists.active }
+    for _, queued in ipairs(ns.db.todoLists.upcoming or {}) do
+        lists[#lists + 1] = queued
+    end
+
+    local requested = 0
+    for _, list in ipairs(lists) do
+        if list and list.tasks then
+            for _, task in ipairs(list.tasks) do
+                if task.name == "Unknown" and task.itemKey then
+                    local itemID = tonumber(task.itemKey:match("^(%d+)"))
+                    if itemID then
+                        -- Try immediate resolution first
+                        local name = C_Item.GetItemNameByID(itemID)
+                        if name then
+                            task.name = name
+                        else
+                            -- Queue a server request
+                            if not pendingNameRequests[itemID] then
+                                pendingNameRequests[itemID] = true
+                                C_Item.RequestLoadItemDataByID(itemID)
+                                requested = requested + 1
+                            end
+                        end
+                    end
+                end
+            end
+        end
+    end
+
+    if requested > 0 then
+        ns:PrintDebug("[TodoList] Requested item data for " .. requested .. " Unknown items")
+    end
+end
+
+-- Event frame for GET_ITEM_INFO_RECEIVED
+local nameResolveFrame = CreateFrame("Frame")
+nameResolveFrame:RegisterEvent("GET_ITEM_INFO_RECEIVED")
+nameResolveFrame:SetScript("OnEvent", function(_, event, itemID, success)
+    if not success or not pendingNameRequests[itemID] then return end
+    pendingNameRequests[itemID] = nil
+
+    local name = C_Item.GetItemNameByID(itemID)
+    if not name then return end
+
+    -- Update all tasks that reference this itemID and still show "Unknown"
+    local updated = 0
+    local lists = {}
+    if ns.db and ns.db.todoLists then
+        lists[#lists + 1] = ns.db.todoLists.active
+        for _, queued in ipairs(ns.db.todoLists.upcoming or {}) do
+            lists[#lists + 1] = queued
+        end
+    end
+
+    for _, list in ipairs(lists) do
+        if list and list.tasks then
+            for _, task in ipairs(list.tasks) do
+                if task.name == "Unknown" and task.itemKey then
+                    local taskItemID = tonumber(task.itemKey:match("^(%d+)"))
+                    if taskItemID == itemID then
+                        task.name = name
+                        updated = updated + 1
+                    end
+                end
+            end
+        end
+    end
+
+    if updated > 0 then
+        ns:PrintDebug("[TodoList] Resolved " .. updated .. " task(s) to \"" .. name .. "\"")
+        -- Refresh UI if available
+        if ns.UI and ns.UI.Refresh then ns.UI:Refresh() end
+        if ns.UI and ns.UI.RefreshMini then ns.UI:RefreshMini() end
+    end
+end)
