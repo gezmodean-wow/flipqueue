@@ -349,8 +349,9 @@ local function GetWithdrawLabel()
     local charKey = ns:GetCharKey()
     local currentRealm = charKey:match("%-(.+)$") or GetRealmName()
     local ok, totalCopper = pcall(Tracker.CalculateRequiredGold, Tracker, charKey, currentRealm)
-    if not ok or not totalCopper or totalCopper <= 0 then return "Withdraw Gold" end
-    local estimatedCopper = math.max(10000, math.ceil(totalCopper * 1.1))
+    if not ok then totalCopper = 0 end
+    local bufferCopper = (ns.db and ns.db.settings.goldBuffer or 0) * 10000
+    local estimatedCopper = math.max(10000, math.ceil((totalCopper or 0) * 1.1)) + bufferCopper
     local playerCopper = GetMoney and GetMoney() or 0
     if playerCopper >= estimatedCopper then return "Withdraw Gold: 0g" end
     local shortfall = estimatedCopper - playerCopper

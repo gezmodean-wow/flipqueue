@@ -197,14 +197,14 @@ function Tracker:ShowBankOpsPopup()
                 if d.duration == "buy" then hasBuyCosts = true; break end
             end
             local playerCopper = GetMoney()
-            local needed = math.max(10000, math.ceil(totalFees * 1.1))
+            local bufferCopper = (ns.db.settings.goldBuffer or 0) * 10000
+            local needed = math.max(10000, math.ceil(totalFees * 1.1)) + bufferCopper
             if playerCopper < needed then
                 goldWithdraw = needed - playerCopper
             end
 
             -- Estimate deposit excess
-            local bufferCopper = (ns.db.settings.goldBuffer or 0) * 10000
-            local keepCopper = math.max(10000, math.ceil(totalFees * 1.1)) + bufferCopper
+            local keepCopper = needed
             if playerCopper > keepCopper then
                 local excess = math.floor((playerCopper - keepCopper) / 10000) * 10000
                 if excess > 0 then goldDeposit = excess end

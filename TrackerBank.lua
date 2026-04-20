@@ -440,13 +440,17 @@ function Tracker:AutoWithdrawGold()
         end
     end
 
-    -- Add a small buffer (1g minimum, 10% extra for rounding)
-    local estimatedFeesCopper = math.max(10000, math.ceil(totalDepositCopper * 1.1))
+    -- Target withdraw amount: fees + 10% rounding buffer + user's goldBuffer
+    -- (the "min balance to keep on character"). Must mirror AutoDepositGold's
+    -- keepCopper formula so deposit and withdraw target the same balance.
+    local goldBufferCopper = (ns.db.settings.goldBuffer or 0) * 10000
+    local estimatedFeesCopper = math.max(10000, math.ceil(totalDepositCopper * 1.1)) + goldBufferCopper
     local estimatedFeesGold = math.ceil(estimatedFeesCopper / 10000)
 
     local totalLabel = hasBuyCosts and "Total (fees + purchases)" or "Total deposit"
     ns:PrintDebug("  " .. totalLabel .. ": " .. ns:FormatGold(totalDepositCopper) ..
-        " + 10% buffer = " .. ns:FormatGold(estimatedFeesCopper))
+        " + 10% buffer + " .. ns:FormatGold(goldBufferCopper) .. " min balance = " ..
+        ns:FormatGold(estimatedFeesCopper))
 
     -- Account for what we've already withdrawn this session
     local playerCopper = GetMoney()
