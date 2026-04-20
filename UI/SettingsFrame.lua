@@ -310,7 +310,126 @@ end
 --------------------------
 
 -- Section ordering for reflow
-local sectionOrder = { "automation", "bankops", "auctionhouse", "notifications", "miniview", "data", "multiaccount" }
+local sectionOrder = { "automation", "bankops", "auctionhouse", "notifications", "miniview", "data", "deletedchars", "multiaccount" }
+
+-- Rebuild the pooled row list inside the "Deleted Characters" section.
+-- Keeps the section height in sync with how many tombstones exist. Called
+-- from RefreshSettings (initial render + after add/remove events).
+local function RefreshDeletedCharactersSection()
+    local container = settingsWidgets.deletedContainer
+    local section   = settingsWidgets._deletedSection
+    if not container or not section then return end
+
+    local rows = settingsWidgets.deletedRows
+    for _, r in ipairs(rows) do r:Hide() end
+
+    local deleted = (ns and ns.GetDeletedCharacters) and ns:GetDeletedCharacters() or {}
+    local ROW_H = 26
+    local y = 0
+
+    -- Height above the row container: desc (34) + Clean Orphaned Data
+    -- button row (28) + ITEM_SPACING (6) + vertical gap (6) = 74. Kept
+    -- as a constant so the calc below stays readable.
+    local HEADER_ABOVE_ROWS = 74
+
+    if #deleted == 0 then
+        -- Empty state: single line reassuring the user.
+        local empty = settingsWidgets.deletedEmpty
+        if not empty then
+            empty = container:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+            empty:SetPoint("TOPLEFT", container, "TOPLEFT", 0, 0)
+            empty:SetPoint("RIGHT", container, "RIGHT", 0, 0)
+            empty:SetJustifyH("LEFT")
+            empty:SetText("No deleted characters.")
+            settingsWidgets.deletedEmpty = empty
+        end
+        empty:Show()
+        container:SetHeight(20)
+        section.contentHeight = HEADER_ABOVE_ROWS + 20 + 8
+    else
+        if settingsWidgets.deletedEmpty then
+            settingsWidgets.deletedEmpty:Hide()
+        end
+
+        for i, entry in ipairs(deleted) do
+            local row = rows[i]
+            if not row then
+                row = CreateFrame("Frame", nil, container)
+                row.bg = row:CreateTexture(nil, "BACKGROUND")
+                row.bg:SetAllPoints()
+
+                row.nameText = row:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+                row.nameText:SetPoint("LEFT", row, "LEFT", 6, 0)
+                row.nameText:SetJustifyH("LEFT")
+
+                row.realmText = row:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+                row.realmText:SetPoint("LEFT", row, "LEFT", 160, 0)
+
+                row.whenText = row:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+                row.whenText:SetPoint("LEFT", row, "LEFT", 300, 0)
+
+                row.restoreBtn = CreateFrame("Button", nil, row, "BackdropTemplate")
+                row.restoreBtn:SetSize(78, 20)
+                row.restoreBtn:SetPoint("RIGHT", row, "RIGHT", -4, 0)
+                row.restoreBtn:SetBackdrop({
+                    bgFile   = "Interface\\Tooltips\\UI-Tooltip-Background",
+                    edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
+                    edgeSize = 8,
+                    insets = {left = 1, right = 1, top = 1, bottom = 1},
+                })
+                row.restoreBtn:SetBackdropColor(0.12, 0.24, 0.12, 1)
+                row.restoreBtn:SetBackdropBorderColor(0.3, 0.6, 0.3, 0.8)
+                row.restoreBtn.text = row.restoreBtn:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+                row.restoreBtn.text:SetPoint("CENTER")
+                row.restoreBtn.text:SetText("|cff66ff66Restore|r")
+                row.restoreBtn:SetScript("OnEnter", function(self)
+                    self:SetBackdropColor(0.18, 0.32, 0.18, 1)
+                end)
+                row.restoreBtn:SetScript("OnLeave", function(self)
+                    self:SetBackdropColor(0.12, 0.24, 0.12, 1)
+                end)
+
+                rows[i] = row
+            end
+            row:SetHeight(ROW_H)
+            row:ClearAllPoints()
+            row:SetPoint("TOPLEFT", container, "TOPLEFT", 0, y)
+            row:SetPoint("RIGHT", container, "RIGHT", 0, 0)
+            row.bg:SetColorTexture(
+                i % 2 == 0 and 0.08 or 0.05,
+                i % 2 == 0 and 0.08 or 0.05,
+                i % 2 == 0 and 0.12 or 0.09,
+                0.6)
+
+            local name = entry.charKey:match("^(.-)%-") or entry.charKey
+            local realm = entry.charKey:match("%-(.+)$") or ""
+            row.nameText:SetText(name)
+            row.realmText:SetText(realm)
+            row.whenText:SetText(ns:FormatRelativeTime(entry.deletedAt) ..
+                (entry.syndicatorPurged and " (purged)" or ""))
+
+            local capturedKey = entry.charKey
+            row.restoreBtn:SetScript("OnClick", function()
+                ns:RestoreCharacter(capturedKey)
+                ns:Print(ns.COLORS.GREEN .. "Restored " .. capturedKey ..
+                    ". It will reappear on next scan.|r")
+                if UI.RefreshSettings then UI:RefreshSettings() end
+                if UI.Refresh then UI:Refresh() end
+            end)
+
+            row:Show()
+            y = y - ROW_H
+        end
+
+        container:SetHeight(math.abs(y))
+        section.contentHeight = HEADER_ABOVE_ROWS + math.abs(y) + 8
+    end
+
+    if section.UpdateLayout then section.UpdateLayout() end
+    if UI.ReflowSettings then UI:ReflowSettings() end
+end
+
+UI._RefreshDeletedCharactersSection = RefreshDeletedCharactersSection
 
 function UI:ReflowSettings()
     if not settingsWidgets.contentFrame then return end
@@ -1032,6 +1151,87 @@ function UI:CreateSettingsPanel(parent)
     secData.contentHeight = math.abs(sy)
 
     ------------------------------------------------
+    -- Section: Deleted Characters (tombstones)
+    ------------------------------------------------
+    -- Shows characters that were explicitly deleted from the Characters
+    -- page. Their tombstones prevent TSM/Syndicator/sync from re-adding
+    -- them. Restore lifts the tombstone; the character reappears on the
+    -- next scan (or immediate reload if the user is logged in on that
+    -- character).
+    local secDeleted = CreateCollapsibleSection(content, y, "deletedchars",
+        "Deleted Characters",
+        "Restore characters you've previously deleted")
+    sc = secDeleted.content
+    sy = 0
+
+    -- Header description
+    local delDesc = sc:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+    delDesc:SetPoint("TOPLEFT", sc, "TOPLEFT", LEFT_MARGIN, sy)
+    delDesc:SetPoint("RIGHT", sc, "RIGHT", RIGHT_MARGIN, 0)
+    delDesc:SetJustifyH("LEFT")
+    delDesc:SetWordWrap(true)
+    delDesc:SetTextColor(DESC_COLOR[1], DESC_COLOR[2], DESC_COLOR[3])
+    delDesc:SetText("Deleted characters are kept out of FlipQueue even if " ..
+        "TSM or Syndicator still knows about them. Restore reverses the " ..
+        "deletion; the character reappears on the next scan.")
+    sy = sy - 34
+
+    -- Manual orphan-cleanup button: for characters that were deleted
+    -- and then restored (or deleted before cascade cleanup existed),
+    -- this scans log + to-do lists for entries referencing charKeys that
+    -- no longer exist in db.characters and removes them.
+    local cleanBtn, cleanH = CreateSettingsButton(sc, sy,
+        "Clean Orphaned Data",
+        "Remove tasks and log entries referencing characters that no longer exist.",
+        170, function()
+            StaticPopupDialogs["FLIPQUEUE_CLEAN_ORPHANED"] = {
+                text = "Scan for tasks and log entries referencing characters " ..
+                    "that are no longer tracked and remove them?\n\n" ..
+                    "Use this if you deleted a character and still see " ..
+                    "references to it in the to-do list or log.",
+                button1 = "Clean",
+                button2 = "Cancel",
+                OnAccept = function()
+                    local counts = ns:PurgeOrphanedCharData()
+                    local total = counts.logs + counts.tasks
+                    if total == 0 then
+                        ns:Print(ns.COLORS.GRAY .. "No orphaned data found.|r")
+                    else
+                        ns:Print(ns.COLORS.GREEN .. "Removed " .. counts.tasks ..
+                            " orphaned task(s) and " .. counts.logs ..
+                            " orphaned log entr" ..
+                            (counts.logs == 1 and "y" or "ies") .. ".|r")
+                    end
+                    UI:Refresh()
+                end,
+                timeout = 0,
+                whileDead = true,
+                hideOnEscape = true,
+            }
+            StaticPopup_Show("FLIPQUEUE_CLEAN_ORPHANED")
+        end)
+    settingsWidgets.cleanOrphansBtn = cleanBtn
+    sy = sy - cleanH - ITEM_SPACING
+
+    -- Container for the dynamic row list. Rows are pooled in
+    -- settingsWidgets.deletedRows and rebuilt by RebuildDeletedList() on
+    -- each refresh.
+    local delContainer = CreateFrame("Frame", nil, sc)
+    delContainer:SetPoint("TOPLEFT", sc, "TOPLEFT", LEFT_MARGIN, sy)
+    delContainer:SetPoint("RIGHT", sc, "RIGHT", RIGHT_MARGIN, 0)
+    delContainer:SetHeight(1)
+    settingsWidgets.deletedContainer = delContainer
+    settingsWidgets.deletedRows = {}
+    settingsWidgets._deletedSection = secDeleted
+    sy = sy - 6
+
+    -- Space reserved for the row list. The actual height is set by
+    -- RebuildDeletedList, which also updates secDeleted.contentHeight.
+    local RESERVED = 60  -- empty-state height; overridden on refresh
+    sy = sy - RESERVED
+    secDeleted.contentHeight = math.abs(sy)
+
+    ------------------------------------------------
     -- Section: Multi-Account
     ------------------------------------------------
     local secMulti = CreateCollapsibleSection(content, y, "multiaccount",
@@ -1585,6 +1785,9 @@ end
 
 function UI:RefreshSettings()
     if not ns.db then return end
+    if UI._RefreshDeletedCharactersSection then
+        UI._RefreshDeletedCharactersSection()
+    end
     if settingsWidgets.autoScan then
         settingsWidgets.autoScan:SetChecked(ns.db.settings.autoScan)
     end

@@ -7,7 +7,7 @@ local addonName, ns = ...
 --------------------------
 
 -- Current schema version
-local CURRENT_SCHEMA = 7
+local CURRENT_SCHEMA = 8
 
 -- Schema history:
 -- nil/0  = v0.5.0 (stable release): queue array, separate inventory/characters/hiddenCharacters
@@ -19,6 +19,9 @@ local CURRENT_SCHEMA = 7
 -- 6      = Dual transport (bnet / whisper)
 -- 7      = v0.11.0: Syndicator becomes hard dep; old inventory caches wiped
 --          and re-populated from Syndicator on next scan.
+-- 8      = Character tombstones: db.deletedCharacters table. Tombstoned
+--          chars are kept out of db.characters despite TSM/Syndicator/sync
+--          re-detection, until the user explicitly restores.
 
 local function RunMigrations(db)
     db.schemaVersion = db.schemaVersion or 0
@@ -272,6 +275,15 @@ local function RunMigrations(db)
             " and the warbank cache. Syndicator is now the inventory source."
         db.schemaVersion = 7
     end  -- migration 7
+
+    -- Migration 8: Character deletion tombstones. Adds db.deletedCharacters,
+    -- a table keyed by charKey whose presence blocks re-detection from
+    -- TSM/Syndicator/sync. No data migration needed — empty table suffices
+    -- since no prior deletions could have been recorded.
+    if db.schemaVersion < 8 then
+        db.deletedCharacters = db.deletedCharacters or {}
+        db.schemaVersion = 8
+    end  -- migration 8
 end  -- RunMigrations
 
 -- Expose for DB.lua

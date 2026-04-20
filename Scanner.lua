@@ -258,6 +258,9 @@ end
 -- both current-character refresh and alt bulk-projection.
 local function WriteProjectedInventory(fqKey, charData, sourceLabel)
     if not ns.db then return end
+    -- Tombstoned characters are intentionally kept out of db.characters;
+    -- silently skip rather than re-create them from Syndicator data.
+    if ns:IsCharDeleted(fqKey) then return end
     ns.db.characters[fqKey] = ns.db.characters[fqKey] or {}
     local charEntry = ns.db.characters[fqKey]
 
@@ -352,6 +355,13 @@ function Scanner:RefreshCurrentCharacterFromSyndicator()
     if not ok or type(charData) ~= "table" then return end
 
     local fqKey = ns:GetCharKey()
+    -- Tombstoned current character: skip the direct table access below
+    -- (which would resurrect the row) and the projection. The bulk alt
+    -- pass further down still runs, honoring its own tombstone checks.
+    if ns:IsCharDeleted(fqKey) then
+        BulkProjectKnownAlts()
+        return
+    end
     ns.db.characters[fqKey] = ns.db.characters[fqKey] or {}
     ns.db.characters[fqKey].class = select(2, UnitClass("player"))
 
@@ -534,6 +544,9 @@ end
 local function UpdateCharacterMeta()
     if not ns.db then return end
     local charKey = ns:GetCharKey()
+    -- Current character was deleted and the user chose "keep deleted" at
+    -- the login prompt. Don't re-seed metadata for this session.
+    if ns:IsCharDeleted(charKey) then return end
     ns.db.characters[charKey] = ns.db.characters[charKey] or {}
     local char = ns.db.characters[charKey]
     char.gold = GetMoney()
@@ -631,6 +644,47 @@ frame:SetScript("OnEvent", function(self, event, ...)
         if ns.db._phase6aMessage then
             ns:Print(ns.COLORS.YELLOW .. ns.db._phase6aMessage .. "|r")
             ns.db._phase6aMessage = nil
+        end
+
+        -- Deleted-character login prompt. When the user logs in on a char
+        -- they previously deleted from FlipQueue, give them a chance to
+        -- restore it. If they don't, the guards in UpdateCharacterMeta and
+        -- WriteProjectedInventory keep FQ from re-creating the char's data
+        -- this session — they can still open the UI and restore from the
+        -- Settings > Deleted Characters section at any time.
+        local currentCharKey = ns:GetCharKey()
+        if ns:IsCharDeleted(currentCharKey) then
+            StaticPopupDialogs["FLIPQUEUE_DELETED_CHAR_LOGIN"] = {
+                text = "This character (" .. currentCharKey ..
+                    ") was deleted from FlipQueue.\n\n" ..
+                    "Restore it, or keep it deleted for this session?",
+                button1 = "Restore",
+                button2 = "Keep deleted",
+                OnAccept = function()
+                    ns:RestoreCharacter(currentCharKey)
+                    ns:Print(ns.COLORS.GREEN .. "Restored " .. currentCharKey ..
+                        ". Reloading UI to rescan.|r")
+                    -- A fresh login is the cleanest way to re-seed the
+                    -- character's inventory + metadata; reload rather than
+                    -- trying to replay init here.
+                    C_Timer.After(0.5, function() ReloadUI() end)
+                end,
+                OnCancel = function()
+                    ns:Print(ns.COLORS.GRAY ..
+                        "FlipQueue is not tracking this character. " ..
+                        "Restore it from Settings → Deleted Characters.|r")
+                end,
+                timeout = 0,
+                whileDead = true,
+                hideOnEscape = true,
+            }
+            C_Timer.After(2, function()
+                -- Re-check: the user may have restored via /reload between
+                -- InitDB and the timer firing.
+                if ns:IsCharDeleted(currentCharKey) then
+                    StaticPopup_Show("FLIPQUEUE_DELETED_CHAR_LOGIN")
+                end
+            end)
         end
 
         if ns.Tracker and ns.Tracker.StartExpiryTicker then

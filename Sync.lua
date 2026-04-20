@@ -1528,6 +1528,7 @@ function Sync:BuildFullSyncPayload()
         imports = ns.db.imports,
         doNotTrack = ns.db.doNotTrack,
         guilds = ns.db.guilds,
+        deletedCharacters = ns.db.deletedCharacters,
     }
 
     -- Send ALL known characters (not just our own) for gossip relay
@@ -1657,6 +1658,8 @@ function Sync:MergeFullSync(remote)
 
     self._applying = true
 
+    -- Merge tombstones before characters so MergeCharacters can honor them.
+    self:MergeDeletedCharacters(remote.deletedCharacters)
     self:MergeCharacters(remote.characters, remote.ownedCharacters, remote.accountUUID)
     self:MergeWarbank(remote.warbank)
     self:MergeTodoLists(remote.todoLists)
@@ -1679,9 +1682,40 @@ function Sync:MergeCharacters(remoteChars, ownedChars, remoteUUID)
 
     for charKey, charData in pairs(remoteChars) do
         local charOwner = charData.accountUUID or remoteUUID
-        -- Don't overwrite characters we own
-        if charOwner ~= myUUID then
+        -- Don't overwrite characters we own, and don't resurrect characters
+        -- we've tombstoned — even if the partner still has them, our delete
+        -- is authoritative until the user explicitly restores.
+        if charOwner ~= myUUID and not ns:IsCharDeleted(charKey) then
             ns.db.characters[charKey] = charData
+        end
+    end
+end
+
+-- Tombstones are union-merged: a delete from either side wins and we keep
+-- the earliest deletedAt timestamp. Restoring is explicit (user clicks
+-- Restore in either client); there's no "un-delete" implicit in a remote
+-- entry being absent, since a partner running an older version wouldn't
+-- send the table at all.
+function Sync:MergeDeletedCharacters(remoteDeleted)
+    if not remoteDeleted then return end
+    ns.db.deletedCharacters = ns.db.deletedCharacters or {}
+    for charKey, entry in pairs(remoteDeleted) do
+        if type(entry) == "table" then
+            local local_ = ns.db.deletedCharacters[charKey]
+            if not local_ then
+                ns.db.deletedCharacters[charKey] = {
+                    deletedAt = entry.deletedAt or time(),
+                    syndicatorPurged = entry.syndicatorPurged and true or false,
+                    accountUUID = entry.accountUUID,
+                }
+                -- Drop the live row if the partner's delete reaches us
+                -- before we'd purged it locally.
+                if ns.db.characters then
+                    ns.db.characters[charKey] = nil
+                end
+            elseif (entry.deletedAt or 0) < (local_.deletedAt or 0) then
+                local_.deletedAt = entry.deletedAt
+            end
         end
     end
 end
@@ -1884,8 +1918,34 @@ function Sync:ApplyDelta(delta)
 
     if deltaType == "CHAR" then
         if data and data.charKey and data.charData then
-            data.charData.accountUUID = delta.accountUUID
-            ns.db.characters[data.charKey] = data.charData
+            -- Honor local tombstones: a resurrecting CHAR from the partner
+            -- should be dropped on the floor, not applied.
+            if not ns:IsCharDeleted(data.charKey) then
+                data.charData.accountUUID = delta.accountUUID
+                ns.db.characters[data.charKey] = data.charData
+            end
+        end
+    elseif deltaType == "CDEL" then
+        -- Partner deleted a character. Add the tombstone and drop the live
+        -- row; skip any further action (they already emitted this for us).
+        if data and data.charKey then
+            ns.db.deletedCharacters = ns.db.deletedCharacters or {}
+            local t = data.tombstone or {}
+            ns.db.deletedCharacters[data.charKey] = {
+                deletedAt = t.deletedAt or delta.ts or time(),
+                syndicatorPurged = t.syndicatorPurged and true or false,
+                accountUUID = t.accountUUID,
+            }
+            if ns.db.characters then
+                ns.db.characters[data.charKey] = nil
+            end
+        end
+    elseif deltaType == "CUND" then
+        -- Partner restored a character. Clear the tombstone locally; the
+        -- live character row will reappear on next Syndicator projection
+        -- or full sync from whichever client owns the char.
+        if data and data.charKey and ns.db.deletedCharacters then
+            ns.db.deletedCharacters[data.charKey] = nil
         end
     elseif deltaType == "WB" then
         if data then

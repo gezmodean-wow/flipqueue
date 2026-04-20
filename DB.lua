@@ -17,6 +17,7 @@ function ns:InitDB()
 
     -- Ensure new structure exists (for fresh installs and post-migration)
     db.characters   = db.characters or {}
+    db.deletedCharacters = db.deletedCharacters or {}
     db.warbank      = db.warbank or {}
     db.guilds       = db.guilds or {}
     db.imports      = db.imports or { fpScanner = {}, fpCrossRealm = {}, tsm = {} }
@@ -164,6 +165,10 @@ function ns:InitDB()
     -- Popup anchor positions (relative to mini frame)
     db.settings.bankPopupAnchor = db.settings.bankPopupAnchor or "below"   -- below, above, left, right
     db.settings.detailPopupAnchor = db.settings.detailPopupAnchor or "left" -- left, right
+    -- Characters page view toggles (both off by default so the list stays
+    -- focused on active characters)
+    if db.settings.showHiddenChars == nil then db.settings.showHiddenChars = false end
+    if db.settings.showDeletedChars == nil then db.settings.showDeletedChars = false end
     if db.settings.setupDone == nil then
         if db.settings.tutorialDone or next(db.characters or {}) then
             db.settings.setupDone = true
@@ -297,14 +302,64 @@ function ns:CleanupLegacyData()
         end
     end
 
+    -- 8) Retroactive cascade purge for tombstones created before v0.11.0-alpha13.
+    -- Early deletes didn't cascade to db.log or db.todoLists, so characters
+    -- previously deleted still have orphaned task/log entries. Sweep once per
+    -- tombstone — the purge is idempotent on subsequent runs (nothing to do).
+    if db.deletedCharacters and next(db.deletedCharacters) then
+        local tombstoneSet = {}
+        for ck in pairs(db.deletedCharacters) do tombstoneSet[ck] = true end
+
+        if db.log then
+            local before = #db.log
+            for i = #db.log, 1, -1 do
+                local ck = db.log[i].charKey
+                if ck and tombstoneSet[ck] then
+                    table.remove(db.log, i)
+                end
+            end
+            local removed = before - #db.log
+            if removed > 0 then
+                cleaned.orphanedLogs = (cleaned.orphanedLogs or 0) + removed
+            end
+        end
+
+        local function PurgeTombstoned(tasks)
+            if not tasks then return 0 end
+            local removed = 0
+            for i = #tasks, 1, -1 do
+                local ac = tasks[i].assignedChar
+                if ac and tombstoneSet[ac] then
+                    table.remove(tasks, i)
+                    removed = removed + 1
+                end
+            end
+            return removed
+        end
+        if db.todoLists then
+            local removed = 0
+            if db.todoLists.active then
+                removed = removed + PurgeTombstoned(db.todoLists.active.tasks)
+            end
+            for _, list in ipairs(db.todoLists.upcoming or {}) do
+                removed = removed + PurgeTombstoned(list.tasks)
+            end
+            if removed > 0 then
+                cleaned.orphanedTasks = (cleaned.orphanedTasks or 0) + removed
+            end
+        end
+    end
+
     -- Store cleanup version to avoid re-logging on every login
-    local currentVersion = 3  -- increment when adding new cleanup steps
+    local currentVersion = 4  -- increment when adding new cleanup steps
     if db._cleanupVersion ~= currentVersion then
         local parts = {}
         if cleaned.staleSettings then table.insert(parts, cleaned.staleSettings .. " stale settings") end
         if cleaned.oldLogs then table.insert(parts, cleaned.oldLogs .. " old log entries pruned") end
         if cleaned.emptyItems then table.insert(parts, cleaned.emptyItems .. " empty items removed") end
         if cleaned.orphanedOrder then table.insert(parts, cleaned.orphanedOrder .. " orphaned order entries") end
+        if cleaned.orphanedLogs then table.insert(parts, cleaned.orphanedLogs .. " orphaned log entries") end
+        if cleaned.orphanedTasks then table.insert(parts, cleaned.orphanedTasks .. " orphaned tasks") end
         if #parts > 0 then
             db._cleanupSummary = table.concat(parts, ", ")
         end
@@ -515,6 +570,244 @@ function ns:RolesOverlap(role1, role2)
     if role1 == "none" or role2 == "none" then return false end
     if role1 == "both" or role2 == "both" then return true end
     return role1 == role2  -- sell+sell or buy+buy
+end
+
+--------------------------
+-- Deleted-character tombstones
+--------------------------
+
+-- Tombstones prevent a deleted character from being re-added by Syndicator
+-- scans, TSM detection, or sync merges. Live entries in db.characters and
+-- tombstones in db.deletedCharacters are mutually exclusive.
+
+function ns:IsCharDeleted(charKey)
+    if not self.db or not self.db.deletedCharacters then return false end
+    return self.db.deletedCharacters[charKey] ~= nil
+end
+
+-- Delete a character. opts.purgeSyndicator: if true, also call
+-- Syndicator.API.DeleteCharacter so bag addons stop seeing the char.
+-- Default is false — users running bag addons that read Syndicator may
+-- want to keep the Syndicator cache intact.
+--
+-- Cascades through every table keyed by charKey:
+--   * db.characters              (inventory, metadata)
+--   * db.settings.characterOrder (manual sort)
+--   * db.accounts.primary.characters
+--   * db.todoLists.active.tasks + db.todoLists.upcoming[*].tasks
+--     (tasks assigned to this char — removed, not reassigned)
+--   * db.settings.pullTabs.bank[charKey]
+--   * db.settings.depositOverflow.char[charKey]
+--   * db.guilds[*].members
+--   * db.log                     (sales history for this char)
+-- Historical log entries are purged too: if a user deletes a character
+-- they want it GONE, not showing up in stats/sales views.
+function ns:DeleteCharacter(charKey, opts)
+    if not self.db or not charKey then return end
+    opts = opts or {}
+
+    local existing = self.db.characters and self.db.characters[charKey]
+    local accountUUID = existing and existing.accountUUID or nil
+
+    -- Drop from the live character table
+    if self.db.characters then
+        self.db.characters[charKey] = nil
+    end
+
+    -- Drop from the manual sort order so it doesn't linger
+    if self.db.settings and self.db.settings.characterOrder then
+        local newOrder = {}
+        for _, ck in ipairs(self.db.settings.characterOrder) do
+            if ck ~= charKey then table.insert(newOrder, ck) end
+        end
+        self.db.settings.characterOrder = newOrder
+    end
+
+    -- Drop from primary-account character list (multi-account bookkeeping)
+    if self.db.accounts and self.db.accounts.primary and
+        self.db.accounts.primary.characters then
+        local newList = {}
+        for _, ck in ipairs(self.db.accounts.primary.characters) do
+            if ck ~= charKey then table.insert(newList, ck) end
+        end
+        self.db.accounts.primary.characters = newList
+    end
+
+    -- Purge to-do tasks assigned to this char across active + upcoming lists.
+    -- We don't reassign because the user deleted this character explicitly;
+    -- if the task is still meaningful, the generator will recreate it next
+    -- pass against another character.
+    local function PurgeCharTasks(tasks)
+        if not tasks then return end
+        for i = #tasks, 1, -1 do
+            if tasks[i].assignedChar == charKey then
+                table.remove(tasks, i)
+            end
+        end
+    end
+    if self.db.todoLists then
+        if self.db.todoLists.active and self.db.todoLists.active.tasks then
+            PurgeCharTasks(self.db.todoLists.active.tasks)
+        end
+        if self.db.todoLists.upcoming then
+            for _, list in ipairs(self.db.todoLists.upcoming) do
+                PurgeCharTasks(list.tasks)
+            end
+        end
+    end
+
+    -- Per-character settings on global settings tables
+    if self.db.settings then
+        if self.db.settings.pullTabs and self.db.settings.pullTabs.bank then
+            self.db.settings.pullTabs.bank[charKey] = nil
+        end
+        if self.db.settings.depositOverflow
+            and self.db.settings.depositOverflow.char then
+            self.db.settings.depositOverflow.char[charKey] = nil
+        end
+    end
+
+    -- Strip from guild member lists
+    if self.db.guilds then
+        for _, guild in pairs(self.db.guilds) do
+            if guild.members then
+                for i = #guild.members, 1, -1 do
+                    if guild.members[i] == charKey then
+                        table.remove(guild.members, i)
+                    end
+                end
+            end
+        end
+    end
+
+    -- Purge sales/auction log entries for this character so the deleted
+    -- char doesn't linger in the Log page, SalesIndex, or "check mail"
+    -- task generation.
+    if self.db.log then
+        for i = #self.db.log, 1, -1 do
+            if self.db.log[i].charKey == charKey then
+                table.remove(self.db.log, i)
+            end
+        end
+    end
+    if ns.SalesIndex and ns.SalesIndex.Invalidate then
+        ns.SalesIndex:Invalidate()
+    end
+
+    -- Record the tombstone
+    self.db.deletedCharacters = self.db.deletedCharacters or {}
+    self.db.deletedCharacters[charKey] = {
+        deletedAt         = time(),
+        syndicatorPurged  = opts.purgeSyndicator and true or false,
+        accountUUID       = accountUUID,
+    }
+
+    -- Optionally ask Syndicator to drop its own cache for this char. Only
+    -- attempted when Syndicator is loaded and exposes the API; older
+    -- versions may not have it, in which case we silently skip.
+    if opts.purgeSyndicator and Syndicator and Syndicator.API
+        and Syndicator.API.DeleteCharacter then
+        -- Syndicator uses "Name-NormalizedRealm" keys. The FQ charKey uses
+        -- display realm (with spaces), so translate via the alias map if we
+        -- have one. If not, fall back to the display realm — Syndicator's
+        -- API handles both forms in practice but we try to prefer the
+        -- normalized form when available.
+        local name, displayRealm = charKey:match("^(.-)%-(.+)$")
+        local synKey = charKey
+        if name and displayRealm and self.db.realmAliases then
+            for normalized, disp in pairs(self.db.realmAliases) do
+                if disp == displayRealm then
+                    synKey = name .. "-" .. normalized
+                    break
+                end
+            end
+        end
+        pcall(Syndicator.API.DeleteCharacter, synKey)
+    end
+
+    -- Emit sync delta so partners also tombstone this char.
+    if ns.Sync and ns.Sync.IsLinked and ns.Sync:IsLinked()
+        and not ns.Sync._applying then
+        ns.Sync:EmitDelta("CDEL", {
+            charKey = charKey,
+            tombstone = self.db.deletedCharacters[charKey],
+        })
+    end
+end
+
+function ns:RestoreCharacter(charKey)
+    if not self.db or not charKey then return end
+    if not self.db.deletedCharacters then return end
+    self.db.deletedCharacters[charKey] = nil
+
+    if ns.Sync and ns.Sync.IsLinked and ns.Sync:IsLinked()
+        and not ns.Sync._applying then
+        ns.Sync:EmitDelta("CUND", { charKey = charKey })
+    end
+end
+
+-- Sweep db.log and db.todoLists for entries referencing a charKey that
+-- no longer exists in db.characters. Used to recover from pre-cascade
+-- deletes (alpha12 and earlier) and from restores of characters that
+-- no longer exist in WoW. Returns {logs = N, tasks = N}.
+function ns:PurgeOrphanedCharData()
+    local counts = { logs = 0, tasks = 0 }
+    if not self.db then return counts end
+
+    local characters = self.db.characters or {}
+
+    if self.db.log then
+        for i = #self.db.log, 1, -1 do
+            local ck = self.db.log[i].charKey
+            if ck and ck ~= "" and not characters[ck] then
+                table.remove(self.db.log, i)
+                counts.logs = counts.logs + 1
+            end
+        end
+    end
+
+    local function PurgeInList(tasks)
+        if not tasks then return end
+        for i = #tasks, 1, -1 do
+            local ac = tasks[i].assignedChar
+            if ac and ac ~= "" and not characters[ac] then
+                table.remove(tasks, i)
+                counts.tasks = counts.tasks + 1
+            end
+        end
+    end
+    if self.db.todoLists then
+        if self.db.todoLists.active then
+            PurgeInList(self.db.todoLists.active.tasks)
+        end
+        for _, list in ipairs(self.db.todoLists.upcoming or {}) do
+            PurgeInList(list.tasks)
+        end
+    end
+
+    if counts.logs > 0 or counts.tasks > 0 then
+        if ns.SalesIndex and ns.SalesIndex.Invalidate then
+            ns.SalesIndex:Invalidate()
+        end
+    end
+    return counts
+end
+
+-- Array form for UI: {charKey, deletedAt, syndicatorPurged, accountUUID}
+-- sorted newest-first by deletedAt.
+function ns:GetDeletedCharacters()
+    local out = {}
+    if not self.db or not self.db.deletedCharacters then return out end
+    for charKey, entry in pairs(self.db.deletedCharacters) do
+        table.insert(out, {
+            charKey           = charKey,
+            deletedAt         = entry.deletedAt or 0,
+            syndicatorPurged  = entry.syndicatorPurged and true or false,
+            accountUUID       = entry.accountUUID,
+        })
+    end
+    table.sort(out, function(a, b) return a.deletedAt > b.deletedAt end)
+    return out
 end
 
 --------------------------

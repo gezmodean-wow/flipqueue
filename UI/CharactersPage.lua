@@ -151,12 +151,18 @@ local function BuildCharactersData()
         and ns.Tracker:GetAuctionSummaryByCharacter() or {}
 
     -- Build character list
+    local showHidden = ns.db.settings.showHiddenChars and true or false
+    local showDeleted = ns.db.settings.showDeletedChars and true or false
     for charKey, inv in pairs(ns.db.characters) do
         local name = charKey:match("^(.-)%-") or charKey
         local realm = charKey:match("%-(.+)$") or ""
-        local allTasks = ns.TodoList:GetCharacterTasks(charKey)
         local charRole = inv.role or "both"
         local isHidden = charRole == "none"
+        -- Hide hidden characters from the list unless the user opts in via
+        -- the "Show Hidden" toggle. Skipping via a goto-style early continue
+        -- isn't available in 5.1, so nest the rest of the block.
+        if not (isHidden and not showHidden) then
+        local allTasks = ns.TodoList:GetCharacterTasks(charKey)
 
         -- Filter tasks by character's realm
         local tasks = {}
@@ -253,10 +259,13 @@ local function BuildCharactersData()
             auctionStr = table.concat(parts, " / ")
         end
 
-        -- Build status string (showing role + shared AH indicator)
+        -- Build status string (showing role + shared AH indicator).
+        -- Hidden rows are only in the list when the "Show Hidden" toggle
+        -- is on; repurpose the status cell as an [Unhide] action hint —
+        -- clicking the row unhides directly (see row click handler).
         local statusParts = {}
         if isHidden then
-            table.insert(statusParts, "|cff666666Hidden|r")
+            table.insert(statusParts, "|cff66ff66[Unhide]|r")
         elseif charCluster[charKey] then
             if charRole == "sell" then
                 table.insert(statusParts, "|cffff8800Sell*|r")
@@ -336,6 +345,43 @@ local function BuildCharactersData()
                             return names
                         end)(), ", ")) or ""),
         })
+        end  -- if not (isHidden and not showHidden)
+    end
+
+    -- Deleted-character ghost rows. Included only when "Show Deleted" is on.
+    -- These rows are minimal (name + realm + status) and clicking them
+    -- restores the character. They sit at the bottom of the list via a
+    -- sentinel _orderPos.
+    if showDeleted then
+        local deleted = ns:GetDeletedCharacters()
+        for _, entry in ipairs(deleted) do
+            local dKey = entry.charKey
+            local name = dKey:match("^(.-)%-") or dKey
+            local realm = dKey:match("%-(.+)$") or ""
+            table.insert(charData, {
+                name      = "|cff884444" .. name .. "|r  |cff777777(deleted)|r",
+                realm     = realm,
+                gold      = "-",
+                tasks     = "-",
+                auctions  = "",
+                pull      = "-",
+                dep       = "-",
+                depAll    = "-",
+                status    = "|cff66ff66[Restore]|r",
+                _sortName = name:lower(),
+                _sortGold = -1,
+                _sortLastLogin = entry.deletedAt or 0,
+                _sortAuctions = -1,
+                _charKey = dKey,
+                _isDeleted = true,
+                _rowColor = {0.35, 0.1, 0.1, 0.15},
+                _orderPos = 10000,  -- sort deleted rows to the bottom
+                _tooltipText = dKey .. " (deleted)",
+                _tooltipExtra = "Deleted " .. (ns:FormatRelativeTime(entry.deletedAt or 0)) ..
+                    (entry.syndicatorPurged and "\nSyndicator cache was purged" or "") ..
+                    "\n\nClick to restore",
+            })
+        end
     end
 
     -- Build "realms needing characters" from to-do list unassigned groups
@@ -639,7 +685,134 @@ local function EnsureConfigPanel(tableContainer)
         tabBtn.tabIndex = i
         configWidgets.warbankTabBtns[i] = tabBtn
     end
+
+    -- Divider before the danger zone. Anchored to the warbank label row
+    -- rather than an individual tab button so it survives tab count
+    -- changes.
+    local div5 = configPanel:CreateTexture(nil, "ARTWORK")
+    div5:SetHeight(1)
+    div5:SetPoint("TOPLEFT", wbLabel, "BOTTOMLEFT", 0, -(TAB_ICON_SIZE + 18))
+    div5:SetPoint("RIGHT", configPanel, "RIGHT", R_MARGIN, 0)
+    div5:SetColorTexture(0.35, 0.35, 0.45, 0.6)
+    configWidgets.div5 = div5
+
+    local dangerLabel = configPanel:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    dangerLabel:SetPoint("TOPLEFT", div5, "BOTTOMLEFT", 0, -4)
+    dangerLabel:SetTextColor(1, 0.4, 0.4)
+    dangerLabel:SetText("Danger Zone")
+    configWidgets.dangerLabel = dangerLabel
+
+    local deleteBtn = CreateFrame("Button", nil, configPanel, "BackdropTemplate")
+    deleteBtn:SetHeight(20)
+    deleteBtn:SetPoint("TOPLEFT", dangerLabel, "BOTTOMLEFT", 0, -4)
+    deleteBtn:SetPoint("RIGHT", configPanel, "RIGHT", R_MARGIN, 0)
+    deleteBtn:SetBackdrop({
+        bgFile   = "Interface\\Tooltips\\UI-Tooltip-Background",
+        edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
+        edgeSize = 8,
+        insets   = {left = 1, right = 1, top = 1, bottom = 1},
+    })
+    deleteBtn:SetBackdropColor(0.3, 0.1, 0.1, 1)
+    deleteBtn:SetBackdropBorderColor(0.6, 0.2, 0.2, 0.8)
+    deleteBtn.text = deleteBtn:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    deleteBtn.text:SetPoint("CENTER")
+    deleteBtn.text:SetText("|cffff5555Delete Character|r")
+    deleteBtn:SetScript("OnEnter", function(self)
+        self:SetBackdropColor(0.45, 0.15, 0.15, 1)
+    end)
+    deleteBtn:SetScript("OnLeave", function(self)
+        self:SetBackdropColor(0.3, 0.1, 0.1, 1)
+    end)
+    configWidgets.deleteBtn = deleteBtn
 end
+
+-- ==========================================
+-- DELETE CHARACTER DIALOG
+-- ==========================================
+-- StaticPopupDialogs don't compose well with checkboxes, so we build a
+-- small dedicated frame. Reused across deletions — populated fresh each
+-- time via ShowDeleteDialog(charKey).
+local deleteDialog
+
+local function EnsureDeleteDialog()
+    if deleteDialog then return end
+
+    deleteDialog = CreateFrame("Frame", "FlipQueueDeleteCharDialog", UIParent, "BackdropTemplate")
+    deleteDialog:SetSize(380, 210)
+    deleteDialog:SetPoint("CENTER")
+    deleteDialog:SetFrameStrata("DIALOG")
+    deleteDialog:SetBackdrop({
+        bgFile   = "Interface\\DialogFrame\\UI-DialogBox-Background",
+        edgeFile = "Interface\\DialogFrame\\UI-DialogBox-Border",
+        tile = true, tileSize = 32, edgeSize = 32,
+        insets = {left = 11, right = 12, top = 12, bottom = 11},
+    })
+    deleteDialog:EnableMouse(true)
+    deleteDialog:Hide()
+
+    local title = deleteDialog:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
+    title:SetPoint("TOP", deleteDialog, "TOP", 0, -14)
+    title:SetText("Delete Character")
+    title:SetTextColor(1, 0.4, 0.4)
+
+    local body = deleteDialog:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+    body:SetPoint("TOPLEFT", deleteDialog, "TOPLEFT", 20, -40)
+    body:SetPoint("TOPRIGHT", deleteDialog, "TOPRIGHT", -20, -40)
+    body:SetJustifyH("LEFT")
+    body:SetJustifyV("TOP")
+    body:SetWordWrap(true)
+    body:SetHeight(60)
+    deleteDialog.body = body
+
+    local synCB = CreateFrame("CheckButton", nil, deleteDialog, "UICheckButtonTemplate")
+    synCB:SetPoint("TOPLEFT", body, "BOTTOMLEFT", 0, -4)
+    synCB.text:SetText("Also purge Syndicator data for this character")
+    synCB.text:SetFontObject("GameFontHighlightSmall")
+    deleteDialog.synCB = synCB
+
+    local synHint = deleteDialog:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+    synHint:SetPoint("TOPLEFT", synCB, "BOTTOMLEFT", 26, -2)
+    synHint:SetPoint("RIGHT", deleteDialog, "RIGHT", -20, 0)
+    synHint:SetJustifyH("LEFT")
+    synHint:SetWordWrap(true)
+    synHint:SetText("Leave unchecked if other addons (bag views, inventory UIs) still need this character's data.")
+
+    local deleteBtn = CreateFrame("Button", nil, deleteDialog, "UIPanelButtonTemplate")
+    deleteBtn:SetSize(110, 22)
+    deleteBtn:SetPoint("BOTTOMRIGHT", deleteDialog, "BOTTOM", -4, 16)
+    deleteBtn:SetText("Delete")
+    deleteDialog.deleteBtn = deleteBtn
+
+    local cancelBtn = CreateFrame("Button", nil, deleteDialog, "UIPanelButtonTemplate")
+    cancelBtn:SetSize(110, 22)
+    cancelBtn:SetPoint("BOTTOMLEFT", deleteDialog, "BOTTOM", 4, 16)
+    cancelBtn:SetText("Cancel")
+    cancelBtn:SetScript("OnClick", function() deleteDialog:Hide() end)
+end
+
+local function ShowDeleteDialog(charKey, onDeleted)
+    EnsureDeleteDialog()
+    local name = charKey:match("^(.-)%-") or charKey
+    deleteDialog.body:SetText("Delete |cffffffff" .. name ..
+        "|r from FlipQueue?\n\n" ..
+        "Character key: |cffaaaaaa" .. charKey .. "|r\n\n" ..
+        "You can restore the character later from " ..
+        "Settings → Deleted Characters.")
+    deleteDialog.synCB:SetChecked(false)
+    deleteDialog.deleteBtn:SetScript("OnClick", function()
+        local purge = deleteDialog.synCB:GetChecked() and true or false
+        ns:DeleteCharacter(charKey, { purgeSyndicator = purge })
+        ns:Print(ns.COLORS.YELLOW .. "Deleted " .. charKey ..
+            (purge and " (Syndicator data purged)" or
+                " (Syndicator data kept)") .. ".|r")
+        deleteDialog:Hide()
+        if onDeleted then onDeleted() end
+    end)
+    deleteDialog:Show()
+end
+
+-- Exposed so SettingsFrame can share the same dialog if ever needed.
+UI._ShowDeleteCharDialog = ShowDeleteDialog
 
 -- Populate and show the config panel for a given character
 local function ShowConfigPanel(charKey)
@@ -840,6 +1013,32 @@ local function ShowConfigPanel(charKey)
         btn:SetScript("OnLeave", function() GameTooltip:Hide() end)
     end
 
+    -- Delete button: wires to the character-specific dialog
+    if configWidgets.deleteBtn then
+        configWidgets.deleteBtn:SetScript("OnClick", function()
+            ShowDeleteDialog(charKey, function()
+                if configPanel and configPanel:IsShown() then
+                    configPanel:Hide()
+                end
+                UI:Refresh()
+            end)
+        end)
+        configWidgets.deleteBtn:SetScript("OnEnter", function(self)
+            self:SetBackdropColor(0.45, 0.15, 0.15, 1)
+            GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+            GameTooltip:SetText("Delete Character", 1, 0.4, 0.4)
+            GameTooltip:AddLine("Removes this character from FlipQueue and prevents " ..
+                "Syndicator/TSM scans from re-adding it.", 0.8, 0.8, 0.8, true)
+            GameTooltip:AddLine(" ")
+            GameTooltip:AddLine("Restorable from Settings → Deleted Characters.", 0.5, 0.5, 0.5)
+            GameTooltip:Show()
+        end)
+        configWidgets.deleteBtn:SetScript("OnLeave", function(self)
+            self:SetBackdropColor(0.3, 0.1, 0.1, 1)
+            GameTooltip:Hide()
+        end)
+    end
+
     configPanel._charKey = charKey
     configPanel:Show()
 end
@@ -847,9 +1046,14 @@ end
 -- ==========================================
 -- GLOBAL DEFAULTS BAR
 -- ==========================================
+-- Houses the global Pull/Deposit/Dep. All checkboxes on the LEFT and the
+-- Show Hidden / Show Deleted view toggles on the RIGHT. Both toggle labels'
+-- right edges are pinned flush to the bar's right edge so they don't
+-- overflow the container.
 
 local globalDefaultsBar
 local globalDefaultsWidgets = {}
+local viewTogglesWidgets = {}
 
 local function EnsureGlobalDefaultsBar(tableContainer)
     if globalDefaultsBar then return end
@@ -903,6 +1107,52 @@ local function EnsureGlobalDefaultsBar(tableContainer)
 
     globalDefaultsWidgets.depAllCB = MakeGlobalCB(globalDefaultsWidgets.depCB.text, "Dep. All",
         "autoDepositAll", "Auto-deposit ALL extra items to bank/warbank")
+
+    -- Right-justified view toggles. We pin each checkbox's LABEL to the
+    -- bar's right edge (not the checkbox), so the label's right edge —
+    -- not the checkbox itself — is what sits flush with the bar. The
+    -- checkbox is then anchored to the LEFT of its own label.
+    local function MakeRightToggle(rightAnchor, label, settingKey, tooltipDesc)
+        local cb = CreateFrame("CheckButton", nil, globalDefaultsBar, "UICheckButtonTemplate")
+        cb:SetSize(18, 18)
+
+        cb.text:SetText(label)
+        cb.text:SetFontObject("GameFontHighlightSmall")
+        cb.text:ClearAllPoints()
+        if type(rightAnchor) == "table" and rightAnchor.frame then
+            -- Anchor to the LEFT of the previous toggle's CHECKBOX (which
+            -- is itself left of its own label), with padding.
+            cb.text:SetPoint("RIGHT", rightAnchor.frame, "LEFT", -10, 0)
+        else
+            cb.text:SetPoint("RIGHT", globalDefaultsBar, "RIGHT", -8, 0)
+        end
+
+        cb:ClearAllPoints()
+        cb:SetPoint("RIGHT", cb.text, "LEFT", -2, 1)
+
+        cb:SetScript("OnClick", function(self)
+            if ns.db then
+                ns.db.settings[settingKey] = self:GetChecked() and true or false
+                RefreshCharactersTable()
+            end
+        end)
+        cb:SetScript("OnEnter", function(self)
+            GameTooltip:SetOwner(self, "ANCHOR_BOTTOM")
+            GameTooltip:SetText(label, 1, 1, 1)
+            GameTooltip:AddLine(tooltipDesc, 0.7, 0.7, 0.7, true)
+            GameTooltip:Show()
+        end)
+        cb:SetScript("OnLeave", function() GameTooltip:Hide() end)
+        return cb
+    end
+
+    viewTogglesWidgets.deletedCB = MakeRightToggle(nil, "Show Deleted",
+        "showDeletedChars",
+        "Include deleted characters in the list. Click a deleted row to restore.")
+
+    viewTogglesWidgets.hiddenCB = MakeRightToggle({frame = viewTogglesWidgets.deletedCB},
+        "Show Hidden", "showHiddenChars",
+        "Include hidden characters (role=Hidden) in the list. Click a hidden row to unhide.")
 end
 
 local function RefreshGlobalDefaultsBar()
@@ -910,6 +1160,12 @@ local function RefreshGlobalDefaultsBar()
     globalDefaultsWidgets.pullCB:SetChecked(ns.db.settings.autoPullBank)
     globalDefaultsWidgets.depCB:SetChecked(ns.db.settings.autoDepositWarbank)
     globalDefaultsWidgets.depAllCB:SetChecked(ns.db.settings.autoDepositAll)
+    if viewTogglesWidgets.hiddenCB then
+        viewTogglesWidgets.hiddenCB:SetChecked(ns.db.settings.showHiddenChars and true or false)
+    end
+    if viewTogglesWidgets.deletedCB then
+        viewTogglesWidgets.deletedCB:SetChecked(ns.db.settings.showDeletedChars and true or false)
+    end
     globalDefaultsBar:Show()
 end
 
@@ -928,9 +1184,12 @@ function RefreshCharactersTable()
             if (ckData.role or "both") == "none" then hiddenCount = hiddenCount + 1 end
             if ckData.gold then totalGold = totalGold + ckData.gold end
         end
+        local deletedCount = 0
+        for _ in pairs(ns.db.deletedCharacters or {}) do deletedCount = deletedCount + 1 end
         local parts = { charCount .. " characters" }
         if totalGold > 0 then table.insert(parts, ns:FormatGold(totalGold) .. " total") end
         if hiddenCount > 0 then table.insert(parts, hiddenCount .. " hidden") end
+        if deletedCount > 0 then table.insert(parts, deletedCount .. " deleted") end
         table.insert(parts, ns.COLORS.GRAY .. "Click character to configure" .. "|r")
         UI.mainFrame.statusText:SetText(table.concat(parts, "  |  "))
     end
@@ -946,7 +1205,6 @@ function UI:RefreshCharactersPage()
     mainFrame.pageTitle:SetText("Characters & Realms")
     UI._HideAllActionBtns()
 
-    -- Ensure global defaults bar and config panel are created
     EnsureGlobalDefaultsBar(tableContainer)
     EnsureConfigPanel(tableContainer)
 
@@ -963,7 +1221,24 @@ function UI:RefreshCharactersPage()
     UI._ShowTable(self.charsTable)
     self.charsTable:SetRowClickHandler(function(rowData, button, rowIndex)
         if button == "LeftButton" and rowData._charKey then
-            -- Left-click opens config panel
+            -- Deleted ghost row: restore directly, don't try to open config.
+            if rowData._isDeleted then
+                ns:RestoreCharacter(rowData._charKey)
+                ns:Print(ns.COLORS.GREEN .. "Restored " .. rowData._charKey ..
+                    ". It will reappear on the next scan.|r")
+                UI:Refresh()
+                return
+            end
+            -- Hidden row (visible because "Show Hidden" is on): unhide
+            -- directly. User can re-hide via the config panel's Role cycle.
+            if rowData._isHidden then
+                ns:SetCharRole(rowData._charKey, "both")
+                ns:Print(ns.COLORS.GREEN .. "Unhidden " .. rowData._charKey ..
+                    " (role set to Both).|r")
+                UI:Refresh()
+                return
+            end
+            -- Normal row: open config panel
             ShowConfigPanel(rowData._charKey)
         elseif button == "RightButton" and rowData._charKey then
             if IsShiftKeyDown() then
@@ -1266,12 +1541,17 @@ function UI:RefreshCharactersPage()
         if (ckData.role or "both") == "none" then hiddenCount = hiddenCount + 1 end
         if ckData.gold then totalGold = totalGold + ckData.gold end
     end
+    local deletedCount = 0
+    for _ in pairs(ns.db.deletedCharacters or {}) do deletedCount = deletedCount + 1 end
     local statusParts = {charCount .. " characters"}
     if totalGold > 0 then
         table.insert(statusParts, ns:FormatGold(totalGold) .. " total")
     end
     if hiddenCount > 0 then
         table.insert(statusParts, hiddenCount .. " hidden")
+    end
+    if deletedCount > 0 then
+        table.insert(statusParts, deletedCount .. " deleted")
     end
     table.insert(statusParts, #needData .. " realms need chars")
     table.insert(statusParts, ns.COLORS.GRAY .. "Click character to configure" .. "|r")

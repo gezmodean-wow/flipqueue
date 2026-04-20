@@ -357,8 +357,12 @@ function TSM:DetectCharacters()
         local tsmName, tsmRealm = charEntry:match("^(.+) %- (.+)$")
         if tsmName and tsmRealm then
             local charKey = tsmName .. "-" .. tsmRealm
-            -- Skip if already known or dismissed
-            if not (ns.db.characters and ns.db.characters[charKey]) and not dismissed[charKey] then
+            -- Skip if already known, dismissed, or tombstoned. Tombstoned
+            -- chars were explicitly deleted by the user; we must not prompt
+            -- to re-add them.
+            if not (ns.db.characters and ns.db.characters[charKey])
+                and not dismissed[charKey]
+                and not ns:IsCharDeleted(charKey) then
                 -- Look up class from TSM internal data
                 -- Keys: s@CharName - Faction - RealmName@internalData@classKey
                 local charClass = nil
