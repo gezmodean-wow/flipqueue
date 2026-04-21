@@ -186,9 +186,9 @@ local function BuildSteps()
             },
             {
                 type = "input", key = "goldBuffer",
-                label = "Extra gold to keep on character",
-                desc  = "Gold to keep beyond AH fees. Covers repairs, travel, reagents, " ..
-                        "or anything else you might need while playing.",
+                label = "Minimum gold to keep on character",
+                desc  = "Absolute floor for your character's balance. Used when AH fees " ..
+                        "are lower — covers repairs, travel, reagents, etc.",
                 suffix = "gold",
             },
         },

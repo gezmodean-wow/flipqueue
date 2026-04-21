@@ -17,7 +17,7 @@ ns._automationPaused = false
 -- Constants
 --------------------------
 
-local THUMB_HEIGHT   = 12
+local THUMB_HEIGHT   = 14   -- matches tool drawer's THUMB_WIDTH for visual symmetry
 local BTN_HEIGHT     = 18
 local BTN_SPACING    = 2
 local PAD            = 4
@@ -25,10 +25,10 @@ local HEADER_HEIGHT  = 16
 local ANIM_DURATION  = 0.15
 
 local DEFAULT_CONTENT_H = HEADER_HEIGHT + PAD + BTN_HEIGHT + PAD  -- 42
-local DEFAULT_FULL_H    = DEFAULT_CONTENT_H + THUMB_HEIGHT  -- 54
+local DEFAULT_FULL_H    = DEFAULT_CONTENT_H + THUMB_HEIGHT  -- 56
 
 local BANK_CONTENT_H = HEADER_HEIGHT + PAD + 3 * BTN_HEIGHT + 2 * BTN_SPACING + PAD  -- 82
-local BANK_FULL_H    = BANK_CONTENT_H + THUMB_HEIGHT  -- 94
+local BANK_FULL_H    = BANK_CONTENT_H + THUMB_HEIGHT  -- 96
 
 local DRAWER_BACKDROP = {
     bgFile   = "Interface\\Tooltips\\UI-Tooltip-Background",
@@ -351,7 +351,8 @@ local function GetWithdrawLabel()
     local ok, totalCopper = pcall(Tracker.CalculateRequiredGold, Tracker, charKey, currentRealm)
     if not ok then totalCopper = 0 end
     local bufferCopper = (ns.db and ns.db.settings.goldBuffer or 0) * 10000
-    local estimatedCopper = math.max(10000, math.ceil((totalCopper or 0) * 1.1)) + bufferCopper
+    local estimatedCopper = math.max(bufferCopper, math.ceil((totalCopper or 0) * 1.1))
+    estimatedCopper = math.ceil(estimatedCopper / 10000) * 10000
     local playerCopper = GetMoney and GetMoney() or 0
     if playerCopper >= estimatedCopper then return "Withdraw Gold: 0g" end
     local shortfall = estimatedCopper - playerCopper
@@ -366,11 +367,11 @@ local function GetDepositLabel()
     local ok, feesCopper = pcall(Tracker.CalculateRequiredGold, Tracker, charKey, currentRealm)
     if not ok then feesCopper = 0 end
     local bufferCopper = (ns.db and ns.db.settings.goldBuffer or 0) * 10000
-    local keepCopper = math.max(10000, math.ceil((feesCopper or 0) * 1.1)) + bufferCopper
+    local keepCopper = math.max(bufferCopper, math.ceil((feesCopper or 0) * 1.1))
+    keepCopper = math.ceil(keepCopper / 10000) * 10000
     local playerCopper = GetMoney and GetMoney() or 0
     if playerCopper <= keepCopper then return "Deposit Earnings: 0g" end
-    local excess = math.floor((playerCopper - keepCopper) / 10000) * 10000
-    if excess <= 0 then return "Deposit Earnings: 0g" end
+    local excess = playerCopper - keepCopper
     return "Deposit Earnings: " .. ns:FormatGold(excess)
 end
 
@@ -1138,24 +1139,31 @@ local function EnsureDrawer()
     Tracker = ns.Tracker
 
     -- Clip frame: full width, overlapping mini border by 3px for seamless look
-    contextClip = CreateFrame("Frame", "FlipQueueContextClip", mini)
+    -- Backdrop lives on the clip frame itself (not the content) so the visible
+    -- drawer is always a complete rounded rectangle — both top and bottom
+    -- borders track the clip's animated height, so the collapsed thumb doesn't
+    -- look like it's cut off on one side.
+    contextClip = CreateFrame("Frame", "FlipQueueContextClip", mini, "BackdropTemplate")
     contextClip:SetClipsChildren(true)
     contextClip:SetHeight(THUMB_HEIGHT)
     contextClip:SetPoint("TOPLEFT",  mini, "BOTTOMLEFT",  0, 3)
     contextClip:SetPoint("TOPRIGHT", mini, "BOTTOMRIGHT", 0, 3)
     contextClip:SetFrameStrata("MEDIUM")
+    contextClip:SetBackdrop(DRAWER_BACKDROP)
+    contextClip:SetBackdropColor(0.05, 0.05, 0.1, 0.9)
+    contextClip:SetBackdropBorderColor(0.3, 0.3, 0.4, 0.8)
 
     -- Content frame: anchored to TOP of clip (grows downward with clip).
     -- Using TOP anchor instead of BOTTOM avoids the backdrop extending
     -- above the clip rect (SetClipsChildren doesn't clip a frame's own
     -- backdrop, only its children).
-    contextContent = CreateFrame("Frame", "FlipQueueContextContent", contextClip, "BackdropTemplate")
+    -- Content frame is just a container for buttons now; the backdrop lives
+    -- on the clip frame. Kept as a full-height shell so button positions
+    -- (which reference its TOPLEFT) remain stable during animation.
+    contextContent = CreateFrame("Frame", "FlipQueueContextContent", contextClip)
     contextContent:SetHeight(THUMB_HEIGHT)
     contextContent:SetPoint("TOPLEFT",  contextClip, "TOPLEFT",  0, 0)
     contextContent:SetPoint("TOPRIGHT", contextClip, "TOPRIGHT", 0, 0)
-    contextContent:SetBackdrop(DRAWER_BACKDROP)
-    contextContent:SetBackdropColor(0.05, 0.05, 0.1, 0.9)
-    contextContent:SetBackdropBorderColor(0.3, 0.3, 0.4, 0.8)
 
     -- Thumb (grip tab at bottom). Parented to contextClip so it always sits
     -- at the visible bottom edge regardless of contextContent's height.

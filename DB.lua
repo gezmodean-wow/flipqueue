@@ -91,7 +91,7 @@ function ns:InitDB()
     if db.settings.debugMessages == nil then db.settings.debugMessages = false end
     -- Auto-deposit earnings to warbank (off by default — players may want to keep earnings)
     if db.settings.autoDepositGold == nil then db.settings.autoDepositGold = false end
-    db.settings.goldBuffer = db.settings.goldBuffer or 50  -- gold to keep on character beyond fees
+    db.settings.goldBuffer = db.settings.goldBuffer or 50  -- absolute min gold to keep on character (floor vs AH fees)
     -- Warband Miser override: when true, FlipQueue manages gold even if
     -- Warband Miser is loaded. Default off — WM owns gold by default when
     -- installed to avoid fighting it.

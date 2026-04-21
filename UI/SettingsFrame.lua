@@ -803,7 +803,7 @@ function UI:CreateSettingsPanel(parent)
         descText:SetJustifyH("LEFT")
         descText:SetWordWrap(true)
         descText:SetTextColor(DESC_COLOR[1], DESC_COLOR[2], DESC_COLOR[3])
-        descText:SetText("Extra gold to keep beyond AH fees. 0 means keep only fees.")
+        descText:SetText("Minimum gold to keep on character. Used as a floor — if AH fees exceed this, fees win.")
 
         settingsWidgets.goldBufferBox = box
     end

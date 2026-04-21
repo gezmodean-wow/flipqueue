@@ -391,25 +391,8 @@ function Tracker:AutoWithdrawGold()
         return
     end
 
-    -- Only withdraw if this character actually has tasks on its realm
     local charKey = ns:GetCharKey()
     local currentRealm = charKey:match("%-(.+)$") or GetRealmName()
-    local hasTasks = false
-    if ns.TodoList then
-        local todoTasks = ns.TodoList:GetCharacterTasks(charKey)
-        for _, task in ipairs(todoTasks) do
-            local isBuy = task.item.action == "buy"
-            local realmToMatch = isBuy and task.item.buyRealm or task.item.targetRealm
-            if ns:RealmMatches(realmToMatch or "", currentRealm) then
-                hasTasks = true
-                break
-            end
-        end
-    end
-    if not hasTasks then
-        ns:PrintDebug("AutoWithdrawGold: skipped — no tasks on realm " .. currentRealm)
-        return
-    end
 
     -- Reset session tracker if realm changed
     if sessionWithdrawnRealm ~= currentRealm then
@@ -419,37 +402,37 @@ function Tracker:AutoWithdrawGold()
 
     local totalDepositCopper, itemCount, depositDetails = self:CalculateRequiredGold(charKey, currentRealm)
 
-    if itemCount == 0 then
-        ns:PrintDebug("AutoWithdrawGold: skipped — CalculateRequiredGold returned 0 items")
-        return
-    end
-
-    -- Print breakdown (debug only)
+    -- Print breakdown (debug only) — skipped when there are no task-driven fees,
+    -- since only the goldBuffer min-balance drives the withdraw in that case.
     local hasBuyCosts = false
-    ns:PrintDebug(ns.COLORS.YELLOW .. "Gold calc for " .. itemCount .. " task(s):|r")
-    for _, d in ipairs(depositDetails) do
-        local depositStr = ns:FormatGold(d.deposit)
-        if d.duration == "buy" then
-            hasBuyCosts = true
-            ns:PrintDebug("  " .. d.name .. ": buy x" .. d.qty .. " = " .. depositStr)
-        else
-            local vendorStr = ns:FormatGold(d.vendorCopper)
-            ns:PrintDebug("  " .. d.name .. ": vendor=" .. vendorStr ..
-                " x" .. d.qty .. " @ " .. d.duration ..
-                " (" .. string.format("%.0f%%", d.mult * 100) .. ") = " .. depositStr)
+    if itemCount > 0 then
+        ns:PrintDebug(ns.COLORS.YELLOW .. "Gold calc for " .. itemCount .. " task(s):|r")
+        for _, d in ipairs(depositDetails) do
+            local depositStr = ns:FormatGold(d.deposit)
+            if d.duration == "buy" then
+                hasBuyCosts = true
+                ns:PrintDebug("  " .. d.name .. ": buy x" .. d.qty .. " = " .. depositStr)
+            else
+                local vendorStr = ns:FormatGold(d.vendorCopper)
+                ns:PrintDebug("  " .. d.name .. ": vendor=" .. vendorStr ..
+                    " x" .. d.qty .. " @ " .. d.duration ..
+                    " (" .. string.format("%.0f%%", d.mult * 100) .. ") = " .. depositStr)
+            end
         end
     end
 
-    -- Target withdraw amount: fees + 10% rounding buffer + user's goldBuffer
-    -- (the "min balance to keep on character"). Must mirror AutoDepositGold's
+    -- Target balance: max of (fees + 10% rounding) or the user's goldBuffer
+    -- (absolute min balance to keep on character). Must mirror AutoDepositGold's
     -- keepCopper formula so deposit and withdraw target the same balance.
     local goldBufferCopper = (ns.db.settings.goldBuffer or 0) * 10000
-    local estimatedFeesCopper = math.max(10000, math.ceil(totalDepositCopper * 1.1)) + goldBufferCopper
-    local estimatedFeesGold = math.ceil(estimatedFeesCopper / 10000)
+    local estimatedFeesCopper = math.max(goldBufferCopper, math.ceil(totalDepositCopper * 1.1))
+    -- Round target up to whole gold so the post-withdraw balance is even
+    estimatedFeesCopper = math.ceil(estimatedFeesCopper / 10000) * 10000
+    local estimatedFeesGold = estimatedFeesCopper / 10000
 
     local totalLabel = hasBuyCosts and "Total (fees + purchases)" or "Total deposit"
-    ns:PrintDebug("  " .. totalLabel .. ": " .. ns:FormatGold(totalDepositCopper) ..
-        " + 10% buffer + " .. ns:FormatGold(goldBufferCopper) .. " min balance = " ..
+    ns:PrintDebug("  " .. totalLabel .. ": max(" .. ns:FormatGold(goldBufferCopper) ..
+        " min balance, " .. ns:FormatGold(totalDepositCopper) .. " + 10%) = " ..
         ns:FormatGold(estimatedFeesCopper))
 
     -- Account for what we've already withdrawn this session
@@ -467,8 +450,9 @@ function Tracker:AutoWithdrawGold()
         return
     end
 
+    -- shortfallCopper is exact: it includes silver/copper needed to round
+    -- playerCopper up to the whole-gold target.
     local shortfallCopper = estimatedFeesCopper - playerCopper
-    local shortfallGold = math.ceil(shortfallCopper / 10000)
     local playerGold = math.floor(playerCopper / 10000)
 
     -- Ensure BankFrame is on the warbank panel before calling C_Bank APIs.
@@ -494,24 +478,20 @@ function Tracker:AutoWithdrawGold()
         return
     end
 
-    -- Round up to whole gold
-    shortfallCopper = shortfallGold * 10000
-
     -- Enforce max withdrawal cap
     local maxGold = ns.db.settings.maxWithdrawGold or 0
     if maxGold > 0 then
         local maxCopper = maxGold * 10000
         if shortfallCopper > maxCopper then
             shortfallCopper = maxCopper
-            shortfallGold = maxGold
             ns:Print(ns.COLORS.YELLOW .. "Capped withdrawal to " .. maxGold .. "g (max setting).|r")
         end
     end
 
     if warbankCopper < shortfallCopper then
         local warbankGold = math.floor(warbankCopper / 10000)
-        ns:Print(ns.COLORS.RED .. "Not enough in warbank.|r Need " .. shortfallGold ..
-            "g more, warbank has " .. warbankGold .. "g")
+        ns:Print(ns.COLORS.RED .. "Not enough in warbank.|r Need " .. ns:FormatGold(shortfallCopper) ..
+            " more, warbank has " .. warbankGold .. "g")
         return
     end
 
@@ -520,7 +500,7 @@ function Tracker:AutoWithdrawGold()
     if ok8 then
         sessionWithdrawnCopper = sessionWithdrawnCopper + shortfallCopper
         local costLabel = hasBuyCosts and "fees + purchases" or "fees"
-        ns:Print(ns.COLORS.GREEN .. "Withdrew " .. shortfallGold .. "g|r from warbank" ..
+        ns:Print(ns.COLORS.GREEN .. "Withdrew " .. ns:FormatGold(shortfallCopper) .. "|r from warbank" ..
             " (est. " .. estimatedFeesGold .. "g " .. costLabel .. " for " .. itemCount .. " items, had " .. playerGold .. "g)")
         return shortfallCopper
     else
@@ -552,11 +532,13 @@ function Tracker:AutoDepositGold()
     local charKey = ns:GetCharKey()
     local currentRealm = charKey:match("%-(.+)$") or GetRealmName()
 
-    -- Calculate how much gold we need to keep
+    -- Calculate how much gold we need to keep: whichever is larger of
+    -- (fees + 10% rounding) or the user's configured min-balance buffer.
     local feesCopper = self:CalculateRequiredGold(charKey, currentRealm)
-    -- Add 10% buffer for rounding + the user's configured buffer
     local bufferCopper = (ns.db.settings.goldBuffer or 0) * 10000
-    local keepCopper = math.max(10000, math.ceil(feesCopper * 1.1)) + bufferCopper
+    local keepCopper = math.max(bufferCopper, math.ceil(feesCopper * 1.1))
+    -- Round target up to whole gold so the post-deposit balance is even
+    keepCopper = math.ceil(keepCopper / 10000) * 10000
 
     local playerCopper = GetMoney()
     if playerCopper <= keepCopper then
@@ -565,11 +547,10 @@ function Tracker:AutoDepositGold()
         return
     end
 
+    -- excessCopper is exact: depositing this leaves a whole-gold balance.
     local excessCopper = playerCopper - keepCopper
-    -- Round down to whole gold
-    excessCopper = math.floor(excessCopper / 10000) * 10000
     if excessCopper <= 0 then
-        ns:PrintDebug("AutoDepositGold: excessCopper <= 0 after rounding")
+        ns:PrintDebug("AutoDepositGold: excessCopper <= 0")
         return
     end
 
@@ -593,9 +574,8 @@ function Tracker:AutoDepositGold()
 
     local ok2, err = pcall(C_Bank.DepositMoney, Enum.BankType.Account, excessCopper)
     if ok2 then
-        local depositGold = math.floor(excessCopper / 10000)
         local keptGold = math.floor(keepCopper / 10000)
-        ns:Print(ns.COLORS.GREEN .. "Deposited " .. depositGold .. "g|r to warbank" ..
+        ns:Print(ns.COLORS.GREEN .. "Deposited " .. ns:FormatGold(excessCopper) .. "|r to warbank" ..
             " (kept " .. keptGold .. "g for fees + buffer)")
         return excessCopper
     else
