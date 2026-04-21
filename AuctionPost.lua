@@ -9,6 +9,29 @@ ns.AuctionPost = AuctionPost
 -- Post Result Tracking
 --------------------------
 
+-- Enum.AuctionHouseError values from Blizzard's API. Used to name error codes
+-- from AUCTION_HOUSE_SHOW_ERROR. Derived from the enum order in
+-- Blizzard_AuctionHouseUI / the API docs; if Blizzard reorders this we just
+-- show the numeric fallback.
+local AH_ERROR_NAMES = {
+    [0]  = "DatabaseError",
+    [1]  = "HigherBid",
+    [2]  = "BidIncrement",
+    [3]  = "BidOwn",
+    [4]  = "ItemNotSuitable",
+    [5]  = "AuctionHouseBusy",
+    [6]  = "AuctionHouseUnavailable",
+    [7]  = "RestrictedAccount",
+    [8]  = "HasRestriction",
+    [9]  = "NotEnoughMoney",
+    [10] = "ItemNotFound",
+    [11] = "Repair",
+    [12] = "UsedCharges",
+    [13] = "Wrapped",
+    [14] = "LimitedDuration",
+    [15] = "Bag",
+}
+
 -- Listen for server responses to PostItem/PostCommodity to verify success.
 local postResultFrame = CreateFrame("Frame")
 postResultFrame:RegisterEvent("AUCTION_HOUSE_AUCTION_CREATED")
@@ -21,7 +44,9 @@ postResultFrame:SetScript("OnEvent", function(_, event, ...)
         ns:PrintDebug("[AuctionPost] Server confirmed: auction created")
     elseif event == "AUCTION_HOUSE_SHOW_ERROR" then
         local errIdx = ...
-        ns:PrintDebug("[AuctionPost] Server error: " .. tostring(errIdx))
+        local name = errIdx and AH_ERROR_NAMES[errIdx] or "Unknown"
+        ns:PrintDebug("[AuctionPost] Server error: " .. tostring(errIdx) ..
+            " (" .. name .. ")")
     elseif event == "AUCTION_HOUSE_SHOW_FORMATTED_NOTIFICATION" then
         local notification = ...
         ns:PrintDebug("[AuctionPost] Server notification: " .. tostring(notification))
@@ -81,8 +106,8 @@ function AuctionPost:TestPost()
                         ns:Print("[TestPost] Calling PostCommodity...")
                         C_AuctionHouse.PostCommodity(itemLoc, 1, info.stackCount or 1, price)
                     else
-                        ns:Print("[TestPost] Calling PostItem...")
-                        C_AuctionHouse.PostItem(itemLoc, 1, 1, price, price)
+                        ns:Print("[TestPost] Calling PostItem (buy-it-now, bid=nil)...")
+                        C_AuctionHouse.PostItem(itemLoc, 1, 1, nil, price)
                     end
                     ns:Print("[TestPost] Call returned. Watch for server events...")
                     return
@@ -433,16 +458,25 @@ function AuctionPost:PostItem(scanResult, callback)
     local COPPER_PER_SILVER = 100
     unitPrice = math.floor(unitPrice / COPPER_PER_SILVER) * COPPER_PER_SILVER
 
-    -- Commodities use PostCommodity (unitPrice only, no bid).
-    -- Non-commodities use PostItem (bid + buyout).
+    -- Commodities use PostCommodity (unitPrice + stack quantity).
+    -- Non-commodities use PostItem with bid=nil for buy-it-now only. Blizzard's
+    -- validator requires buyout > bid strictly when both are set, and the
+    -- server rejects bid==buyout with AuctionHouseError.ItemNotFound (enum 10).
+    -- Previously we passed bid=buyout=unitPrice per a stale hypothesis; that
+    -- matches neither TSM (nils bid when bid >= buyout) nor Auctionator (passes
+    -- nil bid for buy-it-now only). One click posts one auction; users repeat
+    -- for multiple copies.
+    local loggedQuantity
     if isCommodity then
         ns:PrintDebug("[AuctionPost] calling PostCommodity: dur=" .. duration ..
             " qty=" .. quantity .. " unitPrice=" .. unitPrice)
         C_AuctionHouse.PostCommodity(itemLoc, duration, quantity, unitPrice)
+        loggedQuantity = quantity
     else
         ns:PrintDebug("[AuctionPost] calling PostItem: dur=" .. duration ..
-            " qty=1 bid=" .. unitPrice .. " buyout=" .. unitPrice)
-        C_AuctionHouse.PostItem(itemLoc, duration, 1, unitPrice, unitPrice)
+            " qty=1 bid=nil buyout=" .. unitPrice)
+        C_AuctionHouse.PostItem(itemLoc, duration, 1, nil, unitPrice)
+        loggedQuantity = 1
     end
 
     -- Log the posting
@@ -460,17 +494,17 @@ function AuctionPost:PostItem(scanResult, callback)
             icon           = scanResult.icon,
             targetRealm    = GetRealmName(),
             expectedPrice  = ns:FormatGold(unitPrice),
-            postedPrice    = ns:FormatGold(unitPrice * quantity),
+            postedPrice    = ns:FormatGold(unitPrice * loggedQuantity),
             postedAt       = now,
             charKey        = charKey,
             expiresAt      = expiresAt,
             auctionStatus  = "active",
             soldAt         = nil,
             soldPrice      = nil,
-            postedQuantity = quantity,
+            postedQuantity = loggedQuantity,
         })
 
-        ns:PrintDebug("Posted " .. (scanResult.name or "?") .. " x" .. quantity
+        ns:PrintDebug("Posted " .. (scanResult.name or "?") .. " x" .. loggedQuantity
             .. " at " .. ns:FormatGold(unitPrice) .. "/ea for " .. durationHours .. "h")
     end
 
