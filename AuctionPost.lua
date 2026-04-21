@@ -186,63 +186,58 @@ end
 -- TSM Price Resolution
 --------------------------
 
--- Resolve posting price from TSM Auctioning operation for a given itemKey.
--- Returns a pricing table or nil if TSM is unavailable or no operation found.
+-- Price-source key validator for priceReset / aboveMax lookups.
+-- TSM's MakePostDecision treats only these three as posting targets when the
+-- operation setting names a price to fall back on. "none" / "ignore" mean
+-- "don't post" / "ignore low auctions" and are handled separately.
+local RESET_ABOVEMAX_KEYS = {
+    minPrice    = true,
+    maxPrice    = true,
+    normalPrice = true,
+}
+
+-- Resolve the actual posting buyout for an item, matching TSM's
+-- AuctioningOperation.MakePostDecision logic (see TSM's
+-- LibTSMSystem/Source/Operation/AuctioningOperation.lua:417).
+--
+-- Returns a pricing table or nil if no operation / no price sources are
+-- available or the item is below the operation's threshold with no reset
+-- configured.
+--
+-- The critical piece the old implementation was missing: TSM posts at an
+-- UNDERCUT of the current market (not at the normalPrice baseline). Our
+-- old code evaluated normalPrice and stopped there, which meant FlipQueue
+-- was posting at ~2x average market — way above what players would post
+-- via TSM's own Post Scan.
 function AuctionPost:ResolvePostPrice(itemKey, itemID)
     if not ns.TSM or not ns.TSM:IsEnabled() then
         ns:PrintDebug("[AuctionPost] ResolvePostPrice: TSM not available")
         return nil
     end
 
-    local tsmStr = ns.TSM:ItemKeyToTSMString(itemKey)
-    if not tsmStr then
-        tsmStr = "i:" .. tostring(itemID)
-    end
-
     local op = ns.TSM:GetItemAuctioningOp(itemKey)
-    local normalCopper, minCopper, maxCopper
-    local opName, postCap, duration
 
-    if op then
-        opName = op.opName
-        postCap = op.postCap
-        duration = op.duration
+    -- Evaluate every price expression through TSM up front. These are copper
+    -- values for this specific item/variant.
+    local normalCopper = op and ns.TSM:EvaluateOpPrice(itemKey, op.normalPrice) or nil
+    local minCopper    = op and ns.TSM:EvaluateOpPrice(itemKey, op.minPrice)    or nil
+    local maxCopper    = op and ns.TSM:EvaluateOpPrice(itemKey, op.maxPrice)    or nil
+    local undercut     = op and ns.TSM:EvaluateOpPrice(itemKey, op.undercut)    or 0
+    -- Undercut may be 0 ("match") for players who prefer matching the market.
+    undercut = undercut or 0
 
-        ns:PrintDebug("[AuctionPost] ResolvePostPrice: " .. tostring(itemKey) ..
-            " tsmStr=" .. tostring(tsmStr) .. " op=" .. tostring(opName))
+    -- Current lowest buyout on the AH (from TSM's last scan). This is the
+    -- market reference the decision tree branches on.
+    local lowestCopper = ns.TSM:GetPrice(itemKey, "DBMinBuyout")
 
-        if type(TSM_API) == "table" then
-            if op.normalPrice and op.normalPrice ~= "" then
-                local ok, val = pcall(TSM_API.GetCustomPriceValue, op.normalPrice, tsmStr)
-                normalCopper = ok and val or nil
-                ns:PrintDebug("[AuctionPost]   normal=\"" .. op.normalPrice .. "\" -> " ..
-                    (ok and tostring(val) or ("ERR: " .. tostring(val))))
-            else
-                ns:PrintDebug("[AuctionPost]   normalPrice is empty/nil")
-            end
-
-            if op.minPrice and op.minPrice ~= "" then
-                local ok, val = pcall(TSM_API.GetCustomPriceValue, op.minPrice, tsmStr)
-                minCopper = ok and val or nil
-            end
-
-            if op.maxPrice and op.maxPrice ~= "" then
-                local ok, val = pcall(TSM_API.GetCustomPriceValue, op.maxPrice, tsmStr)
-                maxCopper = ok and val or nil
-            end
-        end
-    else
-        ns:PrintDebug("[AuctionPost] ResolvePostPrice: no op for " .. tostring(itemKey) .. ", using settings fallback")
-    end
-
-    -- Fallback chain when no auctioning operation or normalPrice eval failed:
-    -- 1. Try the player's tsmPriceSource setting (e.g., "70% DBRegionMarketAvg")
-    -- 2. Try DBMinBuyout (current AH price)
-    -- 3. Try DBMarket
-    -- 4. Try DBRegionMarketAvg
+    -- Fallback chain when no auctioning operation OR normalPrice didn't
+    -- evaluate. We'd rather post at *something* sensible than refuse.
+    -- Prefer the current market (DBMinBuyout), then the player's configured
+    -- tsmPriceSource, then market/regional fallbacks. minCopper falls back to
+    -- the tsmMinPriceSource setting so below-threshold checks still fire.
     if not normalCopper then
         local priceSrc = ns.db and ns.db.settings.tsmPriceSource or "DBMinBuyout"
-        local sources = {priceSrc, "DBMinBuyout", "DBMarket", "DBRegionMarketAvg"}
+        local sources = {"DBMinBuyout", priceSrc, "DBMarket", "DBRegionMarketAvg"}
         local seen = {}
         for _, src in ipairs(sources) do
             if not seen[src] then
@@ -250,41 +245,109 @@ function AuctionPost:ResolvePostPrice(itemKey, itemID)
                 local val = ns.TSM:GetPrice(itemKey, src)
                 if val and val > 0 then
                     normalCopper = val
-                    if not opName then opName = src end
-                    ns:PrintDebug("[AuctionPost]   fallback " .. src .. " = " .. tostring(val))
+                    ns:PrintDebug("[AuctionPost]   normalPrice fallback " .. src .. " = " .. tostring(val))
                     break
                 end
             end
         end
     end
-
-    -- Also resolve a minPrice threshold if we don't have one from an op
-    if not minCopper and normalCopper then
+    if not minCopper then
         local minSrc = ns.db and ns.db.settings.tsmMinPriceSource
         if minSrc and minSrc ~= "" then
-            local val = ns.TSM:GetPrice(itemKey, minSrc)
-            if val and val > 0 then minCopper = val end
+            minCopper = ns.TSM:GetPrice(itemKey, minSrc)
         end
     end
 
     if not normalCopper then
-        ns:PrintDebug("[AuctionPost]   no price from any source for " .. tostring(itemKey))
+        ns:PrintDebug("[AuctionPost]   no price source available for " .. tostring(itemKey))
         return nil
     end
 
-    local belowThreshold = false
-    if minCopper and normalCopper < minCopper then
-        belowThreshold = true
+    local opName   = op and op.opName or "fallback"
+    local postCap  = op and op.postCap
+    local duration = op and op.duration
+
+    -- Helper: resolve priceReset / aboveMax setting string to its copper value.
+    local function ResolveReferencedPrice(settingKey)
+        if not op or not op[settingKey] then return nil end
+        local priceKeyName = op[settingKey]
+        if not RESET_ABOVEMAX_KEYS[priceKeyName] then return nil end
+        if priceKeyName == "minPrice"    then return minCopper    end
+        if priceKeyName == "maxPrice"    then return maxCopper    end
+        if priceKeyName == "normalPrice" then return normalCopper end
+        return nil
     end
 
+    -- MakePostDecision branch tree.
+    local buyoutCopper
+    local reason
+    local belowThreshold = false
+    local aboveMaxSkip = false
+
+    if not lowestCopper or lowestCopper <= 0 then
+        -- No competition on the AH — post at normalPrice (TSM's "empty market"
+        -- branch). Still clamp against min/max below.
+        buyoutCopper = normalCopper
+        reason = "normal (no competition)"
+    else
+        local proposed = lowestCopper - (undercut or 0)
+        if minCopper and proposed < minCopper then
+            -- Undercut would put us below our configured floor. Apply the
+            -- operation's priceReset setting.
+            local resetValue = ResolveReferencedPrice("priceReset")
+            if resetValue then
+                buyoutCopper = resetValue
+                reason = "reset (lowest below min)"
+            else
+                -- priceReset is "none" or "ignore" — TSM refuses to post.
+                belowThreshold = true
+                reason = "below min (no reset configured)"
+            end
+        elseif maxCopper and proposed > maxCopper then
+            -- Undercut would leave us above our configured ceiling. Apply
+            -- the aboveMax setting.
+            local aboveMaxValue = ResolveReferencedPrice("aboveMax")
+            if aboveMaxValue then
+                buyoutCopper = aboveMaxValue
+                reason = "aboveMax"
+            else
+                -- aboveMax is "none" — TSM refuses to post.
+                aboveMaxSkip = true
+                reason = "above max (no fallback configured)"
+            end
+        else
+            -- Normal case: undercut the current lowest auction.
+            buyoutCopper = proposed
+            reason = "undercut (lowest - undercut)"
+        end
+    end
+
+    -- Clamp buyout >= minPrice if we have one and we're actually posting.
+    if buyoutCopper and minCopper and buyoutCopper < minCopper then
+        buyoutCopper = minCopper
+    end
+
+    ns:PrintDebug(("[AuctionPost] ResolvePostPrice: %s op=%s lowest=%s normal=%s min=%s max=%s uc=%s -> buyout=%s (%s)"):format(
+        tostring(itemKey), tostring(opName),
+        tostring(lowestCopper), tostring(normalCopper),
+        tostring(minCopper), tostring(maxCopper),
+        tostring(undercut), tostring(buyoutCopper), tostring(reason)))
+
     return {
+        -- The price we will actually post at. Consumers use this instead of
+        -- normalCopper; normalCopper is kept for UI display of "baseline".
+        buyoutCopper   = buyoutCopper,
         normalCopper   = normalCopper,
         minCopper      = minCopper,
         maxCopper      = maxCopper,
+        lowestCopper   = lowestCopper,
+        undercutCopper = undercut,
         postCap        = postCap,
         duration       = duration,
         opName         = opName,
+        reason         = reason,
         belowThreshold = belowThreshold,
+        aboveMaxSkip   = aboveMaxSkip,
     }
 end
 
@@ -373,11 +436,18 @@ function AuctionPost:ScanBags(filterToTodo)
                                 local pricing = self:ResolvePostPrice(key, itemID)
                                 local isCommodity = self:IsCommodity(itemID)
 
+                                -- "ready" means we have a valid post price.
+                                -- "below_threshold" / "above_max" / "no_price" mean TSM's
+                                -- operation refuses to post this item right now.
                                 local status = "ready"
                                 if not pricing then
                                     status = "no_price"
                                 elseif pricing.belowThreshold then
                                     status = "below_threshold"
+                                elseif pricing.aboveMaxSkip then
+                                    status = "above_max"
+                                elseif not pricing.buyoutCopper then
+                                    status = "no_price"
                                 end
 
                                 -- Determine post quantity from TSM postCap or default
@@ -455,7 +525,11 @@ function AuctionPost:PostItem(scanResult, callback)
         return
     end
 
-    if not scanResult.pricing or not scanResult.pricing.normalCopper then
+    -- Prefer the computed post buyout (TSM decision tree) over the baseline
+    -- normalPrice. Fall back to normalPrice only for old callers that haven't
+    -- been re-scanned since this field was added.
+    local postPrice = scanResult.pricing and (scanResult.pricing.buyoutCopper or scanResult.pricing.normalCopper) or nil
+    if not postPrice or postPrice <= 0 then
         cb(false, "No valid price resolved")
         return
     end
@@ -470,7 +544,7 @@ function AuctionPost:PostItem(scanResult, callback)
         return
     end
 
-    local unitPrice = scanResult.pricing.normalCopper
+    local unitPrice = postPrice
     local quantity = scanResult.postQty or 1
     local duration = tonumber(scanResult.pricing.duration) or 3
     local isCommodity = scanResult.isCommodity
@@ -478,7 +552,8 @@ function AuctionPost:PostItem(scanResult, callback)
     ns:PrintDebug("[AuctionPost] PostItem: " .. (scanResult.name or "?") ..
         " qty=" .. quantity .. " price=" .. unitPrice ..
         " dur=" .. duration .. " commodity=" .. tostring(isCommodity) ..
-        " bag=" .. slotInfo.bag .. " slot=" .. slotInfo.slot)
+        " bag=" .. slotInfo.bag .. " slot=" .. slotInfo.slot ..
+        " reason=" .. tostring(scanResult.pricing.reason))
 
     -- WoW AH silently rejects prices with non-zero copper — round to silver.
     local COPPER_PER_SILVER = 100

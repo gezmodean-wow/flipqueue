@@ -216,16 +216,53 @@ function TSM:GetItemAuctioningOp(fqKey)
     if not opSettings then return nil end
 
     local result = {
-        opName      = opName,
-        minPrice    = opSettings.minPrice,
-        maxPrice    = opSettings.maxPrice,
-        normalPrice = opSettings.normalPrice,
-        postCap     = opSettings.postCap,
-        duration    = opSettings.duration,
-        ts          = time(),
+        opName        = opName,
+        -- Price expression strings — evaluate via EvaluateOpPrice.
+        minPrice      = opSettings.minPrice,
+        maxPrice      = opSettings.maxPrice,
+        normalPrice   = opSettings.normalPrice,
+        undercut      = opSettings.undercut,
+        -- String keys naming which price to use. Valid: "none", "ignore",
+        -- "minPrice", "maxPrice", "normalPrice". Consumer looks the key up,
+        -- then evaluates the referenced expression.
+        priceReset    = opSettings.priceReset,
+        aboveMax      = opSettings.aboveMax,
+        -- Numeric: bid as a fraction of buyout (default 1.0 = bid equals
+        -- buyout in TSM's internal math; we still post buy-it-now only).
+        bidPercent    = opSettings.bidPercent,
+        postCap       = opSettings.postCap,
+        duration      = opSettings.duration,
+        ts            = time(),
     }
     opCache[fqKey] = result
     return result
+end
+
+--------------------------
+-- Op Price Evaluation
+--------------------------
+
+-- Evaluate a TSM price expression for a given FlipQueue item key.
+-- Returns the copper value or nil if the expression is empty / unevaluable.
+-- Handles the base-ID fallback the same way GetPrice does.
+function TSM:EvaluateOpPrice(fqKey, expression)
+    if not self:IsAvailable() then return nil end
+    if not expression or expression == "" then return nil end
+    if not fqKey or fqKey == "" then return nil end
+
+    local tsmStr = self:ItemKeyToTSMString(fqKey)
+    if not tsmStr then return nil end
+
+    local ok, copper = pcall(TSM_API.GetCustomPriceValue, expression, tsmStr)
+    if ok and copper then return copper end
+
+    -- Base-item fallback (strip bonus IDs)
+    local baseStr = BaseItemID(fqKey)
+    if baseStr and baseStr ~= tsmStr then
+        ok, copper = pcall(TSM_API.GetCustomPriceValue, expression, baseStr)
+        if ok and copper then return copper end
+    end
+    return nil
 end
 
 -- Walk group hierarchy to find effective operation (handles inheritance)

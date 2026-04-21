@@ -450,8 +450,24 @@ local function GetOrCreateScanRow(parent, index)
         end
         if r.pricing then
             GameTooltip:AddLine(" ")
-            if r.pricing.normalCopper then
-                GameTooltip:AddDoubleLine("Post price:", ns:FormatGold(r.pricing.normalCopper), 0.7, 0.7, 0.7, 1, 1, 1)
+            -- Actual posting price (what TSM's decision tree chose). Bright
+            -- white so players see it as the load-bearing number.
+            local postBuyout = r.pricing.buyoutCopper or r.pricing.normalCopper
+            if postBuyout then
+                GameTooltip:AddDoubleLine("Post price:", ns:FormatGold(postBuyout), 0.7, 0.7, 0.7, 1, 1, 1)
+            end
+            -- Market reference: what we undercut (from TSM DBMinBuyout).
+            if r.pricing.lowestCopper then
+                GameTooltip:AddDoubleLine("AH lowest:", ns:FormatGold(r.pricing.lowestCopper), 0.7, 0.7, 0.7, 0.85, 0.85, 1)
+            end
+            -- Why we chose that price (undercut / reset / aboveMax / no competition).
+            if r.pricing.reason then
+                GameTooltip:AddDoubleLine("Reason:", r.pricing.reason, 0.7, 0.7, 0.7, 0.6, 0.8, 0.6)
+            end
+            -- Baseline (normalPrice) is still interesting context but not the
+            -- post price itself.
+            if r.pricing.normalCopper and r.pricing.normalCopper ~= postBuyout then
+                GameTooltip:AddDoubleLine("Normal:", ns:FormatGold(r.pricing.normalCopper), 0.7, 0.7, 0.7, 0.7, 0.7, 0.7)
             end
             if r.pricing.minCopper then
                 GameTooltip:AddDoubleLine("Min price:", ns:FormatGold(r.pricing.minCopper), 0.7, 0.7, 0.7, 0.9, 0.7, 0.3)
@@ -471,6 +487,8 @@ local function GetOrCreateScanRow(parent, index)
         end
         if r.status == "below_threshold" then
             GameTooltip:AddLine("Cheapest auction below min price", 1, 0.4, 0.3)
+        elseif r.status == "above_max" then
+            GameTooltip:AddLine("Above operation's max price (aboveMax=none)", 1, 0.6, 0.3)
         elseif r.status == "no_price" then
             GameTooltip:AddLine("No TSM pricing data", 0.7, 0.7, 0.7)
         end
@@ -778,8 +796,10 @@ local function RefreshAHScanRows()
             row.dealPrice:SetText("")
         end
 
-        -- Post price from TSM operation
-        local priceCopper = result.pricing and result.pricing.normalCopper
+        -- Post price = what TSM's decision tree chose (undercut of the AH
+        -- lowest, clamped to min/max). Falls back to normalCopper for
+        -- empty-market / legacy scan results.
+        local priceCopper = result.pricing and (result.pricing.buyoutCopper or result.pricing.normalCopper)
         if priceCopper then
             row.postPrice:SetText("|cffddcc66Post:|r " .. ns:FormatGold(priceCopper))
         else
@@ -791,6 +811,10 @@ local function RefreshAHScanRows()
             row.info:SetText("|cffff6644Below min price|r")
             row.name:SetTextColor(0.7, 0.5, 0.5)
             row:SetBackdropBorderColor(0.5, 0.2, 0.2, 0.7)
+        elseif result.status == "above_max" then
+            row.info:SetText("|cffff9944Above max price|r")
+            row.name:SetTextColor(0.7, 0.6, 0.5)
+            row:SetBackdropBorderColor(0.5, 0.3, 0.15, 0.7)
         elseif result.status == "no_price" then
             row.info:SetText("|cff888888No TSM data|r")
             row.name:SetTextColor(0.6, 0.6, 0.6)
