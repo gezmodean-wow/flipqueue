@@ -30,6 +30,8 @@ Affects all realms/characters once any of the three contributing bugs fires:
 
 - **2026-04-20** (working-tree on master, uncommitted): Fix for all three contributing bugs. In-game verification in progress before commit + alpha tag. Files touched: `TrackerMail.lua` (removed pre-emptive flip, added post-scan cleanup), `TrackerAuctions.lua:CheckOwnedAuctions` (rewritten as three clean phases), new `TrackerTSMReconcile.lua` (direct `TradeSkillMasterDB` CSV parse with per-entry idempotent upgrade flag), `Tracker.lua` (fires `ReconcileWithTSM(false)` 2s after owned-auction reconcile on AH open, 1h throttle), `flipqueue.toc` (registers new file), `UI/SlashCommands.lua` (`/fq reconcile` + `/fq reconcile reset`). Per project policy, no commit/tag until in-game verification passes. See **Root cause** and **Fix details** in Notes.
 
+- **2026-04-20** (commit `6c62771`): Code committed to master as `fix: reconcile active auction drift and upgrade sold outcomes via TSM`. Not yet tagged — alpha release pending. In-game verification continues; tag + push when ready for testers.
+
 ## Notes
 
 ### Thread opening — 2026-04-21 by gezmodean
