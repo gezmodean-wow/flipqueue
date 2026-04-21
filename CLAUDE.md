@@ -18,11 +18,11 @@
 
 ## Cogworks suite context
 
-This addon is part of the **Cogworks** WoW addon suite alongside Tempo, Maxcraft, and a planned ledger cog. The shared core lives at `C:\src\cogworks\`. Before making structural or architectural changes, read:
+This addon is part of the **Cogworks** WoW addon suite alongside Tempo, Maxcraft, and Tally. The shared core lives at `C:\src\cogworks\`. Before making structural or architectural changes, read:
 
 - `C:\src\cogworks\docs\AGENT_BRIEF.md` — single-page suite overview
 - `C:\src\cogworks\docs\PLAN.md` — integration plan and phased rollout
-- `C:\src\cogworks\docs\SYNDICATOR_INTEGRATION.md` — implementation patterns for the upcoming Syndicator hard-dep migration (Phase 6a)
+- `C:\src\cogworks\docs\SYNDICATOR_INTEGRATION.md` — implementation patterns for Syndicator migration (complete)
 
 **Live-user constraints:** This cog is published on CurseForge and Wago. The SavedVariables name `FlipQueueDB`, the slash commands `/fq` and `/flipqueue`, and the addon folder name `flipqueue` are all immutable without a migration plan — renaming any of them would break every existing install. The item key format `itemID;bonusIDs;modifiers` is also user-data-shaped and matched against external imports (FlippingPal, TSM, Auctionator).
 
@@ -32,7 +32,6 @@ This addon is part of the **Cogworks** WoW addon suite alongside Tempo, Maxcraft
 - All Lua files use `local addonName, ns = ...` for namespace
 - Colors defined in Core.lua ns.COLORS table
 - Use WoW native templates (BasicFrameTemplateWithInset, GameMenuButtonTemplate, etc.)
-- No external library dependencies (no Ace3, no LibStub)
 - Item key format: `itemID;bonusIDs;modifiers` (matches FlippingPal)
 
 ## User Preferences
@@ -40,3 +39,19 @@ This addon is part of the **Cogworks** WoW addon suite alongside Tempo, Maxcraft
 - German EU account - item names and realm names may be in German
 - Uses FlippingPal.com + TSM + Auctionator for cross-realm arbitrage
 - Prefers clean TSM-like UI styling (tabular data, sortable columns, side navigation)
+
+## Feedback tracking
+
+Player feedback (from the Chronoforge Discord), bug reports, and internal observations for FlipQueue live in `feedback/`. Schema and lifecycle are documented in `~/.chronoforge/CONVENTIONS.md`.
+
+- `feedback/collection/` — still gathering info
+- `feedback/releases/v<X.Y.Z>/` — scoped to a specific release
+- `feedback/archive/` — shipped, wontfix, or duplicate
+
+FlipQueue issue IDs use the prefix `FQ` (e.g. `FQ-001`).
+
+### Proactive capture
+
+When the user mentions a bug, regression, feature idea, or improvement during normal work, offer to log it via `/feedback-capture` — search for related existing entries first, then augment or create. Don't write a feedback file unprompted; ask first. When shipping a fix for a tracked issue, offer to append to its Attempts log via `/feedback-note`.
+
+Commit messages referencing a tracked issue should use `<type>(<ID>): <subject>` — e.g. `fix(FQ-004): sniper delay cancels on target change`.
