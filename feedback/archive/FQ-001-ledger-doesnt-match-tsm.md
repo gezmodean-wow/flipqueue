@@ -1,7 +1,7 @@
 ---
 id: FQ-001
 cog: flipqueue
-status: in-progress
+status: shipped
 title: Ledger doesn't match TSM sales records
 sources:
   - type: discord
@@ -10,8 +10,8 @@ sources:
     reporter: gezmodean
 reporters: [gezmodean]
 created: 2026-04-20
-updated: 2026-04-20
-release: null
+updated: 2026-04-21
+release: v0.11.0
 tags: [ledger, tsm, reconciliation, mail, auctions]
 ---
 
@@ -31,6 +31,8 @@ Affects all realms/characters once any of the three contributing bugs fires:
 - **2026-04-20** (working-tree on master, uncommitted): Fix for all three contributing bugs. In-game verification in progress before commit + alpha tag. Files touched: `TrackerMail.lua` (removed pre-emptive flip, added post-scan cleanup), `TrackerAuctions.lua:CheckOwnedAuctions` (rewritten as three clean phases), new `TrackerTSMReconcile.lua` (direct `TradeSkillMasterDB` CSV parse with per-entry idempotent upgrade flag), `Tracker.lua` (fires `ReconcileWithTSM(false)` 2s after owned-auction reconcile on AH open, 1h throttle), `flipqueue.toc` (registers new file), `UI/SlashCommands.lua` (`/fq reconcile` + `/fq reconcile reset`). Per project policy, no commit/tag until in-game verification passes. See **Root cause** and **Fix details** in Notes.
 
 - **2026-04-20** (commit `6c62771`): Code committed to master as `fix: reconcile active auction drift and upgrade sold outcomes via TSM`. Not yet tagged — alpha release pending. In-game verification continues; tag + push when ready for testers.
+
+- **2026-04-21** (tag `v0.11.0`, commit `46f4761`): Shipped to stable. TSM reconciliation verified solved in live testing by @gezmodean — ledger entries upgrade to `sold` correctly when TSM has a matching sale, active-auction badge stays aligned with the AH across post / cancel / expire / sell cycles, `/fq reconcile` sweep produces sensible upgrades. Same-item-within-48h cross-match caveat documented for future tester reports; `/fq reconcile reset` escape hatch is in place.
 
 ## Notes
 
