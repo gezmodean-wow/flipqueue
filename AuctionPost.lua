@@ -196,6 +196,36 @@ local RESET_ABOVEMAX_KEYS = {
     normalPrice = true,
 }
 
+-- Find our character's lowest buyout-per-unit for items matching baseItemID
+-- among currently-live owned auctions. TSM's MakePostDecision calls this the
+-- isPlayer branch: if we already own the lowest auction, match our own price
+-- instead of undercutting ourselves into a cheaper bracket with every repost.
+--
+-- Returns nil when the AH isn't open, the owned-auctions query hasn't
+-- resolved yet, or we have no matching auction on the AH.
+local function GetOwnLowestBuyout(itemID)
+    if not C_AuctionHouse or not C_AuctionHouse.GetOwnedAuctions then return nil end
+    if not itemID then return nil end
+    local ok, owned = pcall(C_AuctionHouse.GetOwnedAuctions)
+    if not ok or not owned or #owned == 0 then return nil end
+
+    local target = tostring(itemID)
+    local lowest
+    for _, auction in ipairs(owned) do
+        if auction.itemKey and tostring(auction.itemKey.itemID) == target then
+            local buyout = auction.buyoutAmount or 0
+            local qty = auction.quantity or 1
+            if buyout > 0 and qty > 0 then
+                local unit = math.floor(buyout / qty)
+                if unit > 0 and (not lowest or unit < lowest) then
+                    lowest = unit
+                end
+            end
+        end
+    end
+    return lowest
+end
+
 -- Resolve the actual posting buyout for an item, matching TSM's
 -- AuctioningOperation.MakePostDecision logic (see TSM's
 -- LibTSMSystem/Source/Operation/AuctioningOperation.lua:417).
@@ -227,8 +257,19 @@ function AuctionPost:ResolvePostPrice(itemKey, itemID)
     undercut = undercut or 0
 
     -- Current lowest buyout on the AH (from TSM's last scan). This is the
-    -- market reference the decision tree branches on.
+    -- market reference the decision tree branches on. DBMinBuyout can lag
+    -- reality between scans and doesn't tell us who owns the lowest listing
+    -- — see ownLowestCopper below for the self-owned guard.
     local lowestCopper = ns.TSM:GetPrice(itemKey, "DBMinBuyout")
+
+    -- Our own lowest live buyout for this item (if the AH is open and we
+    -- have a matching active auction). TSM's MakePostDecision has an
+    -- `isPlayer` branch: when the market's lowest auction is ours, TSM
+    -- matches our own price instead of undercutting — otherwise every
+    -- repost ratchets the price down further. Without this guard FlipQueue
+    -- undercuts itself and TSM's cancel scan immediately flags the post as
+    -- undercut or cancellable for repost.
+    local ownLowestCopper = GetOwnLowestBuyout(itemID)
 
     -- Fallback chain when no auctioning operation OR normalPrice didn't
     -- evaluate. We'd rather post at *something* sensible than refuse.
@@ -289,6 +330,14 @@ function AuctionPost:ResolvePostPrice(itemKey, itemID)
         -- branch). Still clamp against min/max below.
         buyoutCopper = normalCopper
         reason = "normal (no competition)"
+    elseif ownLowestCopper and ownLowestCopper <= lowestCopper + 100 then
+        -- We own the market's lowest listing (1s slack for silver rounding).
+        -- Match our own price — do not self-undercut. This matches TSM's
+        -- isPlayer branch: without it, every repost ratchets the ceiling
+        -- down and TSM's cancel scan immediately flags the post as
+        -- undercut / cancellable-for-repost-higher.
+        buyoutCopper = ownLowestCopper
+        reason = "match own (we're lowest)"
     else
         local proposed = lowestCopper - (undercut or 0)
         if minCopper and proposed < minCopper then
@@ -327,27 +376,29 @@ function AuctionPost:ResolvePostPrice(itemKey, itemID)
         buyoutCopper = minCopper
     end
 
-    ns:PrintDebug(("[AuctionPost] ResolvePostPrice: %s op=%s lowest=%s normal=%s min=%s max=%s uc=%s -> buyout=%s (%s)"):format(
+    ns:PrintDebug(("[AuctionPost] ResolvePostPrice: %s op=%s lowest=%s own=%s normal=%s min=%s max=%s uc=%s -> buyout=%s (%s)"):format(
         tostring(itemKey), tostring(opName),
-        tostring(lowestCopper), tostring(normalCopper),
+        tostring(lowestCopper), tostring(ownLowestCopper),
+        tostring(normalCopper),
         tostring(minCopper), tostring(maxCopper),
         tostring(undercut), tostring(buyoutCopper), tostring(reason)))
 
     return {
         -- The price we will actually post at. Consumers use this instead of
         -- normalCopper; normalCopper is kept for UI display of "baseline".
-        buyoutCopper   = buyoutCopper,
-        normalCopper   = normalCopper,
-        minCopper      = minCopper,
-        maxCopper      = maxCopper,
-        lowestCopper   = lowestCopper,
-        undercutCopper = undercut,
-        postCap        = postCap,
-        duration       = duration,
-        opName         = opName,
-        reason         = reason,
-        belowThreshold = belowThreshold,
-        aboveMaxSkip   = aboveMaxSkip,
+        buyoutCopper      = buyoutCopper,
+        normalCopper      = normalCopper,
+        minCopper         = minCopper,
+        maxCopper         = maxCopper,
+        lowestCopper      = lowestCopper,
+        ownLowestCopper   = ownLowestCopper,
+        undercutCopper    = undercut,
+        postCap           = postCap,
+        duration          = duration,
+        opName            = opName,
+        reason            = reason,
+        belowThreshold    = belowThreshold,
+        aboveMaxSkip      = aboveMaxSkip,
     }
 end
 
@@ -450,11 +501,19 @@ function AuctionPost:ScanBags(filterToTodo)
                                     status = "no_price"
                                 end
 
-                                -- Determine post quantity from TSM postCap or default
+                                -- Determine post quantity. TSM's postCap is the number of
+                                -- auctions per scan cycle (non-commodity) or total items
+                                -- to list (commodity). pricing.postCap is pre-evaluated
+                                -- to a number in TSM:GetItemAuctioningOp. When we have
+                                -- a TSM op but the postCap evaluation failed, fall back
+                                -- to 1 — safer to post too few than too many, since each
+                                -- post incurs an AH deposit fee the player pays back.
                                 local postQty = info.stackCount or 1
-                                local cap = pricing and tonumber(pricing.postCap) or 0
-                                if cap > 0 then
+                                local cap = pricing and tonumber(pricing.postCap)
+                                if cap and cap > 0 then
                                     postQty = math.min(info.stackCount or 1, cap)
+                                elseif pricing then
+                                    postQty = math.min(info.stackCount or 1, 1)
                                 end
 
                                 byKey[key] = {
@@ -474,10 +533,15 @@ function AuctionPost:ScanBags(filterToTodo)
                                 local entry = byKey[key]
                                 entry.slots[#entry.slots + 1] = {bag = bagIndex, slot = slot, count = info.stackCount or 1}
                                 entry.totalCount = entry.totalCount + (info.stackCount or 1)
-                                local entryCap = entry.pricing and tonumber(entry.pricing.postCap) or 0
-                                if entryCap > 0 then
+                                local entryCap = entry.pricing and tonumber(entry.pricing.postCap)
+                                if entryCap and entryCap > 0 then
                                     entry.postQty = math.min(entry.totalCount, entryCap)
+                                elseif entry.pricing then
+                                    -- Have a TSM op but postCap didn't evaluate — be
+                                    -- conservative, don't default to "post everything".
+                                    entry.postQty = math.min(entry.totalCount, 1)
                                 else
+                                    -- No TSM op at all — fall through to full stack.
                                     entry.postQty = entry.totalCount
                                 end
                             end
@@ -562,22 +626,25 @@ function AuctionPost:PostItem(scanResult, callback)
     -- Commodities use PostCommodity (unitPrice + stack quantity).
     -- Non-commodities use PostItem with bid=nil for buy-it-now only. Blizzard's
     -- validator requires buyout > bid strictly when both are set, and the
-    -- server rejects bid==buyout with AuctionHouseError.ItemNotFound (enum 10).
-    -- Previously we passed bid=buyout=unitPrice per a stale hypothesis; that
-    -- matches neither TSM (nils bid when bid >= buyout) nor Auctionator (passes
-    -- nil bid for buy-it-now only). One click posts one auction; users repeat
-    -- for multiple copies.
-    local loggedQuantity
+    -- server rejects bid==buyout with AuctionHouseError.ItemNotFound.
+    --
+    -- quantity semantics differ between the two APIs:
+    --   PostCommodity(itemLoc, duration, quantity, unitPrice) — quantity is
+    --     the total number of units to list at unitPrice (fungible pool).
+    --   PostItem(itemLoc, duration, quantity, bid, buyout) — quantity is the
+    --     number of SEPARATE AUCTIONS to create; Blizzard finds `quantity`
+    --     matching items in bags and posts each as its own auction.
+    --
+    -- Both honor postCap via scanResult.postQty (pre-capped during scan).
+    local loggedQuantity = quantity
     if isCommodity then
         ns:PrintDebug("[AuctionPost] calling PostCommodity: dur=" .. duration ..
             " qty=" .. quantity .. " unitPrice=" .. unitPrice)
         C_AuctionHouse.PostCommodity(itemLoc, duration, quantity, unitPrice)
-        loggedQuantity = quantity
     else
         ns:PrintDebug("[AuctionPost] calling PostItem: dur=" .. duration ..
-            " qty=1 bid=nil buyout=" .. unitPrice)
-        C_AuctionHouse.PostItem(itemLoc, duration, 1, nil, unitPrice)
-        loggedQuantity = 1
+            " qty=" .. quantity .. " bid=nil buyout=" .. unitPrice)
+        C_AuctionHouse.PostItem(itemLoc, duration, quantity, nil, unitPrice)
     end
 
     -- Log the posting

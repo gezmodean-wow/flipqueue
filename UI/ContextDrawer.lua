@@ -460,7 +460,13 @@ local function GetOrCreateScanRow(parent, index)
             if r.pricing.lowestCopper then
                 GameTooltip:AddDoubleLine("AH lowest:", ns:FormatGold(r.pricing.lowestCopper), 0.7, 0.7, 0.7, 0.85, 0.85, 1)
             end
-            -- Why we chose that price (undercut / reset / aboveMax / no competition).
+            -- Our own existing lowest auction for this item, if any. Shown so
+            -- players can see when FlipQueue is matching their own price
+            -- (the "we're lowest" branch) instead of undercutting.
+            if r.pricing.ownLowestCopper then
+                GameTooltip:AddDoubleLine("Your lowest:", ns:FormatGold(r.pricing.ownLowestCopper), 0.7, 0.7, 0.7, 0.7, 0.9, 0.7)
+            end
+            -- Why we chose that price (undercut / reset / aboveMax / match own / no competition).
             if r.pricing.reason then
                 GameTooltip:AddDoubleLine("Reason:", r.pricing.reason, 0.7, 0.7, 0.7, 0.6, 0.8, 0.6)
             end

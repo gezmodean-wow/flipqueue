@@ -16,6 +16,38 @@ local opCache = {}      -- fqKey -> {minPrice, maxPrice, normalPrice, opName, ts
 local CACHE_TTL = 60    -- seconds
 local OP_CACHE_TTL = 300 -- 5 min for operations (they rarely change mid-session)
 
+-- TSM version we last audited our posting logic against. If TSM bumps to a
+-- newer version, we still work — everything we read (operation settings,
+-- price-expression evaluation via TSM_API.GetCustomPriceValue, group lookup)
+-- is supported public-ish surface area that changes rarely. But the decision
+-- tree in AuctionPost:ResolvePostPrice mirrors TSM's internal
+-- AuctioningOperation.MakePostDecision in:
+--   LibTSMSystem/Source/Operation/AuctioningOperation.lua
+-- If TSM reworks that function (new settings keys, new branches, renamed
+-- fields) our implementation will silently drift. TSM:CheckAuditedVersion
+-- compares the running TSM version to this constant and surfaces a one-time
+-- warning when a new-enough TSM is detected, so someone (human or agent)
+-- knows to re-read MakePostDecision and update the local tree.
+--
+-- When bumping this constant:
+--   1. Read the current MakePostDecision in TSM's source.
+--   2. Compare every branch against AuctionPost:ResolvePostPrice.
+--   3. Check the :AddCustomStringSetting / :AddStringSetting list in
+--      AuctioningOperation.Load for new fields we'd need in
+--      GetItemAuctioningOp.
+--   4. Update the comment in ResolvePostPrice with the audit date.
+local TSM_AUDITED_VERSION = "v4.14.66"
+
+-- Fields we expect every Auctioning operation record to expose. If TSM
+-- renames one, GetItemAuctioningOp returns nil for it and ResolvePostPrice
+-- reports "no TSM data" — which is a safer failure than posting at a wrong
+-- price. The structural check below surfaces the mismatch to the player.
+local EXPECTED_OP_FIELDS = {
+    "minPrice", "maxPrice", "normalPrice",
+    "undercut", "priceReset", "aboveMax",
+    "postCap", "duration",
+}
+
 --------------------------
 -- Availability
 --------------------------
@@ -30,6 +62,90 @@ end
 
 function TSM:IsEnabled()
     return self:IsAvailable() and ns.db and ns.db.settings.tsmEnabled
+end
+
+--------------------------
+-- Audit Drift Detection
+--------------------------
+
+-- Parse a TSM-style version string ("v4.14.66" or "4.14.66") into a numeric
+-- tuple. Returns {major, minor, patch} or nil if the string doesn't look
+-- like a dotted version.
+local function ParseVersion(v)
+    if type(v) ~= "string" then return nil end
+    v = v:gsub("^v", "")
+    local major, minor, patch = v:match("^(%d+)%.(%d+)%.(%d+)")
+    if not major then return nil end
+    return { tonumber(major), tonumber(minor), tonumber(patch) }
+end
+
+-- Compare two parsed version tuples. Returns -1/0/1 for a < b / a == b / a > b.
+local function CompareVersions(a, b)
+    for i = 1, 3 do
+        if a[i] ~= b[i] then
+            return a[i] < b[i] and -1 or 1
+        end
+    end
+    return 0
+end
+
+-- Read the loaded TSM addon's version via the standard addon metadata API.
+function TSM:GetLoadedVersion()
+    if not self:IsAvailable() then return nil end
+    local getMeta = C_AddOns and C_AddOns.GetAddOnMetadata or GetAddOnMetadata
+    if not getMeta then return nil end
+    local ok, ver = pcall(getMeta, "TradeSkillMaster", "Version")
+    return ok and ver or nil
+end
+
+-- Returns "ok" | "ahead" | "behind" | "unknown" comparing the running TSM
+-- version to what our posting logic was last audited against.
+function TSM:GetAuditStatus()
+    local running = ParseVersion(self:GetLoadedVersion())
+    local audited = ParseVersion(TSM_AUDITED_VERSION)
+    if not running or not audited then return "unknown" end
+    local cmp = CompareVersions(running, audited)
+    if cmp == 0 then return "ok" end
+    if cmp > 0 then return "ahead" end
+    return "behind"
+end
+
+-- One-time session warning when TSM has moved past our audited version or
+-- when a new operation field has been added that we don't yet read.
+-- Structural check runs against the first real Auctioning operation we see;
+-- if TSM renamed minPrice/maxPrice/etc, GetItemAuctioningOp returns nil for
+-- that field and we point the player at where to look.
+local _auditWarned = false
+function TSM:CheckAuditedVersion(opSettings)
+    if _auditWarned then return end
+    if not self:IsAvailable() then return end
+
+    local status = self:GetAuditStatus()
+    local running = self:GetLoadedVersion() or "?"
+    if status == "ahead" then
+        ns:Print(ns.COLORS.YELLOW .. "[FlipQueue] TSM " .. running ..
+            " is newer than the version FlipQueue's posting logic was audited against (" ..
+            TSM_AUDITED_VERSION .. "). Posts should still work, but the TSM " ..
+            "decision tree may have changed. If prices look off, report it — " ..
+            "FlipQueue's ResolvePostPrice mirrors TSM's MakePostDecision.|r")
+        _auditWarned = true
+    end
+
+    if opSettings and type(opSettings) == "table" then
+        local missing = {}
+        for _, field in ipairs(EXPECTED_OP_FIELDS) do
+            if opSettings[field] == nil then
+                missing[#missing + 1] = field
+            end
+        end
+        if #missing > 0 and not _auditWarned then
+            ns:Print(ns.COLORS.YELLOW .. "[FlipQueue] TSM Auctioning operation " ..
+                "is missing field(s) we expect: " .. table.concat(missing, ", ") ..
+                ". The schema may have changed in TSM " .. running ..
+                ". Post prices may default to fallbacks.|r")
+            _auditWarned = true
+        end
+    end
 end
 
 --------------------------
@@ -215,6 +331,22 @@ function TSM:GetItemAuctioningOp(fqKey)
     local opSettings = opsDB["Auctioning"][opName]
     if not opSettings then return nil end
 
+    -- Evaluate postCap up front. TSM defines it as a "custom string" setting
+    -- so it accepts both literal numbers ("5", "1") and expressions
+    -- ("max(1, dbmarket/1g)"). The old code used tonumber() on the raw
+    -- string which returns nil for expressions — the caller then fell
+    -- through to "no cap" and over-grabbed items. Try tonumber first for
+    -- the common literal case, then fall back to TSM's evaluator.
+    local postCapEval = tonumber(opSettings.postCap)
+    if not postCapEval and opSettings.postCap and opSettings.postCap ~= "" then
+        postCapEval = self:EvaluateOpPrice(fqKey, opSettings.postCap)
+    end
+
+    -- Audit the operation shape against the fields we expect. TSM may add or
+    -- rename fields across versions; this surfaces mismatches so we don't
+    -- silently fall through to defaults.
+    self:CheckAuditedVersion(opSettings)
+
     local result = {
         opName        = opName,
         -- Price expression strings — evaluate via EvaluateOpPrice.
@@ -230,7 +362,11 @@ function TSM:GetItemAuctioningOp(fqKey)
         -- Numeric: bid as a fraction of buyout (default 1.0 = bid equals
         -- buyout in TSM's internal math; we still post buy-it-now only).
         bidPercent    = opSettings.bidPercent,
-        postCap       = opSettings.postCap,
+        -- Pre-evaluated postCap so downstream consumers get a number, not a
+        -- string expression. Nil when evaluation failed — callers should
+        -- fall back to conservative behavior (post 1) rather than "no cap".
+        postCap       = postCapEval,
+        postCapRaw    = opSettings.postCap,
         duration      = opSettings.duration,
         ts            = time(),
     }
