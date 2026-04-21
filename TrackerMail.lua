@@ -19,9 +19,12 @@ function Tracker:ScanMailForSales()
 
     local currentCharKey = ns:GetCharKey()
 
-    -- Collect active and expired log entries for this character, grouped by name
+    -- Collect active, expired, and cancelled log entries for this character,
+    -- grouped by lowercased name. Cancelled auctions also return their item
+    -- via mail (same shape as expired), so they share the returned-item code
+    -- path.
     local activeByName = {} -- name:lower() -> list of log indices (oldest first)
-    local expiredByName = {} -- name:lower() -> list of log indices for expired auctions
+    local expiredByName = {} -- name:lower() -> list of log indices for expired/cancelled auctions
     for i, entry in ipairs(ns.db.log) do
         if entry.charKey == currentCharKey then
             local key = (entry.name or ""):lower()
@@ -29,7 +32,7 @@ function Tracker:ScanMailForSales()
                 if entry.auctionStatus == "active" then
                     if not activeByName[key] then activeByName[key] = {} end
                     table.insert(activeByName[key], i)
-                elseif entry.auctionStatus == "expired" then
+                elseif entry.auctionStatus == "expired" or entry.auctionStatus == "cancelled" then
                     if not expiredByName[key] then expiredByName[key] = {} end
                     table.insert(expiredByName[key], i)
                 end
@@ -39,7 +42,8 @@ function Tracker:ScanMailForSales()
 
     local hasActive = next(activeByName)
     local hasExpired = next(expiredByName)
-    if not hasActive and not hasExpired then return end
+    -- We still want to run the cleanup pass below even if no log entries are
+    -- open — it's cheap and keeps collectedAt fresh on sold entries.
 
     local consumed = {} -- log index -> true
     local soldCount = 0
@@ -146,13 +150,47 @@ function Tracker:ScanMailForSales()
     end
     mailScanRetries = 0
 
+    -- Cleanup: anything still in expired/cancelled for this char after the
+    -- scan represents returns the user already looted in a previous session
+    -- (or returns whose item mail we couldn't match). Mark them collected so
+    -- they don't linger in the "done but not yet collected" bucket. We set
+    -- saleOutcome="expired" if unset — both expired (timer) and cancelled
+    -- (user aborted) count as unsold for sales stats.
+    --
+    -- Also finalize "collected, saleOutcome unset" entries whose auction
+    -- window has clearly closed (posted > 49h ago). These come from
+    -- CheckOwnedAuctions phase 2 reconciling a stale active entry; if the
+    -- mail scan hasn't matched them by now and TSM hasn't either, conclude
+    -- they didn't sell. Without this step they stay in limbo forever, not
+    -- counted as sold or failed.
+    local finalizedCount = 0
+    local now = time()
+    local AUCTION_WINDOW = 48 * 60 * 60 + 60 * 60 -- 48h + 1h grace
+    for _, entry in ipairs(ns.db.log) do
+        if entry.charKey == currentCharKey then
+            local s = entry.auctionStatus
+            if s == "expired" or s == "cancelled" then
+                entry.auctionStatus = "collected"
+                entry.saleOutcome = entry.saleOutcome or "expired"
+                entry.collectedAt = entry.collectedAt or now
+                finalizedCount = finalizedCount + 1
+            elseif s == "collected" and not entry.saleOutcome then
+                local postedAt = entry.postedAt or 0
+                if postedAt > 0 and (postedAt + AUCTION_WINDOW) < now then
+                    entry.saleOutcome = "expired"
+                    finalizedCount = finalizedCount + 1
+                end
+            end
+        end
+    end
+
     if soldCount > 0 then
         ns:Print(ns.COLORS.GREEN .. soldCount .. " auction sale(s) detected!|r")
     end
     if collectedCount > 0 then
         ns:Print(ns.COLORS.YELLOW .. collectedCount .. " returned auction(s) collected.|r")
     end
-    if soldCount > 0 or collectedCount > 0 then
+    if soldCount > 0 or collectedCount > 0 or finalizedCount > 0 then
         if ns.SalesIndex then ns.SalesIndex:Invalidate() end
         if ns.UI and ns.UI.Refresh then ns.UI:Refresh() end
         if ns.UI and ns.UI.RefreshMini then ns.UI:RefreshMini() end
@@ -172,16 +210,20 @@ mailFrame:SetScript("OnEvent", function(self, event)
         isMailOpen = true
         mailScanRetries = 0
 
-        -- Mark expired/cancelled/sold auctions as collected (user is checking mail)
+        -- Stamp collectedAt on sold entries that haven't been marked yet — the
+        -- user is at the mailbox, which is when "collected" becomes true for
+        -- sales. Do NOT flip expired/cancelled entries here: ScanMailForSales
+        -- needs their status intact so it can match returned-item mail to the
+        -- correct log entry and record postHistory / totalFeesSpent. The
+        -- scan's cleanup pass converts unmatched expired/cancelled entries to
+        -- collected after matching runs.
         if ns.db then
             local charKey = ns:GetCharKey()
             for _, entry in ipairs(ns.db.log) do
-                if entry.charKey == charKey then
-                    if entry.auctionStatus == "expired" or entry.auctionStatus == "cancelled" then
-                        entry.auctionStatus = "collected"
-                    elseif entry.auctionStatus == "sold" and not entry.collectedAt then
-                        entry.collectedAt = time()
-                    end
+                if entry.charKey == charKey
+                    and entry.auctionStatus == "sold"
+                    and not entry.collectedAt then
+                    entry.collectedAt = time()
                 end
             end
         end

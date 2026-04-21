@@ -459,9 +459,25 @@ SlashCmdList["FLIPQUEUE"] = function(msg)
         print("  /fq sync - Force full re-sync with linked account")
         print("  /fq dnt add <name> - Add item to Do Not Track")
         print("  /fq dnt remove <name> - Remove from Do Not Track")
+        print("  /fq reconcile - Upgrade expired/cancelled log entries to sold using TSM data")
+        print("  /fq reconcile reset - Clear the reconcile-checked flag (re-run against all entries)")
         print("")
         print("  Inventory: Right-click by status (DNT/remove DNT/queue info)")
         print("  To-Do: Right-click = posted, Shift+Right = skip")
+    elseif msg == "reconcile" then
+        if ns.Tracker and ns.Tracker.ReconcileWithTSM then
+            ns.Tracker:ReconcileWithTSM(true)
+        else
+            ns:Print(ns.COLORS.RED .. "TSM reconcile not available.|r")
+        end
+
+    elseif msg == "reconcile reset" then
+        if ns.Tracker and ns.Tracker.ResetTSMReconcile then
+            local n = ns.Tracker:ResetTSMReconcile()
+            ns.Tracker._tsmLastReconcile = nil
+            ns:Print("Cleared TSM-reconcile flag on " .. n .. " entries.")
+        end
+
     elseif msg == "testpost" then
         if ns.AuctionPost and ns.AuctionPost.TestPost then
             ns.AuctionPost:TestPost()

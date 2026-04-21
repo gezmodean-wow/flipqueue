@@ -12,44 +12,33 @@ local Tracker = ns.Tracker
 -- Only checks items targeted at the current character's realm
 local ownedAuctionCheckRetries = 0
 
+-- Canonical item-ID key for reconciliation. Pet auctions and pet log entries
+-- share the same namespace as regular items if we don't prefix them, so battle
+-- pets get a "pet:<speciesID>" form.
+local function AuctionItemID(auction)
+    local speciesID = auction.itemKey.battlePetSpeciesID
+    if speciesID and speciesID > 0 then
+        return "pet:" .. speciesID
+    end
+    return tostring(auction.itemKey.itemID)
+end
+
+local function EntryItemID(entry)
+    local key = entry.itemKey or ""
+    local petID = key:match("^pet:(%d+)")
+    if petID then return "pet:" .. petID end
+    return key:match("^(%d+)")
+end
+
 function Tracker:CheckOwnedAuctions()
     if not ns.db or not C_AuctionHouse then return end
 
     local owned = C_AuctionHouse.GetOwnedAuctions()
     if not owned then return end
 
-    -- If no auctions on AH, reconcile all "active" log entries for this character
-    if #owned == 0 then
-        local charKey = ns:GetCharKey()
-        local pendingCancels = Tracker._pendingCancels or 0
-        local cancelledCount = 0
-        local cleared = 0
-        for _, entry in ipairs(ns.db.log) do
-            if entry.auctionStatus == "active" and entry.charKey == charKey then
-                if pendingCancels > 0 then
-                    entry.auctionStatus = "cancelled"
-                    pendingCancels = pendingCancels - 1
-                    cancelledCount = cancelledCount + 1
-                else
-                    entry.auctionStatus = "collected"
-                end
-                cleared = cleared + 1
-            end
-        end
-        Tracker._pendingCancels = 0
-        if cancelledCount > 0 then
-            ns:Print(ns.COLORS.YELLOW .. cancelledCount .. " auction(s) cancelled — items in mail.|r")
-        end
-        if cleared > 0 then
-            ns:PrintDebug("Reconciled " .. cleared ..
-                " log entries (no auctions on AH).")
-            if ns.UI and ns.UI.Refresh then ns.UI:Refresh() end
-            if ns.UI and ns.UI.RefreshMini then ns.UI:RefreshMini() end
-        end
-        return
-    end
-
+    local charKey = ns:GetCharKey()
     local currentRealm = GetRealmName()
+    local now = time()
 
     -- Pre-cache item names and track if any are missing
     local auctionNames = {}
@@ -75,8 +64,11 @@ function Tracker:CheckOwnedAuctions()
         end
     end
 
-    -- If item names aren't cached yet, retry after a delay (up to 3 times)
-    if hasMissing and ownedAuctionCheckRetries < 3 then
+    -- If item names aren't cached yet, retry after a delay (up to 3 times).
+    -- We skip the retry when there are no owned auctions — there's nothing to
+    -- name-match against, and the reconcile pass below should still run so
+    -- stale active log entries get cleared.
+    if hasMissing and #owned > 0 and ownedAuctionCheckRetries < 3 then
         ownedAuctionCheckRetries = ownedAuctionCheckRetries + 1
         C_Timer.After(1, function()
             if Tracker._isAHOpen then
@@ -87,16 +79,16 @@ function Tracker:CheckOwnedAuctions()
     end
     ownedAuctionCheckRetries = 0
 
-    -- Track which owned auctions have been consumed so each only satisfies one to-do item
-    local consumed = {}
-
+    -- Phase 1: match owned auctions to pending/skipped todo items.
+    -- Each consumed auction results in a NEW "active" log entry via
+    -- MoveTaskToLog; that entry participates in the count-based reconcile
+    -- below alongside pre-existing active entries.
+    local consumed = {} -- aIdx -> true
     local found = 0
 
-    -- Match against active to-do list items (consume multiple auctions per todo item)
     if ns.TodoList then
         local todoList = ns.TodoList:GetCurrentList()
         if todoList and todoList.tasks then
-            local charKey = ns:GetCharKey()
             for taskIdx, todoItem in ipairs(todoList.tasks) do
                 if (todoItem.status == "pending" or todoItem.status == "skipped")
                     and todoItem.assignedChar == charKey
@@ -141,140 +133,128 @@ function Tracker:CheckOwnedAuctions()
                         end
                         ns:PrintDebug("Listed: " .. (todoItem.name or "?") .. " x" .. totalMatched .. " — marking done")
                         ns.TodoList:MoveTaskToLog(taskIdx, nil, firstExpiry, totalMatched)
+                        found = found + 1
                     end
                 end
             end
         end
     end
 
-    -- State recovery: discover orphaned auctions not in todo list or log
-    local recovered = 0
+    -- Phase 2: count-based reconciliation.
+    -- Group owned auctions and this char's active log entries by item ID.
+    -- For each ID: if log > owned, oldest excess entries are stale — mark
+    -- them collected (or cancelled, consuming _pendingCancels). If owned >
+    -- log, the difference becomes orphan entries in phase 3.
+    local ownedListByID = {} -- itemID -> array of {aIdx, auction}
+    for aIdx, auction in ipairs(owned) do
+        local id = AuctionItemID(auction)
+        if not ownedListByID[id] then ownedListByID[id] = {} end
+        table.insert(ownedListByID[id], {aIdx = aIdx, auction = auction})
+    end
 
-    -- Count active log entries per item ID for this character
-    local loggedByItemID = {} -- itemID string -> count
-    local charKey = ns:GetCharKey()
+    local activeByID = {} -- itemID -> array of entry refs (this char, active)
     for _, entry in ipairs(ns.db.log) do
         if entry.auctionStatus == "active" and entry.charKey == charKey then
-            local entryID = tostring((entry.itemKey or ""):match("^(%d+)")) or ""
-            if entryID ~= "" then
-                loggedByItemID[entryID] = (loggedByItemID[entryID] or 0) + 1
+            local id = EntryItemID(entry)
+            if id then
+                if not activeByID[id] then activeByID[id] = {} end
+                table.insert(activeByID[id], entry)
             end
         end
     end
 
-    -- Count consumed auctions (matched to todo list) per item ID
-    local consumedByItemID = {}
-    for aIdx, _ in pairs(consumed) do
-        local aID = tostring(owned[aIdx].itemKey.itemID)
-        consumedByItemID[aID] = (consumedByItemID[aID] or 0) + 1
+    local pendingCancels = Tracker._pendingCancels or 0
+    local reconciledCount, cancelledCount = 0, 0
+
+    for id, entries in pairs(activeByID) do
+        local ownedCount = ownedListByID[id] and #ownedListByID[id] or 0
+        local logCount = #entries
+        if logCount > ownedCount then
+            -- Stable-sort oldest-first so the freshest posts survive
+            table.sort(entries, function(a, b)
+                return (a.postedAt or 0) < (b.postedAt or 0)
+            end)
+            local excess = logCount - ownedCount
+            for i = 1, excess do
+                local entry = entries[i]
+                if pendingCancels > 0 then
+                    entry.auctionStatus = "cancelled"
+                    entry.saleOutcome = "expired" -- cancelled = unsold
+                    pendingCancels = pendingCancels - 1
+                    cancelledCount = cancelledCount + 1
+                else
+                    -- Silently mark collected — ScanMailForSales or the TSM
+                    -- reconcile will set saleOutcome when they can tell
+                    -- whether this was a sale vs. an expire/cancel.
+                    entry.auctionStatus = "collected"
+                end
+                reconciledCount = reconciledCount + 1
+            end
+        end
+    end
+    Tracker._pendingCancels = 0
+
+    -- Phase 3: orphan recovery.
+    -- For each owned auction without a matching active log entry, insert one.
+    -- The accountedFor counter starts at the count of REMAINING active
+    -- entries for this ID (after the phase-2 reconcile), and is decremented
+    -- once per owned auction iterated. Consumed auctions (phase 1) already
+    -- have matching active entries from MoveTaskToLog, so they naturally
+    -- consume one slot each.
+    local accountedFor = {}
+    for id, entries in pairs(activeByID) do
+        -- After reconcile, effective active count is min(log, owned)
+        accountedFor[id] = math.min(#entries, ownedListByID[id] and #ownedListByID[id] or 0)
     end
 
-    -- Track how many auctions per item ID we've already accounted for
-    local accountedFor = {} -- itemID -> count
-    for id, count in pairs(loggedByItemID) do
-        accountedFor[id] = count
-    end
-    for id, count in pairs(consumedByItemID) do
-        accountedFor[id] = (accountedFor[id] or 0) + count
-    end
-
-    local now = time()
+    local recovered = 0
     for aIdx, auction in ipairs(owned) do
-        if not consumed[aIdx] then
-            -- For battle pets, use pet:speciesID format to match inventory keys
+        local id = AuctionItemID(auction)
+        local slots = accountedFor[id] or 0
+        if slots > 0 then
+            accountedFor[id] = slots - 1
+        else
+            -- Orphan: no active log entry for this owned auction.
             local speciesID = auction.itemKey.battlePetSpeciesID
             local isPet = speciesID and speciesID > 0
-            local auctionID = isPet and ("pet:" .. speciesID) or tostring(auction.itemKey.itemID)
-            local accounted = accountedFor[auctionID] or 0
+            local auctionKey = isPet
+                and ("pet:" .. speciesID .. ";;")
+                or (tostring(auction.itemKey.itemID) .. ";;")
+            local auctionName = auctionNames[aIdx] or ("Item " .. id)
+            local expirySec = auction.timeLeftSeconds
+            local estPostedAt = expirySec and (now - (172800 - expirySec)) or now
 
-            if accounted > 0 then
-                -- This auction is accounted for by an existing log entry
-                accountedFor[auctionID] = accounted - 1
-            else
-                -- Orphaned auction: not in todo list or log
-                local auctionKey = isPet
-                    and ("pet:" .. speciesID .. ";;")
-                    or (auctionID .. ";;")
-                local auctionName = auctionNames[aIdx] or ("Item " .. auctionID)
-                local expirySec = auction.timeLeftSeconds
-                local estPostedAt = expirySec and (now - (172800 - expirySec)) or now
-
-                table.insert(ns.db.log, {
-                    itemKey       = auctionKey,
-                    itemID        = auctionID,
-                    name          = auctionName,
-                    quality       = "",
-                    icon          = nil,
-                    targetRealm   = currentRealm,
-                    expectedPrice = "",
-                    postedPrice   = auction.buyoutAmount and ns:FormatGold(auction.buyoutAmount) or "",
-                    postedAt      = estPostedAt,
-                    charKey       = charKey,
-                    expiresAt     = expirySec and (now + expirySec) or nil,
-                    auctionStatus = "active",
-                    soldAt        = nil,
-                    soldPrice     = nil,
-                    postedQuantity = auction.quantity or 1,
-                    isRecovered   = true,
-                })
-                recovered = recovered + 1
-            end
+            table.insert(ns.db.log, {
+                itemKey        = auctionKey,
+                itemID         = id,
+                name           = auctionName,
+                quality        = "",
+                icon           = nil,
+                targetRealm    = currentRealm,
+                expectedPrice  = "",
+                postedPrice    = auction.buyoutAmount and ns:FormatGold(auction.buyoutAmount) or "",
+                postedAt       = estPostedAt,
+                charKey        = charKey,
+                expiresAt      = expirySec and (now + expirySec) or nil,
+                auctionStatus  = "active",
+                soldAt         = nil,
+                soldPrice      = nil,
+                postedQuantity = auction.quantity or 1,
+                isRecovered    = true,
+            })
+            recovered = recovered + 1
         end
     end
-
-    if recovered > 0 then
-        ns:PrintDebug("Recovered " .. recovered .. " untracked auction(s) from AH.")
-    end
-
-    -- Reconcile: mark log entries as "collected" if they claim active on this
-    -- character but are NOT found in the owned auctions list.
-    -- The owned auctions list is the source of truth for what's actually on the AH.
-    -- Build a set of item IDs actually on the AH (from owned auctions)
-    local ownedByItemID = {} -- itemID string -> count on AH
-    for _, auction in ipairs(owned) do
-        local aID = tostring(auction.itemKey.itemID)
-        ownedByItemID[aID] = (ownedByItemID[aID] or 0) + 1
-    end
-
-    -- Walk log entries for this character: if "active" but not on AH, determine fate
-    -- Use pending cancel count to distinguish cancelled vs silently collected
-    local pendingCancels = Tracker._pendingCancels or 0
-    local reconciledCount = 0
-    local cancelledCount = 0
-    local ownedConsumed = {} -- track how many owned auctions we've "used up" per ID
-    for _, entry in ipairs(ns.db.log) do
-        if entry.auctionStatus == "active" and entry.charKey == charKey then
-            local entryID = tostring((entry.itemKey or ""):match("^(%d+)"))
-            if entryID and entryID ~= "" then
-                local onAH = ownedByItemID[entryID] or 0
-                local used = ownedConsumed[entryID] or 0
-                if used < onAH then
-                    -- This log entry is accounted for by an actual auction
-                    ownedConsumed[entryID] = used + 1
-                else
-                    -- No matching auction on AH — determine why
-                    if pendingCancels > 0 then
-                        entry.auctionStatus = "cancelled"
-                        pendingCancels = pendingCancels - 1
-                        cancelledCount = cancelledCount + 1
-                    else
-                        -- Silently mark as collected — ScanMailForSales will detect
-                        -- actual sales and set "sold" status with gold amount
-                        entry.auctionStatus = "collected"
-                    end
-                    reconciledCount = reconciledCount + 1
-                end
-            end
-        end
-    end
-    Tracker._pendingCancels = 0 -- reset after reconciliation
 
     if cancelledCount > 0 then
         ns:Print(ns.COLORS.YELLOW .. cancelledCount .. " auction(s) cancelled — items in mail.|r")
     end
+    if recovered > 0 then
+        ns:PrintDebug("Recovered " .. recovered .. " untracked auction(s) from AH.")
+    end
     if reconciledCount > 0 then
         ns:PrintDebug("Reconciled " .. reconciledCount ..
-            " stale log entries (not found on AH).|r")
+            " stale log entries (not found on AH).")
     end
 
     if found > 0 or recovered > 0 or reconciledCount > 0 then

@@ -177,38 +177,28 @@ function Tracker:ShowBankOpsPopup()
     local goldWithdraw, goldDeposit = 0, 0
     local hasBuyCosts = false
 
-    -- Estimate withdrawal need (show in popup regardless of auto setting)
+    -- Estimate withdrawal / deposit need (show in popup regardless of auto setting).
+    -- Runs for every character — the goldBuffer min-balance applies even when
+    -- there are no tasks on this realm (symmetric with AutoDepositGold).
     if ns.db then
-        local hasTasks = false
-        if ns.TodoList then
-            local todoTasks = ns.TodoList:GetCharacterTasks(charKey)
-            for _, task in ipairs(todoTasks) do
-                local isBuy = task.item.action == "buy"
-                local realmToMatch = isBuy and task.item.buyRealm or task.item.targetRealm
-                if ns:RealmMatches(realmToMatch or "", currentRealm) then
-                    hasTasks = true
-                    break
-                end
-            end
+        local totalFees, _, details = Tracker:CalculateRequiredGold(charKey, currentRealm)
+        for _, d in ipairs(details) do
+            if d.duration == "buy" then hasBuyCosts = true; break end
         end
-        if hasTasks then
-            local totalFees, _, details = Tracker:CalculateRequiredGold(charKey, currentRealm)
-            for _, d in ipairs(details) do
-                if d.duration == "buy" then hasBuyCosts = true; break end
-            end
-            local playerCopper = GetMoney()
-            local bufferCopper = (ns.db.settings.goldBuffer or 0) * 10000
-            local needed = math.max(10000, math.ceil(totalFees * 1.1)) + bufferCopper
-            if playerCopper < needed then
-                goldWithdraw = needed - playerCopper
-            end
+        local playerCopper = GetMoney()
+        local bufferCopper = (ns.db.settings.goldBuffer or 0) * 10000
+        local needed = math.max(bufferCopper, math.ceil(totalFees * 1.1))
+        -- Round target up to whole gold so the resulting balance is even
+        needed = math.ceil(needed / 10000) * 10000
+        if playerCopper < needed then
+            goldWithdraw = needed - playerCopper
+        end
 
-            -- Estimate deposit excess
-            local keepCopper = needed
-            if playerCopper > keepCopper then
-                local excess = math.floor((playerCopper - keepCopper) / 10000) * 10000
-                if excess > 0 then goldDeposit = excess end
-            end
+        -- Estimate deposit excess
+        local keepCopper = needed
+        if playerCopper > keepCopper then
+            local excess = playerCopper - keepCopper
+            if excess > 0 then goldDeposit = excess end
         end
     end
 
@@ -695,6 +685,20 @@ frame:SetScript("OnEvent", function(self, event)
         -- Request owned auctions to check for already-listed items
         if C_AuctionHouse and C_AuctionHouse.QueryOwnedAuctions then
             C_AuctionHouse.QueryOwnedAuctions({})
+        end
+
+        -- Throttle TSM reconcile to once per hour — TSM's sales CSV is only
+        -- rewritten on logout, so running it on every AH open would just
+        -- re-check the same data. _tsmReconciled per-entry also prevents
+        -- redundant work across runs.
+        if Tracker.ReconcileWithTSM then
+            local last = Tracker._tsmLastReconcile or 0
+            if time() - last > 3600 then
+                Tracker._tsmLastReconcile = time()
+                C_Timer.After(2, function()
+                    Tracker:ReconcileWithTSM(false)
+                end)
+            end
         end
 
         -- Refresh UI after AH opens (task steps may have changed)
