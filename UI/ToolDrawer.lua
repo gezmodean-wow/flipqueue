@@ -588,7 +588,7 @@ local PAD            = 6
 local CONTENT_WIDTH  = PAD + ICON_SIZE + PAD          -- 52
 local FULL_WIDTH     = CONTENT_WIDTH + THUMB_WIDTH     -- 66
 local HEADER_HEIGHT  = 18
-local CONTENT_HEIGHT = HEADER_HEIGHT + 4 * ICON_SIZE + 3 * ICON_SPACING  -- 196
+local CONTENT_HEIGHT = HEADER_HEIGHT + 4 * ICON_SIZE + 3 * ICON_SPACING + PAD  -- 202
 local ANIM_DURATION  = 0.15
 
 local DRAWER_BACKDROP = {
@@ -607,9 +607,34 @@ local clipFrame   = nil
 local innerFrame  = nil
 local thumbFrame  = nil
 
-local drawerOpen = false
-local animating  = false
-local animTarget = THUMB_WIDTH
+local drawerOpen   = false
+local animating    = false
+local animProgress = 0   -- 0 = fully closed, 1 = fully open
+local animTarget   = 0   -- target value for animProgress
+
+-- Height the thumb/clip collapses to when closed. Tracks the mini's current
+-- height (capped at CONTENT_HEIGHT) so the thumb visually aligns with the
+-- mini when the drawer is taller than the mini.
+local thumbCollapsedHeight = 0
+
+local function GetCollapsedThumbHeight()
+    local mini = _G["FlipQueueMiniFrame"]
+    local miniH = (mini and mini:GetHeight()) or CONTENT_HEIGHT
+    if miniH <= 0 then miniH = CONTENT_HEIGHT end
+    return math.min(miniH, CONTENT_HEIGHT)
+end
+
+-- Apply animation progress to clip width/height and thumb height.
+-- Inner frame height stays at CONTENT_HEIGHT so button positions are stable
+-- and the clip reveals them by growing downward.
+local function ApplyAnimProgress(p)
+    if not clipFrame then return end
+    local w = THUMB_WIDTH + (FULL_WIDTH - THUMB_WIDTH) * p
+    local h = thumbCollapsedHeight + (CONTENT_HEIGHT - thumbCollapsedHeight) * p
+    clipFrame:SetWidth(w)
+    clipFrame:SetHeight(h)
+    if thumbFrame then thumbFrame:SetHeight(h) end
+end
 
 -- Create a service button. Always shows the service category icon (mail
 -- envelope, coin, bag, etc). When a summon is available, left-click uses it
@@ -715,9 +740,12 @@ local function EnsureDrawer()
 
     -- Clip frame: anchored TOPRIGHT to mini's TOPLEFT with 3px overlap.
     -- Width starts at THUMB_WIDTH (collapsed) and animates to FULL_WIDTH.
+    -- Height collapses to the mini's height when closed so the thumb doesn't
+    -- extend past the mini; expands to CONTENT_HEIGHT when open.
+    thumbCollapsedHeight = GetCollapsedThumbHeight()
     clipFrame = CreateFrame("Frame", "FlipQueueToolClip", mini)
     clipFrame:SetClipsChildren(true)
-    clipFrame:SetSize(THUMB_WIDTH, CONTENT_HEIGHT)
+    clipFrame:SetSize(THUMB_WIDTH, thumbCollapsedHeight)
     clipFrame:SetPoint("TOPRIGHT", mini, "TOPLEFT", 3, 0)
     clipFrame:SetFrameStrata("MEDIUM")
 
@@ -744,11 +772,12 @@ local function EnsureDrawer()
         serviceButtons[i] = CreateServiceButton(innerFrame, svc, i)
     end
 
-    -- Thumb grip on the RIGHT edge of inner (closest to mini, always visible).
+    -- Thumb grip at the top-left of inner (closest to mini, always visible).
+    -- Height is animated: matches mini height when closed, grows to full
+    -- drawer height when open.
     thumbFrame = CreateFrame("Button", "FlipQueueToolTab", innerFrame)
-    thumbFrame:SetWidth(THUMB_WIDTH)
+    thumbFrame:SetSize(THUMB_WIDTH, thumbCollapsedHeight)
     thumbFrame:SetPoint("TOPLEFT", innerFrame, "TOPLEFT", 0, 0)
-    thumbFrame:SetPoint("BOTTOMLEFT", innerFrame, "BOTTOMLEFT", 0, 0)
 
     -- Grip lines: 3 vertical bars (1px wide, 16px tall, 3px apart).
     for j = 1, 3 do
@@ -767,19 +796,19 @@ local function EnsureDrawer()
         UI:ToggleToolDrawer()
     end)
 
-    -- Width animation: interpolates clip width between THUMB_WIDTH and FULL_WIDTH.
-    local animSpeed = CONTENT_WIDTH / ANIM_DURATION
-    clipFrame:SetScript("OnUpdate", function(self, elapsed)
+    -- Unified progress animation: drives clip width, clip height, and thumb
+    -- height together. Progress runs from 0 (closed) to 1 (open).
+    clipFrame:SetScript("OnUpdate", function(_, elapsed)
         if not animating then return end
-        local cur = self:GetWidth()
-        local diff = animTarget - cur
-        local step = animSpeed * elapsed
+        local diff = animTarget - animProgress
+        local step = elapsed / ANIM_DURATION
         if math.abs(diff) <= step then
-            self:SetWidth(animTarget)
+            animProgress = animTarget
             animating = false
         else
-            self:SetWidth(cur + (diff > 0 and step or -step))
+            animProgress = animProgress + (diff > 0 and step or -step)
         end
+        ApplyAnimProgress(animProgress)
     end)
 
     return true
@@ -801,7 +830,9 @@ function UI:ShowToolDrawer()
     if not mini or not mini:IsShown() then return end
 
     drawerOpen = true
-    animTarget = FULL_WIDTH
+    -- Capture mini height so closing animates back to the right target.
+    thumbCollapsedHeight = GetCollapsedThumbHeight()
+    animTarget = 1
     animating = true
 
     SaveDrawerShown(true)
@@ -811,7 +842,9 @@ end
 function UI:HideToolDrawer()
     if not clipFrame then return end
     drawerOpen = false
-    animTarget = THUMB_WIDTH
+    -- Re-capture in case the mini was resized while drawer was open.
+    thumbCollapsedHeight = GetCollapsedThumbHeight()
+    animTarget = 0
     animating = true
 
     SaveDrawerShown(false)
@@ -839,10 +872,14 @@ function UI:IsToolDrawerShown()
 end
 
 function UI:UpdateToolDrawerHeight()
-    -- Called when mini height changes. Update clip height to match content.
+    -- Called when mini height changes. Inner stays at CONTENT_HEIGHT so
+    -- buttons remain positioned correctly; only the collapsed thumb target
+    -- follows the mini height.
     if not clipFrame then return end
-    clipFrame:SetHeight(CONTENT_HEIGHT)
     innerFrame:SetHeight(CONTENT_HEIGHT)
+    thumbCollapsedHeight = GetCollapsedThumbHeight()
+    -- Re-apply so a mini resize while closed (or mid-animation) takes effect.
+    if not animating then ApplyAnimProgress(animProgress) end
 end
 
 function UI:RefreshToolDrawer()
@@ -861,10 +898,14 @@ function UI:RefreshToolDrawer()
         local saved = ns.db.settings.toolDrawerShown
         if saved == true and not drawerOpen and not animating then
             drawerOpen = true
-            clipFrame:SetWidth(FULL_WIDTH)
-            animTarget = FULL_WIDTH
-        elseif (saved == false or saved == nil) and not drawerOpen then
-            clipFrame:SetWidth(THUMB_WIDTH)
+            animProgress = 1
+            animTarget = 1
+            ApplyAnimProgress(1)
+        elseif (saved == false or saved == nil) and not drawerOpen and not animating then
+            thumbCollapsedHeight = GetCollapsedThumbHeight()
+            animProgress = 0
+            animTarget = 0
+            ApplyAnimProgress(0)
         end
     end
 

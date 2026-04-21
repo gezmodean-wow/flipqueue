@@ -964,6 +964,7 @@ function UI:RefreshMini()
     local maxScreenHeight = UIParent:GetHeight() * 0.8
     mini:SetHeight(math.min(frameHeight, maxScreenHeight))
     resizeGrip:SetShown(not miniCollapsed)
+    if UI.UpdateToolDrawerHeight then UI:UpdateToolDrawerHeight() end
 end
 
 --------------------------
