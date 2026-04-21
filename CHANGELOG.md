@@ -1,5 +1,51 @@
 # Changelog
 
+## v0.11.0
+
+The first stable release of the 0.11 line. Posting works again after a regression in the late alphas, your active-auction count stays honest across sessions and cancels, and FlipQueue now cross-checks its own ledger against TSM's sales history so older entries marked as "expired" can be upgraded to "sold" when they really did sell. Also compatible with the 12.0.5 client shipping alongside this release.
+
+### Auction posting
+
+- **Posting works again.** A change in an earlier alpha had FlipQueue sending the same amount as both the starting bid and the buyout. The server rejects that combination — Blizzard requires the buyout to be strictly higher than the bid when both are set — and the error surfaced as repeated "Item Not Found" failures with nothing actually listing. FlipQueue now posts buy-it-now only (no starting bid), matching how TSM and Auctionator do it. One click lists one auction.
+- **TSM, Auctionator, and FlipQueue all see your new listings immediately.** Previously you had to click the Auctions tab or close and reopen the AH before other addons would notice what you had just posted or cancelled. FlipQueue now asks the server to re-send the owned-auction list the moment a post is confirmed or a cancel goes through, and every addon on the auction bus picks up the change within a second.
+- **Ledger entries match what actually got posted.** The "Posted x5 at 12.4k/ea" chat message used to lie when a click only posted one item; it now reflects what really landed on the AH.
+
+### Active-auction count no longer drifts
+
+The "N active auctions" badge used to drift out of sync with the real AH — sometimes showing 1 when nothing was listed, 3 when you had 2 listed, or 2 when you had 3. Three independent bugs all fed into this and are all fixed in this release:
+
+- **The mailbox handler was too eager.** When you opened your mailbox, FlipQueue flipped every expired or cancelled auction to "collected" immediately — before it had a chance to match the returned-item mail to the right log entry. That broke the repeat-listing tracker (how many times each item has expired without selling, total fees spent across attempts) for the normal flow, and occasionally left entries counted as neither sold nor failed. Now the mail scan runs first and the cleanup pass afterward only touches entries the scan couldn't resolve.
+- **Auction matching was too coarse.** FlipQueue compared log entries to live auctions by bare item ID only, so different variants of the same item (different item levels or bonus IDs) could be confused for each other. The reconciliation now uses a count-based pass per item ID that keeps variants straight.
+- **Orphan recovery and stale-entry cleanup ran in the wrong order.** A freshly posted auction could inherit a stale entry's metadata instead of getting its own record, which then threw the count off on the next refresh. The two phases are now separated: stale entries are reconciled first, then any remaining unmatched auctions on the AH get their own log entries.
+
+### Sold-vs-expired ledger accuracy
+
+- **FlipQueue now reads TSM's sales history.** If TSM knows about a sale that FlipQueue missed (missed session, mailbox looted without FlipQueue running, name mismatch in the mail scan), FlipQueue will upgrade the matching log entry from "expired" / "cancelled" / "unknown" to "sold" with the real sale price and timestamp. This runs automatically the first time you open the AH in a session.
+- **`/fq reconcile`** — manually run the full cross-check across every eligible log entry and print how many were upgraded.
+- **`/fq reconcile reset`** — clear the reconcile-checked flag on every entry and re-run from scratch. Useful if TSM data has changed mid-session or a mis-attribution needs redoing.
+- Entries in limbo (closed auction with no clear outcome) no longer sit uncounted forever — once the auction window has clearly closed (49+ hours since posting), they finalize as expired so the success-rate column is accurate.
+
+### Gold buffer is a floor, not an addition
+
+- **`goldBuffer` now means "minimum balance I want on my character", not "extra gold beyond fees".** Previously your target character balance was `AH fees + 10% + buffer`, so a 500g buffer meant 500 gold *on top of* whatever fees you needed — not what most players thought it did. The new formula is `max(buffer, fees + 10%)`: set it to the minimum you want on your character, and it acts as a floor. If fees are higher, fees win.
+- Settings label and Setup Wizard wording updated to say what the field actually does.
+- Withdraw and deposit paths now target the exact same balance and round to whole gold, so there's no asymmetry between the two.
+
+### Character management
+
+- **Delete a character from FlipQueue's tracking.** Settings → Characters now lets you remove a character from the addon. The deletion is recorded as a tombstone, so if you log in on that character, FlipQueue won't silently re-add it from auto-detection. All references (inventory data, log entries for that character, to-do items targeted at them) are cascaded out cleanly.
+- **Restore if you change your mind.** Settings → Deleted Characters shows every character you've deleted, with a Restore button that brings back everything associated with them.
+
+### Drawer polish
+
+- **Tool drawer thumb now tracks the mini view's height.** When you resize the mini with the grip handle, the thumb no longer sticks out past the bottom of the mini — it collapses to match.
+- **Drawer animation unified.** Width and height animate together as a single progress value, so the thumb never lands at a mismatched size during a mid-animation resize.
+- **Context drawer border is now a complete rounded rectangle** when collapsed. Previously the bottom edge looked cut off because the backdrop was on the inner content frame; it's now on the outer clip frame.
+
+### Game compatibility
+
+- **Works on both WoW 12.0.1 and 12.0.5.** The .toc lists both client versions, so FlipQueue won't be flagged out-of-date on either the current live client or after the 12.0.5 patch rolls out.
+
 ## v0.10.2-alpha1
 
 ### New Features
