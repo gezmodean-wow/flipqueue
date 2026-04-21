@@ -32,6 +32,31 @@ local AH_ERROR_NAMES = {
     [15] = "Bag",
 }
 
+-- Debounced owned-auctions requery. After a successful post or cancel we
+-- re-query the server so the OWNED_AUCTIONS_UPDATED event fires, which causes
+-- FlipQueue (via Tracker:CheckOwnedAuctions), TSM, Auctionator, and any
+-- other addon listening for the event to refresh their owned-auctions view.
+-- Blizzard doesn't always fire the event automatically after PostItem, so
+-- we force it. Debounce collapses rapid sequential posts (e.g., multiple
+-- commodity stacks posted back-to-back) into a single requery.
+local _queryTimer = nil
+local function RequestOwnedAuctionsRefresh()
+    if _queryTimer then return end
+    _queryTimer = C_Timer.After(1.0, function()
+        _queryTimer = nil
+        if not C_AuctionHouse or not C_AuctionHouse.QueryOwnedAuctions then return end
+        -- Only requery if the AH is still open; doing it closed is a no-op
+        -- but wastes a throttled query slot.
+        if ns.Tracker and not ns.Tracker._isAHOpen then return end
+        local ok, err = pcall(C_AuctionHouse.QueryOwnedAuctions, {})
+        if ok then
+            ns:PrintDebug("[AuctionPost] requested owned-auctions refresh")
+        else
+            ns:PrintDebug("[AuctionPost] QueryOwnedAuctions failed: " .. tostring(err))
+        end
+    end)
+end
+
 -- Listen for server responses to PostItem/PostCommodity to verify success.
 local postResultFrame = CreateFrame("Frame")
 postResultFrame:RegisterEvent("AUCTION_HOUSE_AUCTION_CREATED")
@@ -42,6 +67,7 @@ postResultFrame:RegisterEvent("ADDON_ACTION_BLOCKED")
 postResultFrame:SetScript("OnEvent", function(_, event, ...)
     if event == "AUCTION_HOUSE_AUCTION_CREATED" then
         ns:PrintDebug("[AuctionPost] Server confirmed: auction created")
+        RequestOwnedAuctionsRefresh()
     elseif event == "AUCTION_HOUSE_SHOW_ERROR" then
         local errIdx = ...
         local name = errIdx and AH_ERROR_NAMES[errIdx] or "Unknown"
@@ -665,6 +691,12 @@ function AuctionPost:CancelAuction(auctionID, callback)
     if ns.Tracker then
         ns.Tracker._pendingCancels = (ns.Tracker._pendingCancels or 0) + 1
     end
+
+    -- Force a re-query so TSM, Auctionator, and our own drawer see the
+    -- cancelled auction disappear. Blizzard fires AUCTION_CANCELED for us
+    -- but doesn't always push a fresh OWNED_AUCTIONS_UPDATED — the requery
+    -- guarantees it.
+    RequestOwnedAuctionsRefresh()
 
     ns:PrintDebug("Cancelled auction ID " .. tostring(auctionID))
     cb(true, nil)
