@@ -1,7 +1,7 @@
 ---
 id: FQ-007
 cog: flipqueue
-status: investigating
+status: fixed-awaiting-verification
 title: ADDON_ACTION_BLOCKED on Hide() of FlipQueueToolClip during combat
 sources:
   - type: internal
@@ -10,7 +10,7 @@ sources:
 reporters: [gezmodean]
 created: 2026-04-21
 updated: 2026-04-21
-release: null
+release: v0.11.1-candidate
 tags: [combat, taint, tool-drawer, addon-action-blocked]
 ---
 
@@ -61,3 +61,13 @@ The stack shows `RefreshToolDrawer` at `ToolDrawer.lua:890` is the caller — ne
 2. Wrap the hide + any related size/position updates in `if InCombatLockdown() then ... else ... end`; defer the deferred path to `PLAYER_REGEN_ENABLED`.
 3. Audit `UI/ContextDrawer.lua` for the same pattern.
 4. Repro after fix: enter combat, trigger hide, verify no `ADDON_ACTION_BLOCKED` fires; leave combat, verify drawer state catches up to whatever it should be.
+
+## Attempts
+
+### 2026-04-21 — gate refreshes on InCombatLockdown, drain on PLAYER_REGEN_ENABLED (8fa735f)
+
+Both `RefreshToolDrawer` (`UI/ToolDrawer.lua`) and `RefreshContextDrawer` (`UI/ContextDrawer.lua`) now early-return when `InCombatLockdown()` is true, setting a module-level pending flag. A dedicated `PLAYER_REGEN_ENABLED` frame in each file drains the flag and re-runs the refresh once combat ends.
+
+Applied to both drawers in one pass — `FlipQueueContextClip` has the same protection-chain inheritance as `FlipQueueToolClip`, and any event-driven context refresh during combat would have hit the same lockdown.
+
+Awaiting in-game verification: enter combat → trigger the hide path (combat-hide toggle or whatever produced the original BugGrabber report) → confirm no `[ADDON_ACTION_BLOCKED]` → leave combat → confirm drawer state catches up.
