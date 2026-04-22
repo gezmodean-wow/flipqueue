@@ -203,22 +203,44 @@ local RESET_ABOVEMAX_KEYS = {
 --
 -- Returns nil when the AH isn't open, the owned-auctions query hasn't
 -- resolved yet, or we have no matching auction on the AH.
-local function GetOwnLowestBuyout(itemID)
+-- Blizzard groups AH listings by {itemID, itemLevel, itemSuffix,
+-- battlePetSpeciesID}. For gear with modifier-9 ilvl variants, each variant
+-- is a separate bucket on the AH. Matching only on itemID pulls in our
+-- OTHER-variant listings as the "own lowest" and trips the match-own branch
+-- against the wrong variant's market — cue FlipQueue undercutting itself.
+-- Filter by itemLevel (derived from the fqKey's modifier 9) so we only
+-- match the variant we're actually posting.
+local function GetOwnLowestBuyout(itemKey, itemID)
     if not C_AuctionHouse or not C_AuctionHouse.GetOwnedAuctions then return nil end
     if not itemID then return nil end
     local ok, owned = pcall(C_AuctionHouse.GetOwnedAuctions)
     if not ok or not owned or #owned == 0 then return nil end
 
+    local targetIlvl
+    if itemKey then
+        local modStr = itemKey:match("^[^;]*;[^;]*;(.*)$")
+        if modStr and modStr ~= "" then
+            local v = modStr:match("^9=(%-?%d+)") or modStr:match(":9=(%-?%d+)")
+            if v then targetIlvl = tonumber(v) end
+        end
+    end
+
     local target = tostring(itemID)
     local lowest
     for _, auction in ipairs(owned) do
         if auction.itemKey and tostring(auction.itemKey.itemID) == target then
-            local buyout = auction.buyoutAmount or 0
-            local qty = auction.quantity or 1
-            if buyout > 0 and qty > 0 then
-                local unit = math.floor(buyout / qty)
-                if unit > 0 and (not lowest or unit < lowest) then
-                    lowest = unit
+            local variantMatches = true
+            if targetIlvl and auction.itemKey.itemLevel and auction.itemKey.itemLevel ~= targetIlvl then
+                variantMatches = false
+            end
+            if variantMatches then
+                local buyout = auction.buyoutAmount or 0
+                local qty = auction.quantity or 1
+                if buyout > 0 and qty > 0 then
+                    local unit = math.floor(buyout / qty)
+                    if unit > 0 and (not lowest or unit < lowest) then
+                        lowest = unit
+                    end
                 end
             end
         end
@@ -269,7 +291,7 @@ function AuctionPost:ResolvePostPrice(itemKey, itemID)
     -- repost ratchets the price down further. Without this guard FlipQueue
     -- undercuts itself and TSM's cancel scan immediately flags the post as
     -- undercut or cancellable for repost.
-    local ownLowestCopper = GetOwnLowestBuyout(itemID)
+    local ownLowestCopper = GetOwnLowestBuyout(itemKey, itemID)
 
     -- Fallback chain when no auctioning operation OR normalPrice didn't
     -- evaluate. We'd rather post at *something* sensible than refuse.

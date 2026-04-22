@@ -164,22 +164,60 @@ function TSM:ItemKeyToTSMString(fqKey)
         return result
     end
 
-    -- Parse "itemID;bonusIDs;modifiers"
-    local itemID, bonusStr = fqKey:match("^([^;]*);([^;]*)")
+    -- Preferred path: build a WoW item string (via Core.lua, which handles
+    -- bonuses AND modifiers) and let TSM canonicalize it. TSM's ToItemString
+    -- applies its own bonus-ID filter + modifier sort, so variants like
+    -- ilvl-85 and ilvl-87 produce distinct strings — which is the whole
+    -- point: without modifiers in the string, TSM returns the base item's
+    -- dbmarket/minPrice for every variant and our decision tree evaluates
+    -- against the wrong reference.
+    if TSM_API and type(TSM_API.ToItemString) == "function" and ns.ItemKeyToItemString then
+        local wowStr = ns:ItemKeyToItemString(fqKey)
+        if wowStr then
+            local ok, tsmStr = pcall(TSM_API.ToItemString, wowStr)
+            if ok and type(tsmStr) == "string" and tsmStr ~= "" then
+                keyCache[fqKey] = tsmStr
+                return tsmStr
+            end
+        end
+    end
+
+    -- Fallback: construct the TSM string by hand. Matches TSM's internal
+    -- format i:<id>:<rand>:<numBonus>:<b1>:<b2>...:<numMods>:<t1>:<v1>:...
+    local itemID, bonusStr, modStr = fqKey:match("^([^;]*);([^;]*);?(.*)$")
     if not itemID or itemID == "" then return nil end
 
-    if not bonusStr or bonusStr == "" then
-        local result = "i:" .. itemID
-        keyCache[fqKey] = result
-        return result
+    local parts = { "i", itemID, "" }
+
+    local bonuses = {}
+    if bonusStr and bonusStr ~= "" then
+        for b in bonusStr:gmatch("[^:]+") do bonuses[#bonuses + 1] = b end
     end
 
-    -- With bonus IDs: "1663:2293" -> "i:225575::2:1663:2293"
-    local bonuses = {}
-    for b in bonusStr:gmatch("[^:]+") do
-        bonuses[#bonuses + 1] = b
+    local modPairs = {}
+    if modStr and modStr ~= "" then
+        for m in modStr:gmatch("[^:]+") do
+            local k, v = m:match("^(%-?%d+)=(%-?%d+)$")
+            if k and v then
+                modPairs[#modPairs + 1] = k
+                modPairs[#modPairs + 1] = v
+            end
+        end
     end
-    local result = "i:" .. itemID .. "::" .. #bonuses .. ":" .. table.concat(bonuses, ":")
+
+    if #bonuses > 0 then
+        parts[#parts + 1] = tostring(#bonuses)
+        for _, b in ipairs(bonuses) do parts[#parts + 1] = b end
+    elseif #modPairs > 0 then
+        parts[#parts + 1] = "0"
+    end
+
+    if #modPairs > 0 then
+        parts[#parts + 1] = tostring(#modPairs / 2)
+        for _, p in ipairs(modPairs) do parts[#parts + 1] = p end
+    end
+
+    local result = table.concat(parts, ":")
     keyCache[fqKey] = result
     return result
 end

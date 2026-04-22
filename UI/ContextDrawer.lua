@@ -450,11 +450,17 @@ local function GetOrCreateScanRow(parent, index)
         end
         if r.pricing then
             GameTooltip:AddLine(" ")
-            -- Actual posting price (what TSM's decision tree chose). Bright
-            -- white so players see it as the load-bearing number.
-            local postBuyout = r.pricing.buyoutCopper or r.pricing.normalCopper
-            if postBuyout then
-                GameTooltip:AddDoubleLine("Post price:", ns:FormatGold(postBuyout), 0.7, 0.7, 0.7, 1, 1, 1)
+            -- Only the post price (what TSM's decision tree actually chose)
+            -- goes in the headline row. When the decision was "skip" (below
+            -- min with no reset / above max with no fallback) we show that
+            -- explicitly — falling back to normalCopper here would lie about
+            -- what FlipQueue is going to do.
+            if r.pricing.buyoutCopper then
+                GameTooltip:AddDoubleLine("Post price:", ns:FormatGold(r.pricing.buyoutCopper), 0.7, 0.7, 0.7, 1, 1, 1)
+            elseif r.pricing.belowThreshold then
+                GameTooltip:AddDoubleLine("Post price:", "skip (below min)", 0.7, 0.7, 0.7, 1, 0.6, 0.3)
+            elseif r.pricing.aboveMaxSkip then
+                GameTooltip:AddDoubleLine("Post price:", "skip (above max)", 0.7, 0.7, 0.7, 1, 0.6, 0.3)
             end
             -- Market reference: what we undercut (from TSM DBMinBuyout).
             if r.pricing.lowestCopper then
@@ -472,7 +478,7 @@ local function GetOrCreateScanRow(parent, index)
             end
             -- Baseline (normalPrice) is still interesting context but not the
             -- post price itself.
-            if r.pricing.normalCopper and r.pricing.normalCopper ~= postBuyout then
+            if r.pricing.normalCopper and r.pricing.normalCopper ~= r.pricing.buyoutCopper then
                 GameTooltip:AddDoubleLine("Normal:", ns:FormatGold(r.pricing.normalCopper), 0.7, 0.7, 0.7, 0.7, 0.7, 0.7)
             end
             if r.pricing.minCopper then
@@ -802,12 +808,14 @@ local function RefreshAHScanRows()
             row.dealPrice:SetText("")
         end
 
-        -- Post price = what TSM's decision tree chose (undercut of the AH
-        -- lowest, clamped to min/max). Falls back to normalCopper for
-        -- empty-market / legacy scan results.
-        local priceCopper = result.pricing and (result.pricing.buyoutCopper or result.pricing.normalCopper)
-        if priceCopper then
-            row.postPrice:SetText("|cffddcc66Post:|r " .. ns:FormatGold(priceCopper))
+        -- Post price = what TSM's decision tree chose. When the decision was
+        -- a skip, say so — the old "fall back to normalCopper" showed a
+        -- number that looked like the post price but wasn't.
+        local pricing = result.pricing
+        if pricing and pricing.buyoutCopper then
+            row.postPrice:SetText("|cffddcc66Post:|r " .. ns:FormatGold(pricing.buyoutCopper))
+        elseif pricing and (pricing.belowThreshold or pricing.aboveMaxSkip) then
+            row.postPrice:SetText("|cff888888Post:|r skip")
         else
             row.postPrice:SetText("")
         end

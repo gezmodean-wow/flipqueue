@@ -1,7 +1,7 @@
 ---
 id: FQ-003
 cog: flipqueue
-status: investigating
+status: fixed-awaiting-verification
 title: Posting algorithm still doesn't match TSM despite v0.11.0 rewrite
 sources:
   - type: internal
@@ -15,7 +15,7 @@ sources:
 reporters: [gezmodean]
 created: 2026-04-21
 updated: 2026-04-22
-release: null
+release: v0.11.1-candidate
 tags: [posting, tsm, auction, critical]
 ---
 
@@ -36,6 +36,23 @@ Needs concrete repro details to investigate:
 ## Attempts
 
 - **2026-04-21** (v0.11.0, commit `46f4761`): `ResolvePostPrice` rewritten to implement TSM's `MakePostDecision` branch tree (undercut market / match own / priceReset / aboveMax / clamp min). Uses TSM's stored operation settings as the authority, evaluates every price expression via `TSM_API.GetCustomPriceValue`. Self-match branch added so we don't self-undercut when our own listing is the market lowest. Audit-drift guard pinned to TSM v4.14.66. Result: player still reports divergence with TSM's Post Scan.
+
+### 2026-04-22 — ilvl-variant divergence: three distinct bugs
+
+Concrete repro: Tarnished Dawnlit Signet (itemID 258909) with ilvl-85 and ilvl-87 variants in bags. TSM posts at 120g (ilvl-85, undercutting the market low) and 819g (ilvl-87, normalPrice for that variant). FlipQueue posted both at `normalCopper = 17,093g` or skipped as "below min (no reset)" — evaluating the same per-base-item numbers for both variants. Debug log showed both variants resolving to `normal=170934381 min=77697446` — a dead giveaway that the ilvl modifier wasn't reaching TSM.
+
+Root cause: three independent bugs along the same path.
+
+1. **`TSM:ItemKeyToTSMString` dropped the modifier segment.** It parsed `itemID;bonusIDs` and threw away the third `;` segment (the modifier list, where modifier 9 = ilvl lives). Both `258909;13729:13668;9=85` and `...;9=87` produced `i:258909::2:13729:13668` — indistinguishable. TSM's `GetCustomPriceValue` returned the base item's dbmarket for every variant, so `normalPrice`, `minPrice`, and `maxPrice` collapsed.
+   **Fix:** route through `ns:ItemKeyToItemString` (which already handles modifiers correctly) + `TSM_API.ToItemString` so TSM canonicalizes the WoW item string itself. Fallback to manual construction matching TSM's internal `i:<id>:<rand>:<numBonus>:<bonuses...>:<numMods>:<type>:<val>:...` format when the API path fails.
+
+2. **`GetOwnLowestBuyout` matched only on `itemID`.** If we owned a low-ilvl listing of the same base item, the match-own branch triggered against the wrong variant's price — ratcheting the high-ilvl post down to whatever the low-ilvl listing sits at. That's the self-undercut.
+   **Fix:** extract the modifier-9 ilvl from the fqKey and filter `auction.itemKey.itemLevel == targetIlvl` on the owned-auction scan. Blizzard groups AH listings by exactly that quartet.
+
+3. **Context drawer tooltip displayed `normalCopper` as "Post price" when the decision was `skip`.** `buyoutCopper` was nil in the below-min-no-reset branch, so the old `buyoutCopper or normalCopper` fallback showed the 17.1k baseline — looked like a post intention but wasn't. Same bug on the row's inline `Post:` label.
+   **Fix:** show explicit "skip (below min)" / "skip (above max)" in both the tooltip headline and the inline row label. Normal price stays as a secondary "Normal:" row so the baseline is still visible without pretending to be the post price.
+
+Files touched: `TSM.lua:ItemKeyToTSMString`, `AuctionPost.lua:GetOwnLowestBuyout` + call site in `ResolvePostPrice`, `UI/ContextDrawer.lua` row + tooltip. Awaiting in-game verification: same item, same TSM op, expect FlipQueue's `AH lowest` / `Normal` / decided post price to match TSM's Post Scan per variant.
 
 ## Notes
 
