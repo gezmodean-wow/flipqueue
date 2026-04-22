@@ -1393,11 +1393,24 @@ function UI:UpdateContextDrawerWidth()
     end
 end
 
+-- Queued refresh for when combat ends. Show/Hide/SetSize/SetPoint on
+-- contextClip are protected during combat (FlipQueueContextClip inherits
+-- protection from the mini-view parent), so a refresh triggered by an event
+-- that fires mid-combat would otherwise hit ADDON_ACTION_BLOCKED.
+local _ctxPendingRefreshAfterCombat = false
+
 function UI:RefreshContextDrawer()
     if not EnsureDrawer() then return end
 
     -- Lazy-resolve Tracker each refresh in case it loaded after us
     if not Tracker then Tracker = ns.Tracker end
+
+    -- Defer the whole refresh while combat is active — any Show/Hide/resize
+    -- on contextClip would be blocked by the protection chain.
+    if InCombatLockdown and InCombatLockdown() then
+        _ctxPendingRefreshAfterCombat = true
+        return
+    end
 
     local mini = _G["FlipQueueMiniFrame"]
     if not mini or not mini:IsShown() then
@@ -1455,3 +1468,13 @@ function UI:RefreshContextDrawer()
         end
     end
 end
+
+-- Drain the queued refresh when combat ends.
+local _ctxCombatEvt = CreateFrame("Frame")
+_ctxCombatEvt:RegisterEvent("PLAYER_REGEN_ENABLED")
+_ctxCombatEvt:SetScript("OnEvent", function()
+    if _ctxPendingRefreshAfterCombat and UI.RefreshContextDrawer then
+        _ctxPendingRefreshAfterCombat = false
+        UI:RefreshContextDrawer()
+    end
+end)

@@ -882,8 +882,22 @@ function UI:UpdateToolDrawerHeight()
     if not animating then ApplyAnimProgress(animProgress) end
 end
 
+-- Pending-refresh flag: set when a refresh was requested during combat
+-- lockdown. PLAYER_REGEN_ENABLED below re-runs the refresh once combat ends.
+-- Needed because Show/Hide/SetSize on the drawer's clip frame are treated as
+-- protected calls during combat — FlipQueueToolClip inherits protection from
+-- its mini-view parent, so touching it fires ADDON_ACTION_BLOCKED.
+local _pendingRefreshAfterCombat = false
+
 function UI:RefreshToolDrawer()
     if not EnsureDrawer() then return end
+
+    -- Any Show/Hide/Size/Anchor we'd do below is protected while combat is
+    -- active. Skip the refresh and queue one for when combat ends.
+    if InCombatLockdown and InCombatLockdown() then
+        _pendingRefreshAfterCombat = true
+        return
+    end
 
     local mini = _G["FlipQueueMiniFrame"]
     if not mini or not mini:IsShown() then
@@ -1020,4 +1034,16 @@ evt:SetScript("OnEvent", function(_, event)
         serviceState.bankOpen = false
     end
     if UI.RefreshToolDrawer then UI:RefreshToolDrawer() end
+end)
+
+-- Combat-end handler: if a refresh was queued during combat (the drawer
+-- couldn't Show/Hide/resize due to the mini-view's protection chain), run it
+-- now that PLAYER_REGEN_ENABLED has fired.
+local combatEvt = CreateFrame("Frame")
+combatEvt:RegisterEvent("PLAYER_REGEN_ENABLED")
+combatEvt:SetScript("OnEvent", function()
+    if _pendingRefreshAfterCombat and UI.RefreshToolDrawer then
+        _pendingRefreshAfterCombat = false
+        UI:RefreshToolDrawer()
+    end
 end)
