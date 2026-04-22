@@ -7,9 +7,14 @@ sources:
   - type: internal
     session: 2026-04-21
     note: Relayed from player reports via gezmodean post-v0.11.0
+  - type: discord
+    thread: https://discord.com/channels/1489375376760373473/1496027121112580178
+    date: 2026-04-22
+    reporter: gezmodean
+    note: Player-originated thread ("ledger doesn't match TSM"), folded in as canonical FQ-003 tracker
 reporters: [gezmodean]
 created: 2026-04-21
-updated: 2026-04-21
+updated: 2026-04-22
 release: null
 tags: [posting, tsm, auction, critical]
 ---

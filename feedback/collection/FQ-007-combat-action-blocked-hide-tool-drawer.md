@@ -7,9 +7,13 @@ sources:
   - type: internal
     session: 2026-04-21
     note: Relayed from player reports via gezmodean with BugGrabber trace
+  - type: discord
+    thread: https://discord.com/channels/1489375376760373473/1496405803043782666
+    date: 2026-04-22
+    note: Chronoforge tracking thread
 reporters: [gezmodean]
 created: 2026-04-21
-updated: 2026-04-21
+updated: 2026-04-22
 release: v0.11.1-candidate
 tags: [combat, taint, tool-drawer, addon-action-blocked]
 ---

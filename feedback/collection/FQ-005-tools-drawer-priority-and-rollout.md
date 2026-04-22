@@ -7,9 +7,13 @@ sources:
   - type: internal
     session: 2026-04-21
     note: Relayed from player reports via gezmodean — substantial redesign, multiple threads
+  - type: discord
+    thread: https://discord.com/channels/1489375376760373473/1496405655354081292
+    date: 2026-04-22
+    note: Chronoforge tracking thread
 reporters: [gezmodean]
 created: 2026-04-21
-updated: 2026-04-21
+updated: 2026-04-22
 release: null
 tags: [tools-drawer, ui, design, summons, profession, racial]
 ---
