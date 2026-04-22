@@ -384,6 +384,22 @@ SlashCmdList["FLIPQUEUE"] = function(msg)
             ns:Print("Debug bank popup: " .. p .. " pulls, " .. d .. " deposits, " .. e .. " extras.")
         end
 
+    elseif msg == "debug scan" or msg:match("^debug scan%s+%d+$") then
+        -- /fq debug scan [N]
+        -- Dump the live-AH-scan cache (populated passively from any addon's
+        -- search events). Shows per-variant minUnit and how old each entry
+        -- is — handy for confirming TSM scans are actually feeding us.
+        local n = tonumber(msg:match("^debug scan%s+(%d+)$")) or 20
+        if not ns.AuctionScanCache then
+            ns:Print("AuctionScanCache not loaded.")
+        else
+            local rows, total = ns.AuctionScanCache:DebugDump(n)
+            ns:Print(("Live-scan cache: %d entries (showing %d newest)"):format(total, #rows))
+            for _, line in ipairs(rows) do
+                print("  " .. line)
+            end
+        end
+
     elseif msg:match("^debug post%s+") then
         -- /fq debug post <fqKey>
         -- Dump the TSM lookup chain for an fqKey so we can see what string
@@ -492,6 +508,7 @@ SlashCmdList["FLIPQUEUE"] = function(msg)
         print("  /fq debug toggle - Toggle debug message output to chat")
         print("  /fq debug bankpopup [N|P D E] - Show fake bank popup with N (or P/D/E) rows for UI overflow testing")
         print("  /fq debug post <fqKey> - Dump TSM string + price sources + op settings for diagnosing posting divergence")
+        print("  /fq debug scan [N] - Dump N (default 20) most recent entries from the live-AH-scan cache")
         print("  /fq tutorial - Show the first-time tutorial")
         print("  /fq settings - Open settings panel")
         print("  /fq link [bnet|local] <Char-Realm> - Link to another account (bnet=friend, local=same BNet)")

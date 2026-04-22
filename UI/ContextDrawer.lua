@@ -476,6 +476,24 @@ local function GetOrCreateScanRow(parent, index)
             if r.pricing.reason then
                 GameTooltip:AddDoubleLine("Reason:", r.pricing.reason, 0.7, 0.7, 0.7, 0.6, 0.8, 0.6)
             end
+            -- Freshness of the `AH lowest` number. Live = harvested from a
+            -- recent AH scan (TSM / Auctionator / default UI). Stale =
+            -- DBMinBuyout fallback (hourly Desktop-App snapshot, not per
+            -- variant). Players need to know which they're looking at to
+            -- judge whether to run a fresh scan before posting.
+            if r.pricing.liveAge then
+                local ageText
+                if r.pricing.liveAge < 60 then
+                    ageText = r.pricing.liveAge .. "s ago"
+                elseif r.pricing.liveAge < 3600 then
+                    ageText = math.floor(r.pricing.liveAge / 60) .. "m ago"
+                else
+                    ageText = math.floor(r.pricing.liveAge / 3600) .. "h ago"
+                end
+                GameTooltip:AddDoubleLine("Scan:", "live " .. ageText, 0.7, 0.7, 0.7, 0.6, 0.9, 0.6)
+            elseif r.pricing.lowestCopper then
+                GameTooltip:AddDoubleLine("Scan:", "DBMinBuyout (stale)", 0.7, 0.7, 0.7, 0.9, 0.7, 0.4)
+            end
             -- Baseline (normalPrice) is still interesting context but not the
             -- post price itself.
             if r.pricing.normalCopper and r.pricing.normalCopper ~= r.pricing.buyoutCopper then

@@ -261,7 +261,7 @@ end
 -- old code evaluated normalPrice and stopped there, which meant FlipQueue
 -- was posting at ~2x average market — way above what players would post
 -- via TSM's own Post Scan.
-function AuctionPost:ResolvePostPrice(itemKey, itemID)
+function AuctionPost:ResolvePostPrice(itemKey, itemID, itemLink, isCommodity)
     if not ns.TSM or not ns.TSM:IsEnabled() then
         ns:PrintDebug("[AuctionPost] ResolvePostPrice: TSM not available")
         return nil
@@ -278,11 +278,27 @@ function AuctionPost:ResolvePostPrice(itemKey, itemID)
     -- Undercut may be 0 ("match") for players who prefer matching the market.
     undercut = undercut or 0
 
-    -- Current lowest buyout on the AH (from TSM's last scan). This is the
-    -- market reference the decision tree branches on. DBMinBuyout can lag
-    -- reality between scans and doesn't tell us who owns the lowest listing
-    -- — see ownLowestCopper below for the self-owned guard.
-    local lowestCopper = ns.TSM:GetPrice(itemKey, "DBMinBuyout")
+    -- Current lowest buyout on the AH. Prefer live scan cache (populated
+    -- passively from any addon's AH search events — TSM Post/Cancel Scan,
+    -- Auctionator, default UI). Live data is per-variant and reflects the
+    -- actual current market. Fall back to TSM's DBMinBuyout only when no
+    -- recent live scan covered this variant — DBMinBuyout is a stale
+    -- regional snapshot from the TSM Desktop App and is keyed on the base
+    -- item string, so it collapses across bonus-ID variants (the root of
+    -- FQ-003 divergence on gear with ilvl upgrades).
+    local lowestCopper, liveAge, liveIsPlayer, liveSource
+    if ns.AuctionScanCache then
+        local live = ns.AuctionScanCache:Lookup(itemLink, isCommodity)
+        if live then
+            lowestCopper = live.minUnit
+            liveAge = live.age
+            liveIsPlayer = live.isPlayer
+            liveSource = live.source
+        end
+    end
+    if not lowestCopper then
+        lowestCopper = ns.TSM:GetPrice(itemKey, "DBMinBuyout")
+    end
 
     -- Our own lowest live buyout for this item (if the AH is open and we
     -- have a matching active auction). TSM's MakePostDecision has an
@@ -398,9 +414,11 @@ function AuctionPost:ResolvePostPrice(itemKey, itemID)
         buyoutCopper = minCopper
     end
 
-    ns:PrintDebug(("[AuctionPost] ResolvePostPrice: %s op=%s lowest=%s own=%s normal=%s min=%s max=%s uc=%s -> buyout=%s (%s)"):format(
+    ns:PrintDebug(("[AuctionPost] ResolvePostPrice: %s op=%s lowest=%s(%s) own=%s normal=%s min=%s max=%s uc=%s -> buyout=%s (%s)"):format(
         tostring(itemKey), tostring(opName),
-        tostring(lowestCopper), tostring(ownLowestCopper),
+        tostring(lowestCopper),
+        liveAge and ("live " .. liveSource .. " " .. liveAge .. "s") or "dbmin",
+        tostring(ownLowestCopper),
         tostring(normalCopper),
         tostring(minCopper), tostring(maxCopper),
         tostring(undercut), tostring(buyoutCopper), tostring(reason)))
@@ -421,6 +439,12 @@ function AuctionPost:ResolvePostPrice(itemKey, itemID)
         reason            = reason,
         belowThreshold    = belowThreshold,
         aboveMaxSkip      = aboveMaxSkip,
+        -- Live-scan provenance so the UI can show freshness ("scan: 2min
+        -- ago") and the player knows whether the lowest value came from a
+        -- fresh scan or TSM's stale DBMinBuyout fallback.
+        liveAge           = liveAge,
+        liveSource        = liveSource,
+        liveIsPlayer      = liveIsPlayer,
     }
 end
 
@@ -506,8 +530,8 @@ function AuctionPost:ScanBags(filterToTodo)
 
                             if todoMatched and not byKey[key] then
                                 local iconOk, icon = pcall(C_Item.GetItemIconByID, tonumber(itemID))
-                                local pricing = self:ResolvePostPrice(key, itemID)
                                 local isCommodity = self:IsCommodity(itemID)
+                                local pricing = self:ResolvePostPrice(key, itemID, info.hyperlink, isCommodity)
 
                                 -- "ready" means we have a valid post price.
                                 -- "below_threshold" / "above_max" / "no_price" mean TSM's

@@ -54,6 +54,35 @@ Root cause: three independent bugs along the same path.
 
 Files touched: `TSM.lua:ItemKeyToTSMString`, `AuctionPost.lua:GetOwnLowestBuyout` + call site in `ResolvePostPrice`, `UI/ContextDrawer.lua` row + tooltip. Awaiting in-game verification: same item, same TSM op, expect FlipQueue's `AH lowest` / `Normal` / decided post price to match TSM's Post Scan per variant.
 
+### 2026-04-22 — ilvl-variant fix didn't land: DBMinBuyout is a base-item regional snapshot
+
+In-game test showed the decision tree still diverged. `/fq debug post` on the two variants confirmed: TSM strings ARE distinct now (`i:245775::2:12251:12499` vs `...:12498`), but `DBMinBuyout`, `dbmarket`, and `DBRegionMarketAvg` all return identical numbers for both — because TSM's AuctionDB is keyed on `BaseItemString` (`i:245775`), which strips bonus IDs. Every variant resolves to the base item.
+
+Worse: TSM's `AuctionDB.OnEnable` (`Core/Service/AuctionDB/Core.lua:41`) loads `realmData` once from `AppHelper.GetAuctionDBData()` — the TSM Desktop App's hourly pre-baked data. No `RegisterEvent` calls. TSM's own in-game Post/Cancel Scans do NOT write to `realmData.minBuyout`. DBMinBuyout is effectively a stale regional snapshot. TSM-the-addon makes posting decisions from **live `C_AuctionHouse` scan results**, not DBMinBuyout.
+
+This explains why FlipQueue's decisions have always been wrong for variant-sensitive items: we're reading from a source TSM itself doesn't use for posting. TSM's Desktop App feeds one view; TSM's live posting uses another. We've been stuck on the former.
+
+### 2026-04-22 — passive live-scan listener
+
+Also considered driving TSM's UI ourselves (open TSM tab → switch to Auctioning page → trigger scan). Not feasible: `TSM = select(2, ...)` is addon-private; `TSM_API` exposes no scan controls, no page navigation, no "show UI" entrypoint. Scan buttons aren't globally-named frames either. Dead end.
+
+Workable path: passive listener on Blizzard's AH event stream. Any addon that runs a search query (TSM's Post/Cancel Scans, Auctionator, default UI browse) fires the same events — we harvest results without initiating anything ourselves.
+
+Fix: new `AuctionScanCache.lua` module.
+- Listens for `ITEM_SEARCH_RESULTS_UPDATED` (per-variant item queries), `COMMODITY_SEARCH_RESULTS_UPDATED` (per-itemID commodity queries), and `AUCTION_HOUSE_BROWSE_RESULTS_UPDATED` (bulk browse scans).
+- On each event, reads the result table via `C_AuctionHouse.GetItemSearchResultInfo` / `GetCommoditySearchResultInfo` / `GetBrowseResults` and stores `{minUnit, isPlayer, scannedAt, source}` keyed by Blizzard's ItemKey tuple (`<itemID>:<itemLevel>:<itemSuffix>:<speciesID>`).
+- 10-minute TTL, survives AH open/close.
+
+`ResolvePostPrice` now prefers the live-scan cache for `lowestCopper`, falling back to `DBMinBuyout` only when no fresh scan has covered the variant. The returned pricing table carries `liveAge` / `liveSource` so the Context drawer tooltip shows "Scan: live 2m ago" for live-backed rows and "Scan: DBMinBuyout (stale)" for fallback rows.
+
+Bonus: cancel scans feed the cache too. Running TSM's Cancel Scan updates our per-variant market view for the items being cancelled — exactly the workflow the original bug report described ("I cancel with TSM and repost with TSM").
+
+New debug command `/fq debug scan [N]` dumps the most recent N cache entries so we can verify scans are feeding us.
+
+Files added: `AuctionScanCache.lua`. Files touched: `flipqueue.toc` (load order), `AuctionPost.lua:ResolvePostPrice` (signature + live-scan source + provenance fields), `AuctionPost.lua:ScanBags` call site, `UI/ContextDrawer.lua` (Scan freshness row), `UI/SlashCommands.lua` (debug scan command).
+
+Expected in-game behavior: run any AH scan (TSM Post Scan is the obvious test), then check the Context drawer tooltip on a previously-divergent variant. `AH lowest` should now match TSM's scan view, `Scan:` row should say "live <age>", and the decision should match TSM's posting decision for the same item.
+
 ## Notes
 
 - Known gaps in the v0.11.0 implementation:
