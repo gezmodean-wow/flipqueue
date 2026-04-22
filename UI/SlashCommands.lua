@@ -384,6 +384,45 @@ SlashCmdList["FLIPQUEUE"] = function(msg)
             ns:Print("Debug bank popup: " .. p .. " pulls, " .. d .. " deposits, " .. e .. " extras.")
         end
 
+    elseif msg:match("^debug post%s+") then
+        -- /fq debug post <fqKey>
+        -- Dump the TSM lookup chain for an fqKey so we can see what string
+        -- TSM sees and what prices it returns. Used to diagnose variant
+        -- collapse (e.g. bonus-ID ilvl upgrades that TSM filters).
+        local key = msg:match("^debug post%s+(.+)$")
+        if not key or key == "" then
+            ns:Print("Usage: /fq debug post <itemID;bonusIDs;modifiers>")
+        elseif not ns.TSM or not ns.TSM:IsAvailable() then
+            ns:Print("TSM not available.")
+        else
+            local tsmStr = ns.TSM:ItemKeyToTSMString(key)
+            print("fqKey:", key)
+            print("TSM string:", tostring(tsmStr))
+            if tsmStr and TSM_API and TSM_API.GetCustomPriceValue then
+                local function P(src)
+                    local ok, v = pcall(TSM_API.GetCustomPriceValue, src, tsmStr)
+                    print(src .. ":", ok and tostring(v) or ("err " .. tostring(v)))
+                end
+                P("DBMinBuyout")
+                P("dbmarket")
+                P("DBRegionMarketAvg")
+            end
+            local op = ns.TSM:GetItemAuctioningOp(key)
+            if op then
+                print("op:", op.opName,
+                    "priceReset=" .. tostring(op.priceReset),
+                    "aboveMax=" .. tostring(op.aboveMax))
+                print("  normalPrice expr:", tostring(op.normalPrice),
+                    "-> " .. tostring(ns.TSM:EvaluateOpPrice(key, op.normalPrice)))
+                print("  minPrice expr:", tostring(op.minPrice),
+                    "-> " .. tostring(ns.TSM:EvaluateOpPrice(key, op.minPrice)))
+                print("  maxPrice expr:", tostring(op.maxPrice),
+                    "-> " .. tostring(ns.TSM:EvaluateOpPrice(key, op.maxPrice)))
+            else
+                print("op: <none> (item ungrouped or no TSM profile selected)")
+            end
+        end
+
     elseif msg == "tutorial" then
         ns.db.settings.tutorialDone = false
         UI._tutorialActive = true
@@ -452,6 +491,7 @@ SlashCmdList["FLIPQUEUE"] = function(msg)
         print("  /fq debug - Open the debug console (buttons + live log)")
         print("  /fq debug toggle - Toggle debug message output to chat")
         print("  /fq debug bankpopup [N|P D E] - Show fake bank popup with N (or P/D/E) rows for UI overflow testing")
+        print("  /fq debug post <fqKey> - Dump TSM string + price sources + op settings for diagnosing posting divergence")
         print("  /fq tutorial - Show the first-time tutorial")
         print("  /fq settings - Open settings panel")
         print("  /fq link [bnet|local] <Char-Realm> - Link to another account (bnet=friend, local=same BNet)")
