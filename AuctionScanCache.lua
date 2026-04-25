@@ -41,46 +41,23 @@ local function CurrentRealm()
     return r:gsub("%s+", ""):lower()
 end
 
-local function TupleKey(itemID, itemLevel, itemSuffix, speciesID, realm)
+-- Cache key = "<realm>|<fqKey>" where fqKey is FlipQueue's canonical
+-- "<itemID>;<bonusIDs>;<modifiers>" string. Bucketing on the full fqKey
+-- distinguishes bonus-ID variants (Design ranks 1/2/3, gear ilvl upgrades,
+-- etc.) the same way TSM does internally. Earlier versions bucketed by
+-- (itemID, GetDetailedItemLevelInfo, ...) which collapsed all ranks of a
+-- Design into one bucket and could pick up the *base* ilvl when item info
+-- hadn't finished loading (boots ilvl 240 cached as "44" because 44 was the
+-- pre-upgrade base). Bonus IDs are present in the link string itself, no
+-- item-info load needed, so this is robust against async load timing.
+local function MakeCacheKey(fqKey, isCommodity, realm)
+    if not fqKey or fqKey == "" then return nil end
     realm = realm or CurrentRealm()
-    if speciesID and speciesID > 0 then
-        return realm .. "|p:" .. tostring(speciesID)
+    if isCommodity then
+        local id = fqKey:match("^([^;]+)")
+        return realm .. "|c:" .. tostring(id)
     end
-    return string.format("%s|%d:%d:%d:0",
-        realm,
-        tonumber(itemID) or 0,
-        tonumber(itemLevel) or 0,
-        tonumber(itemSuffix) or 0)
-end
-
-local function CommodityKey(itemID, realm)
-    realm = realm or CurrentRealm()
-    return realm .. "|c:" .. tostring(tonumber(itemID) or 0)
-end
-
--- Derive a Blizzard ItemKey tuple from an item hyperlink. We need itemLevel
--- from GetDetailedItemLevelInfo to match what Blizzard puts in auction
--- ItemKeys (the scan event keys by the same level).
-local function TupleFromLink(itemLink)
-    if not itemLink or type(itemLink) ~= "string" then return nil end
-
-    -- Battle pets: itemID is always 82800, suffix/level are 0, speciesID
-    -- distinguishes variants.
-    local speciesID = itemLink:match("|Hbattlepet:(%d+)")
-    if speciesID then
-        return tonumber(speciesID), 0, 0, tonumber(speciesID)
-    end
-
-    local itemID = itemLink:match("|Hitem:(%d+):")
-    if not itemID then return nil end
-
-    local ilvl = 0
-    if GetDetailedItemLevelInfo then
-        local v = GetDetailedItemLevelInfo(itemLink)
-        if type(v) == "number" then ilvl = v end
-    end
-
-    return tonumber(itemID), ilvl, 0, 0
+    return realm .. "|" .. fqKey
 end
 
 --------------------------
@@ -90,43 +67,42 @@ end
 -- TSM (and the default UI's sell flow) sends non-commodity searches with
 -- itemKey.itemLevel = 0 — a deliberate workaround for an old Blizzard bug,
 -- still in TSM as of v4.14.66 (LibTSMWoW/Source/API/AuctionHouseWrapper.lua).
--- The server returns ALL ilvl variants of that itemID in a single result
--- list, and the scanning addon buckets per-variant client-side using each
--- result's itemLink. Without this, we'd cache `<itemID>:0:0:0` (the event's
--- itemKey) and never match the per-variant ilvl we compute from bag items.
---
--- HarvestNonCommodity reads every result, extracts per-result ilvl from the
--- itemLink, buckets by (real ilvl), and writes one cache entry per variant.
+-- The server returns ALL variants of that itemID (every bonus-ID combo and
+-- every ilvl) in one combined result list. Each per-result itemLink carries
+-- its own bonus IDs and modifiers — that's what we bucket on. Bonus IDs
+-- are in the link string itself, so we don't depend on async item-info
+-- loading (which is what made GetDetailedItemLevelInfo return base ilvls
+-- for upgraded gear in the previous bucketing scheme).
 local function HarvestNonCommodity(itemKey, now)
     local getNum = C_AuctionHouse.GetNumItemSearchResults
     local n = getNum and getNum(itemKey) or 0
     if n == 0 then return 0 end
 
-    -- Battle pets are keyed by speciesID; ilvl is meaningless for them.
-    local isPet = itemKey.battlePetSpeciesID and itemKey.battlePetSpeciesID > 0
-
-    local buckets = {} -- ilvl -> { minUnit, isPlayer }
+    local realm = CurrentRealm()
+    local buckets = {} -- cache-key -> { minUnit, isPlayer }
     for i = 1, n do
         local ok, info = pcall(C_AuctionHouse.GetItemSearchResultInfo, itemKey, i)
-        if ok and info and info.buyoutAmount and info.buyoutAmount > 0 then
+        if ok and info and info.buyoutAmount and info.buyoutAmount > 0 and info.itemLink then
             local qty = info.quantity or 1
             if qty > 0 then
                 local unit = math.floor(info.buyoutAmount / qty)
                 if unit > 0 then
-                    local bucketKey = 0
-                    if not isPet and info.itemLink and GetDetailedItemLevelInfo then
-                        local v = GetDetailedItemLevelInfo(info.itemLink)
-                        if type(v) == "number" then bucketKey = v end
-                    end
-                    local b = buckets[bucketKey]
-                    if not b then
-                        buckets[bucketKey] = {
-                            minUnit  = unit,
-                            isPlayer = info.containsOwnerItem == true,
-                        }
-                    elseif unit < b.minUnit then
-                        b.minUnit  = unit
-                        b.isPlayer = info.containsOwnerItem == true
+                    local id, bonus, mods = ns:ParseItemLink(info.itemLink)
+                    if id then
+                        local fqKey = ns:MakeItemKey(id, bonus, mods)
+                        local k = MakeCacheKey(fqKey, false, realm)
+                        if k then
+                            local b = buckets[k]
+                            if not b then
+                                buckets[k] = {
+                                    minUnit  = unit,
+                                    isPlayer = info.containsOwnerItem == true,
+                                }
+                            elseif unit < b.minUnit then
+                                b.minUnit  = unit
+                                b.isPlayer = info.containsOwnerItem == true
+                            end
+                        end
                     end
                 end
             end
@@ -134,13 +110,7 @@ local function HarvestNonCommodity(itemKey, now)
     end
 
     local stored = 0
-    for ilvl, b in pairs(buckets) do
-        local k
-        if isPet then
-            k = TupleKey(itemKey.itemID, 0, 0, itemKey.battlePetSpeciesID)
-        else
-            k = TupleKey(itemKey.itemID, ilvl, itemKey.itemSuffix or 0, 0)
-        end
+    for k, b in pairs(buckets) do
         cache[k] = {
             minUnit   = b.minUnit,
             isPlayer  = b.isPlayer,
@@ -206,25 +176,26 @@ local function HarvestReplicate()
     local n = C_AuctionHouse.GetNumReplicateItems() or 0
     if n == 0 then return 0 end
 
+    local realm = CurrentRealm()
     local now = time()
-    local buckets = {} -- key -> { minUnit, isPlayer }
+    local buckets = {} -- cache-key -> { minUnit, isPlayer }
     for i = 0, n - 1 do
         local _, _, count, _, _, _, _, _, _, buyout = C_AuctionHouse.GetReplicateItemInfo(i)
         if buyout and buyout > 0 and count and count > 0 then
             local link = C_AuctionHouse.GetReplicateItemLink(i)
-            local itemID, ilvl, suffix, species = TupleFromLink(link)
-            if itemID then
-                local k
-                if species and species > 0 then
-                    k = TupleKey(itemID, 0, 0, species)
-                else
-                    k = TupleKey(itemID, ilvl, suffix or 0, 0)
-                end
-                local unit = math.floor(buyout / count)
-                if unit > 0 then
-                    local b = buckets[k]
-                    if not b or unit < b.minUnit then
-                        buckets[k] = { minUnit = unit, isPlayer = false }
+            if link then
+                local id, bonus, mods = ns:ParseItemLink(link)
+                if id then
+                    local fqKey = ns:MakeItemKey(id, bonus, mods)
+                    local k = MakeCacheKey(fqKey, false, realm)
+                    if k then
+                        local unit = math.floor(buyout / count)
+                        if unit > 0 then
+                            local b = buckets[k]
+                            if not b or unit < b.minUnit then
+                                buckets[k] = { minUnit = unit, isPlayer = false }
+                            end
+                        end
                     end
                 end
             end
@@ -262,33 +233,51 @@ listener:SetScript("OnEvent", function(_, event, arg1)
         if not itemID then return end
         local unit, isPlayer = LowestUnitCommodity(itemID)
         if not unit then return end
-        cache[CommodityKey(itemID)] = {
-            minUnit = unit,
-            isPlayer = isPlayer,
-            scannedAt = time(),
-            source = "commodity",
-        }
-        ScheduleNotify()
+        local fqKey = ns:MakeItemKey(itemID, "", "")
+        local k = MakeCacheKey(fqKey, true)
+        if k then
+            cache[k] = {
+                minUnit = unit,
+                isPlayer = isPlayer,
+                scannedAt = time(),
+                source = "commodity",
+            }
+            ScheduleNotify()
+        end
 
     elseif event == "AUCTION_HOUSE_BROWSE_RESULTS_UPDATED" then
         -- Browse/full scan (e.g. TSM Shopping with broad search, Auctionator
-        -- full scan). Per-entry data is coarser — we get minPrice per
-        -- ItemKey, not per-auction detail. Good enough for our use: lowest
-        -- unit price is what we need.
+        -- full scan). Per-entry data is coarser — Blizzard gives us minPrice
+        -- per ItemKey, not per-auction detail with full bonus IDs. We can't
+        -- distinguish bonus-ID variants here, so browse results land in a
+        -- coarser bucket that an item-level search will refine on next scan.
         if not C_AuctionHouse.GetBrowseResults then return end
         local results = C_AuctionHouse.GetBrowseResults() or {}
+        local realm = CurrentRealm()
         local now = time()
         local stored = 0
         for _, br in ipairs(results) do
             if br.itemKey and br.minPrice and br.minPrice > 0 then
-                local k = TupleKey(br.itemKey.itemID, br.itemKey.itemLevel, br.itemKey.itemSuffix, br.itemKey.battlePetSpeciesID)
-                cache[k] = {
-                    minUnit = br.minPrice,
-                    isPlayer = br.containsOwnerItem == true,
-                    scannedAt = now,
-                    source = "browse",
-                }
-                stored = stored + 1
+                local fqKey
+                if br.itemKey.battlePetSpeciesID and br.itemKey.battlePetSpeciesID > 0 then
+                    fqKey = "pet:" .. br.itemKey.battlePetSpeciesID .. ";;"
+                else
+                    fqKey = string.format("%d;;", br.itemKey.itemID or 0)
+                end
+                local k = MakeCacheKey(fqKey, false, realm)
+                if k then
+                    -- Don't overwrite a more precise per-link entry if we
+                    -- already have one — browse data is coarser.
+                    if not cache[k] then
+                        cache[k] = {
+                            minUnit = br.minPrice,
+                            isPlayer = br.containsOwnerItem == true,
+                            scannedAt = now,
+                            source = "browse",
+                        }
+                        stored = stored + 1
+                    end
+                end
             end
         end
         if stored > 0 then ScheduleNotify() end
@@ -310,19 +299,13 @@ end)
 --------------------------
 
 -- Look up the freshest live-scan minimum unit price for an item.
--- itemLink: hyperlink from bags / auction data — needed to derive ilvl.
+-- fqKey: FlipQueue's canonical "<itemID>;<bonusIDs>;<modifiers>" string —
+--        the same key the caller already has from MakeItemKey.
 -- isCommodity: caller already knows this from C_AuctionHouse.GetItemCommodityStatus.
 -- Returns a table { minUnit, isPlayer, age, source } or nil.
-function ScanCache:Lookup(itemLink, isCommodity)
-    local itemID, itemLevel, itemSuffix, speciesID = TupleFromLink(itemLink)
-    if not itemID then return nil end
-
-    local key
-    if isCommodity then
-        key = CommodityKey(itemID)
-    else
-        key = TupleKey(itemID, itemLevel, itemSuffix, speciesID)
-    end
+function ScanCache:Lookup(fqKey, isCommodity)
+    local key = MakeCacheKey(fqKey, isCommodity)
+    if not key then return nil end
 
     local entry = cache[key]
     if not entry then return nil end
@@ -380,13 +363,23 @@ persistFrame:SetScript("OnEvent", function(_, event)
     if event == "PLAYER_LOGIN" then
         if type(FlipQueueDB) == "table" and type(FlipQueueDB.scanCache) == "table" then
             -- Restore entries. Save format matches in-memory format exactly.
-            -- Filter to new-format keys that include a realm prefix ("<realm>|...");
-            -- older single-realm entries from earlier builds would otherwise
-            -- inject stale prices when the player logs into a different realm.
+            -- Current key shape is "<realm>|<fqKey>" (with ";" inside the
+            -- suffix, since fqKey is "<itemID>;<bonusIDs>;<modifiers>") or
+            -- "<realm>|c:<itemID>" for commodities. Drop anything that
+            -- doesn't match — covers older builds that keyed on
+            -- "<itemID>:<ilvl>:0:0" tuples, since those collapsed bonus-ID
+            -- variants and would inject wrong prices into the new lookup.
             local kept, dropped = 0, 0
             for k, v in pairs(FlipQueueDB.scanCache) do
-                if type(k) == "string" and k:find("|", 1, true)
-                    and type(v) == "table" and v.minUnit and v.scannedAt then
+                local valid = false
+                if type(k) == "string" and type(v) == "table"
+                    and v.minUnit and v.scannedAt then
+                    local suffix = k:match("|(.+)$")
+                    if suffix and (suffix:find(";", 1, true) or suffix:find("^c:")) then
+                        valid = true
+                    end
+                end
+                if valid then
                     cache[k] = v
                     kept = kept + 1
                 else
@@ -395,7 +388,7 @@ persistFrame:SetScript("OnEvent", function(_, event)
             end
             if dropped > 0 then
                 ns:PrintDebug("[ScanCache] loaded " .. kept ..
-                    " entries, dropped " .. dropped .. " from older build (no realm prefix)")
+                    " entries, dropped " .. dropped .. " from older build")
             end
         end
 

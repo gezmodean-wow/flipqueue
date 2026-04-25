@@ -304,7 +304,7 @@ function AuctionPost:ResolvePostPrice(itemKey, itemID, itemLink, isCommodity)
     local lowestAgeSec       -- age of the chosen source in seconds, when known
     local liveLookup
     if ns.AuctionScanCache then
-        liveLookup = ns.AuctionScanCache:Lookup(itemLink, isCommodity)
+        liveLookup = ns.AuctionScanCache:Lookup(itemKey, isCommodity)
     end
     local dbminCopper = ns.TSM:GetPrice(itemKey, "DBMinBuyout")
 
