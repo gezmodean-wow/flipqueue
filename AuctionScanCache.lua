@@ -160,7 +160,8 @@ listener:SetScript("OnEvent", function(_, event, arg1)
     if event == "ITEM_SEARCH_RESULTS_UPDATED" then
         local itemKey = arg1
         if type(itemKey) ~= "table" or not itemKey.itemID then return end
-        HarvestNonCommodity(itemKey, time())
+        local n = HarvestNonCommodity(itemKey, time())
+        if n > 0 then ScheduleNotify() end
 
     elseif event == "COMMODITY_SEARCH_RESULTS_UPDATED" then
         local itemID = arg1
@@ -173,6 +174,7 @@ listener:SetScript("OnEvent", function(_, event, arg1)
             scannedAt = time(),
             source = "commodity",
         }
+        ScheduleNotify()
 
     elseif event == "AUCTION_HOUSE_BROWSE_RESULTS_UPDATED" then
         -- Browse/full scan (e.g. TSM Shopping with broad search, Auctionator
@@ -182,6 +184,7 @@ listener:SetScript("OnEvent", function(_, event, arg1)
         if not C_AuctionHouse.GetBrowseResults then return end
         local results = C_AuctionHouse.GetBrowseResults() or {}
         local now = time()
+        local stored = 0
         for _, br in ipairs(results) do
             if br.itemKey and br.minPrice and br.minPrice > 0 then
                 local k = TupleKey(br.itemKey.itemID, br.itemKey.itemLevel, br.itemKey.itemSuffix, br.itemKey.battlePetSpeciesID)
@@ -191,10 +194,40 @@ listener:SetScript("OnEvent", function(_, event, arg1)
                     scannedAt = now,
                     source = "browse",
                 }
+                stored = stored + 1
             end
         end
+        if stored > 0 then ScheduleNotify() end
     end
 end)
+
+--------------------------
+-- Update notifications
+--------------------------
+
+-- A scan typically fires many events in quick succession (one per item TSM
+-- queries). Notifying on every single event would re-resolve pricing dozens
+-- of times per scan. Debounce until the burst settles, then fire once.
+local listeners = {}
+local DEBOUNCE_SEC = 2
+
+local debounceTicker
+
+local function ScheduleNotify()
+    if debounceTicker then debounceTicker:Cancel() end
+    debounceTicker = C_Timer.NewTimer(DEBOUNCE_SEC, function()
+        debounceTicker = nil
+        for _, fn in ipairs(listeners) do
+            pcall(fn)
+        end
+    end)
+end
+
+function ScanCache:RegisterUpdated(fn)
+    if type(fn) == "function" then
+        listeners[#listeners + 1] = fn
+    end
+end
 
 --------------------------
 -- Public API

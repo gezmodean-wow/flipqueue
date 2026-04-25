@@ -448,6 +448,39 @@ function AuctionPost:ResolvePostPrice(itemKey, itemID, itemLink, isCommodity)
     }
 end
 
+-- Re-resolve pricing for an existing scan-results list without rewalking
+-- bags. Called from the scan-cache update listener so rows reflect a fresh
+-- TSM Post Scan / Cancel Scan within a couple of seconds. Updates each
+-- entry's `pricing`, `status`, and `postQty` in place.
+function AuctionPost:RerunPricing(scanResults)
+    if not scanResults then return end
+    for _, entry in ipairs(scanResults) do
+        if entry.itemKey and entry.itemID and entry.status ~= "dnt" then
+            local pricing = self:ResolvePostPrice(entry.itemKey, entry.itemID, entry.itemLink, entry.isCommodity)
+            entry.pricing = pricing
+            local status = "ready"
+            if not pricing then
+                status = "no_price"
+            elseif pricing.belowThreshold then
+                status = "below_threshold"
+            elseif pricing.aboveMaxSkip then
+                status = "above_max"
+            elseif not pricing.buyoutCopper then
+                status = "no_price"
+            end
+            entry.status = status
+            local cap = pricing and tonumber(pricing.postCap)
+            if cap and cap > 0 then
+                entry.postQty = math.min(entry.totalCount or 1, cap)
+            elseif pricing then
+                entry.postQty = math.min(entry.totalCount or 1, 1)
+            else
+                entry.postQty = 0
+            end
+        end
+    end
+end
+
 --------------------------
 -- Bag Scanning
 --------------------------
@@ -565,6 +598,7 @@ function AuctionPost:ScanBags(filterToTodo)
                                 byKey[key] = {
                                     itemKey     = key,
                                     itemID      = itemID,
+                                    itemLink    = info.hyperlink,
                                     name        = name,
                                     icon        = iconOk and icon or nil,
                                     slots       = {{bag = bagIndex, slot = slot, count = info.stackCount or 1}},

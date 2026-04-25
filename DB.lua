@@ -468,6 +468,36 @@ function ns:FormatGold(copper)
     return tostring(gold) .. "g"
 end
 
+-- Precise gold/silver/copper formatter — used for AH-side numbers (post
+-- price, AH lowest) where the player needs to verify the exact value
+-- against what the AH UI shows. FormatGold rounds to "9.1k" for anything
+-- ≥ 1000g, which hides whether the price actually changed scan-to-scan.
+function ns:FormatGoldPrecise(copper)
+    if not copper or copper <= 0 then return "0g" end
+    local g = math.floor(copper / 10000)
+    local s = math.floor((copper % 10000) / 100)
+    local c = copper % 100
+
+    local gStr
+    if g >= 1000 then
+        local formatted = tostring(g)
+        local rep
+        repeat
+            formatted, rep = formatted:gsub("^(-?%d+)(%d%d%d)", "%1,%2")
+        until rep == 0
+        gStr = formatted .. "g"
+    else
+        gStr = g .. "g"
+    end
+
+    if c > 0 then
+        return string.format("%s %ds %dc", gStr, s, c)
+    elseif s > 0 then
+        return string.format("%s %ds", gStr, s)
+    end
+    return gStr
+end
+
 -- Parse gold strings like "1,377g", "22.8k", "1.3m" to numeric gold value
 -- Handles WoW color-coded strings and abbreviated formats
 function ns:ParseGoldValue(str)

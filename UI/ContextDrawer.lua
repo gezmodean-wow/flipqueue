@@ -456,21 +456,21 @@ local function GetOrCreateScanRow(parent, index)
             -- explicitly — falling back to normalCopper here would lie about
             -- what FlipQueue is going to do.
             if r.pricing.buyoutCopper then
-                GameTooltip:AddDoubleLine("Post price:", ns:FormatGold(r.pricing.buyoutCopper), 0.7, 0.7, 0.7, 1, 1, 1)
+                GameTooltip:AddDoubleLine("Post price:", ns:FormatGoldPrecise(r.pricing.buyoutCopper), 0.7, 0.7, 0.7, 1, 1, 1)
             elseif r.pricing.belowThreshold then
                 GameTooltip:AddDoubleLine("Post price:", "skip (below min)", 0.7, 0.7, 0.7, 1, 0.6, 0.3)
             elseif r.pricing.aboveMaxSkip then
                 GameTooltip:AddDoubleLine("Post price:", "skip (above max)", 0.7, 0.7, 0.7, 1, 0.6, 0.3)
             end
-            -- Market reference: what we undercut (from TSM DBMinBuyout).
+            -- Market reference: what we undercut (from live scan or TSM DBMinBuyout).
             if r.pricing.lowestCopper then
-                GameTooltip:AddDoubleLine("AH lowest:", ns:FormatGold(r.pricing.lowestCopper), 0.7, 0.7, 0.7, 0.85, 0.85, 1)
+                GameTooltip:AddDoubleLine("AH lowest:", ns:FormatGoldPrecise(r.pricing.lowestCopper), 0.7, 0.7, 0.7, 0.85, 0.85, 1)
             end
             -- Our own existing lowest auction for this item, if any. Shown so
             -- players can see when FlipQueue is matching their own price
             -- (the "we're lowest" branch) instead of undercutting.
             if r.pricing.ownLowestCopper then
-                GameTooltip:AddDoubleLine("Your lowest:", ns:FormatGold(r.pricing.ownLowestCopper), 0.7, 0.7, 0.7, 0.7, 0.9, 0.7)
+                GameTooltip:AddDoubleLine("Your lowest:", ns:FormatGoldPrecise(r.pricing.ownLowestCopper), 0.7, 0.7, 0.7, 0.7, 0.9, 0.7)
             end
             -- Why we chose that price (undercut / reset / aboveMax / match own / no competition).
             if r.pricing.reason then
@@ -1504,3 +1504,26 @@ _ctxCombatEvt:SetScript("OnEvent", function()
         UI:RefreshContextDrawer()
     end
 end)
+
+-- After a TSM (or any addon's) AH scan settles, re-resolve pricing for the
+-- currently-displayed AH scan rows so the player sees fresh per-variant
+-- prices without having to click "Scan To-Do" again. The cache module fires
+-- this listener once per scan burst (debounced ~2s after the last event).
+if ns.AuctionScanCache and ns.AuctionScanCache.RegisterUpdated then
+    ns.AuctionScanCache:RegisterUpdated(function()
+        if not currentScanResults or #currentScanResults == 0 then return end
+        local ap = ns.AuctionPost
+        if not ap or not ap.RerunPricing then return end
+        if InCombatLockdown and InCombatLockdown() then
+            -- Defer through the existing combat-end path.
+            _ctxPendingRefreshAfterCombat = true
+            return
+        end
+        ap:RerunPricing(currentScanResults)
+        if ahContentFrame then
+            -- RefreshAHScanRows is a file-local; only call it if the AH UI
+            -- is built. Layout / height recompute happens inside the refresh.
+            if RefreshAHScanRows then RefreshAHScanRows() end
+        end
+    end)
+end
