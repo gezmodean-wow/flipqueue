@@ -71,29 +71,69 @@ end
 -- Harvest helpers
 --------------------------
 
--- For a non-commodity ItemKey, find the lowest unit buyout from live results.
--- Returns nil if there are no buyout-priced listings (bid-only auctions get
--- excluded — we can't undercut a bid-only listing).
-local function LowestUnitNonCommodity(itemKey)
-    local n = C_AuctionHouse.GetNumItemSearchResults and C_AuctionHouse.GetNumItemSearchResults(itemKey)
-    if not n or n == 0 then return nil, false end
+-- TSM (and the default UI's sell flow) sends non-commodity searches with
+-- itemKey.itemLevel = 0 — a deliberate workaround for an old Blizzard bug,
+-- still in TSM as of v4.14.66 (LibTSMWoW/Source/API/AuctionHouseWrapper.lua).
+-- The server returns ALL ilvl variants of that itemID in a single result
+-- list, and the scanning addon buckets per-variant client-side using each
+-- result's itemLink. Without this, we'd cache `<itemID>:0:0:0` (the event's
+-- itemKey) and never match the per-variant ilvl we compute from bag items.
+--
+-- HarvestNonCommodity reads every result, extracts per-result ilvl from the
+-- itemLink, buckets by (real ilvl), and writes one cache entry per variant.
+local function HarvestNonCommodity(itemKey, now)
+    local getNum = C_AuctionHouse.GetNumItemSearchResults
+    local n = getNum and getNum(itemKey) or 0
+    if n == 0 then return 0 end
 
-    local lowestUnit
-    local lowestIsPlayer = false
+    -- Battle pets are keyed by speciesID; ilvl is meaningless for them.
+    local isPet = itemKey.battlePetSpeciesID and itemKey.battlePetSpeciesID > 0
+
+    local buckets = {} -- ilvl -> { minUnit, isPlayer }
     for i = 1, n do
         local ok, info = pcall(C_AuctionHouse.GetItemSearchResultInfo, itemKey, i)
         if ok and info and info.buyoutAmount and info.buyoutAmount > 0 then
             local qty = info.quantity or 1
             if qty > 0 then
                 local unit = math.floor(info.buyoutAmount / qty)
-                if unit > 0 and (not lowestUnit or unit < lowestUnit) then
-                    lowestUnit = unit
-                    lowestIsPlayer = info.containsOwnerItem == true
+                if unit > 0 then
+                    local bucketKey = 0
+                    if not isPet and info.itemLink and GetDetailedItemLevelInfo then
+                        local v = GetDetailedItemLevelInfo(info.itemLink)
+                        if type(v) == "number" then bucketKey = v end
+                    end
+                    local b = buckets[bucketKey]
+                    if not b then
+                        buckets[bucketKey] = {
+                            minUnit  = unit,
+                            isPlayer = info.containsOwnerItem == true,
+                        }
+                    elseif unit < b.minUnit then
+                        b.minUnit  = unit
+                        b.isPlayer = info.containsOwnerItem == true
+                    end
                 end
             end
         end
     end
-    return lowestUnit, lowestIsPlayer
+
+    local stored = 0
+    for ilvl, b in pairs(buckets) do
+        local k
+        if isPet then
+            k = TupleKey(itemKey.itemID, 0, 0, itemKey.battlePetSpeciesID)
+        else
+            k = TupleKey(itemKey.itemID, ilvl, itemKey.itemSuffix or 0, 0)
+        end
+        cache[k] = {
+            minUnit   = b.minUnit,
+            isPlayer  = b.isPlayer,
+            scannedAt = now,
+            source    = "item",
+        }
+        stored = stored + 1
+    end
+    return stored
 end
 
 local function LowestUnitCommodity(itemID)
@@ -120,15 +160,7 @@ listener:SetScript("OnEvent", function(_, event, arg1)
     if event == "ITEM_SEARCH_RESULTS_UPDATED" then
         local itemKey = arg1
         if type(itemKey) ~= "table" or not itemKey.itemID then return end
-        local unit, isPlayer = LowestUnitNonCommodity(itemKey)
-        if not unit then return end
-        local k = TupleKey(itemKey.itemID, itemKey.itemLevel, itemKey.itemSuffix, itemKey.battlePetSpeciesID)
-        cache[k] = {
-            minUnit = unit,
-            isPlayer = isPlayer,
-            scannedAt = time(),
-            source = "item",
-        }
+        HarvestNonCommodity(itemKey, time())
 
     elseif event == "COMMODITY_SEARCH_RESULTS_UPDATED" then
         local itemID = arg1
