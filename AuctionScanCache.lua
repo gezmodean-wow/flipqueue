@@ -148,6 +148,36 @@ local function LowestUnitCommodity(itemID)
 end
 
 --------------------------
+-- Update notifications
+--------------------------
+
+-- A scan typically fires many events in quick succession (one per item TSM
+-- queries). Notifying on every single event would re-resolve pricing dozens
+-- of times per scan. Debounce until the burst settles, then fire once.
+-- Declared before the event handler so the OnEvent closure captures
+-- ScheduleNotify as a real local upvalue (not a missing global).
+local listeners = {}
+local DEBOUNCE_SEC = 2
+
+local debounceTicker
+
+local function ScheduleNotify()
+    if debounceTicker then debounceTicker:Cancel() end
+    debounceTicker = C_Timer.NewTimer(DEBOUNCE_SEC, function()
+        debounceTicker = nil
+        for _, fn in ipairs(listeners) do
+            pcall(fn)
+        end
+    end)
+end
+
+function ScanCache:RegisterUpdated(fn)
+    if type(fn) == "function" then
+        listeners[#listeners + 1] = fn
+    end
+end
+
+--------------------------
 -- Event handling
 --------------------------
 
@@ -200,34 +230,6 @@ listener:SetScript("OnEvent", function(_, event, arg1)
         if stored > 0 then ScheduleNotify() end
     end
 end)
-
---------------------------
--- Update notifications
---------------------------
-
--- A scan typically fires many events in quick succession (one per item TSM
--- queries). Notifying on every single event would re-resolve pricing dozens
--- of times per scan. Debounce until the burst settles, then fire once.
-local listeners = {}
-local DEBOUNCE_SEC = 2
-
-local debounceTicker
-
-local function ScheduleNotify()
-    if debounceTicker then debounceTicker:Cancel() end
-    debounceTicker = C_Timer.NewTimer(DEBOUNCE_SEC, function()
-        debounceTicker = nil
-        for _, fn in ipairs(listeners) do
-            pcall(fn)
-        end
-    end)
-end
-
-function ScanCache:RegisterUpdated(fn)
-    if type(fn) == "function" then
-        listeners[#listeners + 1] = fn
-    end
-end
 
 --------------------------
 -- Public API
