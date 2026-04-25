@@ -384,6 +384,44 @@ SlashCmdList["FLIPQUEUE"] = function(msg)
             ns:Print("Debug bank popup: " .. p .. " pulls, " .. d .. " deposits, " .. e .. " extras.")
         end
 
+    elseif msg == "debug bagprices" then
+        -- /fq debug bagprices
+        -- Walk current character's bags, parse each item's actual fqKey,
+        -- and print: bag fqKey | live-cache hit | DBMinBuyout | item link.
+        -- The point is to compare what FQ thinks the bag item is vs. what
+        -- the cache and TSM data say for that exact variant — useful when
+        -- the displayed post price looks wrong and we suspect the bag item
+        -- is parsing to a different fqKey than the task expects.
+        local bagList = ns.ALL_PLAYER_BAGS or ns.INVENTORY_BAGS or {0, 1, 2, 3, 4}
+        local lines = 0
+        for _, bag in ipairs(bagList) do
+            local ok, num = pcall(C_Container.GetContainerNumSlots, bag)
+            if ok and num then
+                for slot = 1, num do
+                    local ok2, info = pcall(C_Container.GetContainerItemInfo, bag, slot)
+                    if ok2 and info and info.hyperlink then
+                        local id, bonus, mods = ns:ParseItemLink(info.hyperlink)
+                        if id then
+                            local fqKey = ns:MakeItemKey(id, bonus, mods)
+                            local liveStr = "-"
+                            if ns.AuctionScanCache then
+                                local live = ns.AuctionScanCache:Lookup(fqKey, false)
+                                if live then
+                                    liveStr = string.format("%.0fc (%s, %ds)", live.minUnit, live.source or "?", live.age)
+                                end
+                            end
+                            local dbmin = ns.TSM and ns.TSM:IsEnabled() and ns.TSM:GetPrice(fqKey, "DBMinBuyout") or nil
+                            local dbminStr = dbmin and string.format("%.0fc", dbmin) or "-"
+                            print(string.format("  %s | live=%s | dbmin=%s | %s",
+                                fqKey, liveStr, dbminStr, info.hyperlink))
+                            lines = lines + 1
+                        end
+                    end
+                end
+            end
+        end
+        ns:Print("Bag prices: " .. lines .. " items")
+
     elseif msg == "debug scan" or msg:match("^debug scan%s+%d+$") then
         -- /fq debug scan [N]
         -- Dump the live-AH-scan cache (populated passively from any addon's
@@ -509,6 +547,7 @@ SlashCmdList["FLIPQUEUE"] = function(msg)
         print("  /fq debug bankpopup [N|P D E] - Show fake bank popup with N (or P/D/E) rows for UI overflow testing")
         print("  /fq debug post <fqKey> - Dump TSM string + price sources + op settings for diagnosing posting divergence")
         print("  /fq debug scan [N] - Dump N (default 20) most recent entries from the live-AH-scan cache")
+        print("  /fq debug bagprices - Walk bags, dump each item's fqKey + cache hit + DBMinBuyout + link")
         print("  /fq tutorial - Show the first-time tutorial")
         print("  /fq settings - Open settings panel")
         print("  /fq link [bnet|local] <Char-Realm> - Link to another account (bnet=friend, local=same BNet)")
