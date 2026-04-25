@@ -342,7 +342,9 @@ function ScanCache:DebugDump(limit)
     local out = {}
     for i = 1, math.min(limit, #rows) do
         local r = rows[i]
-        out[#out + 1] = string.format("%s: %d copper (%s, %ds old%s)",
+        -- %.0f instead of %d — copper values can exceed the 32-bit signed
+        -- limit Lua's %d uses (e.g. 4.25B copper for a 425k gold listing).
+        out[#out + 1] = string.format("%s: %.0f copper (%s, %ds old%s)",
             r.key, r.entry.minUnit, r.entry.source or "?",
             time() - r.entry.scannedAt,
             r.entry.isPlayer and ", owned" or "")
