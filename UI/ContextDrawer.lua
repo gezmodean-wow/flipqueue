@@ -812,12 +812,38 @@ local function RefreshAHScanRows()
         if row then row:Hide() end
     end
 
+    -- Rows anchor below the Scan buttons + the Post Next button (the latter
+    -- sits in a fixed slot above the queue so it doesn't drift as items get
+    -- posted off the top).
     local yOff = -(HEADER_HEIGHT + BTN_HEIGHT + BTN_SPACING)
+    if #currentScanResults > 0 then
+        yOff = yOff - BTN_HEIGHT - BTN_SPACING
+    end
+
+    -- Identify the next-to-post item so we can highlight that row. PostNext
+    -- always picks the first ready item in the list.
+    local nextReadyIdx
+    for i, result in ipairs(currentScanResults) do
+        if result.status == "ready" then
+            nextReadyIdx = i
+            break
+        end
+    end
+
     for i = 1, scanCount do
         local row = GetOrCreateScanRow(ahContentFrame, i)
         local result = currentScanResults[i]
         row:SetPoint("TOPLEFT", ahContentFrame, "TOPLEFT", 0, yOff - (i - 1) * ROW_HEIGHT)
         row:SetPoint("RIGHT", ahContentFrame, "RIGHT", 0, 0)
+
+        -- Visual indicator for the next-to-post item.
+        if i == nextReadyIdx then
+            row:SetBackdropColor(0.15, 0.25, 0.45, 0.85)
+            row:SetBackdropBorderColor(0.45, 0.65, 0.95, 0.95)
+        else
+            row:SetBackdropColor(0.08, 0.08, 0.12, 0.6)
+            row:SetBackdropBorderColor(0.2, 0.2, 0.3, 0.5)
+        end
 
         if result.icon then row.icon:SetTexture(result.icon) end
         row.name:SetText(result.name or "?")
@@ -1123,11 +1149,12 @@ local function BuildAHContent(parent)
         -- Dynamic vertical layout
         local yOff = -(HEADER_HEIGHT + BTN_HEIGHT + BTN_SPACING)
 
-        local scanCount = math.min(#currentScanResults, MAX_SCAN_ROWS)
-        yOff = yOff - scanCount * ROW_HEIGHT
-        if scanCount > 0 then yOff = yOff - BTN_SPACING end
-
+        -- Post Next sits directly below the scan buttons in a fixed slot,
+        -- ABOVE the queue. Posting an item shrinks the queue downward without
+        -- moving Post Next, so the player's mouse stays on the button for
+        -- repeated clicks.
         if #currentScanResults > 0 then
+            ahPostAll:ClearAllPoints()
             ahPostAll:SetPoint("TOPLEFT", ahContentFrame, "TOPLEFT", 0, yOff)
             ahPostAll:SetPoint("RIGHT", ahContentFrame, "RIGHT", 0, 0)
             ahPostAll:Show()
@@ -1135,6 +1162,10 @@ local function BuildAHContent(parent)
         else
             ahPostAll:Hide()
         end
+
+        local scanCount = math.min(#currentScanResults, MAX_SCAN_ROWS)
+        yOff = yOff - scanCount * ROW_HEIGHT
+        if scanCount > 0 then yOff = yOff - BTN_SPACING end
 
         -- Separator
         ahSeparator:SetPoint("TOPLEFT", ahContentFrame, "TOPLEFT", 0, yOff)

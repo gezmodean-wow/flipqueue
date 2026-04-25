@@ -24,7 +24,7 @@ local cache = {}
 -- TSM scan from yesterday still inform today's posting decisions, with the
 -- staleness surfaced in the tooltip rather than silently dropped.
 local PERSIST_MAX_AGE = 7 * 24 * 3600  -- prune entries older than 7 days at save time
-local PERSIST_MAX_ENTRIES = 5000       -- cap on saved entries (keep most recent)
+local PERSIST_MAX_ENTRIES = 20000      -- cap on saved entries (keep most recent)
 
 --------------------------
 -- Keys
