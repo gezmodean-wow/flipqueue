@@ -30,18 +30,32 @@ local PERSIST_MAX_ENTRIES = 20000      -- cap on saved entries (keep most recent
 -- Keys
 --------------------------
 
-local function TupleKey(itemID, itemLevel, itemSuffix, speciesID)
+-- Realm-scope all cache keys. AH listings are per connected-realm cluster,
+-- so a 3.2k price scanned on Realm A would leak into Realm B's posting
+-- decisions if we shared a single cache. Use the player's normalized realm
+-- name as a prefix; connected realms each get their own bucket and converge
+-- after one scan each — acceptable for v1.
+local function CurrentRealm()
+    local r = (GetNormalizedRealmName and GetNormalizedRealmName())
+        or GetRealmName() or "Unknown"
+    return r:gsub("%s+", ""):lower()
+end
+
+local function TupleKey(itemID, itemLevel, itemSuffix, speciesID, realm)
+    realm = realm or CurrentRealm()
     if speciesID and speciesID > 0 then
-        return "p:" .. tostring(speciesID)
+        return realm .. "|p:" .. tostring(speciesID)
     end
-    return string.format("%d:%d:%d:0",
+    return string.format("%s|%d:%d:%d:0",
+        realm,
         tonumber(itemID) or 0,
         tonumber(itemLevel) or 0,
         tonumber(itemSuffix) or 0)
 end
 
-local function CommodityKey(itemID)
-    return "c:" .. tostring(tonumber(itemID) or 0)
+local function CommodityKey(itemID, realm)
+    realm = realm or CurrentRealm()
+    return realm .. "|c:" .. tostring(tonumber(itemID) or 0)
 end
 
 -- Derive a Blizzard ItemKey tuple from an item hyperlink. We need itemLevel
@@ -366,10 +380,22 @@ persistFrame:SetScript("OnEvent", function(_, event)
     if event == "PLAYER_LOGIN" then
         if type(FlipQueueDB) == "table" and type(FlipQueueDB.scanCache) == "table" then
             -- Restore entries. Save format matches in-memory format exactly.
+            -- Filter to new-format keys that include a realm prefix ("<realm>|...");
+            -- older single-realm entries from earlier builds would otherwise
+            -- inject stale prices when the player logs into a different realm.
+            local kept, dropped = 0, 0
             for k, v in pairs(FlipQueueDB.scanCache) do
-                if type(v) == "table" and v.minUnit and v.scannedAt then
+                if type(k) == "string" and k:find("|", 1, true)
+                    and type(v) == "table" and v.minUnit and v.scannedAt then
                     cache[k] = v
+                    kept = kept + 1
+                else
+                    dropped = dropped + 1
                 end
+            end
+            if dropped > 0 then
+                ns:PrintDebug("[ScanCache] loaded " .. kept ..
+                    " entries, dropped " .. dropped .. " from older build (no realm prefix)")
             end
         end
 
