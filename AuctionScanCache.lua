@@ -19,10 +19,12 @@ local ScanCache = {}
 ns.AuctionScanCache = ScanCache
 
 local cache = {}
--- Entries survive across AH open/close. DBMinBuyout is hour-stale anyway,
--- so a 10-minute TTL on our live data is still strictly better. Bumping the
--- TTL helps when the player scans once then comes back later to post.
-local CACHE_TTL = 600
+-- Entries persist across sessions via FlipQueueDB.scanCache. We keep them
+-- indefinitely in memory; lookup decides freshness per call. This lets a
+-- TSM scan from yesterday still inform today's posting decisions, with the
+-- staleness surfaced in the tooltip rather than silently dropped.
+local PERSIST_MAX_AGE = 7 * 24 * 3600  -- prune entries older than 7 days at save time
+local PERSIST_MAX_ENTRIES = 5000       -- cap on saved entries (keep most recent)
 
 --------------------------
 -- Keys
@@ -181,10 +183,58 @@ end
 -- Event handling
 --------------------------
 
+-- Harvest a full bulk-replicate dump (Auctionator's "Full Scan" path uses
+-- C_AuctionHouse.ReplicateItems → REPLICATE_ITEM_LIST_UPDATE). Returns a
+-- count of cache entries written. Iterates every auction in the replicate
+-- batch, derives per-result ilvl from the link, buckets per (itemID, ilvl).
+local function HarvestReplicate()
+    if not C_AuctionHouse or not C_AuctionHouse.GetNumReplicateItems then return 0 end
+    local n = C_AuctionHouse.GetNumReplicateItems() or 0
+    if n == 0 then return 0 end
+
+    local now = time()
+    local buckets = {} -- key -> { minUnit, isPlayer }
+    for i = 0, n - 1 do
+        local _, _, count, _, _, _, _, _, _, buyout = C_AuctionHouse.GetReplicateItemInfo(i)
+        if buyout and buyout > 0 and count and count > 0 then
+            local link = C_AuctionHouse.GetReplicateItemLink(i)
+            local itemID, ilvl, suffix, species = TupleFromLink(link)
+            if itemID then
+                local k
+                if species and species > 0 then
+                    k = TupleKey(itemID, 0, 0, species)
+                else
+                    k = TupleKey(itemID, ilvl, suffix or 0, 0)
+                end
+                local unit = math.floor(buyout / count)
+                if unit > 0 then
+                    local b = buckets[k]
+                    if not b or unit < b.minUnit then
+                        buckets[k] = { minUnit = unit, isPlayer = false }
+                    end
+                end
+            end
+        end
+    end
+
+    local stored = 0
+    for k, b in pairs(buckets) do
+        cache[k] = {
+            minUnit   = b.minUnit,
+            isPlayer  = b.isPlayer,
+            scannedAt = now,
+            source    = "replicate",
+        }
+        stored = stored + 1
+    end
+    return stored
+end
+
 local listener = CreateFrame("Frame", "FlipQueueScanListener")
 listener:RegisterEvent("ITEM_SEARCH_RESULTS_UPDATED")
 listener:RegisterEvent("COMMODITY_SEARCH_RESULTS_UPDATED")
 listener:RegisterEvent("AUCTION_HOUSE_BROWSE_RESULTS_UPDATED")
+listener:RegisterEvent("REPLICATE_ITEM_LIST_UPDATE")
 
 listener:SetScript("OnEvent", function(_, event, arg1)
     if event == "ITEM_SEARCH_RESULTS_UPDATED" then
@@ -228,6 +278,16 @@ listener:SetScript("OnEvent", function(_, event, arg1)
             end
         end
         if stored > 0 then ScheduleNotify() end
+
+    elseif event == "REPLICATE_ITEM_LIST_UPDATE" then
+        -- Auctionator's Full Scan triggers this. Heavy event — replicate
+        -- batches can be 50k–200k auctions on a busy realm. Harvest inline;
+        -- if frame hitching becomes a complaint we can shift to a coroutine.
+        local stored = HarvestReplicate()
+        if stored > 0 then
+            ns:PrintDebug("[ScanCache] Replicate harvested " .. stored .. " entries")
+            ScheduleNotify()
+        end
     end
 end)
 
@@ -253,16 +313,10 @@ function ScanCache:Lookup(itemLink, isCommodity)
     local entry = cache[key]
     if not entry then return nil end
 
-    local age = time() - entry.scannedAt
-    if age > CACHE_TTL then
-        cache[key] = nil
-        return nil
-    end
-
     return {
         minUnit  = entry.minUnit,
         isPlayer = entry.isPlayer,
-        age      = age,
+        age      = time() - entry.scannedAt,
         source   = entry.source,
     }
 end
@@ -295,3 +349,44 @@ function ScanCache:DebugDump(limit)
     end
     return out, #rows
 end
+
+--------------------------
+-- Persistence (cross-session)
+--------------------------
+
+-- Load cache from FlipQueueDB.scanCache on session start. Survives logout
+-- so the player gets immediate live-data fidelity for items they've scanned
+-- before, without needing to re-run TSM on first AH open of the session.
+local persistFrame = CreateFrame("Frame")
+persistFrame:RegisterEvent("PLAYER_LOGIN")
+persistFrame:RegisterEvent("PLAYER_LOGOUT")
+persistFrame:SetScript("OnEvent", function(_, event)
+    if event == "PLAYER_LOGIN" then
+        if type(FlipQueueDB) == "table" and type(FlipQueueDB.scanCache) == "table" then
+            -- Restore entries. Save format matches in-memory format exactly.
+            for k, v in pairs(FlipQueueDB.scanCache) do
+                if type(v) == "table" and v.minUnit and v.scannedAt then
+                    cache[k] = v
+                end
+            end
+        end
+
+    elseif event == "PLAYER_LOGOUT" then
+        if type(FlipQueueDB) ~= "table" then return end
+        -- Prune old entries and cap size before saving. We sort by recency
+        -- and keep the newest PERSIST_MAX_ENTRIES.
+        local now = time()
+        local rows = {}
+        for k, v in pairs(cache) do
+            if v.scannedAt and (now - v.scannedAt) <= PERSIST_MAX_AGE then
+                rows[#rows + 1] = { k = k, v = v }
+            end
+        end
+        table.sort(rows, function(a, b) return a.v.scannedAt > b.v.scannedAt end)
+        local saved = {}
+        for i = 1, math.min(PERSIST_MAX_ENTRIES, #rows) do
+            saved[rows[i].k] = rows[i].v
+        end
+        FlipQueueDB.scanCache = saved
+    end
+end)

@@ -196,6 +196,15 @@ local RESET_ABOVEMAX_KEYS = {
     normalPrice = true,
 }
 
+-- Compact age string for tooltip / debug labels: 12s, 4m, 2h, 3d.
+local function FormatShortAge(sec)
+    sec = tonumber(sec) or 0
+    if sec < 60 then return sec .. "s" end
+    if sec < 3600 then return math.floor(sec / 60) .. "m" end
+    if sec < 86400 then return math.floor(sec / 3600) .. "h" end
+    return math.floor(sec / 86400) .. "d"
+end
+
 -- Find our character's lowest buyout-per-unit for items matching baseItemID
 -- among currently-live owned auctions. TSM's MakePostDecision calls this the
 -- isPlayer branch: if we already own the lowest auction, match our own price
@@ -278,26 +287,45 @@ function AuctionPost:ResolvePostPrice(itemKey, itemID, itemLink, isCommodity)
     -- Undercut may be 0 ("match") for players who prefer matching the market.
     undercut = undercut or 0
 
-    -- Current lowest buyout on the AH. Prefer live scan cache (populated
-    -- passively from any addon's AH search events — TSM Post/Cancel Scan,
-    -- Auctionator, default UI). Live data is per-variant and reflects the
-    -- actual current market. Fall back to TSM's DBMinBuyout only when no
-    -- recent live scan covered this variant — DBMinBuyout is a stale
-    -- regional snapshot from the TSM Desktop App and is keyed on the base
-    -- item string, so it collapses across bonus-ID variants (the root of
-    -- FQ-003 divergence on gear with ilvl upgrades).
-    local lowestCopper, liveAge, liveIsPlayer, liveSource
+    -- Current lowest buyout on the AH. Prefer the freshest source: live scan
+    -- cache (populated passively from any addon's AH search events — TSM
+    -- Post/Cancel Scan, Auctionator's Full Scan / per-item search, default
+    -- UI) when it's newer than TSM's DBMinBuyout snapshot. The DBMinBuyout
+    -- snapshot is updated by the TSM Desktop App roughly hourly, so we
+    -- assume that age as the comparison threshold — if our cache entry is
+    -- older than that, the regional snapshot has probably moved on.
+    -- DBMinBuyout is also keyed on the base item string and collapses across
+    -- bonus-ID variants, so live cache wins on tie for variant-sensitive
+    -- items (gear with ilvl upgrades).
+    local DBMINBUYOUT_ASSUMED_AGE = 3600  -- TSM Desktop App refresh cadence
+    local lowestCopper, liveIsPlayer
+    local lowestSourceLabel  -- tooltip-ready string: "live (3s)", "dbmin", "dbmin (live 2h stale)"
+    local lowestSourceKey    -- machine-readable: "live" or "dbmin"
+    local lowestAgeSec       -- age of the chosen source in seconds, when known
+    local liveLookup
     if ns.AuctionScanCache then
-        local live = ns.AuctionScanCache:Lookup(itemLink, isCommodity)
-        if live then
-            lowestCopper = live.minUnit
-            liveAge = live.age
-            liveIsPlayer = live.isPlayer
-            liveSource = live.source
-        end
+        liveLookup = ns.AuctionScanCache:Lookup(itemLink, isCommodity)
     end
-    if not lowestCopper then
-        lowestCopper = ns.TSM:GetPrice(itemKey, "DBMinBuyout")
+    local dbminCopper = ns.TSM:GetPrice(itemKey, "DBMinBuyout")
+
+    if liveLookup and (not dbminCopper or liveLookup.age <= DBMINBUYOUT_ASSUMED_AGE) then
+        -- Live wins: either DBMinBuyout has nothing, or our live entry is
+        -- fresh enough to be at least as current as TSM's hourly snapshot.
+        lowestCopper      = liveLookup.minUnit
+        liveIsPlayer      = liveLookup.isPlayer
+        lowestSourceKey   = "live"
+        lowestSourceLabel = "live " .. (liveLookup.source or "scan")
+        lowestAgeSec      = liveLookup.age
+    elseif liveLookup and dbminCopper then
+        -- Both available, but our live entry is older than the assumed
+        -- DBMinBuyout refresh interval. DBMinBuyout is probably newer.
+        lowestCopper      = dbminCopper
+        lowestSourceKey   = "dbmin"
+        lowestSourceLabel = string.format("dbmin (live %s stale)", FormatShortAge(liveLookup.age))
+    elseif dbminCopper then
+        lowestCopper      = dbminCopper
+        lowestSourceKey   = "dbmin"
+        lowestSourceLabel = "dbmin"
     end
 
     -- Our own lowest live buyout for this item (if the AH is open and we
@@ -417,7 +445,7 @@ function AuctionPost:ResolvePostPrice(itemKey, itemID, itemLink, isCommodity)
     ns:PrintDebug(("[AuctionPost] ResolvePostPrice: %s op=%s lowest=%s(%s) own=%s normal=%s min=%s max=%s uc=%s -> buyout=%s (%s)"):format(
         tostring(itemKey), tostring(opName),
         tostring(lowestCopper),
-        liveAge and ("live " .. liveSource .. " " .. liveAge .. "s") or "dbmin",
+        tostring(lowestSourceLabel or "?"),
         tostring(ownLowestCopper),
         tostring(normalCopper),
         tostring(minCopper), tostring(maxCopper),
@@ -439,11 +467,13 @@ function AuctionPost:ResolvePostPrice(itemKey, itemID, itemLink, isCommodity)
         reason            = reason,
         belowThreshold    = belowThreshold,
         aboveMaxSkip      = aboveMaxSkip,
-        -- Live-scan provenance so the UI can show freshness ("scan: 2min
-        -- ago") and the player knows whether the lowest value came from a
-        -- fresh scan or TSM's stale DBMinBuyout fallback.
-        liveAge           = liveAge,
-        liveSource        = liveSource,
+        -- Provenance for the lowest-buyout source so the UI can show
+        -- freshness ("scan: 2min ago") and the player knows whether the
+        -- price came from a fresh live scan, the hourly DBMinBuyout
+        -- snapshot, or DBMinBuyout while a stale live entry was ignored.
+        lowestSourceKey   = lowestSourceKey,
+        lowestSourceLabel = lowestSourceLabel,
+        lowestAgeSec      = lowestAgeSec,
         liveIsPlayer      = liveIsPlayer,
     }
 end

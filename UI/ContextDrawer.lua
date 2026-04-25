@@ -476,23 +476,31 @@ local function GetOrCreateScanRow(parent, index)
             if r.pricing.reason then
                 GameTooltip:AddDoubleLine("Reason:", r.pricing.reason, 0.7, 0.7, 0.7, 0.6, 0.8, 0.6)
             end
-            -- Freshness of the `AH lowest` number. Live = harvested from a
-            -- recent AH scan (TSM / Auctionator / default UI). Stale =
-            -- DBMinBuyout fallback (hourly Desktop-App snapshot, not per
-            -- variant). Players need to know which they're looking at to
-            -- judge whether to run a fresh scan before posting.
-            if r.pricing.liveAge then
-                local ageText
-                if r.pricing.liveAge < 60 then
-                    ageText = r.pricing.liveAge .. "s ago"
-                elseif r.pricing.liveAge < 3600 then
-                    ageText = math.floor(r.pricing.liveAge / 60) .. "m ago"
-                else
-                    ageText = math.floor(r.pricing.liveAge / 3600) .. "h ago"
+            -- Freshness of the `AH lowest` number. The decision tree picks
+            -- whichever source is freshest (live cache when recent enough vs
+            -- TSM's hourly DBMinBuyout snapshot); we just surface what was
+            -- chosen so the player can judge whether to run a fresh scan.
+            if r.pricing.lowestSourceLabel then
+                local label = r.pricing.lowestSourceLabel
+                if r.pricing.lowestSourceKey == "live" and r.pricing.lowestAgeSec then
+                    local age = r.pricing.lowestAgeSec
+                    local ageText
+                    if age < 60 then
+                        ageText = age .. "s ago"
+                    elseif age < 3600 then
+                        ageText = math.floor(age / 60) .. "m ago"
+                    elseif age < 86400 then
+                        ageText = math.floor(age / 3600) .. "h ago"
+                    else
+                        ageText = math.floor(age / 86400) .. "d ago"
+                    end
+                    label = "live " .. ageText
                 end
-                GameTooltip:AddDoubleLine("Scan:", "live " .. ageText, 0.7, 0.7, 0.7, 0.6, 0.9, 0.6)
-            elseif r.pricing.lowestCopper then
-                GameTooltip:AddDoubleLine("Scan:", "DBMinBuyout (stale)", 0.7, 0.7, 0.7, 0.9, 0.7, 0.4)
+                local r2, g2, b2 = 0.6, 0.9, 0.6
+                if r.pricing.lowestSourceKey ~= "live" then
+                    r2, g2, b2 = 0.9, 0.7, 0.4
+                end
+                GameTooltip:AddDoubleLine("Scan:", label, 0.7, 0.7, 0.7, r2, g2, b2)
             end
             -- Baseline (normalPrice) is still interesting context but not the
             -- post price itself.
