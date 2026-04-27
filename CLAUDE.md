@@ -42,11 +42,9 @@ This addon is part of the **Cogworks** WoW addon suite alongside Tempo, Maxcraft
 
 ## Feedback tracking
 
-**GitHub is canonical.** Issues live at https://github.com/gezmodean-wow/flipqueue/issues — this is the single source of truth for bugs, feature requests, and engineering discussion. The `scribe` bot mirrors Discord forum activity into GitHub issues automatically and broadcasts engineering comments back to the Discord thread.
+**GitHub is canonical.** Issues live at https://github.com/gezmodean-wow/flipqueue/issues — this is the single source of truth for bugs, feature requests, and engineering discussion. The `scribe` bot (deployed on Railway, source at `C:/src/scribe`) mirrors Discord forum activity into GitHub issues automatically and broadcasts engineering comments back to the Discord thread.
 
 When shipping a fix for a tracked issue, post the engineering note as a comment on the GitHub issue via `gh issue comment <number> --repo gezmodean-wow/flipqueue --body "..."`. Don't update Discord directly — scribe handles propagation.
-
-The local `feedback/` directory is **legacy / transitional**. Older issues have md files there; new issues should not. Existing md files are being reduced to thin pointers at their canonical GitHub issue (see `feedback/collection/FQ-003-...md` for the pattern).
 
 FlipQueue issue IDs use the prefix `FQ` (e.g. `FQ-001`). The GitHub issue number is the canonical identifier; the `FQ-N` ID is for commit-message convenience.
 
@@ -56,4 +54,6 @@ When the user mentions a bug, regression, feature idea, or improvement during no
 
 Commit messages referencing a tracked issue should use `<type>(<ID>): <subject>` — e.g. `fix(FQ-004): sniper delay cancels on target change`.
 
-The `/feedback-*` slash commands (feedback-capture, feedback-note, feedback-ask, etc.) predate the scribe workflow and should not be used for FlipQueue. Use `gh issue` commands instead.
+## Cross-cog feature requests
+
+When you spot a gap in a sibling cog's library while working here — most often Cogworks (the shared core) needing a new helper, event, or primitive — offer to file a GitHub Issue on that cog's tracker via `gh issue create --repo gezmodean-wow/<target-cog>`. Mention FlipQueue as the source in the body so the maintainer can triage it as a cross-cog ask. Scribe will mirror it to the target cog's Discord forum where its players can follow along.
