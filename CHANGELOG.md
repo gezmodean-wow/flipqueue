@@ -1,5 +1,32 @@
 # Changelog
 
+## v0.12.0-alpha1
+
+First alpha of v0.12. Focused on TSM posting parity — closes a cluster of cases where FlipQueue's post price diverged from TSM's view, plus a working "Pull Saleable" button.
+
+### Posting price parity with TSM
+
+Fixes for items where FlipQueue's "below min", "undercut", or "no competitors" decision didn't match what TSM showed in its posting view:
+
+- **Live cache no longer stomps real listings.** When the auto-scan kicker timed out, it would overwrite real listings the browse listener had just captured with a synthetic "empty" sentinel — making the row sit at "no competition" while TSM correctly saw a competitor. Both paths now leave real data alone.
+- **Stack listings read at the right price.** Non-commodity items (gear, recipes, etc.) sold as a multi-unit stack were stored at per-unit price internally — so a 3-stack at 12k showed as a 4k competitor and tripped the "below min" branch falsely. Now stored at the full listing buyout, matching TSM's posting comparison.
+- **Op price queries use the right item-string form.** TSM's `AuctioningOpMin/Max/Normal` price sources resolve through the canonical (group-keyed) form, not the level form FlipQueue had been using. For some items (designs, recipes), querying with the level form returned ~half the canonical value, silently flipping decisions from "below min, skip" to "undercut, post". Now uses canonical for op-derived sources, level form for raw DB sources.
+- **Pets resolve to their actual TSM group.** TSM's group-lookup API errors out for battle-pet item strings even when the pet is grouped — so grouped pets always dropped to the `#Default` fallback op. New direct items-DB lookup catches what the API misses; pets now use their real op (Boophie's Battle Pets, etc.) instead of #Default.
+
+### Drawer: see your TSM op at a glance
+
+Every row in the post drawer now shows the TSM Auctioning op as a small inline tag after the decision rule. Custom ops in soft blue, `#Default (fallback)` in muted gray with an explanatory tooltip — TSM's posting view often doesn't show competitors for fallback-op items, so when you see the gray tag, FlipQueue's prices may differ from TSM's "no competition" view. Add the item to a TSM group for parity.
+
+### Pull Saleable: real warbank walk
+
+The "Pull Saleable" button used to require an active to-do list and would refuse otherwise. Now walks the warbank for every TSM-Auctioning-grouped item that isn't soulbound, pulling up to `postCap` (or your default sell quantity) of each, capped by what's already in your bags. Independent of the to-do list — this is the "I want one of everything I can sell" button. Reagent inclusion is gated by a new `trackReagents` master setting (default off, matching the existing "reagents aren't tracked for sales or to-dos" rationale) plus a per-flow sub-toggle. UI checkboxes for both are coming in a follow-up alpha; current surface is SavedVariables-only.
+
+### New debug commands
+
+- **`/fq debug post <fqKey>`** — significantly more output. TSM string + level-form values + price source comparison + TSM operation flags + per-listing cache dump (price, quantity, seller, time-left, isPlayer, hasOwner) + profile chain + group-lookup result. Use this whenever a post price looks wrong; the answer is almost always in here.
+- **`/fq debug gold`** — walks the gold-required calculation per task with verbose printing. Surfaces every filter / skip / cap that AutoWithdrawGold applies, so when withdraw "doesn't appear to work" or pulls a wildly wrong amount, the dump shows exactly which task contributed what (or why it was skipped).
+- **`/fq debug bagprices`** now skips soulbound items (Hearthstone, quest items) so the output is signal-only.
+
 ## v0.11.0
 
 The first stable release since v0.9.8. The alphas between the two shipped a lot of new stuff — mini-view drawers, multi-account sync, a from-scratch bank and posting engine, TSM cross-checking, PBS support — and this release wraps all of it up plus fixes the posting regression that held v0.11.0 back. Compatible with WoW 12.0.5 shipping alongside this release.
