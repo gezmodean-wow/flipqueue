@@ -442,25 +442,40 @@ local function GetOrCreateScanRow(parent, index)
         local r = self._result
         if not r then return end
         GameTooltip:SetOwner(self, "ANCHOR_TOPRIGHT")
-        local numID = tonumber(r.itemID)
-        if numID and numID > 0 then
-            GameTooltip:SetItemByID(numID)
+        -- Prefer the actual item link from the bag — it carries bonus IDs
+        -- and modifiers so the tooltip shows the correct ilvl / sockets /
+        -- variant. SetItemByID falls back to the base item with no
+        -- bonuses, which misrepresents upgraded gear and recipe ranks.
+        if r.itemLink then
+            GameTooltip:SetHyperlink(r.itemLink)
         else
-            GameTooltip:SetText(r.name or "?", 1, 1, 1)
+            local numID = tonumber(r.itemID)
+            if numID and numID > 0 then
+                GameTooltip:SetItemByID(numID)
+            else
+                GameTooltip:SetText(r.name or "?", 1, 1, 1)
+            end
         end
         if r.pricing then
             GameTooltip:AddLine(" ")
             -- Only the post price (what TSM's decision tree actually chose)
             -- goes in the headline row. When the decision was "skip" (below
-            -- min with no reset / above max with no fallback) we show that
-            -- explicitly — falling back to normalCopper here would lie about
-            -- what FlipQueue is going to do.
+            -- min with no reset / above max with no fallback / whitelisted
+            -- competitor / invalid seller) we show the reason explicitly —
+            -- falling back to normalCopper here would lie about what
+            -- FlipQueue is going to do.
             if r.pricing.buyoutCopper then
                 GameTooltip:AddDoubleLine("Post price:", ns:FormatGoldPrecise(r.pricing.buyoutCopper), 0.7, 0.7, 0.7, 1, 1, 1)
             elseif r.pricing.belowThreshold then
                 GameTooltip:AddDoubleLine("Post price:", "skip (below min)", 0.7, 0.7, 0.7, 1, 0.6, 0.3)
             elseif r.pricing.aboveMaxSkip then
                 GameTooltip:AddDoubleLine("Post price:", "skip (above max)", 0.7, 0.7, 0.7, 1, 0.6, 0.3)
+            elseif r.pricing.skipWhitelist then
+                GameTooltip:AddDoubleLine("Post price:", "skip (whitelist)", 0.7, 0.7, 0.7, 1, 0.6, 0.3)
+            elseif r.pricing.invalidReason then
+                GameTooltip:AddDoubleLine("Post price:", "skip (" .. r.pricing.invalidReason .. ")", 0.7, 0.7, 0.7, 1, 0.4, 0.3)
+            elseif r.pricing.lowestSourceKey == "none" or r.pricing.lowestSourceKey == "stale" then
+                GameTooltip:AddDoubleLine("Post price:", "scan pending…", 0.7, 0.7, 0.7, 0.8, 0.8, 0.6)
             end
             -- Market reference: what we undercut (from live scan or TSM DBMinBuyout).
             if r.pricing.lowestCopper then
@@ -482,7 +497,7 @@ local function GetOrCreateScanRow(parent, index)
             -- chosen so the player can judge whether to run a fresh scan.
             if r.pricing.lowestSourceLabel then
                 local label = r.pricing.lowestSourceLabel
-                if r.pricing.lowestSourceKey == "live" and r.pricing.lowestAgeSec then
+                if r.pricing.lowestAgeSec then
                     local age = r.pricing.lowestAgeSec
                     local ageText
                     if age < 60 then
@@ -494,11 +509,17 @@ local function GetOrCreateScanRow(parent, index)
                     else
                         ageText = math.floor(age / 86400) .. "d ago"
                     end
-                    label = "live " .. ageText
+                    if r.pricing.lowestSourceKey == "live" then
+                        label = "live " .. ageText
+                    elseif r.pricing.lowestSourceKey == "stale" then
+                        label = "stale (" .. ageText .. ") — auto-scan running"
+                    end
                 end
-                local r2, g2, b2 = 0.6, 0.9, 0.6
-                if r.pricing.lowestSourceKey ~= "live" then
-                    r2, g2, b2 = 0.9, 0.7, 0.4
+                local r2, g2, b2 = 0.6, 0.9, 0.6  -- live = green
+                if r.pricing.lowestSourceKey == "stale" then
+                    r2, g2, b2 = 0.9, 0.7, 0.4    -- stale = amber
+                elseif r.pricing.lowestSourceKey == "none" then
+                    r2, g2, b2 = 0.7, 0.7, 0.4
                 end
                 GameTooltip:AddDoubleLine("Scan:", label, 0.7, 0.7, 0.7, r2, g2, b2)
             end
@@ -866,10 +887,34 @@ local function RefreshAHScanRows()
         local pricing = result.pricing
         if pricing and pricing.buyoutCopper then
             row.postPrice:SetText("|cffddcc66Post:|r " .. ns:FormatGold(pricing.buyoutCopper))
-        elseif pricing and (pricing.belowThreshold or pricing.aboveMaxSkip) then
+        elseif pricing and (pricing.belowThreshold or pricing.aboveMaxSkip
+            or pricing.skipWhitelist or pricing.invalidReason) then
             row.postPrice:SetText("|cff888888Post:|r skip")
+        elseif pricing and (pricing.lowestSourceKey == "none"
+            or pricing.lowestSourceKey == "stale") then
+            row.postPrice:SetText("|cffaaaa55Post:|r scanning…")
         else
             row.postPrice:SetText("")
+        end
+
+        -- Compact form of the TSM decision reason for inline display. The
+        -- full string lives in pricing.reason; we trim it for the row so
+        -- the player can see at a glance which branch fired ("undercut",
+        -- "match own", "reset → min", etc.) without opening the tooltip.
+        local function CompactReason(reason)
+            if not reason or reason == "" then return nil end
+            if reason == "undercut"                       then return "undercut"        end
+            if reason == "undercut blacklist"             then return "undercut (bl)"   end
+            if reason == "match whitelist"                then return "match wl"        end
+            if reason:find("normal %(no competition%)")   then return "normal · no comp." end
+            if reason:find("match own")                   then return "match own"       end
+            if reason:find("^reset_minPrice")             then return "reset → min"    end
+            if reason:find("^reset_maxPrice")             then return "reset → max"    end
+            if reason:find("^reset_normalPrice")          then return "reset → normal" end
+            if reason:find("^aboveMax_minPrice")          then return "max → min"      end
+            if reason:find("^aboveMax_maxPrice")          then return "max → max"      end
+            if reason:find("^aboveMax_normalPrice")       then return "max → normal"   end
+            return reason
         end
 
         -- Status info and row coloring
@@ -885,12 +930,32 @@ local function RefreshAHScanRows()
             row.info:SetText("|cff888888No TSM data|r")
             row.name:SetTextColor(0.6, 0.6, 0.6)
             row:SetBackdropBorderColor(0.3, 0.3, 0.3, 0.5)
+        elseif result.status == "scan_pending" then
+            row.info:SetText("|cffaaaa55Scan pending|r")
+            row.name:SetTextColor(0.7, 0.7, 0.6)
+            row:SetBackdropBorderColor(0.4, 0.4, 0.2, 0.6)
+        elseif result.status == "skip_whitelist" then
+            row.info:SetText("|cffffaa44Whitelisted competitor|r")
+            row.name:SetTextColor(0.7, 0.6, 0.5)
+            row:SetBackdropBorderColor(0.5, 0.4, 0.2, 0.7)
+        elseif result.status == "invalid" then
+            row.info:SetText("|cffff4444" .. (pricing and pricing.invalidReason or "invalid") .. "|r")
+            row.name:SetTextColor(0.7, 0.4, 0.4)
+            row:SetBackdropBorderColor(0.6, 0.2, 0.2, 0.7)
         elseif result.status == "dnt" then
             row.info:SetText("|cffff8800Do Not Track|r")
             row.name:SetTextColor(0.6, 0.5, 0.4)
             row:SetBackdropBorderColor(0.5, 0.35, 0.1, 0.7)
         else
-            row.info:SetText("")
+            -- Ready row — surface the TSM decision rule (which branch of
+            -- MakePostDecision fired) so the player can see it without
+            -- hovering. Tooltip still has the full reason string.
+            local rule = pricing and CompactReason(pricing.reason)
+            if rule then
+                row.info:SetText("|cff8aa8d8" .. rule .. "|r")
+            else
+                row.info:SetText("")
+            end
             row.name:SetTextColor(0.85, 0.85, 0.9)
             row:SetBackdropBorderColor(0.2, 0.2, 0.3, 0.5)
         end
@@ -1029,7 +1094,11 @@ local function BuildAHContent(parent)
             local ap = ns.AuctionPost
             if ap and ap.ScanBags then
                 currentScanResults = ap:ScanBags(true) or {}
+                ns._currentAHScanResults = currentScanResults
                 ns:PrintDebug("[ContextDrawer] Scan To-Do: " .. #currentScanResults .. " results")
+                if ns.AuctionAutoScan and ns.AuctionAutoScan.ScanQueue then
+                    ns.AuctionAutoScan:ScanQueue(currentScanResults)
+                end
                 RefreshAHScanRows()
                 if ahContentFrame._layoutAH then ahContentFrame._layoutAH() end
                 local ahH = CalculateAHHeight() + THUMB_HEIGHT
@@ -1049,7 +1118,11 @@ local function BuildAHContent(parent)
             local ap = ns.AuctionPost
             if ap and ap.ScanBags then
                 currentScanResults = ap:ScanBags(false) or {}
+                ns._currentAHScanResults = currentScanResults
                 ns:PrintDebug("[ContextDrawer] Scan All: " .. #currentScanResults .. " results")
+                if ns.AuctionAutoScan and ns.AuctionAutoScan.ScanQueue then
+                    ns.AuctionAutoScan:ScanQueue(currentScanResults)
+                end
                 RefreshAHScanRows()
                 if ahContentFrame._layoutAH then ahContentFrame._layoutAH() end
                 local ahH = CalculateAHHeight() + THUMB_HEIGHT
@@ -1359,13 +1432,21 @@ local function ShowContext(ctx)
     elseif ctx == "auction" then
         local af = BuildAHContent(contextContent)
         af:Show()
-        -- Auto-scan on AH open if enabled
-        if ns.db and ns.db.settings.ahAutoScanOnOpen then
+        -- Auto-scan on AH open if enabled (and posting flow is on at all).
+        if ns.db and ns.db.settings.ahAutoScanOnOpen
+            and ns.db.settings.ahPostingEnabled ~= false then
             local ap = ns.AuctionPost
             if ap and ap.ScanBags then
                 currentScanResults = ap:ScanBags(true) or {}
+                ns._currentAHScanResults = currentScanResults
                 if #currentScanResults > 0 then
                     ns:Print(ns.COLORS.GREEN .. #currentScanResults .. " item(s)|r ready to post")
+                    -- Kick the per-item live-AH scanner so we have fresh
+                    -- competitor data for the posting decision tree. Cheap
+                    -- when the cache is already fresh — auto-scan dedups.
+                    if ns.AuctionAutoScan and ns.AuctionAutoScan.ScanQueue then
+                        ns.AuctionAutoScan:ScanQueue(currentScanResults)
+                    end
                 end
             end
         end

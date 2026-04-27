@@ -43,10 +43,17 @@ local TSM_AUDITED_VERSION = "v4.14.66"
 -- reports "no TSM data" — which is a safer failure than posting at a wrong
 -- price. The structural check below surfaces the mismatch to the player.
 local EXPECTED_OP_FIELDS = {
+    -- Required price expression slots and core branch enums. If any of
+    -- these are nil the decision tree can't function, so a missing-field
+    -- warning is genuinely useful.
     "minPrice", "maxPrice", "normalPrice",
     "undercut", "priceReset", "aboveMax",
     "postCap", "duration",
 }
+-- Optional behaviour fields. TSM omits these from saved-vars when set to
+-- their defaults, so warning about them produces noise on every default
+-- op. ResolvePostPrice / IsAuctionFiltered all treat nil as the safe
+-- default (no filter, no override) so missing values are non-fatal.
 
 --------------------------
 -- Availability
@@ -357,11 +364,20 @@ function TSM:GetItemAuctioningOp(fqKey)
         opName = self:ResolveGroupOperation(groupsDB, groupPath, "Auctioning")
     end
 
-    -- Fallback: use the player's configured fallback operation for ungrouped items
+    -- Fallback chain for ungrouped items:
+    --  1. TSM's built-in "#Default" Auctioning op — TSM itself uses this
+    --     when an item has no explicit group, so following the same
+    --     fallback keeps our posting decisions aligned with TSM's.
+    --  2. The player's tsmFallbackOp setting — only kicks in when
+    --     #Default doesn't exist (rare; some players have deleted it).
     if not opName then
-        local fallback = ns.db and ns.db.settings.tsmFallbackOp or ""
-        if fallback ~= "" and opsDB["Auctioning"][fallback] then
-            opName = fallback
+        if opsDB["Auctioning"]["#Default"] then
+            opName = "#Default"
+        else
+            local fallback = ns.db and ns.db.settings.tsmFallbackOp or ""
+            if fallback ~= "" and opsDB["Auctioning"][fallback] then
+                opName = fallback
+            end
         end
     end
     if not opName then return nil end
@@ -406,9 +422,128 @@ function TSM:GetItemAuctioningOp(fqKey)
         postCap       = postCapEval,
         postCapRaw    = opSettings.postCap,
         duration      = opSettings.duration,
+        -- TSM IsAuctionFiltered inputs: drop short-time-left auctions,
+        -- match stack size on commodities, blacklist sellers per-op.
+        ignoreLowDuration = opSettings.ignoreLowDuration,
+        matchStackSize    = opSettings.matchStackSize,
+        stackSize         = opSettings.stackSize,
+        stackSizeIsCap    = opSettings.stackSizeIsCap,
+        blacklist         = opSettings.blacklist,
+        -- Cancel-side knobs we'll read as we add cancel support.
+        cancelUndercut         = opSettings.cancelUndercut,
+        cancelRepost           = opSettings.cancelRepost,
+        cancelRepostThreshold  = opSettings.cancelRepostThreshold,
         ts            = time(),
     }
     opCache[fqKey] = result
+    return result
+end
+
+--------------------------
+-- Global Auctioning Settings (factionrealm-scoped)
+--------------------------
+
+-- TSM's whitelist is scoped per faction+realm and stored on the global
+-- auctioning settings, not on individual operations. TSM v4.14.66 stores it
+-- under the key "f@<faction> - <realm>@auctioningOptions@whitelist" in
+-- TradeSkillMasterDB. Returns a set of lowercased seller names, or nil when
+-- TSM hasn't initialised the key.
+local _whitelistCache
+local _whitelistCacheTs = 0
+function TSM:GetWhitelist()
+    if _whitelistCache and (time() - _whitelistCacheTs) < 60 then
+        return _whitelistCache
+    end
+    if type(TradeSkillMasterDB) ~= "table" then return nil end
+    local faction = UnitFactionGroup and UnitFactionGroup("player") or "Alliance"
+    local realm = (GetNormalizedRealmName and GetNormalizedRealmName()) or GetRealmName() or ""
+    local key = "f@" .. faction .. " - " .. realm .. "@auctioningOptions@whitelist"
+    local raw = TradeSkillMasterDB[key]
+    if type(raw) ~= "table" then
+        _whitelistCache = {}
+        _whitelistCacheTs = time()
+        return _whitelistCache
+    end
+    local out = {}
+    for name in pairs(raw) do
+        if type(name) == "string" then
+            out[name:lower()] = true
+        end
+    end
+    _whitelistCache = out
+    _whitelistCacheTs = time()
+    return out
+end
+
+-- Whether a seller name appears on the player's blacklist for an operation.
+-- Mirrors TSM's AuctioningOperation.IsBlacklisted (case-insensitive CSV
+-- substring match against operationSettings.blacklist).
+function TSM:IsBlacklisted(opOrBlacklist, sellerName)
+    if not sellerName or sellerName == "" then return false end
+    local raw
+    if type(opOrBlacklist) == "table" then
+        raw = opOrBlacklist.blacklist
+    else
+        raw = opOrBlacklist
+    end
+    if type(raw) ~= "string" or raw == "" then return false end
+    local lower = sellerName:lower()
+    -- TSM's String.SeparatedContains is a comma-split exact-segment match.
+    -- We replicate that behavior so "alice,bobby" doesn't match "bob".
+    for token in raw:lower():gmatch("[^,]+") do
+        if token:gsub("^%s+", ""):gsub("%s+$", "") == lower then
+            return true
+        end
+    end
+    return false
+end
+
+--------------------------
+-- Level-form item string
+--------------------------
+
+-- TSM's AuctionDB / AuctioningOp* price sources internally call
+-- ItemString.ToLevel before lookup, which converts bonus-ID strings into
+-- "i:<id>::i<ilvl>" — the level form. Price-data is keyed on the level
+-- form, not on the canonicalised bonus-ID form. If we pass the bonus-ID
+-- form to TSM_API.GetCustomPriceValue, TSM looks up against the wrong
+-- partition and returns ~10% off values vs what TSM's own tooltip shows.
+--
+-- This helper builds the level form FlipQueue should use for price-source
+-- queries. We try a few sources in order:
+--   1. The provided itemLink (most accurate — current bag state)
+--   2. The wowItemString rebuilt from fqKey
+--   3. Base item string (no ilvl) as fallback
+local levelStrCache = {}
+function TSM:ItemKeyToLevelString(fqKey, itemLink)
+    if not fqKey or fqKey == "" then return nil end
+    if fqKey:find("^pet:") then return self:ItemKeyToTSMString(fqKey) end
+
+    -- Cache by fqKey + itemLink — the link adds context that affects ilvl.
+    local cacheKey = fqKey .. (itemLink or "")
+    if levelStrCache[cacheKey] then return levelStrCache[cacheKey] end
+
+    local itemID = fqKey:match("^(%d+)")
+    if not itemID then return nil end
+
+    local ilvl
+    if itemLink and GetDetailedItemLevelInfo then
+        ilvl = GetDetailedItemLevelInfo(itemLink)
+    end
+    if not ilvl and self.ItemKeyToItemString then
+        local wowStr = ns:ItemKeyToItemString(fqKey)
+        if wowStr and GetDetailedItemLevelInfo then
+            ilvl = GetDetailedItemLevelInfo(wowStr)
+        end
+    end
+
+    local result
+    if ilvl and ilvl > 0 then
+        result = "i:" .. itemID .. "::i" .. ilvl
+    else
+        result = "i:" .. itemID
+    end
+    levelStrCache[cacheKey] = result
     return result
 end
 

@@ -186,14 +186,25 @@ end
 -- TSM Price Resolution
 --------------------------
 
--- Price-source key validator for priceReset / aboveMax lookups.
--- TSM's MakePostDecision treats only these three as posting targets when the
+-- Price-source key validator for priceReset / aboveMax lookups. TSM's
+-- MakePostDecision treats only these three as posting targets when the
 -- operation setting names a price to fall back on. "none" / "ignore" mean
 -- "don't post" / "ignore low auctions" and are handled separately.
 local RESET_ABOVEMAX_KEYS = {
     minPrice    = true,
     maxPrice    = true,
     normalPrice = true,
+}
+
+-- Approx. seconds-from-listing-end represented by each timeLeft enum bucket
+-- the AH API returns. The retail API exposes timeLeftSeconds directly; the
+-- fallback table lets us reason about ignoreLowDuration when only the
+-- enum is available. Numbers chosen to err on the include side.
+local TIMELEFT_SECONDS = {
+    [0] = 30 * 60,
+    [1] = 2  * 60 * 60,
+    [2] = 12 * 60 * 60,
+    [3] = 48 * 60 * 60,
 }
 
 -- Compact age string for tooltip / debug labels: 12s, 4m, 2h, 3d.
@@ -205,71 +216,165 @@ local function FormatShortAge(sec)
     return math.floor(sec / 86400) .. "d"
 end
 
--- Find our character's lowest buyout-per-unit for items matching baseItemID
--- among currently-live owned auctions. TSM's MakePostDecision calls this the
--- isPlayer branch: if we already own the lowest auction, match our own price
--- instead of undercutting ourselves into a cheaper bracket with every repost.
---
--- Returns nil when the AH isn't open, the owned-auctions query hasn't
--- resolved yet, or we have no matching auction on the AH.
--- Blizzard groups AH listings by {itemID, itemLevel, itemSuffix,
--- battlePetSpeciesID}. For gear with modifier-9 ilvl variants, each variant
--- is a separate bucket on the AH. Matching only on itemID pulls in our
--- OTHER-variant listings as the "own lowest" and trips the match-own branch
--- against the wrong variant's market — cue FlipQueue undercutting itself.
--- Filter by itemLevel (derived from the fqKey's modifier 9) so we only
--- match the variant we're actually posting.
-local function GetOwnLowestBuyout(itemKey, itemID)
-    if not C_AuctionHouse or not C_AuctionHouse.GetOwnedAuctions then return nil end
-    if not itemID then return nil end
-    local ok, owned = pcall(C_AuctionHouse.GetOwnedAuctions)
-    if not ok or not owned or #owned == 0 then return nil end
-
-    local targetIlvl
-    if itemKey then
-        local modStr = itemKey:match("^[^;]*;[^;]*;(.*)$")
-        if modStr and modStr ~= "" then
-            local v = modStr:match("^9=(%-?%d+)") or modStr:match(":9=(%-?%d+)")
-            if v then targetIlvl = tonumber(v) end
+-- TSM AuctioningOperation.IsAuctionFiltered (LibTSMSystem v4.14.66:269-285).
+-- Drops a listing before it can be considered the lowest competitor.
+local function IsAuctionFiltered(op, listing, opCtx)
+    if not op then return false end
+    if op.ignoreLowDuration and op.ignoreLowDuration > 0 then
+        local secs = listing.timeLeftSec
+        if not secs then secs = TIMELEFT_SECONDS[3] end  -- assume long if unknown
+        if secs <= op.ignoreLowDuration then return true end
+    end
+    if op.matchStackSize and opCtx.opStackSize and listing.quantity ~= opCtx.opStackSize then
+        return true
+    end
+    if op.priceReset == "ignore" and opCtx.minCopper and opCtx.undercutCopper then
+        if (listing.buyout - opCtx.undercutCopper) < opCtx.minCopper then
+            return true
         end
     end
-
-    local target = tostring(itemID)
-    local lowest
-    for _, auction in ipairs(owned) do
-        if auction.itemKey and tostring(auction.itemKey.itemID) == target then
-            local variantMatches = true
-            if targetIlvl and auction.itemKey.itemLevel and auction.itemKey.itemLevel ~= targetIlvl then
-                variantMatches = false
-            end
-            if variantMatches then
-                local buyout = auction.buyoutAmount or 0
-                local qty = auction.quantity or 1
-                if buyout > 0 and qty > 0 then
-                    local unit = math.floor(buyout / qty)
-                    if unit > 0 and (not lowest or unit < lowest) then
-                        lowest = unit
-                    end
-                end
-            end
-        end
-    end
-    return lowest
+    return false
 end
 
--- Resolve the actual posting buyout for an item, matching TSM's
--- AuctioningOperation.MakePostDecision logic (see TSM's
--- LibTSMSystem/Source/Operation/AuctioningOperation.lua:417).
---
--- Returns a pricing table or nil if no operation / no price sources are
--- available or the item is below the operation's threshold with no reset
--- configured.
---
--- The critical piece the old implementation was missing: TSM posts at an
--- UNDERCUT of the current market (not at the normalPrice baseline). Our
--- old code evaluated normalPrice and stopped there, which meant FlipQueue
--- was posting at ~2x average market — way above what players would post
--- via TSM's own Post Scan.
+-- TSM Util.GetLowestAuction retail path (Core/Service/Auctioning/Util.lua:30).
+-- Walks the cached listings (already buyout-ascending), filters via
+-- IsAuctionFiltered, returns the first survivor's data plus seller flags.
+local function GetLowestFromListings(listings, op, opCtx)
+    if not listings or #listings == 0 then return nil end
+
+    local whitelist = ns.TSM and ns.TSM.GetWhitelist and ns.TSM:GetWhitelist() or nil
+
+    for _, listing in ipairs(listings) do
+        if not IsAuctionFiltered(op, listing, opCtx) then
+            local seller = listing.seller or ""
+            local sellerLower = seller:lower()
+            local isWhitelist = false
+            if whitelist and seller ~= "" then
+                isWhitelist = whitelist[sellerLower] == true
+            end
+            local isBlacklist = false
+            if op and op.blacklist and seller ~= "" then
+                isBlacklist = ns.TSM:IsBlacklisted(op, seller)
+            end
+            return {
+                buyout           = listing.buyout,
+                quantity         = listing.quantity,
+                seller           = seller,
+                isPlayer         = listing.isPlayer == true,
+                isWhitelist      = isWhitelist,
+                isBlacklist      = isBlacklist,
+                hasInvalidSeller = (not listing.isPlayer) and (not listing.hasOwner)
+                                    and whitelist and next(whitelist) ~= nil,
+            }
+        end
+    end
+    return nil
+end
+
+-- AuctioningOperation.MakePostDecision (LibTSMSystem v4.14.66:417-506) port.
+-- Returns: { reason, buyoutCopper, seller, belowThreshold, aboveMaxSkip,
+--            invalidReason, skipWhitelist }
+local function MakePostDecision(itemKey, lowest, ctx)
+    local normalCopper = ctx.normalCopper
+    local minCopper    = ctx.minCopper
+    local maxCopper    = ctx.maxCopper
+    local undercut     = ctx.undercutCopper or 0
+    local op           = ctx.op
+    local matchWhitelist = ctx.matchWhitelist
+
+    local result = { seller = lowest and lowest.seller or nil }
+
+    if not lowest then
+        result.reason       = "normal (no competition)"
+        result.buyoutCopper = normalCopper
+    elseif lowest.hasInvalidSeller then
+        result.invalidReason = "invalid_seller"
+        return result
+    elseif lowest.isBlacklist and lowest.isPlayer then
+        result.invalidReason = "alt_blacklisted"
+        return result
+    elseif lowest.isBlacklist and lowest.isWhitelist then
+        result.invalidReason = "blacklist_whitelist_conflict"
+        return result
+    elseif minCopper and (lowest.buyout - undercut) < minCopper then
+        local resetKey = op and op.priceReset
+        if resetKey and RESET_ABOVEMAX_KEYS[resetKey] then
+            local resetValue
+            if resetKey == "minPrice"    then resetValue = minCopper end
+            if resetKey == "maxPrice"    then resetValue = maxCopper end
+            if resetKey == "normalPrice" then resetValue = normalCopper end
+            if resetValue then
+                result.buyoutCopper = resetValue
+                result.reason = "reset_" .. resetKey .. " (lowest below min)"
+            else
+                result.belowThreshold = true
+                result.reason = "below min (reset price unavailable)"
+            end
+        elseif lowest.isBlacklist then
+            result.buyoutCopper = lowest.buyout - undercut
+            result.reason = "undercut blacklist"
+        else
+            result.belowThreshold = true
+            result.reason = "below min (no reset configured)"
+        end
+    elseif lowest.isPlayer or (lowest.isWhitelist and matchWhitelist) then
+        result.buyoutCopper = lowest.buyout
+        result.reason = lowest.isPlayer and "match own (we're lowest)" or "match whitelist"
+    elseif lowest.isWhitelist then
+        result.skipWhitelist = true
+        result.reason = "skip whitelist (no match-whitelist)"
+    elseif maxCopper and (lowest.buyout - undercut) > maxCopper then
+        local aboveMaxKey = op and op.aboveMax
+        if aboveMaxKey and RESET_ABOVEMAX_KEYS[aboveMaxKey] then
+            local aboveMaxValue
+            if aboveMaxKey == "minPrice"    then aboveMaxValue = minCopper end
+            if aboveMaxKey == "maxPrice"    then aboveMaxValue = maxCopper end
+            if aboveMaxKey == "normalPrice" then aboveMaxValue = normalCopper end
+            if aboveMaxValue then
+                result.buyoutCopper = aboveMaxValue
+                result.reason = "aboveMax_" .. aboveMaxKey
+            else
+                result.aboveMaxSkip = true
+                result.reason = "above max (fallback unavailable)"
+            end
+        else
+            result.aboveMaxSkip = true
+            result.reason = "above max (no fallback configured)"
+        end
+    else
+        result.buyoutCopper = lowest.buyout - undercut
+        result.reason = "undercut"
+    end
+
+    -- TSM's final clamp: buyout = max(buyout, minPrice). Bypassed on the
+    -- blacklist undercut branch, matching TSM's reason-gated clamp.
+    if result.buyoutCopper and minCopper and result.buyoutCopper < minCopper
+        and result.reason ~= "undercut blacklist" then
+        result.buyoutCopper = minCopper
+    end
+
+    return result
+end
+
+-- Read TSM's global "match whitelist" toggle. Defaults true in v4.14.66.
+local function ReadMatchWhitelist()
+    if type(TradeSkillMasterDB) ~= "table" then return true end
+    local v = TradeSkillMasterDB["g@ @auctioningOptions@matchWhitelist"]
+    if v == nil then return true end
+    return v ~= false
+end
+
+-- Resolve the actual posting buyout for an item by mirroring TSM v4.14.66's
+-- AuctioningOperation.MakePostDecision (LibTSMSystem/Source/Operation/
+-- AuctioningOperation.lua:417). Decision data:
+--   - normal/min/max prices via TSM's AuctioningOpNormal/Min/Max sources
+--     (TSM resolves the assigned op AND evaluates the expression in one
+--     call — no drift if the player changes ops or groups).
+--   - lowest competitor from AuctionScanCache, filtered through TSM's
+--     IsAuctionFiltered (timeLeft / matchStackSize / threshold-ignore).
+--   - blacklist from op settings, whitelist from TSM's factionrealm-scoped
+--     global setting, matchWhitelist from TSM's global toggle.
+-- Returns a pricing table or nil when no operation / price source resolves.
 function AuctionPost:ResolvePostPrice(itemKey, itemID, itemLink, isCommodity)
     if not ns.TSM or not ns.TSM:IsEnabled() then
         ns:PrintDebug("[AuctionPost] ResolvePostPrice: TSM not available")
@@ -278,90 +383,56 @@ function AuctionPost:ResolvePostPrice(itemKey, itemID, itemLink, isCommodity)
 
     local op = ns.TSM:GetItemAuctioningOp(itemKey)
 
-    -- Evaluate every price expression through TSM up front. These are copper
-    -- values for this specific item/variant.
-    local normalCopper = op and ns.TSM:EvaluateOpPrice(itemKey, op.normalPrice) or nil
-    local minCopper    = op and ns.TSM:EvaluateOpPrice(itemKey, op.minPrice)    or nil
-    local maxCopper    = op and ns.TSM:EvaluateOpPrice(itemKey, op.maxPrice)    or nil
-    local undercut     = op and ns.TSM:EvaluateOpPrice(itemKey, op.undercut)    or 0
-    -- Undercut may be 0 ("match") for players who prefer matching the market.
-    undercut = undercut or 0
-
-    -- Current lowest buyout on the AH. Prefer the freshest source: live scan
-    -- cache (populated passively from any addon's AH search events — TSM
-    -- Post/Cancel Scan, Auctionator's Full Scan / per-item search, default
-    -- UI) when it's newer than TSM's DBMinBuyout snapshot. The DBMinBuyout
-    -- snapshot is updated by the TSM Desktop App roughly hourly, so we
-    -- assume that age as the comparison threshold — if our cache entry is
-    -- older than that, the regional snapshot has probably moved on.
-    -- DBMinBuyout is also keyed on the base item string and collapses across
-    -- bonus-ID variants, so live cache wins on tie for variant-sensitive
-    -- items (gear with ilvl upgrades).
-    local DBMINBUYOUT_ASSUMED_AGE = 3600  -- TSM Desktop App refresh cadence
-    local lowestCopper, liveIsPlayer
-    local lowestSourceLabel  -- tooltip-ready string: "live (3s)", "dbmin", "dbmin (live 2h stale)"
-    local lowestSourceKey    -- machine-readable: "live" or "dbmin"
-    local lowestAgeSec       -- age of the chosen source in seconds, when known
-    local liveLookup
-    if ns.AuctionScanCache then
-        liveLookup = ns.AuctionScanCache:Lookup(itemKey, isCommodity)
-    end
-    local dbminCopper = ns.TSM:GetPrice(itemKey, "DBMinBuyout")
-
-    if liveLookup and (not dbminCopper or liveLookup.age <= DBMINBUYOUT_ASSUMED_AGE) then
-        -- Live wins: either DBMinBuyout has nothing, or our live entry is
-        -- fresh enough to be at least as current as TSM's hourly snapshot.
-        lowestCopper      = liveLookup.minUnit
-        liveIsPlayer      = liveLookup.isPlayer
-        lowestSourceKey   = "live"
-        lowestSourceLabel = "live " .. (liveLookup.source or "scan")
-        lowestAgeSec      = liveLookup.age
-    elseif liveLookup and dbminCopper then
-        -- Both available, but our live entry is older than the assumed
-        -- DBMinBuyout refresh interval. DBMinBuyout is probably newer.
-        lowestCopper      = dbminCopper
-        lowestSourceKey   = "dbmin"
-        lowestSourceLabel = string.format("dbmin (live %s stale)", FormatShortAge(liveLookup.age))
-    elseif dbminCopper then
-        lowestCopper      = dbminCopper
-        lowestSourceKey   = "dbmin"
-        lowestSourceLabel = "dbmin"
+    -- TSM's AuctionDB / AuctioningOp* price sources internally key on the
+    -- level form ("i:<id>::i<ilvl>") via ItemString.ToLevel. Querying
+    -- against the bonus-ID canonical form returns values from a
+    -- different bucket (~10% off vs what TSM's tooltip shows). Build the
+    -- level-form item string from the actual ilvl and use that for all
+    -- price queries.
+    local levelStr = ns.TSM:ItemKeyToLevelString(itemKey, itemLink)
+    local function EvalLevel(source)
+        if not levelStr or not source or source == "" then return nil end
+        local ok, v = pcall(TSM_API.GetCustomPriceValue, source, levelStr)
+        return ok and v or nil
     end
 
-    -- Our own lowest live buyout for this item (if the AH is open and we
-    -- have a matching active auction). TSM's MakePostDecision has an
-    -- `isPlayer` branch: when the market's lowest auction is ours, TSM
-    -- matches our own price instead of undercutting — otherwise every
-    -- repost ratchets the price down further. Without this guard FlipQueue
-    -- undercuts itself and TSM's cancel scan immediately flags the post as
-    -- undercut or cancellable for repost.
-    local ownLowestCopper = GetOwnLowestBuyout(itemKey, itemID)
-
-    -- Fallback chain when no auctioning operation OR normalPrice didn't
-    -- evaluate. We'd rather post at *something* sensible than refuse.
-    -- Prefer the current market (DBMinBuyout), then the player's configured
-    -- tsmPriceSource, then market/regional fallbacks. minCopper falls back to
-    -- the tsmMinPriceSource setting so below-threshold checks still fire.
-    if not normalCopper then
-        local priceSrc = ns.db and ns.db.settings.tsmPriceSource or "DBMinBuyout"
-        local sources = {"DBMinBuyout", priceSrc, "DBMarket", "DBRegionMarketAvg"}
-        local seen = {}
-        for _, src in ipairs(sources) do
-            if not seen[src] then
-                seen[src] = true
-                local val = ns.TSM:GetPrice(itemKey, src)
-                if val and val > 0 then
-                    normalCopper = val
-                    ns:PrintDebug("[AuctionPost]   normalPrice fallback " .. src .. " = " .. tostring(val))
-                    break
-                end
-            end
+    local normalCopper = EvalLevel("AuctioningOpNormal")
+    local minCopper    = EvalLevel("AuctioningOpMin")
+    local maxCopper    = EvalLevel("AuctioningOpMax")
+    if op then
+        if not normalCopper and op.normalPrice then
+            normalCopper = EvalLevel(op.normalPrice)
+        end
+        if not minCopper and op.minPrice then
+            minCopper = EvalLevel(op.minPrice)
+        end
+        if not maxCopper and op.maxPrice then
+            maxCopper = EvalLevel(op.maxPrice)
         end
     end
-    if not minCopper then
-        local minSrc = ns.db and ns.db.settings.tsmMinPriceSource
-        if minSrc and minSrc ~= "" then
-            minCopper = ns.TSM:GetPrice(itemKey, minSrc)
+    local undercut = op and op.undercut and EvalLevel(op.undercut) or 0
+    undercut = undercut or 0
+
+    -- Live AH state. Freshness ceiling enforced by Lookup — anything older
+    -- than DefaultFreshAge is treated as missing so AuctionAutoScan can
+    -- refresh it. Stale data is read separately for UI display purposes.
+    local cache = ns.AuctionScanCache
+    local freshAge = cache and cache:DefaultFreshAge() or 1800
+    local liveLookup = cache and cache:Lookup(itemKey, isCommodity, freshAge) or nil
+
+    -- Display-only fallback for normal price when the op didn't evaluate
+    -- (item ungrouped). Keeps the row from disappearing entirely; the
+    -- decision tree still skips because no op = no postable decision.
+    if not normalCopper then
+        local priceSrc = ns.db and ns.db.settings.tsmPriceSource or "DBMarket"
+        local sources = { priceSrc, "DBMarket", "DBRegionMarketAvg" }
+        local seen = {}
+        for _, src in ipairs(sources) do
+            if src and not seen[src] then
+                seen[src] = true
+                local val = ns.TSM:GetPrice(itemKey, src)
+                if val and val > 0 then normalCopper = val; break end
+            end
         end
     end
 
@@ -374,87 +445,78 @@ function AuctionPost:ResolvePostPrice(itemKey, itemID, itemLink, isCommodity)
     local postCap  = op and op.postCap
     local duration = op and op.duration
 
-    -- Helper: resolve priceReset / aboveMax setting string to its copper value.
-    local function ResolveReferencedPrice(settingKey)
-        if not op or not op[settingKey] then return nil end
-        local priceKeyName = op[settingKey]
-        if not RESET_ABOVEMAX_KEYS[priceKeyName] then return nil end
-        if priceKeyName == "minPrice"    then return minCopper    end
-        if priceKeyName == "maxPrice"    then return maxCopper    end
-        if priceKeyName == "normalPrice" then return normalCopper end
-        return nil
+    -- IsAuctionFiltered context. opStackSize is needed for matchStackSize
+    -- filtering; TSM allows expressions there but most ops use literals.
+    local opStackSize
+    if op and op.stackSize then
+        opStackSize = tonumber(op.stackSize)
+        if not opStackSize then
+            opStackSize = ns.TSM:EvaluateOpPrice(itemKey, op.stackSize)
+        end
+    end
+    local opCtx = {
+        opStackSize    = opStackSize,
+        minCopper      = minCopper,
+        undercutCopper = undercut,
+    }
+
+    local lowest
+    if liveLookup and liveLookup.listings then
+        lowest = GetLowestFromListings(liveLookup.listings, op, opCtx)
     end
 
-    -- MakePostDecision branch tree.
-    local buyoutCopper
-    local reason
-    local belowThreshold = false
-    local aboveMaxSkip = false
+    local matchWhitelist = ReadMatchWhitelist()
+    local decision = MakePostDecision(itemKey, lowest, {
+        normalCopper   = normalCopper,
+        minCopper      = minCopper,
+        maxCopper      = maxCopper,
+        undercutCopper = undercut,
+        op             = op,
+        matchWhitelist = matchWhitelist,
+    })
 
-    if not lowestCopper or lowestCopper <= 0 then
-        -- No competition on the AH — post at normalPrice (TSM's "empty market"
-        -- branch). Still clamp against min/max below.
-        buyoutCopper = normalCopper
-        reason = "normal (no competition)"
-    elseif ownLowestCopper and ownLowestCopper <= lowestCopper + 100 then
-        -- We own the market's lowest listing (1s slack for silver rounding).
-        -- Match our own price — do not self-undercut. This matches TSM's
-        -- isPlayer branch: without it, every repost ratchets the ceiling
-        -- down and TSM's cancel scan immediately flags the post as
-        -- undercut / cancellable-for-repost-higher.
-        buyoutCopper = ownLowestCopper
-        reason = "match own (we're lowest)"
-    else
-        local proposed = lowestCopper - (undercut or 0)
-        if minCopper and proposed < minCopper then
-            -- Undercut would put us below our configured floor. Apply the
-            -- operation's priceReset setting.
-            local resetValue = ResolveReferencedPrice("priceReset")
-            if resetValue then
-                buyoutCopper = resetValue
-                reason = "reset (lowest below min)"
-            else
-                -- priceReset is "none" or "ignore" — TSM refuses to post.
-                belowThreshold = true
-                reason = "below min (no reset configured)"
-            end
-        elseif maxCopper and proposed > maxCopper then
-            -- Undercut would leave us above our configured ceiling. Apply
-            -- the aboveMax setting.
-            local aboveMaxValue = ResolveReferencedPrice("aboveMax")
-            if aboveMaxValue then
-                buyoutCopper = aboveMaxValue
-                reason = "aboveMax"
-            else
-                -- aboveMax is "none" — TSM refuses to post.
-                aboveMaxSkip = true
-                reason = "above max (no fallback configured)"
-            end
-        else
-            -- Normal case: undercut the current lowest auction.
-            buyoutCopper = proposed
-            reason = "undercut (lowest - undercut)"
+    -- Surface own-lowest separately for the tooltip even when the decision
+    -- tree picked a different competitor. Helps the player see when they're
+    -- already the floor.
+    local ownLowestCopper
+    if liveLookup and liveLookup.listings then
+        for _, l in ipairs(liveLookup.listings) do
+            if l.isPlayer then ownLowestCopper = l.buyout; break end
         end
     end
 
-    -- Clamp buyout >= minPrice if we have one and we're actually posting.
-    if buyoutCopper and minCopper and buyoutCopper < minCopper then
-        buyoutCopper = minCopper
+    -- Provenance for the AH-lowest number. live = fresh harvest; stale =
+    -- have a cache entry but it's older than the freshness ceiling; none =
+    -- never scanned this item on this realm.
+    local lowestCopper      = lowest and lowest.buyout or (liveLookup and liveLookup.lowestUnit) or nil
+    local lowestSourceKey, lowestSourceLabel, lowestAgeSec
+    if liveLookup then
+        lowestSourceKey   = "live"
+        lowestSourceLabel = "live " .. (liveLookup.source or "scan")
+        lowestAgeSec      = liveLookup.age
+    elseif cache then
+        local stale = cache:Lookup(itemKey, isCommodity)
+        if stale then
+            lowestSourceKey   = "stale"
+            lowestSourceLabel = "stale (" .. FormatShortAge(stale.age) .. ")"
+            lowestAgeSec      = stale.age
+            lowestCopper      = stale.lowestUnit
+        else
+            lowestSourceKey   = "none"
+            lowestSourceLabel = "no scan yet"
+        end
     end
 
     ns:PrintDebug(("[AuctionPost] ResolvePostPrice: %s op=%s lowest=%s(%s) own=%s normal=%s min=%s max=%s uc=%s -> buyout=%s (%s)"):format(
         tostring(itemKey), tostring(opName),
-        tostring(lowestCopper),
-        tostring(lowestSourceLabel or "?"),
+        tostring(lowestCopper), tostring(lowestSourceLabel or "?"),
         tostring(ownLowestCopper),
-        tostring(normalCopper),
-        tostring(minCopper), tostring(maxCopper),
-        tostring(undercut), tostring(buyoutCopper), tostring(reason)))
+        tostring(normalCopper), tostring(minCopper), tostring(maxCopper),
+        tostring(undercut),
+        tostring(decision.buyoutCopper), tostring(decision.reason)))
 
     return {
-        -- The price we will actually post at. Consumers use this instead of
-        -- normalCopper; normalCopper is kept for UI display of "baseline".
-        buyoutCopper      = buyoutCopper,
+        buyoutCopper      = decision.buyoutCopper,
         normalCopper      = normalCopper,
         minCopper         = minCopper,
         maxCopper         = maxCopper,
@@ -464,17 +526,16 @@ function AuctionPost:ResolvePostPrice(itemKey, itemID, itemLink, isCommodity)
         postCap           = postCap,
         duration          = duration,
         opName            = opName,
-        reason            = reason,
-        belowThreshold    = belowThreshold,
-        aboveMaxSkip      = aboveMaxSkip,
-        -- Provenance for the lowest-buyout source so the UI can show
-        -- freshness ("scan: 2min ago") and the player knows whether the
-        -- price came from a fresh live scan, the hourly DBMinBuyout
-        -- snapshot, or DBMinBuyout while a stale live entry was ignored.
+        reason            = decision.reason,
+        seller            = decision.seller,
+        invalidReason     = decision.invalidReason,
+        belowThreshold    = decision.belowThreshold == true,
+        aboveMaxSkip      = decision.aboveMaxSkip == true,
+        skipWhitelist     = decision.skipWhitelist == true,
         lowestSourceKey   = lowestSourceKey,
         lowestSourceLabel = lowestSourceLabel,
         lowestAgeSec      = lowestAgeSec,
-        liveIsPlayer      = liveIsPlayer,
+        liveIsPlayer      = lowest and lowest.isPlayer or false,
     }
 end
 
@@ -491,10 +552,17 @@ function AuctionPost:RerunPricing(scanResults)
             local status = "ready"
             if not pricing then
                 status = "no_price"
+            elseif pricing.invalidReason then
+                status = "invalid"
             elseif pricing.belowThreshold then
                 status = "below_threshold"
             elseif pricing.aboveMaxSkip then
                 status = "above_max"
+            elseif pricing.skipWhitelist then
+                status = "skip_whitelist"
+            elseif pricing.lowestSourceKey == "none"
+                or pricing.lowestSourceKey == "stale" then
+                status = "scan_pending"
             elseif not pricing.buyoutCopper then
                 status = "no_price"
             end
@@ -602,10 +670,17 @@ function AuctionPost:ScanBags(filterToTodo)
                                 local status = "ready"
                                 if not pricing then
                                     status = "no_price"
+                                elseif pricing.invalidReason then
+                                    status = "invalid"
                                 elseif pricing.belowThreshold then
                                     status = "below_threshold"
                                 elseif pricing.aboveMaxSkip then
                                     status = "above_max"
+                                elseif pricing.skipWhitelist then
+                                    status = "skip_whitelist"
+                                elseif pricing.lowestSourceKey == "none"
+                                    or pricing.lowestSourceKey == "stale" then
+                                    status = "scan_pending"
                                 elseif not pricing.buyoutCopper then
                                     status = "no_price"
                                 end
@@ -680,6 +755,14 @@ end
 -- callback: function(success, errorMsg)
 function AuctionPost:PostItem(scanResult, callback)
     local cb = callback or function() end
+
+    -- Player has opted out of FlipQueue's posting flow (using TSM or
+    -- another addon to post). Refuse to post even if the row's button
+    -- somehow stayed enabled.
+    if ns.db and ns.db.settings and ns.db.settings.ahPostingEnabled == false then
+        cb(false, "FlipQueue posting is disabled (Settings > Auction House)")
+        return
+    end
 
     -- Validate AH is open
     local ahOpen = (ns.Tracker and ns.Tracker._isAHOpen)

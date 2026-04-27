@@ -406,8 +406,11 @@ SlashCmdList["FLIPQUEUE"] = function(msg)
                             local liveStr = "-"
                             if ns.AuctionScanCache then
                                 local live = ns.AuctionScanCache:Lookup(fqKey, false)
-                                if live then
-                                    liveStr = string.format("%.0fc (%s, %ds)", live.minUnit, live.source or "?", live.age)
+                                if live and live.lowestUnit then
+                                    liveStr = string.format("%.0fc (%s, %ds, %d listings%s)",
+                                        live.lowestUnit, live.source or "?", live.age,
+                                        live.listings and #live.listings or 0,
+                                        live.lowestIsPlayer and ", own" or "")
                                 end
                             end
                             local dbmin = ns.TSM and ns.TSM:IsEnabled() and ns.TSM:GetPrice(fqKey, "DBMinBuyout") or nil
@@ -457,9 +460,61 @@ SlashCmdList["FLIPQUEUE"] = function(msg)
                     local ok, v = pcall(TSM_API.GetCustomPriceValue, src, tsmStr)
                     print(src .. ":", ok and tostring(v) or ("err " .. tostring(v)))
                 end
+                -- Operation-evaluated prices: these are the values we
+                -- now feed into the decision tree (TSM resolves the op
+                -- AND evaluates the expression in one call).
+                P("AuctioningOpNormal")
+                P("AuctioningOpMin")
+                P("AuctioningOpMax")
+                -- Raw price sources for comparison — useful for spotting
+                -- when our normal differs from TSM's posting view because
+                -- of bonus-ID canonicalisation (the variant we pass has
+                -- different DBMarket than the variant TSM uses internally).
                 P("DBMinBuyout")
                 P("dbmarket")
                 P("DBRegionMarketAvg")
+                -- Also show the canonical TSM string TSM would derive
+                -- from the BASE itemID (no bonuses) — if AuctioningOp*
+                -- values differ between the variant string and the base
+                -- string, TSM's BonusIds.Filter is collapsing variants
+                -- our cache treats as distinct.
+                local baseStr = "i:" .. (key:match("^([^;]+)") or "?")
+                if baseStr ~= tsmStr then
+                    print("--- base item " .. baseStr .. ":")
+                    local function PB(src)
+                        local ok, v = pcall(TSM_API.GetCustomPriceValue, src, baseStr)
+                        print("  " .. src .. ":", ok and tostring(v) or ("err " .. tostring(v)))
+                    end
+                    PB("AuctioningOpNormal")
+                    PB("AuctioningOpMin")
+                    PB("AuctioningOpMax")
+                    PB("DBMinBuyout")
+                    PB("dbmarket")
+                    PB("DBRegionMarketAvg")
+                end
+                -- Also try the LEVEL form (i:<id>::i<ilvl>) since TSM's
+                -- AuctionDB internally goes through ItemString.ToLevel
+                -- before lookup. Some price sources may key on the level
+                -- form rather than the variant string.
+                local ilvl
+                if GetDetailedItemLevelInfo and ns.ItemKeyToItemString then
+                    local wowStr = ns:ItemKeyToItemString(key)
+                    if wowStr then
+                        ilvl = GetDetailedItemLevelInfo(wowStr)
+                    end
+                end
+                if ilvl then
+                    local levelStr = baseStr .. "::i" .. ilvl
+                    print("--- level form " .. levelStr .. ":")
+                    local function PL(src)
+                        local ok, v = pcall(TSM_API.GetCustomPriceValue, src, levelStr)
+                        print("  " .. src .. ":", ok and tostring(v) or ("err " .. tostring(v)))
+                    end
+                    PL("AuctioningOpNormal")
+                    PL("DBMinBuyout")
+                    PL("dbmarket")
+                    PL("DBRegionMarketAvg")
+                end
             end
             local op = ns.TSM:GetItemAuctioningOp(key)
             if op then

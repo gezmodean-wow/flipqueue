@@ -66,6 +66,13 @@ function ns:InitDB()
     db.settings.dfPriceSource      = db.settings.dfPriceSource or "deal"  -- deal, DBMinBuyout, DBMarket, DBRegionMarketAvg, DBRegionSaleAvg
     if db.settings.tsmShowColumns == nil then db.settings.tsmShowColumns = false end
     if db.settings.ahAutoScanOnOpen == nil then db.settings.ahAutoScanOnOpen = false end
+    -- Master gate for FlipQueue's posting flow. When off, the AH drawer
+    -- shows no post controls, the auto-scan kicker stays quiet, and we
+    -- never initiate SendSearchQuery — the player runs TSM (or whatever)
+    -- to post and FlipQueue stays out of the way. The passive scan-cache
+    -- listener still harvests events fired by other addons (free data,
+    -- no protocol cost), so cancel/research/sales views remain populated.
+    if db.settings.ahPostingEnabled == nil then db.settings.ahPostingEnabled = true end
     db.settings.tsmFallbackOp = db.settings.tsmFallbackOp or ""
     if db.settings.tsmAutoUpdatePrice == nil then db.settings.tsmAutoUpdatePrice = false end
     db.settings.tsmPriceMaxAge     = db.settings.tsmPriceMaxAge or 3600

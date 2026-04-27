@@ -38,6 +38,7 @@ TrackerBank.lua
 TrackerMail.lua
 TrackerTSMReconcile.lua
 AuctionScanCache.lua
+AuctionAutoScan.lua
 AuctionPost.lua
 Sync.lua
 ItemResearch.lua

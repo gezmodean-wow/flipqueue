@@ -952,6 +952,12 @@ function UI:CreateSettingsPanel(parent)
     sc = secAH.content
     sy = 0
 
+    settingsWidgets.ahPostingEnabled, h = CreateSettingsCheckbox(sc, sy,
+        "Use FlipQueue for AH posting",
+        "When off, FlipQueue won't initiate AH scans or offer post controls — leaves the AH to TSM (or whatever you prefer). The passive scan-cache listener still harvests data when other addons scan.",
+        "ahPostingEnabled")
+    sy = sy - h - SECTION_SPACING
+
     settingsWidgets.ahAutoScan, h = CreateSettingsCheckbox(sc, sy,
         "Auto-scan inventory when the Auction House opens",
         "Automatically run a to-do scan when you open the AH, populating the posting drawer with items ready to post.",
@@ -1804,6 +1810,9 @@ function UI:RefreshSettings()
     end
     if settingsWidgets.ahAutoScan then
         settingsWidgets.ahAutoScan:SetChecked(ns.db.settings.ahAutoScanOnOpen)
+    end
+    if settingsWidgets.ahPostingEnabled then
+        settingsWidgets.ahPostingEnabled:SetChecked(ns.db.settings.ahPostingEnabled ~= false)
     end
     if settingsWidgets.goldBufferBox then
         local val = ns.db.settings.goldBuffer or 0
