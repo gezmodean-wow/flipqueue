@@ -399,7 +399,9 @@ SlashCmdList["FLIPQUEUE"] = function(msg)
             if ok and num then
                 for slot = 1, num do
                     local ok2, info = pcall(C_Container.GetContainerItemInfo, bag, slot)
-                    if ok2 and info and info.hyperlink then
+                    -- Skip soulbound items (Hearthstone, quest items, etc.) —
+                    -- they can't be auctioned, so they're noise in this dump.
+                    if ok2 and info and info.hyperlink and not info.isBound then
                         local id, bonus, mods = ns:ParseItemLink(info.hyperlink)
                         if id then
                             local fqKey = ns:MakeItemKey(id, bonus, mods)
@@ -510,17 +512,86 @@ SlashCmdList["FLIPQUEUE"] = function(msg)
                         local ok, v = pcall(TSM_API.GetCustomPriceValue, src, levelStr)
                         print("  " .. src .. ":", ok and tostring(v) or ("err " .. tostring(v)))
                     end
+                    -- AuctionPost.EvalLevel uses level form for ALL op
+                    -- prices, so query the same set here. If level form
+                    -- returns nil for OpMin/Max while canonical doesn't,
+                    -- the decision tree's below-min / above-max branches
+                    -- will silently skip and we'll fall through to
+                    -- "undercut" — exactly the divergence we're chasing.
                     PL("AuctioningOpNormal")
+                    PL("AuctioningOpMin")
+                    PL("AuctioningOpMax")
                     PL("DBMinBuyout")
                     PL("dbmarket")
                     PL("DBRegionMarketAvg")
                 end
+                -- Also dump the level string AuctionPost.EvalLevel actually
+                -- builds (via TSM:ItemKeyToLevelString). The hand-rolled
+                -- baseStr .. "::i" .. ilvl above and that helper can
+                -- diverge if itemLink is missing or the helper's
+                -- normalization differs. Both should produce the same
+                -- string; if they don't, that's a clue.
+                if ns.TSM and ns.TSM.ItemKeyToLevelString then
+                    local apLevelStr = ns.TSM:ItemKeyToLevelString(key, nil)
+                    print("AuctionPost.levelStr (no link):", tostring(apLevelStr))
+                    if apLevelStr and TSM_API and TSM_API.GetCustomPriceValue then
+                        local function PA(src)
+                            local ok, v = pcall(TSM_API.GetCustomPriceValue, src, apLevelStr)
+                            print("  " .. src .. " @ AP-levelStr:",
+                                ok and tostring(v) or ("err " .. tostring(v)))
+                        end
+                        PA("AuctioningOpMin")
+                        PA("AuctioningOpMax")
+                    end
+                end
             end
+            -- Profile + group resolution chain. When the row's op shows
+            -- as #Default but TSM's UI says the item is grouped, the
+            -- divergence is one of: wrong profile selected, TSM string
+            -- mismatch (e.g. pets keyed by full p:<species>:<breed>:...
+            -- instead of our p:<species>), or GetGroupPathByItem refusing
+            -- the bonus-stripped canonical we pass it.
+            if ns.TSM and ns.TSM.GetSelectedProfile then
+                local selProfile = ns.TSM:GetSelectedProfile()
+                local activeProfile = ns.TSM:GetActiveProfile()
+                print("profile (selected):", tostring(selProfile))
+                print("profile (TSM active):", tostring(activeProfile))
+                if selProfile ~= activeProfile then
+                    print("  ⚠ FQ is querying a different profile than TSM's active one — set ns.db.settings.tsmProfile=nil or match TSM's active profile.")
+                end
+                if TSM_API and TSM_API.GetGroupPathByItem and tsmStr then
+                    local ok2, gp = pcall(TSM_API.GetGroupPathByItem, TSM_API, tsmStr)
+                    print("groupPath @ tsmStr:", ok2 and tostring(gp) or "err")
+                end
+                -- For pets, also probe the items DB directly. TSM may store
+                -- group entries under a more granular key than our p:<id>.
+                if key:find("^pet:") and ns.TSM.GetItemsDB then
+                    local itemsDB = ns.TSM:GetItemsDB(selProfile)
+                    if itemsDB then
+                        local matches = {}
+                        local idStr = key:match("^pet:(%d+)") or ""
+                        for k in pairs(itemsDB) do
+                            if k:find("^p:" .. idStr .. "[:$]") or k == ("p:" .. idStr) then
+                                matches[#matches + 1] = k .. " → " .. tostring(itemsDB[k])
+                            end
+                        end
+                        if #matches > 0 then
+                            print("itemsDB pet entries for species " .. idStr .. ":")
+                            for _, m in ipairs(matches) do print("  " .. m) end
+                        else
+                            print("itemsDB: no pet entries match species " .. idStr)
+                        end
+                    end
+                end
+            end
+
             local op = ns.TSM:GetItemAuctioningOp(key)
             if op then
                 print("op:", op.opName,
                     "priceReset=" .. tostring(op.priceReset),
-                    "aboveMax=" .. tostring(op.aboveMax))
+                    "aboveMax=" .. tostring(op.aboveMax),
+                    "ignoreLowDuration=" .. tostring(op.ignoreLowDuration),
+                    "matchStackSize=" .. tostring(op.matchStackSize))
                 print("  normalPrice expr:", tostring(op.normalPrice),
                     "-> " .. tostring(ns.TSM:EvaluateOpPrice(key, op.normalPrice)))
                 print("  minPrice expr:", tostring(op.minPrice),
@@ -529,6 +600,27 @@ SlashCmdList["FLIPQUEUE"] = function(msg)
                     "-> " .. tostring(ns.TSM:EvaluateOpPrice(key, op.maxPrice)))
             else
                 print("op: <none> (item ungrouped or no TSM profile selected)")
+            end
+            -- Dump per-listing cache detail. The decision tree's lowest is
+            -- whatever survives IsAuctionFiltered (low time-left, wrong
+            -- stack size, threshold-ignore) — when our chosen lowest
+            -- diverges from TSM's, the per-listing fields say why.
+            if ns.AuctionScanCache then
+                local live = ns.AuctionScanCache:Lookup(key, false)
+                if live and live.listings and #live.listings > 0 then
+                    print("--- live cache: " .. #live.listings .. " listings, " ..
+                        live.age .. "s old, source=" .. tostring(live.source))
+                    for i, L in ipairs(live.listings) do
+                        local tl = L.timeLeftSec and (L.timeLeftSec .. "s") or "?"
+                        print(string.format(
+                            "  [%d] buyout=%dc qty=%d seller=%s timeLeft=%s isPlayer=%s hasOwner=%s",
+                            i, L.buyout or 0, L.quantity or 0,
+                            tostring(L.seller or ""), tl,
+                            tostring(L.isPlayer == true), tostring(L.hasOwner == true)))
+                    end
+                else
+                    print("--- live cache: (no entry)")
+                end
             end
         end
 

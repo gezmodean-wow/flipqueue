@@ -535,7 +535,21 @@ local function GetOrCreateScanRow(parent, index)
                 GameTooltip:AddDoubleLine("Max price:", ns:FormatGold(r.pricing.maxCopper), 0.7, 0.7, 0.7, 0.9, 0.7, 0.3)
             end
             if r.pricing.opName then
-                GameTooltip:AddDoubleLine("TSM operation:", r.pricing.opName, 0.7, 0.7, 0.7, 0.5, 0.7, 1)
+                if r.pricing.opName == "#Default" then
+                    -- The auto-fallback op fires when an item isn't in any
+                    -- TSM Auctioning group. TSM's posting view doesn't
+                    -- always scan competitors for fallback-op items, so
+                    -- TSM may report "no competitors" even when listings
+                    -- exist. FlipQueue's passive scan listener picks them
+                    -- up regardless, so the post price can diverge.
+                    GameTooltip:AddDoubleLine("TSM operation:", "#Default (fallback)",
+                        0.7, 0.7, 0.7, 0.7, 0.7, 0.5)
+                    GameTooltip:AddLine(
+                        "This item isn't in a TSM Auctioning group. TSM may not show competitors for fallback-op items, but FlipQueue's scan listener still picks them up. Add to a TSM group for parity.",
+                        0.55, 0.55, 0.55, true)
+                else
+                    GameTooltip:AddDoubleLine("TSM operation:", r.pricing.opName, 0.7, 0.7, 0.7, 0.5, 0.7, 1)
+                end
             end
             if r.pricing.postCap then
                 GameTooltip:AddDoubleLine("Post cap:", tostring(r.pricing.postCap), 0.7, 0.7, 0.7, 0.7, 0.7, 0.7)
@@ -917,33 +931,51 @@ local function RefreshAHScanRows()
             return reason
         end
 
+        -- Inline op-name tag rendered after the status text. #Default is
+        -- TSM's auto-fallback op for ungrouped items; styled muted gray
+        -- with a (fallback) suffix so the player can spot at a glance
+        -- when our decision came from the lazier code path. Custom ops
+        -- get a soft blue tag (clearly distinguishable from the gray
+        -- fallback) and are truncated past 14 chars so long op names
+        -- don't crowd the row.
+        local function OpTag(p)
+            if not (p and p.opName) then return "" end
+            if p.opName == "#Default" then
+                return "  |cff888888[#Default (fallback)]|r"
+            end
+            local name = p.opName
+            if #name > 14 then name = name:sub(1, 13) .. "…" end
+            return "  |cff7eb0d8[" .. name .. "]|r"
+        end
+        local opTag = OpTag(pricing)
+
         -- Status info and row coloring
         if result.status == "below_threshold" then
-            row.info:SetText("|cffff6644Below min price|r")
+            row.info:SetText("|cffff6644Below min price|r" .. opTag)
             row.name:SetTextColor(0.7, 0.5, 0.5)
             row:SetBackdropBorderColor(0.5, 0.2, 0.2, 0.7)
         elseif result.status == "above_max" then
-            row.info:SetText("|cffff9944Above max price|r")
+            row.info:SetText("|cffff9944Above max price|r" .. opTag)
             row.name:SetTextColor(0.7, 0.6, 0.5)
             row:SetBackdropBorderColor(0.5, 0.3, 0.15, 0.7)
         elseif result.status == "no_price" then
-            row.info:SetText("|cff888888No TSM data|r")
+            row.info:SetText("|cff888888No TSM data|r" .. opTag)
             row.name:SetTextColor(0.6, 0.6, 0.6)
             row:SetBackdropBorderColor(0.3, 0.3, 0.3, 0.5)
         elseif result.status == "scan_pending" then
-            row.info:SetText("|cffaaaa55Scan pending|r")
+            row.info:SetText("|cffaaaa55Scan pending|r" .. opTag)
             row.name:SetTextColor(0.7, 0.7, 0.6)
             row:SetBackdropBorderColor(0.4, 0.4, 0.2, 0.6)
         elseif result.status == "skip_whitelist" then
-            row.info:SetText("|cffffaa44Whitelisted competitor|r")
+            row.info:SetText("|cffffaa44Whitelisted competitor|r" .. opTag)
             row.name:SetTextColor(0.7, 0.6, 0.5)
             row:SetBackdropBorderColor(0.5, 0.4, 0.2, 0.7)
         elseif result.status == "invalid" then
-            row.info:SetText("|cffff4444" .. (pricing and pricing.invalidReason or "invalid") .. "|r")
+            row.info:SetText("|cffff4444" .. (pricing and pricing.invalidReason or "invalid") .. "|r" .. opTag)
             row.name:SetTextColor(0.7, 0.4, 0.4)
             row:SetBackdropBorderColor(0.6, 0.2, 0.2, 0.7)
         elseif result.status == "dnt" then
-            row.info:SetText("|cffff8800Do Not Track|r")
+            row.info:SetText("|cffff8800Do Not Track|r" .. opTag)
             row.name:SetTextColor(0.6, 0.5, 0.4)
             row:SetBackdropBorderColor(0.5, 0.35, 0.1, 0.7)
         else
@@ -952,7 +984,9 @@ local function RefreshAHScanRows()
             -- hovering. Tooltip still has the full reason string.
             local rule = pricing and CompactReason(pricing.reason)
             if rule then
-                row.info:SetText("|cff8aa8d8" .. rule .. "|r")
+                row.info:SetText("|cff8aa8d8" .. rule .. "|r" .. opTag)
+            elseif opTag ~= "" then
+                row.info:SetText(opTag:gsub("^  ", ""))  -- no rule, opTag without leading spacer
             else
                 row.info:SetText("")
             end

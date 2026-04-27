@@ -355,6 +355,26 @@ function TSM:GetItemAuctioningOp(fqKey)
         end
     end
 
+    -- TSM_API.GetGroupPathByItem doesn't work for battle pets (returns
+    -- error / nil), even when the pet IS grouped in TSM's UI. Fall back
+    -- to a direct lookup in the per-profile items DB which stores
+    -- "<tsmString>" -> "<groupPath>" for every grouped item including
+    -- pets. We probe both the canonical tsmStr ("p:<species>") and the
+    -- numeric base ID for completeness.
+    if not (ok and groupPath) then
+        local itemsDB = self:GetItemsDB(profile)
+        if itemsDB then
+            groupPath = itemsDB[tsmStr]
+            if not groupPath then
+                local baseStr = BaseItemID(fqKey)
+                if baseStr and baseStr ~= tsmStr then
+                    groupPath = itemsDB[baseStr]
+                end
+            end
+            if groupPath then ok = true end
+        end
+    end
+
     local groupsDB = self:GetGroupsDB(profile)
     local opsDB = self:GetOperationsDB(profile)
     if not opsDB or not opsDB["Auctioning"] then return nil end

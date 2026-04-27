@@ -383,34 +383,51 @@ function AuctionPost:ResolvePostPrice(itemKey, itemID, itemLink, isCommodity)
 
     local op = ns.TSM:GetItemAuctioningOp(itemKey)
 
-    -- TSM's AuctionDB / AuctioningOp* price sources internally key on the
-    -- level form ("i:<id>::i<ilvl>") via ItemString.ToLevel. Querying
-    -- against the bonus-ID canonical form returns values from a
-    -- different bucket (~10% off vs what TSM's tooltip shows). Build the
-    -- level-form item string from the actual ilvl and use that for all
-    -- price queries.
+    -- Two TSM item-string forms, used for different query paths:
+    --
+    -- 1. Level form ("i:<id>::i<ilvl>"): TSM's AuctionDB sources
+    --    (DBMinBuyout, DBRegionMarketAvg, dbmarket) internally key on
+    --    this via ItemString.ToLevel. Querying with bonus-ID canonical
+    --    misses by ~10% on items with ilvl variants (FQ-003 fix).
+    --
+    -- 2. Canonical / TSM string ("i:<id>:<bonusIDsFiltered>"): TSM's
+    --    AuctioningOp* sources go through the group→operation lookup
+    --    which is keyed on the canonical form. Querying these with
+    --    level form returns wrong values for some items — for designs/
+    --    recipes (no real ilvl variance) we've seen `AuctioningOpMin`
+    --    return ~half the canonical value, which silently flipped our
+    --    decision tree from "below min, skip" to "undercut, post".
+    --
+    -- So: use canonical for AuctioningOp* (these resolve the player's
+    -- own op settings), level form for raw DB price sources.
     local levelStr = ns.TSM:ItemKeyToLevelString(itemKey, itemLink)
+    local tsmStr   = ns.TSM:ItemKeyToTSMString(itemKey)
     local function EvalLevel(source)
         if not levelStr or not source or source == "" then return nil end
         local ok, v = pcall(TSM_API.GetCustomPriceValue, source, levelStr)
         return ok and v or nil
     end
+    local function EvalCanonical(source)
+        if not tsmStr or not source or source == "" then return nil end
+        local ok, v = pcall(TSM_API.GetCustomPriceValue, source, tsmStr)
+        return ok and v or nil
+    end
 
-    local normalCopper = EvalLevel("AuctioningOpNormal")
-    local minCopper    = EvalLevel("AuctioningOpMin")
-    local maxCopper    = EvalLevel("AuctioningOpMax")
+    local normalCopper = EvalCanonical("AuctioningOpNormal")
+    local minCopper    = EvalCanonical("AuctioningOpMin")
+    local maxCopper    = EvalCanonical("AuctioningOpMax")
     if op then
         if not normalCopper and op.normalPrice then
-            normalCopper = EvalLevel(op.normalPrice)
+            normalCopper = EvalCanonical(op.normalPrice)
         end
         if not minCopper and op.minPrice then
-            minCopper = EvalLevel(op.minPrice)
+            minCopper = EvalCanonical(op.minPrice)
         end
         if not maxCopper and op.maxPrice then
-            maxCopper = EvalLevel(op.maxPrice)
+            maxCopper = EvalCanonical(op.maxPrice)
         end
     end
-    local undercut = op and op.undercut and EvalLevel(op.undercut) or 0
+    local undercut = op and op.undercut and EvalCanonical(op.undercut) or 0
     undercut = undercut or 0
 
     -- Live AH state. Freshness ceiling enforced by Lookup — anything older

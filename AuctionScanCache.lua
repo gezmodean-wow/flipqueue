@@ -139,8 +139,14 @@ local function HarvestNonCommodity(itemKey, now)
         if ok and info and info.buyoutAmount and info.buyoutAmount > 0 and info.itemLink then
             local qty = info.quantity or 1
             if qty > 0 then
-                local unit = math.floor(info.buyoutAmount / qty)
-                if unit > 0 then
+                -- Non-commodity listings are atomic: buyers pay the full
+                -- buyoutAmount for the whole stack. Store the listing-level
+                -- buyout (NOT per-unit) so MakePostDecision compares against
+                -- TSM's "lowest auction buyout" — TSM's posting flow keys
+                -- below-min / undercut on listing buyout for items, and on
+                -- per-unit price only for commodities.
+                local listingBuyout = info.buyoutAmount
+                if listingBuyout > 0 then
                     local id, bonus, mods = ns:ParseItemLink(info.itemLink)
                     if id then
                         local fqKey = ns:MakeItemKey(id, bonus, mods)
@@ -163,7 +169,7 @@ local function HarvestNonCommodity(itemKey, now)
                             -- Capture per-listing; the post decision can
                             -- propagate it when the lowest is the offender.
                             local listing = {
-                                buyout      = unit,
+                                buyout      = listingBuyout,
                                 quantity    = qty,
                                 seller      = seller,
                                 timeLeftSec = info.timeLeftSeconds,
@@ -272,8 +278,11 @@ local function HarvestReplicate()
                     local fqKey = ns:MakeItemKey(id, bonus, mods)
                     local k = MakeCacheKey(fqKey, false, realm)
                     if k then
-                        local unit = math.floor(buyout / count)
-                        if unit > 0 then
+                        -- Replicate is non-commodity in retail (commodities
+                        -- go through SendSearchQuery → GetCommoditySearchResults).
+                        -- Same per-listing semantic as HarvestNonCommodity:
+                        -- store the full listing buyout, not buyout/count.
+                        if buyout > 0 then
                             local b = buckets[k]
                             if not b then
                                 b = { listings = {}, hasInvalidSeller = false }
@@ -281,7 +290,7 @@ local function HarvestReplicate()
                             end
                             local seller = owner or ""
                             local listing = {
-                                buyout      = unit,
+                                buyout      = buyout,
                                 quantity    = count,
                                 seller      = seller,
                                 timeLeftSec = nil,  -- replicate has no timeLeft
@@ -408,7 +417,14 @@ listener:SetScript("OnEvent", function(_, event, arg1)
                     fqKey = string.format("%d;;", br.itemKey.itemID or 0)
                 end
                 local k = MakeCacheKey(fqKey, false, realm)
-                if k and not cache[k] then
+                -- Overwrite synthetic empty sentinels: a real browse hit
+                -- is better than a stale "we timed out, assume empty"
+                -- marker. Don't overwrite real item-scan data — that has
+                -- per-listing detail (sellers, time-left) browse can't
+                -- provide.
+                local existing = k and cache[k]
+                local stomp = existing and existing.source == "empty"
+                if k and (not existing or stomp) then
                     cache[k] = {
                         listings = {{
                             buyout      = br.minPrice,
@@ -558,6 +574,13 @@ end
 function ScanCache:MarkEmpty(fqKey, isCommodity)
     local key = MakeCacheKey(fqKey, isCommodity)
     if not key then return end
+    -- Don't stomp real listings the browse or item listener already
+    -- harvested. SendSearchQuery timeouts are a hint, not authoritative —
+    -- if we have actual data, keep it.
+    local existing = cache[key]
+    if existing and existing.listings and #existing.listings > 0 then
+        return
+    end
     cache[key] = {
         listings         = {},
         scannedAt        = time(),
