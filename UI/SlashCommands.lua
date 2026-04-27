@@ -427,6 +427,104 @@ SlashCmdList["FLIPQUEUE"] = function(msg)
         end
         ns:Print("Bag prices: " .. lines .. " items")
 
+    elseif msg == "debug gold" then
+        -- /fq debug gold
+        -- Walk the gold-required calculation for the current character
+        -- with verbose per-task printing. Surfaces every filter / skip /
+        -- cap that AutoWithdrawGold applies, so we can localise where a
+        -- "wildly off" or "doesn't appear to work" report is coming from
+        -- without having to flip /fq debug toggle and reproduce blind.
+        if not ns.Tracker then ns:Print("Tracker not available.") return end
+        local charKey = ns:GetCharKey()
+        local currentRealm = charKey:match("%-(.+)$") or GetRealmName()
+        print("=== /fq debug gold ===")
+        print("character:    " .. charKey)
+        print("currentRealm: " .. currentRealm)
+
+        local s = ns.db and ns.db.settings or {}
+        print("--- Settings ---")
+        print(string.format("  autoWithdrawGold = %s", tostring(s.autoWithdrawGold)))
+        print(string.format("  autoDepositGold  = %s", tostring(s.autoDepositGold)))
+        print(string.format("  goldBuffer       = %sg",  tostring(s.goldBuffer or 0)))
+        print(string.format("  maxWithdrawGold  = %sg",  tostring(s.maxWithdrawGold or 0)))
+        print(string.format("  sellQtyMode      = %s",  tostring(s.sellQtyMode)))
+        print(string.format("  defaultSellQty   = %s",  tostring(s.defaultSellQty)))
+        if ns.IsWarbandMiserActive then
+            print(string.format("  WarbandMiser active = %s (defers withdraw/deposit if true)",
+                tostring(ns:IsWarbandMiserActive())))
+        end
+
+        -- Walk every task on the current character, print per-task
+        -- decisions verbatim so we see why something gets skipped.
+        local tasks = ns.TodoList and ns.TodoList:GetCharacterTasks(charKey) or {}
+        print("--- Tasks (" .. #tasks .. " total) ---")
+        if #tasks == 0 then
+            print("  (no tasks — withdraw target collapses to goldBuffer)")
+        end
+        for _, task in ipairs(tasks) do
+            local item = task.item
+            if item.action == "buy" then
+                local realmOk = ns:RealmMatches(item.buyRealm or "", currentRealm)
+                local raw = item.buyPrice or "(none)"
+                local parsed = ns:ParseGoldValue(raw)
+                local qty = item.quantity or 1
+                print(string.format(
+                    "  [BUY ] %s | qty=%d | buyRealm=%s | matches=%s | rawPrice=%q | parsed=%dg | cost=%dg %s",
+                    tostring(item.name or "?"), qty, tostring(item.buyRealm),
+                    tostring(realmOk), tostring(raw), parsed, parsed * qty,
+                    realmOk and "" or "← SKIPPED (realm)"))
+            else
+                local realmOk = ns:RealmMatches(item.targetRealm or "", currentRealm)
+                print(string.format(
+                    "  [POST] %s | targetRealm=%s | matches=%s %s",
+                    tostring(item.name or "?"), tostring(item.targetRealm),
+                    tostring(realmOk), realmOk and "" or "← SKIPPED (realm)"))
+            end
+        end
+
+        -- Aggregate via the same helpers AutoWithdrawGold uses, so the
+        -- numbers we print match what the actual flow sees.
+        local postCopper, postCount = ns.Tracker:CalculatePostingFees(charKey, currentRealm)
+        local buyCopper, buyCount = ns.Tracker:CalculatePurchaseCosts(charKey, currentRealm)
+        local totalCopper = postCopper + buyCopper
+
+        print("--- Aggregate ---")
+        print(string.format("  Posting fees: %s over %d task(s)", ns:FormatGold(postCopper), postCount))
+        print(string.format("  Buy costs:    %s over %d task(s)", ns:FormatGold(buyCopper), buyCount))
+        print(string.format("  Total need:   %s", ns:FormatGold(totalCopper)))
+
+        -- Mirror AutoWithdrawGold's target-balance formula.
+        local goldBufferCopper = (s.goldBuffer or 0) * 10000
+        local estimatedFeesCopper = math.max(goldBufferCopper, math.ceil(totalCopper * 1.1))
+        estimatedFeesCopper = math.ceil(estimatedFeesCopper / 10000) * 10000
+        print(string.format("  Target balance: max(goldBuffer=%s, total + 10%%) = %s",
+            ns:FormatGold(goldBufferCopper), ns:FormatGold(estimatedFeesCopper)))
+
+        local playerCopper = GetMoney() or 0
+        print(string.format("  Player has:   %s", ns:FormatGold(playerCopper)))
+
+        if playerCopper >= estimatedFeesCopper then
+            print("  → No withdraw needed (player has at-or-above target)")
+        else
+            local shortfall = estimatedFeesCopper - playerCopper
+            local maxGold = s.maxWithdrawGold or 0
+            local capStr = ""
+            if maxGold > 0 and shortfall > maxGold * 10000 then
+                shortfall = maxGold * 10000
+                capStr = " (capped from larger by maxWithdrawGold)"
+            end
+            print(string.format("  → Would withdraw %s%s", ns:FormatGold(shortfall), capStr))
+        end
+
+        if C_Bank and C_Bank.FetchDepositedMoney and Enum and Enum.BankType then
+            local ok, warbank = pcall(C_Bank.FetchDepositedMoney, Enum.BankType.Account)
+            if ok and warbank then
+                print(string.format("  Warbank balance: %s", ns:FormatGold(warbank)))
+            else
+                print("  Warbank balance: (FetchDepositedMoney failed — bank panel may not be on warband tab)")
+            end
+        end
+
     elseif msg == "debug scan" or msg:match("^debug scan%s+%d+$") then
         -- /fq debug scan [N]
         -- Dump the live-AH-scan cache (populated passively from any addon's
@@ -695,6 +793,7 @@ SlashCmdList["FLIPQUEUE"] = function(msg)
         print("  /fq debug post <fqKey> - Dump TSM string + price sources + op settings for diagnosing posting divergence")
         print("  /fq debug scan [N] - Dump N (default 20) most recent entries from the live-AH-scan cache")
         print("  /fq debug bagprices - Walk bags, dump each item's fqKey + cache hit + DBMinBuyout + link")
+        print("  /fq debug gold - Walk the gold-required calc per task, dump settings + skip reasons + final withdraw amount")
         print("  /fq tutorial - Show the first-time tutorial")
         print("  /fq settings - Open settings panel")
         print("  /fq link [bnet|local] <Char-Realm> - Link to another account (bnet=friend, local=same BNet)")

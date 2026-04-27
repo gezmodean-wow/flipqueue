@@ -232,76 +232,78 @@ local function DoExtras()
     end
 end
 
-local function DoPullAll()
+-- Pull Saleable: walks the warbank, finds every unique TSM-Auctioning-grouped
+-- item, and pulls up to `op.postCap` (or defaultSellQty) of each, capped by
+-- what's still needed after subtracting bags-already-have. Independent of
+-- the to-do list — this is the "pull one of everything I can sell" button,
+-- distinct from "Pull Items" (DoPull) which walks only the current
+-- character's to-do tasks via Tracker:BuildPullOps.
+--
+-- Reagent handling honours the trackReagents master setting and its
+-- pullSaleableIncludeReagents sub-toggle. With master off, reagents are
+-- skipped entirely. With master on, the sub-toggle decides per-flow.
+local function DoPullSaleable()
     if not Tracker then Tracker = ns.Tracker end
-    if not Tracker or not ns.TodoList then return end
-    local todoList = ns.TodoList:GetCurrentList()
-    if not todoList or not todoList.tasks then ns:Print("No active to-do list.") return end
+    if not Tracker then return end
 
-    local currentRealm = (ns:GetCharKey()):match("%-(.+)$") or GetRealmName()
-    local needed = {}
+    local warbankTabs = ns:GetEnabledWarbankTabs() or {}
+    if #warbankTabs == 0 then ns:Print("No warbank tabs configured.") return end
+
     local defaultQty = ns.db and ns.db.settings.defaultSellQty or 1
     local tsmEnabled = ns.TSM and ns.TSM.IsEnabled and ns.TSM:IsEnabled()
-
-    for _, item in ipairs(todoList.tasks) do
-        if item.status == "pending" and item.action ~= "buy"
-                and ns:RealmMatches(item.targetRealm or "", currentRealm) then
-            local qty = item.quantity or defaultQty
-            if tsmEnabled and ns.TSM.GetItemAuctioningOp then
-                local ok, op = pcall(ns.TSM.GetItemAuctioningOp, ns.TSM, item.itemKey)
-                if ok and op and op.postCap then
-                    local cap = tonumber(op.postCap)
-                    if cap and cap > 0 then qty = cap end
-                end
-            end
-            local inBags = Tracker._CountInBags and Tracker._CountInBags(item) or 0
-            local stillNeeded = qty - inBags
-            if stillNeeded > 0 then
-                needed[item] = stillNeeded
-            end
-        end
+    if not tsmEnabled then
+        ns:Print("Pull Saleable requires TSM (uses Auctioning ops to identify saleable items).")
+        return
     end
 
-    if not next(needed) then ns:Print("Nothing to pull (all in bags or no tasks on this realm).") return end
+    -- Reagent gating: classID == 7 is Item Class Tradegoods (herbs, ore,
+    -- leather, cloth, gems, elemental). C_Item.GetItemInfoInstant is
+    -- synchronous so we can call it inline without the async-load dance.
+    local trackReagents   = ns.db and ns.db.settings.trackReagents
+    local pullReagents    = ns.db and ns.db.settings.pullSaleableIncludeReagents
+    local reagentsAllowed = trackReagents and pullReagents
+    local function IsReagent(itemID)
+        if not C_Item or not C_Item.GetItemInfoInstant then return false end
+        local _, _, _, _, _, classID = C_Item.GetItemInfoInstant(itemID)
+        return classID == 7
+    end
 
-    local allBankTabs = {}
-    for _, b in ipairs(ns:GetEnabledBankTabs()) do table.insert(allBankTabs, b) end
-    for _, b in ipairs(ns:GetEnabledWarbankTabs()) do table.insert(allBankTabs, b) end
+    -- Pass 1: walk warbank slots, dedupe by itemKey, capture per-key
+    -- target qty (postCap or default) and the list of slots we can
+    -- pull from for that key.
+    local targetQty = {}
+    local itemNames = {}
+    local itemSlots = {}
 
-    local ops = {}
-    for _, bagIndex in ipairs(allBankTabs) do
+    for _, bagIndex in ipairs(warbankTabs) do
         local ok, numSlots = pcall(C_Container.GetContainerNumSlots, bagIndex)
         if ok and numSlots then
             for slot = 1, numSlots do
                 local ok2, info = pcall(C_Container.GetContainerItemInfo, bagIndex, slot)
-                if ok2 and info and info.hyperlink then
+                -- Skip soulbound — they can't be auctioned anyway.
+                if ok2 and info and info.hyperlink and not info.isBound then
                     local itemID, bonusIDs, modifiers = ns:ParseItemLink(info.hyperlink)
-                    if itemID then
-                        local key = ns:MakeItemKey(itemID, bonusIDs, modifiers)
-                        local slotName
-                        for queueItem, count in pairs(needed) do
-                            if count > 0 then
-                                local matched = ns:ItemsMatch(key, nil, queueItem, false, false)
-                                if not matched then
-                                    if slotName == nil then
-                                        slotName = (info.hyperlink:match("|h%[(.-)%]|h")) or false
+                    if itemID and not ns:IsDoNotTrack(itemID) then
+                        if not (IsReagent(itemID) and not reagentsAllowed) then
+                            local key = ns:MakeItemKey(itemID, bonusIDs, modifiers)
+                            local opOk, op = pcall(ns.TSM.GetItemAuctioningOp, ns.TSM, key)
+                            if opOk and op then
+                                if not targetQty[key] then
+                                    local qty = defaultQty
+                                    if op.postCap then
+                                        local cap = tonumber(op.postCap)
+                                        if cap and cap > 0 then qty = cap end
                                     end
-                                    if slotName then
-                                        matched = ns:ItemsMatch(key, slotName, queueItem, false, false)
-                                    end
+                                    targetQty[key] = qty
+                                    itemNames[key] = info.hyperlink:match("|h%[(.-)%]|h") or ("Item " .. itemID)
+                                    itemSlots[key] = {}
                                 end
-                                if matched then
-                                    table.insert(ops, {
-                                        op       = "pull",
-                                        srcBag   = bagIndex,
-                                        srcSlot  = slot,
-                                        name     = queueItem.name or "?",
-                                        icon     = info.iconFileID,
-                                        quantity = info.stackCount or 1,
-                                    })
-                                    needed[queueItem] = count - (info.stackCount or 1)
-                                    break
-                                end
+                                table.insert(itemSlots[key], {
+                                    bag   = bagIndex,
+                                    slot  = slot,
+                                    stack = info.stackCount or 1,
+                                    icon  = info.iconFileID,
+                                })
                             end
                         end
                     end
@@ -310,10 +312,43 @@ local function DoPullAll()
         end
     end
 
-    if #ops == 0 then ns:Print("No matching items in bank.") return end
-    ns:Print("Pulling " .. #ops .. " item(s) from bank...")
+    if not next(targetQty) then
+        ns:Print("No saleable items in warbank.")
+        return
+    end
+
+    -- Pass 2: subtract bags-already-have, build pull ops per key, capping
+    -- the per-slot pull at the still-needed qty so we don't pull a 20-stack
+    -- when postCap is 5.
+    local ops = {}
+    for key, target in pairs(targetQty) do
+        local synthItem = { itemKey = key, name = itemNames[key] }
+        local inBags = Tracker._CountInBags and Tracker._CountInBags(synthItem) or 0
+        local needed = target - inBags
+        if needed > 0 then
+            for _, s in ipairs(itemSlots[key]) do
+                if needed <= 0 then break end
+                local pullQty = math.min(s.stack, needed)
+                table.insert(ops, {
+                    op       = "pull",
+                    srcBag   = s.bag,
+                    srcSlot  = s.slot,
+                    name     = itemNames[key],
+                    icon     = s.icon,
+                    quantity = pullQty,
+                })
+                needed = needed - pullQty
+            end
+        end
+    end
+
+    if #ops == 0 then
+        ns:Print("Nothing to pull (already have target qty in bags).")
+        return
+    end
+    ns:Print("Pulling " .. #ops .. " saleable item(s) from warbank...")
     if ns.BankQueue and ns.BankQueue.ProcessSync then
-        ns.BankQueue:ProcessSync(ops, "Pull All...", function(success, errors)
+        ns.BankQueue:ProcessSync(ops, "Pull Saleable...", function(success, errors)
             if #success > 0 then ns:Print("Pulled: " .. table.concat(success, ", ")) end
             if errors > 0 then ns:Print(ns.COLORS.YELLOW .. errors .. " pull(s) failed|r") end
             PostOp()
@@ -736,7 +771,7 @@ local function BuildBankContent(parent)
 
     -- Row 3: [Pull Saleable] — full width
     bankButtons.pullAll = CreateActionButton(bankFrame, "Pull Saleable",
-        "Pull all queue items from bank (TSM postCap or default qty)", DoPullAll)
+        "Pull every saleable item from warbank (TSM postCap or default qty per item)", DoPullSaleable)
     bankButtons.pullAll:SetPoint("TOPLEFT", bankFrame, "TOPLEFT", 0, RowY(3))
     bankButtons.pullAll:SetPoint("RIGHT", bankFrame, "RIGHT", 0, 0)
 

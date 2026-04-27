@@ -81,6 +81,23 @@ function ns:InitDB()
     db.settings.transformDiscount     = db.settings.transformDiscount or 100
     db.settings.defaultSellQty     = db.settings.defaultSellQty or 1
     db.settings.sellQtyMode        = db.settings.sellQtyMode or "tsm"  -- "fixed" or "tsm"
+    -- Reagent tracking master toggle. Crafting reagents (Item Class 7 /
+    -- Tradegoods — herbs, ore, leather, cloth, gems, elemental) aren't
+    -- cross-region, so by default they sit outside FlipQueue's AH flow
+    -- entirely (matches the existing depositIncludeReagents intent).
+    -- When TRUE, reagents become first-class items: they appear in the
+    -- inventory page and are eligible for the per-flow sub-toggles below.
+    if db.settings.trackReagents == nil then
+        db.settings.trackReagents = false
+    end
+    -- Sub-toggle: include reagents in Pull Saleable's warbank walk.
+    -- Only meaningful when trackReagents is true; ignored otherwise.
+    -- Default true (when reagents are tracked, the player generally
+    -- wants Pull Saleable to grab them; flip off to keep mats in
+    -- warbank while still seeing them in inventory).
+    if db.settings.pullSaleableIncludeReagents == nil then
+        db.settings.pullSaleableIncludeReagents = true
+    end
     -- Character ordering for manual sort
     db.settings.characterOrder = db.settings.characterOrder or {}
     -- Generator settings (persisted across sessions)
