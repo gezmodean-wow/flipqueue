@@ -42,16 +42,18 @@ This addon is part of the **Cogworks** WoW addon suite alongside Tempo, Maxcraft
 
 ## Feedback tracking
 
-Player feedback (from the Chronoforge Discord), bug reports, and internal observations for FlipQueue live in `feedback/`. Schema and lifecycle are documented in `~/.chronoforge/CONVENTIONS.md`.
+**GitHub is canonical.** Issues live at https://github.com/gezmodean-wow/flipqueue/issues — this is the single source of truth for bugs, feature requests, and engineering discussion. The `scribe` bot mirrors Discord forum activity into GitHub issues automatically and broadcasts engineering comments back to the Discord thread.
 
-- `feedback/collection/` — still gathering info
-- `feedback/releases/v<X.Y.Z>/` — scoped to a specific release
-- `feedback/archive/` — shipped, wontfix, or duplicate
+When shipping a fix for a tracked issue, post the engineering note as a comment on the GitHub issue via `gh issue comment <number> --repo gezmodean-wow/flipqueue --body "..."`. Don't update Discord directly — scribe handles propagation.
 
-FlipQueue issue IDs use the prefix `FQ` (e.g. `FQ-001`).
+The local `feedback/` directory is **legacy / transitional**. Older issues have md files there; new issues should not. Existing md files are being reduced to thin pointers at their canonical GitHub issue (see `feedback/collection/FQ-003-...md` for the pattern).
+
+FlipQueue issue IDs use the prefix `FQ` (e.g. `FQ-001`). The GitHub issue number is the canonical identifier; the `FQ-N` ID is for commit-message convenience.
 
 ### Proactive capture
 
-When the user mentions a bug, regression, feature idea, or improvement during normal work, offer to log it via `/feedback-capture` — search for related existing entries first, then augment or create. Don't write a feedback file unprompted; ask first. When shipping a fix for a tracked issue, offer to append to its Attempts log via `/feedback-note`.
+When the user mentions a bug, regression, feature idea, or improvement during normal work, offer to file or update the GitHub issue. Don't open issues unprompted; ask first. When shipping a fix for a tracked issue, offer to post a status comment to the GitHub issue.
 
 Commit messages referencing a tracked issue should use `<type>(<ID>): <subject>` — e.g. `fix(FQ-004): sniper delay cancels on target change`.
+
+The `/feedback-*` slash commands (feedback-capture, feedback-note, feedback-ask, etc.) predate the scribe workflow and should not be used for FlipQueue. Use `gh issue` commands instead.
