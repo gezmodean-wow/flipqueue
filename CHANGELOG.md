@@ -1,5 +1,55 @@
 # Changelog
 
+## v0.12.0-alpha3
+
+Third alpha of v0.12. Bank operations popup feels alive during long pulls instead of looking frozen, DealFinder resolves real per-realm prices for ilvl variants instead of falling back to a single flat regional value, and the phantom "N expired auction(s) to collect — check mail!" login nag finally clears.
+
+### Bank operations popup: move-by-move feedback
+
+The progress bar used to sit at 0% during a 97-item Pull Saleable for the full 36 seconds, then jump straight to the final count when the move finished. Now it advances move-by-move as each item issues, so the bar reads "Pulling 32 / 97" while you're watching it and feels alive during the long pulls.
+
+A new thin heartbeat sub-bar under the main progress bar fills 0 → 100 % over each timed wait, with a label telling you what FlipQueue is waiting for: `Waiting for bag update`, `Verifying moves`, `Retrying 4 failed move(s)`, `Switching bank panel`. The pauses are now legible — you can see they're intentional and how long they'll be.
+
+When something does fail (rare, usually Blizzard's rate limiter), the completion summary lists each failed item by name in red instead of just saying "1 pull(s) failed" — you know exactly which items to chase down.
+
+### Internal Bag Error: addon backs off automatically
+
+When Blizzard's per-frame container rate limiter trips with `[15] Internal bag error` during a high-volume pull, FlipQueue now slows the inter-move delay to 500 ms (from 100 ms) for the rest of that bank visit. Resets to normal on bank close. Previously kept hammering the limiter at the same rate after the first failure, leaking 4-of-97 final-failed moves on long Pull Saleable runs; the adaptive backoff catches most of those before they fail.
+
+### Phantom "expired auction(s) to collect" — fixed
+
+If you got the orange login nag `N expired auction(s) to collect — check mail!` but had no mail, this is the fix. Three real causes were all collapsed into one symptom:
+
+- **Mail UI never scanned an empty inbox.** When you opened a mailbox with nothing in it, the addon returned early without running its cleanup pass, so any expired entries in the log that should have been finalized stayed stuck. Now opening any mailbox — even an empty one — runs the cleanup and clears those orphans.
+- **Pet auctions never matched.** Returned battle-pet auctions arrive as `[Pet Cage]` in mail, never as `[Lab Rat]` or whatever the species name was, so name-based matching missed every pet auction. Now matched by the species ID embedded in the mail item's hyperlink, which uniquely identifies the species regardless of the cage's display name.
+- **Stale entries past the 30-day mail TTL** are auto-finalized at login. After 30 days the mail evaporates server-side anyway, so an entry stuck "awaiting mail collection" past that point is unrecoverable and shouldn't keep nagging.
+
+If you have phantom entries you want to flush manually, `/fq debug expired` lists them and `/fq debug expired clear` finalizes them.
+
+### TSM reconcile picks up expired and cancelled auctions
+
+`/fq reconcile` previously only matched against TSM's sales records (`csvSales`). It now also reads `csvExpired` and `csvCancelled`, finalizing entries TSM saw end without depending on the mail-side path having run. Each match also fills in `postHistory` and `totalFeesSpent` for the attempt, so accounting reflects the real fee even when TSM was your only source of truth. Failure analytics in Item Research now break down by real cause (expired vs cancelled) instead of collapsing both into "expired."
+
+### DealFinder: per-realm prices for ilvl variants
+
+For gear with bonus IDs (most modern equipment), DealFinder used to show the same regional-average price for every realm — for example the same 43k for Greatlock Girdle on every realm, when the actual realm prices range from 19k to 198k. The cause: TSM stores variant gear under a level-form key (`i:260371::i253`) in its per-realm AuctionDB, but FlipQueue was looking up the bonus-form key TSM uses for general item identity. Bonus-form lookups missed every realm and fell through to the regional fallback.
+
+DealFinder now derives the level-form key and looks up against it, so per-realm prices now reflect each realm's actual market for the variant ilvl. The realm-row tooltip's `Data Source` line shows whether you're seeing `Per-Realm TSM` (TSM has data for that ilvl on that realm) or `Regional Fallback` (TSM doesn't have that exact variant on that realm — rare).
+
+### Tooltips show the right item
+
+Hovering an item in Item Research, Inventory, Log, Generator, Todo, or DealFinder now resolves the tooltip to the actual ilvl variant — so an ilvl 253 ring with bonus IDs shows up as ilvl 253 instead of ilvl 44 (its base form). Two latent bugs were behind this: the WoW item string FlipQueue built was off by one positional field (bonus IDs landed in the wrong slot and the tooltip rendered base/garbage), and per-row metadata like realm/price footnotes was being silently dropped on item tooltips because the append code only ran for text-only tooltips. Both fixed; ilvl labels in Item Research are now correct.
+
+### Bank gold operations: no false-failure reports
+
+If you have `Auto deposit gold` disabled or are using Warband Miser to handle gold, the bank operations popup used to count the no-op as a failure — pop up `1 operation failed` even though nothing went wrong. Now the gold-op estimate respects both settings and the Warband Miser handoff, so the popup doesn't queue a phantom op for something it knows it won't run.
+
+### New debug commands
+
+- **`/fq debug expired`** / **`clear`** — list uncollected expired/cancelled log entries for the current character; the `clear` form finalizes them. Each row also reports whether TSM has a matching expired/cancelled record so you can identify which path orphaned the entry.
+- **`/fq debug realms`** — show whether TSMRealms captured per-realm AuctionDB pricing data, with the per-realm update times. Use to diagnose "DealFinder shows the same price for every realm."
+- **`/fq debug pricing <name|id|link>`** — trace per-realm AuctionDB lookup for one item. Shows the TSM string we built, the level form we'd use as fallback, and per-realm hit/miss with prices. Shift-click an item from your bag for the most accurate result.
+
 ## v0.12.0-alpha2
 
 Second alpha of v0.12. Two fixes, two UX improvements — small but visible. Builds on alpha1.
