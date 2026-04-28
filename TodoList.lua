@@ -636,7 +636,13 @@ function TodoList:UpdateTaskStatus(taskIndex, status, reason)
 end
 
 -- Move a completed task to the log
-function TodoList:MoveTaskToLog(taskIndex, postedPrice, expirySeconds, postedQuantity)
+-- realItemKey: optional caller-provided "itemID;bonusIDs;modifiers" for the
+-- actual posted bag item. Tasks built from FP/TSM imports often carry the
+-- stripped base form (`itemID;;`), but the bag item that was just posted
+-- may have bonus IDs / modifiers attached. When the caller knows the
+-- real bag-item key, pass it here so the log entry preserves variant
+-- data — base form as fallback for legacy callers (FQ-130).
+function TodoList:MoveTaskToLog(taskIndex, postedPrice, expirySeconds, postedQuantity, realItemKey)
     if not ns.db or not ns.db.todoLists or not ns.db.todoLists.active then
         return
     end
@@ -648,6 +654,18 @@ function TodoList:MoveTaskToLog(taskIndex, postedPrice, expirySeconds, postedQua
 
     local taskQty = item.quantity or 1
     local moveQty = postedQuantity or taskQty
+
+    -- Prefer the caller-supplied real bag-item key when it carries variant
+    -- data the task's key lacks. We accept any non-empty key with a non-empty
+    -- bonus-ID segment ("itemID;BONUS;..."); fall back to the task key.
+    local logItemKey = item.itemKey
+    if realItemKey and realItemKey ~= "" then
+        local realHasBonus = realItemKey:match("^[^;]*;([^;]+)")
+        local taskHasBonus = item.itemKey and item.itemKey:match("^[^;]*;([^;]+)")
+        if realHasBonus and not taskHasBonus then
+            logItemKey = realItemKey
+        end
+    end
 
     -- Look for the most recent prior failed-sale history for this item on this character
     -- so we can carry over postAttempts/totalFeesSpent/postHistory (#71)
@@ -690,7 +708,7 @@ function TodoList:MoveTaskToLog(taskIndex, postedPrice, expirySeconds, postedQua
     end
 
     table.insert(ns.db.log, {
-        itemKey        = item.itemKey,
+        itemKey        = logItemKey,
         itemID         = item.itemID,
         name           = item.name,
         quality        = item.quality,

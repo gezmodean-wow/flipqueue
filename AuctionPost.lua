@@ -895,7 +895,11 @@ function AuctionPost:PostItem(scanResult, callback)
                     local matched = ns:ItemsMatch(scanResult.itemKey, scanResult.name, task, nil)
                     if matched then
                         local durationHours = DURATION_HOURS[duration] or 48
-                        ns.TodoList:MoveTaskToLog(taskIdx, ns:FormatGold(unitPrice), durationHours * 3600, quantity)
+                        -- Pass scanResult.itemKey so MoveTaskToLog preserves
+                        -- bonus IDs / modifiers from the bag item even when
+                        -- the task itself was imported with stripped key
+                        -- (FQ-130).
+                        ns.TodoList:MoveTaskToLog(taskIdx, ns:FormatGold(unitPrice), durationHours * 3600, quantity, scanResult.itemKey)
                         break
                     end
                 end

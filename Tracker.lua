@@ -33,8 +33,14 @@ Tracker._GetNameFromLink = GetNameFromLink
 -- Get the bag quantity for a specific queue item across all carried bags
 -- (regular bags + reagent bag — items in the reagent bag still count as
 -- "in inventory" for our purposes).
+-- Returns (total, bestKey) — bestKey is the most-decorated full bag-item
+-- key seen for any matching slot ("itemID;bonusIDs;modifiers"). The snapshot
+-- uses this so that when the user posts via TSM/Blizz UI (no scanResult to
+-- pass through), the log entry can still preserve variant data instead of
+-- falling back to the task's potentially-stripped imported key (FQ-130).
 local function CountInBags(queueItem)
     local total = 0
+    local bestKey = nil
     for _, bagIndex in ipairs(ns.ALL_PLAYER_BAGS) do
         local okSlots, numSlots = pcall(C_Container.GetContainerNumSlots, bagIndex)
         if not okSlots or not numSlots then numSlots = 0 end
@@ -52,12 +58,15 @@ local function CountInBags(queueItem)
                     end
                     if matched then
                         total = total + (info.stackCount or 1)
+                        if not bestKey or (bonusIDs and bonusIDs ~= "") then
+                            bestKey = key
+                        end
                     end
                 end
             end
         end
     end
-    return total
+    return total, bestKey
 end
 
 -- Expose for TrackerBank
@@ -80,9 +89,11 @@ local function SnapshotBags()
                 if (todoItem.status == "pending" or todoItem.status == "skipped")
                     and todoItem.assignedChar == charKey
                     and ns:RealmMatches(todoItem.targetRealm or "", currentRealm) then
+                    local qty, bagKey = CountInBags(todoItem)
                     preTodoSnapshot[taskIdx] = {
                         todoItem = todoItem,
-                        qty = CountInBags(todoItem),
+                        qty = qty,
+                        itemKey = bagKey,
                     }
                 end
             end
@@ -101,7 +112,7 @@ local function CheckForPosts()
                 -- Cap count at task's own quantity to prevent inflation
                 -- when multiple tasks share the same item type
                 local count = math.min(snap.qty - curQty, snap.todoItem.quantity or 1)
-                table.insert(todoPosted, {taskIdx = taskIdx, item = snap.todoItem, count = count})
+                table.insert(todoPosted, {taskIdx = taskIdx, item = snap.todoItem, count = count, itemKey = snap.itemKey})
             end
         end
     end
@@ -128,7 +139,9 @@ local function CheckForPosts()
         else
             ns:Print(ns.COLORS.GREEN .. "Posted:|r " .. p.item.name .. " (x" .. p.count .. ")")
         end
-        ns.TodoList:MoveTaskToLog(p.taskIdx, nil, nil, p.count)
+        -- Pass the snapshotted bag-item key so log entries preserve bonus
+        -- IDs / modifiers even for posts done via TSM / Blizz UI (FQ-130).
+        ns.TodoList:MoveTaskToLog(p.taskIdx, nil, nil, p.count, p.itemKey)
     end
 
     if #todoPosted > 0 then
