@@ -206,6 +206,18 @@ end
 local sessionWithdrawnCopper = 0
 local sessionWithdrawnRealm = nil
 
+-- Reset the session-withdraw tracker. Called from the BANKFRAME_OPENED
+-- handler in Tracker.lua so each bank visit starts with fresh accounting.
+-- Why: the tracker only protected against duplicate withdraws within one
+-- execution, but never decremented when the player spent gold afterwards.
+-- Across bank sessions it grew stale (FQ-117 mort: previously withdrew 8.4k,
+-- spent it on auctions, reopened bank — effectiveCopper still claimed the
+-- 8.4k was on hand, so the next withdraw was suppressed as "already covered").
+function Tracker:ResetSessionWithdrawTracker()
+    sessionWithdrawnCopper = 0
+    sessionWithdrawnRealm = nil
+end
+
 local DURATION_MULT = {[1] = 0.15, [2] = 0.30, [3] = 0.60}
 local DURATION_LABEL = {[1] = "12h", [2] = "24h", [3] = "48h"}
 
@@ -424,6 +436,10 @@ function Tracker:AutoWithdrawGold()
     -- Target balance: max of (fees + 10% rounding) or the user's goldBuffer
     -- (absolute min balance to keep on character). Must mirror AutoDepositGold's
     -- keepCopper formula so deposit and withdraw target the same balance.
+    -- When the character has no active tasks (itemCount=0), totalDepositCopper
+    -- is 0 and the max collapses to goldBuffer — the symmetric "balance to
+    -- minimum" behavior. With tasks, the max bumps up to cover the fees and
+    -- buy purchases so the player doesn't run out posting/buying.
     local goldBufferCopper = (ns.db.settings.goldBuffer or 0) * 10000
     local estimatedFeesCopper = math.max(goldBufferCopper, math.ceil(totalDepositCopper * 1.1))
     -- Round target up to whole gold so the post-withdraw balance is even
@@ -534,6 +550,7 @@ function Tracker:AutoDepositGold()
 
     -- Calculate how much gold we need to keep: whichever is larger of
     -- (fees + 10% rounding) or the user's configured min-balance buffer.
+    -- With no active tasks (feesCopper=0), this collapses to the buffer.
     local feesCopper = self:CalculateRequiredGold(charKey, currentRealm)
     local bufferCopper = (ns.db.settings.goldBuffer or 0) * 10000
     local keepCopper = math.max(bufferCopper, math.ceil(feesCopper * 1.1))

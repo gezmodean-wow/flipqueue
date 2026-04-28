@@ -179,7 +179,9 @@ function Tracker:ShowBankOpsPopup()
 
     -- Estimate withdrawal / deposit need (show in popup regardless of auto setting).
     -- Runs for every character — the goldBuffer min-balance applies even when
-    -- there are no tasks on this realm (symmetric with AutoDepositGold).
+    -- there are no tasks on this realm. With active tasks, the target bumps up
+    -- to cover fees + buy purchases (max with goldBuffer) so the player has
+    -- enough on hand. Symmetric with AutoWithdrawGold / AutoDepositGold.
     if ns.db then
         local totalFees, _, details = Tracker:CalculateRequiredGold(charKey, currentRealm)
         for _, d in ipairs(details) do
@@ -746,6 +748,13 @@ frame:SetScript("OnEvent", function(self, event)
         end)
 
     elseif event == "BANKFRAME_OPENED" then
+        -- Reset the session-withdraw tracker so each bank visit starts with
+        -- fresh accounting. Without this, gold the player spent between bank
+        -- visits stays in the "already covered" total and suppresses the next
+        -- legitimate withdraw (FQ-117).
+        if Tracker.ResetSessionWithdrawTracker then
+            Tracker:ResetSessionWithdrawTracker()
+        end
         C_Timer.After(1, function()
             -- Scanner already scans bags/bank/warbank at 0.5s — refresh task state
             -- with fresh data so depositFrom/source are correct before auto-pull runs
