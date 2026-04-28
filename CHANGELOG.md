@@ -1,5 +1,22 @@
 # Changelog
 
+## v0.12.0-alpha2
+
+Second alpha of v0.12. Two fixes, two UX improvements — small but visible. Builds on alpha1.
+
+### Gold withdrawal: stops getting stuck after the first withdrawal of a session
+
+If you opened the bank, withdrew gold (say 8.4k to top up to your minimum), then went and posted auctions or otherwise spent the gold, the next time you opened the bank the addon would refuse to withdraw — silently, marked as "failed" in the operations summary. The cause: the addon was tracking session withdrawals to avoid double-withdrawing within one execution, but never reset the tracker between bank visits. So gold you'd already spent still counted toward "you already withdrew enough." Now the tracker resets every time the bank opens, so each visit is fresh accounting.
+
+### Manual drawer buttons now show the bank operations popup
+
+The four manual buttons in the drawer below the mini view — **Pull Items**, **Deposit Items**, **Deposit Extras**, **Pull Saleable** — used to bypass the bank operations popup and run silently the moment you clicked. They now show the same preview popup the auto chain shows: a list of what's about to move, with an Execute button. Click Execute to perform the moves. This makes the manual flow consistent with the auto flow and gives you a confirmation step before the items actually move.
+
+### Manual gold buttons (Withdraw Gold / Deposit Earnings)
+
+- Clicking a gold button when there's nothing to do now prints a chat message ("Already at or above target balance — nothing to withdraw" / "At or below target balance — nothing to deposit") instead of silently doing nothing.
+- The button labels (which display the calculated amount, e.g. "Withdraw Gold: 8.4k") now update after a successful withdrawal or deposit, so they reflect your new balance instead of staying stale.
+
 ## v0.12.0-alpha1
 
 First alpha of v0.12. Focused on TSM posting parity — closes a cluster of cases where FlipQueue's post price diverged from TSM's view, plus a working "Pull Saleable" button.
