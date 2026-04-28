@@ -386,7 +386,9 @@ function Tracker:CalculateRequiredGold(charKey, currentRealm)
 end
 
 function Tracker:AutoWithdrawGold()
-    if not ns.db or not ns.db.settings.autoWithdrawGold then
+    if not ns.db then return end
+    local charKey = ns:GetCharKey()
+    if not ns:GetCharSetting(charKey, "autoWithdrawGold") then
         ns:PrintDebug("AutoWithdrawGold: skipped — setting disabled")
         return
     end
@@ -403,7 +405,6 @@ function Tracker:AutoWithdrawGold()
         return
     end
 
-    local charKey = ns:GetCharKey()
     local currentRealm = charKey:match("%-(.+)$") or GetRealmName()
 
     -- Reset session tracker if realm changed
@@ -531,7 +532,9 @@ end
 
 -- Deposit excess gold to warbank, keeping only AH fees + buffer.
 function Tracker:AutoDepositGold()
-    if not ns.db or not ns.db.settings.autoDepositGold then
+    if not ns.db then return end
+    local charKey = ns:GetCharKey()
+    if not ns:GetCharSetting(charKey, "autoDepositGold") then
         ns:PrintDebug("AutoDepositGold: skipped — setting disabled")
         return
     end
@@ -545,7 +548,6 @@ function Tracker:AutoDepositGold()
         return
     end
 
-    local charKey = ns:GetCharKey()
     local currentRealm = charKey:match("%-(.+)$") or GetRealmName()
 
     -- Calculate how much gold we need to keep: whichever is larger of

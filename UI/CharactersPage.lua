@@ -596,10 +596,20 @@ local function EnsureConfigPanel(tableContainer)
     configWidgets.depAllRow = depAllRow
     configWidgets.depAllBtn = depAllBtn
 
+    -- Auto-Withdraw Gold
+    local wdGoldRow, wdGoldBtn = Create3StateRow(depAllRow, "Withdraw Gold:", "autoWithdrawGold")
+    configWidgets.wdGoldRow = wdGoldRow
+    configWidgets.wdGoldBtn = wdGoldBtn
+
+    -- Auto-Deposit Gold
+    local depGoldRow, depGoldBtn = Create3StateRow(wdGoldRow, "Deposit Gold:", "autoDepositGold")
+    configWidgets.depGoldRow = depGoldRow
+    configWidgets.depGoldBtn = depGoldBtn
+
     -- Divider
     local div3 = configPanel:CreateTexture(nil, "ARTWORK")
     div3:SetHeight(1)
-    div3:SetPoint("TOPLEFT", depAllRow, "BOTTOMLEFT", 0, -6)
+    div3:SetPoint("TOPLEFT", depGoldRow, "BOTTOMLEFT", 0, -6)
     div3:SetPoint("RIGHT", configPanel, "RIGHT", R_MARGIN, 0)
     div3:SetColorTexture(0.35, 0.35, 0.45, 0.6)
 
@@ -899,6 +909,8 @@ local function ShowConfigPanel(charKey)
     SetupTriStateBtn(configWidgets.pullBtn, "autoPullBank")
     SetupTriStateBtn(configWidgets.depBtn, "autoDepositWarbank")
     SetupTriStateBtn(configWidgets.depAllBtn, "autoDepositAll")
+    SetupTriStateBtn(configWidgets.wdGoldBtn, "autoWithdrawGold")
+    SetupTriStateBtn(configWidgets.depGoldBtn, "autoDepositGold")
 
     -- Bank tab buttons (per-character)
     local pt = ns.db.settings.pullTabs or {}
