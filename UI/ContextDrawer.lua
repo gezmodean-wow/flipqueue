@@ -57,6 +57,11 @@ ctxEvt:RegisterEvent("AUCTION_HOUSE_CLOSED")
 ctxEvt:RegisterEvent("BANKFRAME_OPENED")
 ctxEvt:RegisterEvent("BANKFRAME_CLOSED")
 ctxEvt:RegisterEvent("PLAYER_ENTERING_WORLD")
+-- PLAYER_MONEY drives RefreshBankLabels so the manual "Withdraw Gold: Xg" /
+-- "Deposit Earnings: Xg" button labels reflect the new balance after a
+-- C_Bank.WithdrawMoney / DepositMoney completes (the balance update arrives
+-- a frame or two after the API call returns).
+ctxEvt:RegisterEvent("PLAYER_MONEY")
 ctxEvt:SetScript("OnEvent", function()
     -- ToolDrawer updates ns._serviceState before we fire (same event,
     -- but registered first). Just kick our refresh.
@@ -185,18 +190,61 @@ local function PostOp()
     end
 end
 
+-- Wraps a manual bank operation in the unified bank popup so the Execute
+-- click runs in hardware-event context, matching the auto-flow UX. Without
+-- this wrapper the drawer buttons skipped the popup and went straight to
+-- ProcessSync, which felt inconsistent once the popup became canonical for
+-- the auto chain.
+--
+-- spec = {
+--   ops          -- operation array from Tracker:Build*Ops
+--   payloadKey   -- "pulls" | "deposits" | "extras"
+--   processLabel -- progress label passed to BankQueue:ProcessSync
+--   phase        -- bucket key for BankOpProgress ("Pulling" | "Depositing")
+--   successWord  -- chat prefix on success ("Pulled" | "Deposited" | "Extras")
+--   errorNoun    -- chat noun on failure ("pull" | "deposit" | "extra")
+-- }
+local function RunManualBankOp(spec)
+    if not (ns.BankQueue and ns.BankQueue.ProcessSync) then return end
+
+    local ops = spec.ops
+    local function RunOps()
+        ns.BankQueue:ProcessSync(ops, spec.processLabel, function(success, errors)
+            if #success > 0 then ns:Print(spec.successWord .. ": " .. table.concat(success, ", ")) end
+            if errors > 0 then ns:Print(ns.COLORS.YELLOW .. errors .. " " .. spec.errorNoun .. "(s) failed|r") end
+            if ns.UI and ns.UI.BankOpProgress then
+                ns.UI:BankOpProgress(#success, errors, spec.phase, success)
+            end
+            PostOp()
+            if ns.UI and ns.UI.BankPopupComplete then ns.UI:BankPopupComplete() end
+        end)
+    end
+
+    if not (ns.UI and ns.UI.ShowBankPopup) then RunOps() return end
+
+    if ns.UI.IsBankExecuting and not ns.UI:IsBankExecuting() and ns.UI.BeginBankExecution then
+        ns.UI:BeginBankExecution(#ops)
+    end
+
+    ns.UI:ShowBankPopup({ [spec.payloadKey] = ops }, function()
+        if ns.UI.BankOpProgress then ns.UI:BankOpProgress(0, 0, spec.phase) end
+        RunOps()
+    end)
+end
+
 local function DoPull()
     if not Tracker then Tracker = ns.Tracker end
     if not Tracker then return end
     local ops = Tracker:BuildPullOps()
     if #ops == 0 then ns:Print("Nothing to pull.") return end
-    if ns.BankQueue and ns.BankQueue.ProcessSync then
-        ns.BankQueue:ProcessSync(ops, "Pulling...", function(success, errors)
-            if #success > 0 then ns:Print("Pulled: " .. table.concat(success, ", ")) end
-            if errors > 0 then ns:Print(ns.COLORS.YELLOW .. errors .. " pull(s) failed|r") end
-            PostOp()
-        end)
-    end
+    RunManualBankOp({
+        ops          = ops,
+        payloadKey   = "pulls",
+        processLabel = "Pulling...",
+        phase        = "Pulling",
+        successWord  = "Pulled",
+        errorNoun    = "pull",
+    })
 end
 
 local function DoDeposit()
@@ -204,13 +252,14 @@ local function DoDeposit()
     if not Tracker then return end
     local ops = Tracker:BuildDepositOps()
     if #ops == 0 then ns:Print("Nothing to deposit.") return end
-    if ns.BankQueue and ns.BankQueue.ProcessSync then
-        ns.BankQueue:ProcessSync(ops, "Depositing...", function(success, errors)
-            if #success > 0 then ns:Print("Deposited: " .. table.concat(success, ", ")) end
-            if errors > 0 then ns:Print(ns.COLORS.YELLOW .. errors .. " deposit(s) failed|r") end
-            PostOp()
-        end)
-    end
+    RunManualBankOp({
+        ops          = ops,
+        payloadKey   = "deposits",
+        processLabel = "Depositing...",
+        phase        = "Depositing",
+        successWord  = "Deposited",
+        errorNoun    = "deposit",
+    })
 end
 
 local function DoExtras()
@@ -223,13 +272,14 @@ local function DoExtras()
     end
     local ops = Tracker:BuildExtraDepositOps(depositSlots)
     if #ops == 0 then ns:Print("No extras to deposit.") return end
-    if ns.BankQueue and ns.BankQueue.ProcessSync then
-        ns.BankQueue:ProcessSync(ops, "Extras...", function(success, errors)
-            if #success > 0 then ns:Print("Extras: " .. table.concat(success, ", ")) end
-            if errors > 0 then ns:Print(ns.COLORS.YELLOW .. errors .. " extra(s) failed|r") end
-            PostOp()
-        end)
-    end
+    RunManualBankOp({
+        ops          = ops,
+        payloadKey   = "extras",
+        processLabel = "Extras...",
+        phase        = "Depositing",
+        successWord  = "Extras",
+        errorNoun    = "extra",
+    })
 end
 
 -- Pull Saleable: walks the warbank, finds every unique TSM-Auctioning-grouped
@@ -347,13 +397,14 @@ local function DoPullSaleable()
         return
     end
     ns:Print("Pulling " .. #ops .. " saleable item(s) from warbank...")
-    if ns.BankQueue and ns.BankQueue.ProcessSync then
-        ns.BankQueue:ProcessSync(ops, "Pull Saleable...", function(success, errors)
-            if #success > 0 then ns:Print("Pulled: " .. table.concat(success, ", ")) end
-            if errors > 0 then ns:Print(ns.COLORS.YELLOW .. errors .. " pull(s) failed|r") end
-            PostOp()
-        end)
-    end
+    RunManualBankOp({
+        ops          = ops,
+        payloadKey   = "pulls",
+        processLabel = "Pull Saleable...",
+        phase        = "Pulling",
+        successWord  = "Pulled",
+        errorNoun    = "pull",
+    })
 end
 
 local function DoPullGold()
@@ -361,8 +412,17 @@ local function DoPullGold()
     if not Tracker or not Tracker.AutoWithdrawGold then return end
     local saved = ns.db and ns.db.settings.autoWithdrawGold
     if ns.db then ns.db.settings.autoWithdrawGold = true end
-    Tracker:AutoWithdrawGold()
+    local withdrawn = Tracker:AutoWithdrawGold()
     if ns.db then ns.db.settings.autoWithdrawGold = saved end
+    -- AutoWithdrawGold prints its own success line on actual withdrawal; on
+    -- a no-op (already at-or-above target) it returns nil and only emits a
+    -- debug-only line. Surface a player-visible chat print so the manual
+    -- button never feels dead, then refresh the drawer so the button label
+    -- (which displays the calculated shortfall) reflects the new balance.
+    if not withdrawn or withdrawn == 0 then
+        ns:Print("Already at or above target balance — nothing to withdraw.")
+    end
+    PostOp()
 end
 
 local function DoDepositGold()
@@ -370,8 +430,12 @@ local function DoDepositGold()
     if not Tracker or not Tracker.AutoDepositGold then return end
     local saved = ns.db and ns.db.settings.autoDepositGold
     if ns.db then ns.db.settings.autoDepositGold = true end
-    Tracker:AutoDepositGold()
+    local deposited = Tracker:AutoDepositGold()
     if ns.db then ns.db.settings.autoDepositGold = saved end
+    if not deposited or deposited == 0 then
+        ns:Print("At or below target balance — nothing to deposit.")
+    end
+    PostOp()
 end
 
 --------------------------
