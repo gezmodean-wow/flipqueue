@@ -382,9 +382,22 @@ listener:SetScript("OnEvent", function(_, event, arg1)
         -- DIDN'T appear in the harvest get treated as "scanned, empty"
         -- on Lookup — letting ResolvePostPrice flip from scan_pending to
         -- ready (no competition) for ilvl variants no one's listed.
-        itemScans[CurrentRealm() .. "|" .. tostring(itemKey.itemID)] = now
+        --
+        -- Caged pets all share itemID 82800; key per-species instead so
+        -- "we scanned species X" doesn't get misread as "we scanned all
+        -- pets" when only one species was queried.
+        local scanIdent
+        if itemKey.battlePetSpeciesID and itemKey.battlePetSpeciesID > 0 then
+            scanIdent = "pet:" .. tostring(itemKey.battlePetSpeciesID)
+        else
+            scanIdent = tostring(itemKey.itemID)
+        end
+        itemScans[CurrentRealm() .. "|" .. scanIdent] = now
         ns:PrintDebug("[ScanCache] ITEM_SEARCH_RESULTS_UPDATED itemID=" ..
-            tostring(itemKey.itemID) .. " harvested=" .. n)
+            tostring(itemKey.itemID) ..
+            ((itemKey.battlePetSpeciesID and itemKey.battlePetSpeciesID > 0)
+                and (" species=" .. itemKey.battlePetSpeciesID) or "") ..
+            " harvested=" .. n)
         ScheduleNotify()  -- always fire, even if n=0 — empty harvest is still news
 
     elseif event == "COMMODITY_SEARCH_RESULTS_UPDATED" then
@@ -526,9 +539,22 @@ function ScanCache:Lookup(fqKey, isCommodity, maxAgeSec)
     -- no listings. Return a synthetic empty entry so the decision tree
     -- runs the empty-market branch (post at normal) instead of waiting
     -- forever in scan_pending.
-    local itemID = fqKey and fqKey:match("^(%d+)") or nil
-    if itemID then
-        local scanKey = CurrentRealm() .. "|" .. itemID
+    --
+    -- Pet fqKeys ("pet:<species>;...") need their own branch: the digit-
+    -- prefix regex doesn't match them, and we key itemScans per-species
+    -- (not by the shared Pet Cage itemID 82800) so each species has its
+    -- own "scanned" sentinel.
+    local scanIdent
+    if fqKey then
+        local species = fqKey:match("^pet:(%d+)")
+        if species then
+            scanIdent = "pet:" .. species
+        else
+            scanIdent = fqKey:match("^(%d+)")
+        end
+    end
+    if scanIdent then
+        local scanKey = CurrentRealm() .. "|" .. scanIdent
         local lastScan = itemScans[scanKey]
         if lastScan then
             local age = time() - lastScan

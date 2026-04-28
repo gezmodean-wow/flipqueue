@@ -39,16 +39,45 @@ local QUERY_SPACING_MS = 350
 local QUERY_TIMEOUT_SEC = 4
 
 local pendingQueue = {}      -- ordered queue of pending scan tasks
-local inflight = {}          -- itemID -> { isCommodity, fqKey, sentAt, callback }
+-- inflight is keyed by an opaque scan key — the itemID for normal items
+-- and "pet:<species>" for caged pets (so two species don't collapse onto
+-- the shared Pet Cage itemID 82800).
+local inflight = {}          -- scanKey -> { itemID, speciesID, isCommodity, fqKey, sentAt, callback }
 local lastSendTime = 0       -- monotonic-ish (GetTime) of last SendSearchQuery
 local kickerTicker = nil     -- C_Timer driving the queue
 
-local function ItemKeyFromID(itemID)
+local function ScanKeyFor(itemID, speciesID)
+    if speciesID and speciesID > 0 then
+        return "pet:" .. tostring(speciesID)
+    end
+    return tostring(itemID)
+end
+
+local function ItemKeyFromID(itemID, speciesID)
     -- Blizzard's SendSearchQuery wants a full ItemKey tuple. We always pass
     -- itemLevel = 0 to match TSM's workaround for the old 9.0.1 ilvl bug:
     -- the server returns ALL variants of that itemID in one combined result
     -- list, which AuctionScanCache then buckets per-link.
-    return { itemID = itemID, itemLevel = 0, itemSuffix = 0, battlePetSpeciesID = 0 }
+    --
+    -- For caged pets (itemID 82800 / Pet Cage), the AH search keys on
+    -- battlePetSpeciesID — passing 0 yields a malformed query that returns
+    -- nothing useful and never fires ITEM_SEARCH_RESULTS_UPDATED. Pass the
+    -- caller's species so each species gets its own valid query.
+    return {
+        itemID              = itemID,
+        itemLevel           = 0,
+        itemSuffix          = 0,
+        battlePetSpeciesID  = tonumber(speciesID) or 0,
+    }
+end
+
+-- Pet fqKeys look like "pet:<species>;...". Extract the species so callers
+-- can dedupe pet tasks by species (rather than the shared Pet Cage itemID
+-- 82800) and feed it into ItemKeyFromID for a valid pet search.
+local function PetSpeciesFromFqKey(fqKey)
+    if type(fqKey) ~= "string" then return nil end
+    local s = fqKey:match("^pet:(%d+)")
+    return s and tonumber(s) or nil
 end
 
 local function NowSec()
@@ -64,26 +93,32 @@ end
 local function CheckTimeouts()
     local now = NowSec()
     local expired = {}
-    for itemID, task in pairs(inflight) do
+    for scanKey, task in pairs(inflight) do
         if (now - task.sentAt) > QUERY_TIMEOUT_SEC then
-            expired[#expired + 1] = itemID
+            expired[#expired + 1] = scanKey
         end
     end
     if #expired == 0 then return end
 
-    for _, itemID in ipairs(expired) do
-        local task = inflight[itemID]
-        inflight[itemID] = nil
+    for _, scanKey in ipairs(expired) do
+        local task = inflight[scanKey]
+        inflight[scanKey] = nil
         if task then
-            ns:PrintDebug("[AutoScan] TIMEOUT itemID=" .. tostring(itemID) ..
+            ns:PrintDebug("[AutoScan] TIMEOUT scanKey=" .. tostring(scanKey) ..
+                " itemID=" .. tostring(task.itemID) ..
+                (task.speciesID and (" species=" .. task.speciesID) or "") ..
                 " (no event in " .. QUERY_TIMEOUT_SEC .. "s — assuming empty market)")
             -- No event came back. Treat as confirmed empty market for this
             -- item: wipe any stale cache entries AND mark each expected
             -- fqKey as empty so ResolvePostPrice flips from "scan pending"
             -- to "ready (no competition)" instead of staying stuck.
             local cache = ns.AuctionScanCache
-            if cache and cache.PruneStaleForItemIDs then
-                cache:PruneStaleForItemIDs({ [itemID] = true }, time() + 1)
+            -- Prune is per-itemID; for pets that's the shared Pet Cage ID,
+            -- but the prune walks listings by realm|<itemID>; prefix and
+            -- bucket key collisions would only matter if we keyed pet
+            -- buckets by itemID too — we don't, so this is a no-op for pets.
+            if cache and cache.PruneStaleForItemIDs and not task.speciesID then
+                cache:PruneStaleForItemIDs({ [task.itemID] = true }, time() + 1)
             end
             if cache and cache.MarkEmpty and task.expectedFqKeys then
                 for fq in pairs(task.expectedFqKeys) do
@@ -115,10 +150,11 @@ local function ProcessQueue()
     -- Skip queries that have already been collapsed into an inflight slot.
     while #pendingQueue > 0 do
         local task = pendingQueue[1]
-        if inflight[task.itemID] then
+        local scanKey = ScanKeyFor(task.itemID, task.speciesID)
+        if inflight[scanKey] then
             table.remove(pendingQueue, 1)
             -- Hand the callback off to whichever scan is in flight.
-            local existing = inflight[task.itemID]
+            local existing = inflight[scanKey]
             local prev = existing.callback
             existing.callback = function(ok)
                 if prev then pcall(prev, ok) end
@@ -155,12 +191,14 @@ local function ProcessQueue()
         -- Pass an empty sorts array — Blizzard documents `sorts` as a table,
         -- and some builds reject nil here.
         sent, errMsg = pcall(C_AuctionHouse.SendSearchQuery,
-            ItemKeyFromID(task.itemID), {}, false)
+            ItemKeyFromID(task.itemID, task.speciesID), {}, false)
     end
 
     if not sent then
         ns:PrintDebug("[AutoScan] SendSearchQuery FAILED for itemID=" ..
-            tostring(task.itemID) .. " err=" .. tostring(errMsg) ..
+            tostring(task.itemID) ..
+            (task.speciesID and (" species=" .. task.speciesID) or "") ..
+            " err=" .. tostring(errMsg) ..
             " UIloaded=" .. tostring(
                 (C_AddOns and C_AddOns.IsAddOnLoaded and C_AddOns.IsAddOnLoaded("Blizzard_AuctionHouseUI"))
                 or (IsAddOnLoaded and IsAddOnLoaded("Blizzard_AuctionHouseUI"))
@@ -171,8 +209,10 @@ local function ProcessQueue()
 
     lastSendTime = NowSec() * 1000
     task.sentAt = NowSec()
-    inflight[task.itemID] = task
+    local scanKey = ScanKeyFor(task.itemID, task.speciesID)
+    inflight[scanKey] = task
     ns:PrintDebug("[AutoScan] SendSearchQuery itemID=" .. tostring(task.itemID) ..
+        (task.speciesID and (" species=" .. task.speciesID) or "") ..
         " commodity=" .. tostring(task.isCommodity) ..
         " (queued=" .. #pendingQueue .. ", inflight=" .. (function()
             local n = 0; for _ in pairs(inflight) do n = n + 1 end; return n
@@ -228,8 +268,20 @@ function AutoScan:ScanItem(itemID, isCommodity, callback, expectedFqKeys)
         return
     end
 
-    if inflight[itemID] then
-        local existing = inflight[itemID]
+    -- For caged pets all rows share itemID 82800; the differentiator is
+    -- battlePetSpeciesID. Pull the species off the first expected fqKey
+    -- so dedupe and SendSearchQuery target the right pet.
+    local speciesID
+    if expectedFqKeys then
+        for _, fq in ipairs(expectedFqKeys) do
+            local s = PetSpeciesFromFqKey(fq)
+            if s then speciesID = s; break end
+        end
+    end
+
+    local scanKey = ScanKeyFor(itemID, speciesID)
+    if inflight[scanKey] then
+        local existing = inflight[scanKey]
         if expectedFqKeys then
             existing.expectedFqKeys = existing.expectedFqKeys or {}
             for _, fq in ipairs(expectedFqKeys) do
@@ -251,6 +303,7 @@ function AutoScan:ScanItem(itemID, isCommodity, callback, expectedFqKeys)
     end
     pendingQueue[#pendingQueue + 1] = {
         itemID         = itemID,
+        speciesID      = speciesID,
         isCommodity    = isCommodity == true,
         callback       = callback,
         expectedFqKeys = fqSet,
@@ -274,20 +327,26 @@ function AutoScan:ScanQueue(scanResults, maxAgeSec, onAllSettled)
     local cache = ns.AuctionScanCache
     local fresh = maxAgeSec or (cache and cache:DefaultFreshAge()) or (30 * 60)
 
-    -- Dedup by itemID, but also prefer to scan items the player wants to
-    -- post first (status == "ready" or nothing yet decided).
+    -- Dedupe by itemID for normal items, but by speciesID for caged pets:
+    -- every pet shares itemID 82800 / Pet Cage, so an itemID dedupe would
+    -- eat every pet after the first regardless of how many distinct
+    -- species are in the bag.
     local seen = {}
     local toScan = {}
     for _, entry in ipairs(scanResults) do
-        if entry.itemID and not seen[entry.itemID] and entry.status ~= "dnt" then
-            seen[entry.itemID] = true
-            local stale = true
-            if cache then
-                local hit = cache:Lookup(entry.itemKey, entry.isCommodity, fresh)
-                stale = (hit == nil)
-            end
-            if stale then
-                toScan[#toScan + 1] = entry
+        if entry.itemID and entry.status ~= "dnt" then
+            local species = PetSpeciesFromFqKey(entry.itemKey)
+            local dedupeKey = species and ("pet:" .. species) or tostring(entry.itemID)
+            if not seen[dedupeKey] then
+                seen[dedupeKey] = true
+                local stale = true
+                if cache then
+                    local hit = cache:Lookup(entry.itemKey, entry.isCommodity, fresh)
+                    stale = (hit == nil)
+                end
+                if stale then
+                    toScan[#toScan + 1] = entry
+                end
             end
         end
     end
@@ -344,14 +403,21 @@ local function ResolveInflightFromCache()
     local cache = ns.AuctionScanCache
     if not cache then return end
     local now = time()
-    for itemID, task in pairs(inflight) do
-        local fqKey = task.fqKey or (tostring(itemID) .. ";;")
+    for scanKey, task in pairs(inflight) do
+        local fqKey = task.fqKey
+        if not fqKey then
+            if task.speciesID then
+                fqKey = "pet:" .. tostring(task.speciesID) .. ";;"
+            else
+                fqKey = tostring(task.itemID) .. ";;"
+            end
+        end
         local hit = cache:Lookup(fqKey, task.isCommodity)
         -- Result is "fresh" if the cache scan time is at or after when we
         -- queued the search. Loose timestamp comparison (1s slack) since
         -- cache uses time() seconds and our sentAt uses GetTime() seconds.
         if hit and (now - hit.age + 1) >= math.floor(task.sentAt) then
-            inflight[itemID] = nil
+            inflight[scanKey] = nil
             HandleResolved(task, true)
         end
     end
