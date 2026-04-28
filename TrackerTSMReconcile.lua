@@ -78,15 +78,28 @@ local function CanonicalCharKey(charKey)
     return (charKey:gsub("%s+", ""))
 end
 
--- Returns array of sale records: {charKey, baseID, price, quantity, stackSize, time, realm}.
--- Reads every realm stored in TradeSkillMasterDB — reconciling across all our
--- characters at once means a single pass can resolve sales on any alt.
-function Tracker:GetTSMSalesRecords()
+-- Generic reader for any per-realm TSM CSV under
+-- TradeSkillMasterDB[r@<realm>@internalData@<csvName>]. Returns an array of
+-- normalized records of the shape:
+--   { charKey, baseID, price, quantity, stackSize, time, realm }
+--
+-- - `csvName`        — TSM key suffix ("csvSales" | "csvExpired" | "csvCancelled").
+-- - `requireSource`  — optional string; when set, rows are kept only if the CSV
+--                      has a `source` column with that value (sales records
+--                      include both Auction and Vendor; we want Auction only).
+--                      Expired/cancelled CSVs don't have a source column, so
+--                      pass nil to skip the filter.
+--
+-- Missing optional columns (price, source) are tolerated — the parser keys
+-- only on whatever's present in the header, so future TSM schema additions
+-- won't break us.
+local function ReadTSMCSV(csvName, requireSource)
     if type(TradeSkillMasterDB) ~= "table" then return {} end
 
     local records = {}
+    local pattern = "^r@(.-)@internalData@" .. csvName .. "$"
     for key, value in pairs(TradeSkillMasterDB) do
-        local realm = key:match("^r@(.-)@internalData@csvSales$")
+        local realm = key:match(pattern)
         if realm and type(value) == "string" and value ~= "" then
             local headerEnd = value:find("\n", 1, true)
             if headerEnd then
@@ -95,11 +108,11 @@ function Tracker:GetTSMSalesRecords()
                 local colItem   = cols.itemString
                 local colStack  = cols.stackSize
                 local colQty    = cols.quantity
-                local colPrice  = cols.price
+                local colPrice  = cols.price          -- absent on expire/cancel
                 local colPlayer = cols.player
                 local colTime   = cols.time
-                local colSource = cols.source
-                if colItem and colPrice and colPlayer and colTime and colSource then
+                local colSource = cols.source         -- absent on expire/cancel
+                if colItem and colPlayer and colTime then
                     local pos = headerEnd + 1
                     local len = #value
                     while pos <= len do
@@ -107,14 +120,16 @@ function Tracker:GetTSMSalesRecords()
                         if nlPos > pos then
                             local row = value:sub(pos, nlPos - 1)
                             local fields = SplitCSVRow(row)
-                            if fields[colSource] == "Auction" then
+                            local sourceOk = (not requireSource)
+                                or (colSource and fields[colSource] == requireSource)
+                            if sourceOk then
                                 local baseID = TSMBaseID(fields[colItem])
-                                local price = tonumber(fields[colPrice])
+                                local price = colPrice and tonumber(fields[colPrice]) or 0
                                 local quantity = tonumber(fields[colQty] or "1") or 1
                                 local stackSize = tonumber(fields[colStack] or "1") or 1
                                 local timestamp = tonumber(fields[colTime])
                                 local player = fields[colPlayer]
-                                if baseID and price and timestamp and player and player ~= "" then
+                                if baseID and timestamp and player and player ~= "" then
                                     records[#records + 1] = {
                                         charKey   = CanonicalCharKey(player .. "-" .. realm),
                                         baseID    = baseID,
@@ -134,6 +149,23 @@ function Tracker:GetTSMSalesRecords()
         end
     end
     return records
+end
+
+-- Returns array of sale records (Auction only — Vendor sales filtered out).
+function Tracker:GetTSMSalesRecords()
+    return ReadTSMCSV("csvSales", "Auction")
+end
+
+-- Returns array of expiration records. Each row corresponds to an auction
+-- whose timer ran out and the item was returned to the seller.
+function Tracker:GetTSMExpireRecords()
+    return ReadTSMCSV("csvExpired", nil)
+end
+
+-- Returns array of cancellation records. Each row corresponds to an auction
+-- the player (or an addon like TSM Cancelling) cancelled before it sold.
+function Tracker:GetTSMCancelRecords()
+    return ReadTSMCSV("csvCancelled", nil)
 end
 
 --------------------------
@@ -163,6 +195,60 @@ end
 local MATCH_WINDOW_PRE  = 60 * 60
 local MATCH_WINDOW_POST = 48 * 60 * 60 + 60 * 60
 
+-- Build a charKey -> baseID -> [records] index. Used three times below
+-- (sales, expires, cancels) so worth a helper.
+local function IndexByCharAndBase(records)
+    local index = {}
+    for _, rec in ipairs(records) do
+        index[rec.charKey] = index[rec.charKey] or {}
+        index[rec.charKey][rec.baseID] = index[rec.charKey][rec.baseID] or {}
+        local list = index[rec.charKey][rec.baseID]
+        list[#list + 1] = rec
+    end
+    return index
+end
+
+-- Find a TSM record matching the given log entry within the auction window.
+-- Marks the record as consumed via usedRec so two log entries can't claim
+-- the same TSM record. Returns the matched record or nil.
+local function FindTSMMatch(entry, index, usedRec)
+    local baseID = FQBaseID(entry.itemKey)
+    local canonKey = entry.charKey and CanonicalCharKey(entry.charKey) or nil
+    local byChar = canonKey and index[canonKey] or nil
+    local candidates = baseID and byChar and byChar[baseID] or nil
+    if not candidates then return nil end
+
+    local postedAt = entry.postedAt or 0
+    local earliest = postedAt - MATCH_WINDOW_PRE
+    local latest   = postedAt + MATCH_WINDOW_POST
+    for _, rec in ipairs(candidates) do
+        if not usedRec[rec]
+            and rec.time >= earliest
+            and rec.time <= latest then
+            usedRec[rec] = true
+            return rec
+        end
+    end
+    return nil
+end
+
+-- Mirror the postHistory tracking that ScanMailForSales does for returned-item
+-- mail, so accounting reflects this attempt's posting fee even when TSM is
+-- the only authoritative source. Idempotent only via the _tsmReconciled flag
+-- — callers must guard against double-invocation.
+local function RecordFailedAttempt(entry, endTime, endKind)
+    entry.postAttempts = (entry.postAttempts or 0) + 1
+    entry.postHistory = entry.postHistory or {}
+    table.insert(entry.postHistory, {
+        postedAt    = entry.postedAt,
+        expiredAt   = endTime,
+        postedPrice = entry.postedPrice,
+        fee         = entry.ahFee or 0,
+        endReason   = endKind,
+    })
+    entry.totalFeesSpent = (entry.totalFeesSpent or 0) + (entry.ahFee or 0)
+end
+
 -- Public API. verbose=true prints summary to chat; otherwise silent unless
 -- there's a non-zero upgrade.
 function Tracker:ReconcileWithTSM(verbose)
@@ -174,71 +260,101 @@ function Tracker:ReconcileWithTSM(verbose)
         return 0, 0
     end
 
-    local records = self:GetTSMSalesRecords()
-    if #records == 0 then
+    local salesRecords  = self:GetTSMSalesRecords()
+    local expireRecords = self:GetTSMExpireRecords()
+    local cancelRecords = self:GetTSMCancelRecords()
+
+    if #salesRecords == 0 and #expireRecords == 0 and #cancelRecords == 0 then
         if verbose then
-            ns:Print(ns.COLORS.YELLOW .. "No TSM sales records found.|r")
+            ns:Print(ns.COLORS.YELLOW .. "No TSM accounting records found.|r")
         end
         return 0, 0
     end
 
-    -- Index: charKey -> baseID -> array of records, sorted by time ascending
-    local index = {}
-    for _, rec in ipairs(records) do
-        index[rec.charKey] = index[rec.charKey] or {}
-        index[rec.charKey][rec.baseID] = index[rec.charKey][rec.baseID] or {}
-        local list = index[rec.charKey][rec.baseID]
-        list[#list + 1] = rec
-    end
+    local salesIndex  = IndexByCharAndBase(salesRecords)
+    local expireIndex = IndexByCharAndBase(expireRecords)
+    local cancelIndex = IndexByCharAndBase(cancelRecords)
 
-    -- Track which TSM records we've already consumed so two log entries can't
-    -- both claim the same sale.
+    -- Each TSM record can only be claimed once. Sales, expires, and cancels
+    -- are physically distinct rows so we technically only need three sets,
+    -- but a single shared set keeps the bookkeeping uniform.
     local usedRec = {}
-    local upgraded, scanned, finalized = 0, 0, 0
+    local upgraded, expiredMatched, cancelledMatched, scanned, finalized = 0, 0, 0, 0, 0
     local now = time()
 
     for _, entry in ipairs(ns.db.log) do
         if IsEligible(entry) then
             scanned = scanned + 1
             local matched = false
-            local baseID = FQBaseID(entry.itemKey)
-            local canonKey = entry.charKey and CanonicalCharKey(entry.charKey) or nil
-            local byChar = canonKey and index[canonKey] or nil
-            local candidates = baseID and byChar and byChar[baseID] or nil
-            if candidates then
-                local postedAt = entry.postedAt or 0
-                local earliest = postedAt - MATCH_WINDOW_PRE
-                local latest   = postedAt + MATCH_WINDOW_POST
-                for _, rec in ipairs(candidates) do
-                    if not usedRec[rec]
-                        and rec.time >= earliest
-                        and rec.time <= latest then
-                        entry.auctionStatus  = "sold"
-                        entry.saleOutcome    = "sold"
-                        entry.soldAt         = rec.time
-                        entry.soldPrice      = rec.price * rec.quantity
-                        entry.collectedAt    = entry.collectedAt or rec.time
-                        entry._tsmMatchedAt  = now
-                        usedRec[rec] = true
-                        upgraded = upgraded + 1
-                        matched = true
-                        break
-                    end
+
+            -- Priority 1: sale match. If TSM saw this auction sell, that's
+            -- the strongest signal — overrides any prior expired/cancelled
+            -- guess from mail-side reconciliation.
+            local saleRec = FindTSMMatch(entry, salesIndex, usedRec)
+            if saleRec then
+                entry.auctionStatus  = "sold"
+                entry.saleOutcome    = "sold"
+                entry.endReason      = "sold"
+                entry.soldAt         = saleRec.time
+                entry.soldPrice      = saleRec.price * saleRec.quantity
+                entry.collectedAt    = entry.collectedAt or saleRec.time
+                entry._tsmMatchedAt  = now
+                upgraded = upgraded + 1
+                matched = true
+            end
+
+            -- Priority 2: expire match. Only run for entries that aren't
+            -- already finalized (collected) — those have whatever accounting
+            -- the mail-side path produced and we don't want to double-count
+            -- postHistory or fees.
+            if not matched and entry.auctionStatus ~= "collected" then
+                local expireRec = FindTSMMatch(entry, expireIndex, usedRec)
+                if expireRec then
+                    entry.auctionStatus       = "collected"
+                    entry.saleOutcome         = "expired"
+                    entry.endReason           = "expired"
+                    entry.expiresAt           = entry.expiresAt or expireRec.time
+                    entry.collectedAt         = entry.collectedAt or now
+                    entry._tsmExpireMatchedAt = now
+                    RecordFailedAttempt(entry, expireRec.time, "expired")
+                    expiredMatched = expiredMatched + 1
+                    matched = true
+                end
+            end
+
+            -- Priority 3: cancel match. Same guard as expires. Cancellations
+            -- get saleOutcome="expired" for backward-compat with code that
+            -- treats anything non-sold as failed; the precise cause lives in
+            -- endReason.
+            if not matched and entry.auctionStatus ~= "collected" then
+                local cancelRec = FindTSMMatch(entry, cancelIndex, usedRec)
+                if cancelRec then
+                    entry.auctionStatus       = "collected"
+                    entry.saleOutcome         = "expired"
+                    entry.endReason           = "cancelled"
+                    entry.cancelledAt         = cancelRec.time
+                    entry.collectedAt         = entry.collectedAt or now
+                    entry._tsmCancelMatchedAt = now
+                    RecordFailedAttempt(entry, cancelRec.time, "cancelled")
+                    cancelledMatched = cancelledMatched + 1
+                    matched = true
                 end
             end
 
             if not matched then
-                -- No TSM match. If the auction window has definitely closed
-                -- (posted > 49h ago) and the entry is in the "collected,
-                -- outcome unknown" limbo set by CheckOwnedAuctions phase 2,
-                -- finalize it as expired. Without this step, entries sit
-                -- forever counted as neither sold nor failed.
+                -- No TSM match of any kind. If the auction window has
+                -- definitely closed (posted > 49h ago) and the entry is in
+                -- the "collected, outcome unknown" limbo set by
+                -- CheckOwnedAuctions phase 2, finalize it as expired.
+                -- Without this step, entries sit forever counted as neither
+                -- sold nor failed.
                 local postedAt = entry.postedAt or 0
                 local ended = (postedAt > 0) and (postedAt + MATCH_WINDOW_POST < now)
                 if ended
                     and entry.auctionStatus == "collected"
                     and not entry.saleOutcome then
                     entry.saleOutcome = "expired"
+                    entry.endReason   = entry.endReason or "expired"
                     finalized = finalized + 1
                 end
             end
@@ -249,18 +365,24 @@ function Tracker:ReconcileWithTSM(verbose)
         end
     end
 
-    if upgraded > 0 or finalized > 0 then
+    local touched = upgraded + expiredMatched + cancelledMatched + finalized
+    if touched > 0 then
         if ns.SalesIndex then ns.SalesIndex:Invalidate() end
         if ns.UI and ns.UI.Refresh then ns.UI:Refresh() end
         if ns.UI and ns.UI.RefreshMini then ns.UI:RefreshMini() end
     end
 
-    if verbose or upgraded > 0 then
-        ns:Print(ns.COLORS.GREEN .. upgraded .. "|r of " .. scanned ..
-            " eligible entries upgraded to sold via TSM" ..
-            (finalized > 0 and (" (+ " .. finalized .. " finalized as expired).") or "."))
+    if verbose or touched > 0 then
+        local parts = {}
+        if upgraded > 0 then table.insert(parts, ns.COLORS.GREEN .. upgraded .. "|r upgraded to sold") end
+        if expiredMatched > 0 then table.insert(parts, ns.COLORS.YELLOW .. expiredMatched .. "|r matched as expired") end
+        if cancelledMatched > 0 then table.insert(parts, ns.COLORS.YELLOW .. cancelledMatched .. "|r matched as cancelled") end
+        if finalized > 0 then table.insert(parts, finalized .. " finalized as expired") end
+        if #parts == 0 then table.insert(parts, "no eligible entries matched") end
+        ns:Print("TSM reconcile: " .. table.concat(parts, ", ") ..
+            " (scanned " .. scanned .. ").")
     end
-    return upgraded, scanned
+    return upgraded + expiredMatched + cancelledMatched, scanned
 end
 
 -- Clear the _tsmReconciled flag on all entries so the next reconcile pass

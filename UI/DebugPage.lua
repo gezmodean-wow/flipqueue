@@ -223,6 +223,8 @@ local function BuildDebugData()
             _sortChain = chainID,
             _tooltipText = task.name or "?",
             _tooltipExtra = table.concat(tooltipLines, "\n"),
+            _tooltipItemString = task.itemKey and ns.ItemKeyToItemString
+                and ns:ItemKeyToItemString(task.itemKey) or nil,
             _tooltipItemID = task.itemID and tonumber(task.itemID) or nil,
         })
     end

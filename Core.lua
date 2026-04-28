@@ -132,9 +132,16 @@ function ns:ItemKeyToItemString(itemKey)
     local numID = tonumber(idStr)
     if not numID or numID <= 0 then return nil end
 
-    -- Build item:id::::::::::::[numBonuses:b1:b2:...][::modType:modValue]
-    -- WoW item string positions: item:id:enchant:gem1:gem2:gem3:gem4:suffix:uniqueID:level:specID:modType:numBonuses:bonus1:bonus2:...
-    local parts = {"item", idStr, "", "", "", "", "", "", "", "", "", ""}
+    -- WoW item string positions:
+    --   item:itemID:enchantID:gemID1:gemID2:gemID3:gemID4:suffixID:uniqueID:
+    --     linkLevel:specID:modifiersMask:itemContext:numBonusIDs:b1:b2:...:
+    --     numModifiers:modType1:modValue1:...
+    -- That's 11 empty fields between itemID and numBonusIDs (positions 3-13).
+    -- Older versions of this builder used only 10 empties, which made the
+    -- bonus count land in the itemContext slot and the bonus IDs themselves
+    -- shift left — SetHyperlink would silently render the base item (or
+    -- nothing at all), masking ilvl variants in tooltips.
+    local parts = {"item", idStr, "", "", "", "", "", "", "", "", "", "", ""}
     -- Bonus IDs
     if bonusStr and bonusStr ~= "" then
         local bonuses = {strsplit(":", bonusStr)}
@@ -158,6 +165,61 @@ function ns:ItemKeyToItemString(itemKey)
         end
     end
     return table.concat(parts, ":")
+end
+
+-- Set up GameTooltip for an item, preferring the bonus-ID-decorated
+-- itemString when itemKey is available so the tooltip — and any TSM /
+-- Auctionator price lines hooking it — resolves to the actual ilvl
+-- variant. Falls back to SetItemByID when only a plain itemID is known
+-- (or itemKey is a pet, which uses the battlepet tooltip API instead).
+-- Returns true if any tooltip was set.
+--
+-- Always calls Show() on success: SetItemByID auto-shows in modern WoW
+-- but SetHyperlink does NOT, so without an explicit Show the tooltip
+-- silently stays hidden when the itemString path is taken. Calling Show
+-- on a populated GameTooltip is idempotent so callers that also call it
+-- afterward are fine.
+function ns:SetTooltipItem(tooltip, itemKey, itemID)
+    if itemKey and itemKey ~= "" and not itemKey:find("^pet:") then
+        local itemString = ns:ItemKeyToItemString(itemKey)
+        if itemString then
+            tooltip:SetHyperlink(itemString)
+            tooltip:Show()
+            return true
+        end
+    end
+    local n = tonumber(itemID)
+    if n and n > 0 then
+        tooltip:SetItemByID(n)
+        tooltip:Show()
+        return true
+    end
+    return false
+end
+
+-- Resolve an item's actual ilvl, preferring the bonus-ID-decorated variant
+-- value over the base item's ilvl. Returns 0 when nothing resolves yet
+-- (item not loaded, or no info available).
+--
+-- The naive fallback of "GetItemInfo(itemID)" returns BASE ilvl, which for
+-- modern gear is wildly wrong — e.g. an ilvl 253 ring with bonus IDs has
+-- a base ilvl of 44 because that's the unsocketed/unupgraded baseline.
+-- Calling GetItemInfo on the FULL itemString (including bonus IDs)
+-- returns the variant's actual ilvl.
+function ns:GetItemLevelFromKey(itemKey, fallbackItemID)
+    if itemKey and itemKey ~= "" and not itemKey:find("^pet:") then
+        local itemString = ns:ItemKeyToItemString(itemKey)
+        if itemString then
+            local ok, _, _, _, ilvl = pcall(C_Item.GetItemInfo, itemString)
+            if ok and ilvl and ilvl > 0 then return ilvl end
+        end
+    end
+    local n = tonumber(fallbackItemID)
+    if n and n > 0 then
+        local ok, _, _, _, ilvl = pcall(C_Item.GetItemInfo, n)
+        if ok and ilvl and ilvl > 0 then return ilvl end
+    end
+    return 0
 end
 
 -- Normalize key for imports map: "itemKey:iLvl|realm" or "name|realm"

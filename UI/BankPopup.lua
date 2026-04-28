@@ -110,6 +110,32 @@ local function GetPopup()
     f.progressText = progressBar:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
     f.progressText:SetPoint("CENTER", progressBar, "CENTER")
 
+    -- Heartbeat sub-bar overlaid on the bottom edge of the main bar. Now
+    -- driven by BankQueue.onWait (#127): each timed wait inside ProcessSync
+    -- (inter-move, verify, retry, panel-settle) fires the callback with its
+    -- duration and a human-readable reason. The popup renders the heartbeat
+    -- as a fill 0 → 100% over that duration and appends the reason to the
+    -- progress text, so the player sees both how long the pause will be
+    -- and what we're waiting for. Hidden when no wait is active.
+    local heartbeat = CreateFrame("StatusBar", nil, progressBar)
+    heartbeat:SetHeight(2)
+    heartbeat:SetPoint("BOTTOMLEFT", progressBar, "BOTTOMLEFT", 0, 0)
+    heartbeat:SetPoint("BOTTOMRIGHT", progressBar, "BOTTOMRIGHT", 0, 0)
+    heartbeat:SetStatusBarTexture("Interface\\TargetingFrame\\UI-StatusBar")
+    heartbeat:SetStatusBarColor(1, 1, 1, 0.55)
+    heartbeat:SetMinMaxValues(0, 1)
+    heartbeat:SetValue(0)
+    heartbeat:Hide()
+    heartbeat._duration = nil
+    heartbeat._elapsed = 0
+    heartbeat:SetScript("OnUpdate", function(self, delta)
+        if not self._duration then return end
+        self._elapsed = self._elapsed + delta
+        local pct = math.min(1, self._elapsed / self._duration)
+        self:SetValue(pct)
+    end)
+    f.heartbeat = heartbeat
+
     -- Content area: a ScrollFrame holding all rows. The visible window is
     -- clamped to MAX_VISIBLE_ROWS by ResizePopup; anything beyond scrolls
     -- via the mouse wheel.
@@ -304,7 +330,14 @@ local function UpdateProgressBar(f)
 
     local phase = execState.phase or ""
     if phase ~= "" then phase = phase .. "  " end
-    f.progressText:SetText(phase .. done .. " / " .. total)
+    local text = phase .. done .. " / " .. total
+    -- Append the current wait reason if BeginHeartbeat has set one. Lets
+    -- the player tell e.g. "we're verifying moves" from "we're between
+    -- container ops" when otherwise the bar would just say "Pulling 97/97".
+    if execState._waitLabel and execState._waitLabel ~= "" then
+        text = text .. "  |cffaaaaaa(" .. execState._waitLabel .. ")|r"
+    end
+    f.progressText:SetText(text)
 
     -- Color based on current phase
     if execState.phase == "Pulling" then
@@ -324,6 +357,15 @@ local function UpdateProgressBar(f)
     end
 
     f.progressBar:Show()
+
+    -- Hide the heartbeat outright on completion regardless of any pending
+    -- wait state — once the operation settles, the countdown is irrelevant.
+    if f.heartbeat and execState.phase == "Complete" then
+        f.heartbeat._duration = nil
+        f.heartbeat:Hide()
+        execState._waitLabel = nil
+    end
+
     f.UpdateContentAnchor()
 
     -- Mini rollout (only if popup not visible)
@@ -394,7 +436,17 @@ local function ShowCompletionSummary(f)
     end
     if execState.failed > 0 then
         idx = AddItemRow(f, idx, "Interface\\RaidFrame\\ReadyCheck-NotReady",
-            execState.failed .. " operation(s) failed", "check chat for details")
+            execState.failed .. " operation(s) failed",
+            "reopen the bank to retry")
+        -- Render each failed item by name so the player can see exactly
+        -- which moves didn't go through (#127). Without this they only
+        -- get the count and have to read chat to learn what's missing.
+        if execState._failedNames then
+            for _, name in ipairs(execState._failedNames) do
+                idx = AddItemRow(f, idx, "Interface\\RaidFrame\\ReadyCheck-NotReady",
+                    ns.COLORS.RED .. name .. "|r", "failed")
+            end
+        end
     end
 
     ResizePopup(f, idx - 1, false, true)
@@ -419,11 +471,16 @@ function UI:BeginBankExecution(totalOps)
         _pulledNames = {},
         _depositedCount = 0,
         _goldOps = {},
+        _failedNames = {},
     }
 end
 
--- Record progress during execution (called by Tracker after each sub-operation)
-function UI:BankOpProgress(successCount, failCount, phase, details)
+-- Record progress during execution (called by Tracker after each sub-operation).
+-- successCount may be negative — ProcessSync emits a compensation tick at the
+-- end for ops that issued optimistically but failed verification (#127).
+-- failedDetails is an optional list of failed item names; rendered as red
+-- rows in the completion summary.
+function UI:BankOpProgress(successCount, failCount, phase, details, failedDetails)
     if not execState then
         if ns.PrintDebug then
             ns:PrintDebug(string.format(
@@ -455,7 +512,46 @@ function UI:BankOpProgress(successCount, failCount, phase, details)
         end
     end
 
+    if failedDetails then
+        for _, name in ipairs(failedDetails) do
+            table.insert(execState._failedNames, name)
+        end
+    end
+
     if popup then UpdateProgressBar(popup) end
+end
+
+-- Begin a definite-duration heartbeat. Called from BankQueue.onWait
+-- subscribers each time ProcessSync enters a known timed wait (#127).
+-- Resets the fill so consecutive short waits produce visible pulses.
+function UI:BeginHeartbeat(duration, label)
+    if not popup or not popup.heartbeat then return end
+    if not duration or duration <= 0 then return end
+    local hb = popup.heartbeat
+    hb._duration = duration
+    hb._elapsed = 0
+    hb:SetValue(0)
+    -- Don't show the heartbeat on the completion summary (phase=Complete
+    -- means execution has settled and any further wait events are stragglers).
+    if execState and execState.phase ~= "Complete" then
+        hb:Show()
+        execState._waitLabel = label or ""
+        UpdateProgressBar(popup)
+    end
+end
+
+-- Stop the heartbeat and clear its label. Called when BankPopupComplete
+-- fires or the popup is hidden, so the bar doesn't keep ticking after the
+-- operation settles.
+function UI:EndHeartbeat()
+    if popup and popup.heartbeat then
+        popup.heartbeat._duration = nil
+        popup.heartbeat:Hide()
+    end
+    if execState then
+        execState._waitLabel = nil
+        if popup then UpdateProgressBar(popup) end
+    end
 end
 
 -- Show final completion summary
@@ -467,6 +563,11 @@ function UI:BankPopupComplete()
             "[bank-popup] BankPopupComplete popupShown=%s execState=%s",
             tostring(popupShown), tostring(hasState)))
     end
+    -- Stop the wait countdown explicitly so the heartbeat doesn't keep
+    -- ticking through any straggling wait events that fire after the final
+    -- callback (verify-then-callback timing leaves a small window).
+    UI:EndHeartbeat()
+    ns.BankQueue.onWait = nil
     if popup and popup:IsShown() and execState then
         ShowCompletionSummary(popup)
     else
@@ -600,7 +701,9 @@ function UI:ShowBankPopup(ops, onExecute)
 end
 
 function UI:HideBankPopup()
+    UI:EndHeartbeat()
     ns.BankQueue.onProgress = nil
+    ns.BankQueue.onWait = nil
     execState = nil
     if popup then popup:Hide() end
     if UI.HideMiniProgress then UI:HideMiniProgress() end

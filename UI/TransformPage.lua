@@ -1121,6 +1121,8 @@ local function BuildPreviewData(items)
             _sortPrice = sortPrice,
             detail     = detailStr,
             _icon      = item.icon,
+            _tooltipItemString = item.itemKey and ns.ItemKeyToItemString
+                and ns:ItemKeyToItemString(item.itemKey) or nil,
             _tooltipItemID = tonumber(tostring(item.itemID)) or nil,
             _tooltipText = item.name,
         })

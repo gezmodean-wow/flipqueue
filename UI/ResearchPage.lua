@@ -1036,13 +1036,24 @@ local function BuildItemListData(index)
                     petQuality = tonumber(keyStr:match("q(%d+)")) or 3
                 end
 
+                -- Pass the full item string (item:id::::::::::numBonus:b1:b2:...
+                -- + modifiers) so the tooltip — and any TSM/Auctionator price
+                -- lines that hook it — resolves to the correct ilvl variant.
+                -- Without this, SetItemByID(item.itemID) would render the base
+                -- item, making prices look identical across realms because
+                -- TSM keys its tooltip prices off the full itemString.
+                local tooltipItemString = (not petSpecies)
+                    and item.itemKey and ns.ItemKeyToItemString
+                    and ns:ItemKeyToItemString(item.itemKey)
+                    or nil
                 table.insert(data, {
                     name = displayName,
                     ilvl = (item.ilvl and item.ilvl > 0) and item.ilvl or "",
                     qty = item.totalQty > 0 and item.totalQty or "",
                     sources = table.concat(badges, " "),
                     _icon = item.icon,
-                    _tooltipItemID = not petSpecies and item.itemID or nil,
+                    _tooltipItemString = tooltipItemString,
+                    _tooltipItemID = (not petSpecies and not tooltipItemString) and item.itemID or nil,
                     _tooltipPetSpecies = petSpecies,
                     _tooltipPetQuality = petQuality,
                     _itemKey = item.itemKey,

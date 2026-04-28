@@ -115,16 +115,13 @@ local function BuildFullInventoryData()
                         displayLocation = statusKey == "Posted" and "Auction House" or "Mailbox"
                     end
 
-                    -- Prefer scanner-captured ilvl (accurate). Fallback to GetItemInfo
-                    -- base ilvl ONLY for items without bonus IDs (where base = actual ilvl).
+                    -- Prefer scanner-captured ilvl (accurate). Fallback to a
+                    -- variant-aware GetItemInfo on the full itemString so an
+                    -- ilvl 253 ring with bonus IDs renders correctly instead
+                    -- of falling back to base ilvl 44.
                     local itemIlvl = itemData.ilvl
-                    if (not itemIlvl or itemIlvl == 0) and invResolvedID then
-                        local bp = key:match("^[^;]+;([^;]*)") or ""
-                        local mp = key:match(";([^;]*)$") or ""
-                        if bp == "" and mp == "" then
-                            local okI, _, _, _, bi = pcall(C_Item.GetItemInfo, invResolvedID)
-                            if okI and bi and bi > 0 then itemIlvl = bi end
-                        end
+                    if (not itemIlvl or itemIlvl == 0) and ns.GetItemLevelFromKey then
+                        itemIlvl = ns:GetItemLevelFromKey(key, invResolvedID)
                     end
 
                     table.insert(data, {
@@ -136,6 +133,7 @@ local function BuildFullInventoryData()
                         status      = statusStr,
                         targetRealm = targetRealm or "",
                         _icon       = itemData.icon,
+                        _tooltipItemString = ns.ItemKeyToItemString and ns:ItemKeyToItemString(key) or nil,
                         _tooltipItemID = invResolvedID,
                         _itemKey    = key,
                         _itemID     = itemData.itemID,
@@ -179,13 +177,8 @@ local function BuildFullInventoryData()
                 end
 
                 local wbIlvl = itemData.ilvl
-                if (not wbIlvl or wbIlvl == 0) and wbResolvedID then
-                    local bp = key:match("^[^;]+;([^;]*)") or ""
-                    local mp = key:match(";([^;]*)$") or ""
-                    if bp == "" and mp == "" then
-                        local okI, _, _, _, bi = pcall(C_Item.GetItemInfo, wbResolvedID)
-                        if okI and bi and bi > 0 then wbIlvl = bi end
-                    end
+                if (not wbIlvl or wbIlvl == 0) and ns.GetItemLevelFromKey then
+                    wbIlvl = ns:GetItemLevelFromKey(key, wbResolvedID)
                 end
 
                 table.insert(data, {
@@ -197,6 +190,7 @@ local function BuildFullInventoryData()
                     status      = statusStr,
                     targetRealm = targetRealm or "",
                     _icon       = itemData.icon,
+                    _tooltipItemString = ns.ItemKeyToItemString and ns:ItemKeyToItemString(key) or nil,
                     _tooltipItemID = wbResolvedID,
                     _itemKey    = key,
                     _itemID     = itemData.itemID,
@@ -247,6 +241,7 @@ local function BuildFullInventoryData()
                         status      = statusStr,
                         targetRealm = targetRealm or "",
                         _icon       = itemData.icon,
+                        _tooltipItemString = ns.ItemKeyToItemString and ns:ItemKeyToItemString(key) or nil,
                         _tooltipItemID = gbResolvedID,
                         _itemKey    = key,
                         _itemID     = itemData.itemID,

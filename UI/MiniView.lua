@@ -431,15 +431,21 @@ local function GetOrCreateMiniRow(index)
     row.text:SetWordWrap(false)
 
     row.tooltipItemID = nil
+    row.tooltipItemKey = nil
     row.tooltipItemName = nil
 
     row:EnableMouse(true)
     row:SetScript("OnEnter", function(self)
         if self.tooltipItemID or self.tooltipItemName then
             GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
-            local numID = tonumber(self.tooltipItemID)
-            if numID and numID > 0 then
-                GameTooltip:SetItemByID(numID)
+            -- Prefer the bonus-ID-decorated itemString so the tooltip
+            -- resolves to the variant (correct ilvl, sockets, recipe rank)
+            -- and TSM/Auctionator price hooks key off the right item.
+            if ns:SetTooltipItem(GameTooltip, self.tooltipItemKey, self.tooltipItemID) then
+                if self.tooltipExtra then
+                    GameTooltip:AddLine(self.tooltipExtra, 0.7, 0.7, 0.7, true)
+                end
+                GameTooltip:Show()
             elseif self.tooltipItemName and self.tooltipItemName ~= "" then
                 GameTooltip:SetText(self.tooltipItemName, 1, 1, 1)
                 if self.tooltipExtra then
@@ -481,7 +487,7 @@ function UI:RefreshMini()
         row:SetScript("OnMouseDown", nil)
         row:SetScript("OnEnter", nil)
         row:SetScript("OnLeave", nil)
-        row.tooltipItemID = nil
+        row.tooltipItemID = nil; row.tooltipItemKey = nil
         row.tooltipItemName = nil
         row.tooltipExtra = nil
         if row._taskActionBtns then
@@ -617,6 +623,7 @@ function UI:RefreshMini()
             local row = GetOrCreateMiniRow(rowIndex)
 
             row.icon:SetTexture(task.icon)
+            row.tooltipItemKey = task.itemKey
             row.tooltipItemID = task.itemID
             row.tooltipItemName = task.name
             if task._isBuy then
@@ -676,9 +683,11 @@ function UI:RefreshMini()
                     UI.ShowTaskActionBtns(self)
                     if self.tooltipItemID or self.tooltipItemName then
                         GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
-                        local numID = tonumber(self.tooltipItemID)
-                        if numID and numID > 0 then
-                            GameTooltip:SetItemByID(numID)
+                        if ns:SetTooltipItem(GameTooltip, self.tooltipItemKey, self.tooltipItemID) then
+                            if self.tooltipExtra then
+                                GameTooltip:AddLine(self.tooltipExtra, 0.7, 0.7, 0.7, true)
+                            end
+                            GameTooltip:Show()
                         elseif self.tooltipItemName and self.tooltipItemName ~= "" then
                             GameTooltip:SetText(self.tooltipItemName, 1, 1, 1)
                             if self.tooltipExtra then
@@ -732,7 +741,7 @@ function UI:RefreshMini()
         local auctRow = GetOrCreateMiniRow(rowIndex)
         auctRow.icon:SetTexture("Interface\\Icons\\INV_Misc_Spyglass_03")
         auctRow.text:SetText(ns.COLORS.YELLOW .. "Create Auctionator Buy List" .. ns.COLORS.RESET)
-        auctRow.tooltipItemID = nil
+        auctRow.tooltipItemID = nil; auctRow.tooltipItemKey = nil
         auctRow.tooltipItemName = "Create Shopping List"
         auctRow.tooltipExtra = "Create Auctionator shopping lists grouped by realm (" .. buyCount .. " buy items)"
         auctRow:SetScript("OnMouseDown", function()
@@ -755,7 +764,7 @@ function UI:RefreshMini()
             local row = GetOrCreateMiniRow(rowIndex)
             row.icon:SetTexture(task.icon)
             row.text:SetText(task.text)
-            row.tooltipItemID = nil
+            row.tooltipItemID = nil; row.tooltipItemKey = nil
             row.tooltipItemName = task._dismissible and "Right-click to dismiss" or nil
             row.tooltipExtra = nil
             if task._dismissible and task._onDismiss then
@@ -787,7 +796,7 @@ function UI:RefreshMini()
         local sepRow = GetOrCreateMiniRow(rowIndex)
         sepRow.icon:SetTexture(nil)
         sepRow.text:SetText(ns.COLORS.GRAY .. "--- Next Steps ---" .. ns.COLORS.RESET)
-        sepRow.tooltipItemID = nil
+        sepRow.tooltipItemID = nil; sepRow.tooltipItemKey = nil
         sepRow.tooltipItemName = nil
         sepRow.tooltipExtra = nil
         sepRow:SetScript("OnMouseDown", nil)
@@ -799,7 +808,7 @@ function UI:RefreshMini()
             local row = GetOrCreateMiniRow(rowIndex)
 
             row.icon:SetTexture(nil)
-            row.tooltipItemID = nil
+            row.tooltipItemID = nil; row.tooltipItemKey = nil
             row.tooltipItemName = step._tooltipText
             row.tooltipExtra = step._tooltipExtra
 
@@ -839,7 +848,7 @@ function UI:RefreshMini()
             moreRow.icon:SetTexture(nil)
             moreRow.text:SetText(ns.COLORS.GRAY .. "+" .. (#nextData - MAX_MINI_STEPS) ..
                 " more... (open /fq)" .. ns.COLORS.RESET)
-            moreRow.tooltipItemID = nil
+            moreRow.tooltipItemID = nil; moreRow.tooltipItemKey = nil
             moreRow.tooltipItemName = nil
             moreRow.tooltipExtra = nil
             moreRow:SetScript("OnMouseDown", nil)
@@ -851,7 +860,7 @@ function UI:RefreshMini()
         row.icon:SetTexture(nil)
         row.text:SetText(ns.COLORS.GREEN .. "All done!" .. ns.COLORS.RESET ..
             ns.COLORS.GRAY .. " Time to go shopping!" .. ns.COLORS.RESET)
-        row.tooltipItemID = nil
+        row.tooltipItemID = nil; row.tooltipItemKey = nil
         row.tooltipItemName = nil
         row.tooltipExtra = nil
         row:SetScript("OnMouseDown", nil)
@@ -862,7 +871,7 @@ function UI:RefreshMini()
         local genRow = GetOrCreateMiniRow(rowIndex)
         genRow.icon:SetTexture("Interface\\Icons\\INV_Scroll_03")
         genRow.text:SetText(ns.COLORS.YELLOW .. "Open To-Do Generator" .. ns.COLORS.RESET)
-        genRow.tooltipItemID = nil
+        genRow.tooltipItemID = nil; genRow.tooltipItemKey = nil
         genRow.tooltipItemName = "Open Generator"
         genRow.tooltipExtra = "Click to open the main window on the To-Do Generator page"
         genRow:SetScript("OnMouseDown", function()
@@ -907,7 +916,7 @@ function UI:RefreshMini()
             local hintRow = GetOrCreateMiniRow(visibleRows)
             hintRow.icon:SetTexture(nil)
             hintRow.text:SetText(ns.COLORS.GRAY .. "+" .. hiddenCount .. " more... (click + to expand)" .. ns.COLORS.RESET)
-            hintRow.tooltipItemID = nil
+            hintRow.tooltipItemID = nil; hintRow.tooltipItemKey = nil
             hintRow.tooltipItemName = nil
             hintRow.tooltipExtra = nil
             hintRow:SetScript("OnMouseDown", nil)
@@ -944,7 +953,7 @@ function UI:RefreshMini()
         if miniRows[MAX_MINI_ROWS] then
             miniRows[MAX_MINI_ROWS].icon:SetTexture(nil)
             miniRows[MAX_MINI_ROWS].text:SetText(ns.COLORS.GRAY .. "+" .. truncated .. " more..." .. ns.COLORS.RESET)
-            miniRows[MAX_MINI_ROWS].tooltipItemID = nil
+            miniRows[MAX_MINI_ROWS].tooltipItemID = nil; miniRows[MAX_MINI_ROWS].tooltipItemKey = nil
             miniRows[MAX_MINI_ROWS].tooltipItemName = nil
             miniRows[MAX_MINI_ROWS].tooltipExtra = nil
             miniRows[MAX_MINI_ROWS]:SetScript("OnMouseDown", nil)

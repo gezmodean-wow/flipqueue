@@ -48,6 +48,8 @@ local function BuildPostNowData()
                 realm    = qi.targetRealm or "",
                 location = table.concat(locParts, ", "),
                 _icon    = task.icon or lookupIcon,
+                _tooltipItemString = qi.itemKey and ns.ItemKeyToItemString
+                    and ns:ItemKeyToItemString(qi.itemKey) or nil,
                 _tooltipItemID = resolvedID,
                 _tooltipText   = qi.name ~= "" and qi.name or tostring(qi.itemID),
                 _tooltipExtra  = (qi.targetRealm or "") ~= "" and
@@ -185,6 +187,8 @@ local function BuildTodoData()
                 realm    = isBuyTask and (item.buyRealm or "") or (item.targetRealm or ""),
                 location = sourceStr,
                 _icon    = item.icon or lookupIcon,
+                _tooltipItemString = item.itemKey and ns.ItemKeyToItemString
+                    and ns:ItemKeyToItemString(item.itemKey) or nil,
                 _tooltipItemID = resolvedID or tonumber(item.itemID),
                 _tooltipText   = item.name or "?",
                 _tooltipExtra  = tooltipExtra,

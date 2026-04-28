@@ -525,6 +525,315 @@ SlashCmdList["FLIPQUEUE"] = function(msg)
             end
         end
 
+    elseif msg:match("^debug pricing%s+") then
+        -- /fq debug pricing <itemName or itemID>
+        -- Trace per-realm pricing for one item: shows the item's itemKey,
+        -- the TSM string we produce, and per-realm hit/miss for the
+        -- captured AuctionDB data. Used to diagnose "DealFinder shows the
+        -- same price for items on every realm" — if all realms miss, the
+        -- tsmStr we build doesn't match how TSM encoded the item in its
+        -- realm data (variant/base mismatch).
+        local rawQuery = msg:match("^debug pricing%s+(.+)$") or ""
+        if rawQuery == "" then
+            ns:Print("Usage: /fq debug pricing <itemName or itemID>  (or shift-click an item into chat)")
+            return
+        end
+
+        -- Accept a shift-clicked item link (full "item:ID:..." string with
+        -- "[Name]" suffix), a numeric ID, or a partial name. Extract the
+        -- most useful matcher from whichever form was pasted.
+        local linkID = rawQuery:match("[Hh]?item:(%d+)") or rawQuery:match("|Hitem:(%d+)")
+        local linkName = rawQuery:match("%[(.-)%]")
+        local query = (linkName or rawQuery):lower():gsub("^%s+", ""):gsub("%s+$", "")
+        local queryID = linkID or rawQuery:match("^(%d+)$")
+
+        local function entryMatches(name, itemID)
+            local nm = (name or ""):lower()
+            if queryID and tostring(itemID) == queryID then return true end
+            if nm == query or (query ~= "" and nm:find(query, 1, true)) then return true end
+            return false
+        end
+
+        -- Resolve query to an itemKey. Search the log first (most recent
+        -- posts), then character inventories, then warbank.
+        local found
+        if ns.db and ns.db.log then
+            for _, entry in ipairs(ns.db.log) do
+                local nm = (entry.name or ""):lower()
+                if nm == query or nm:find(query, 1, true) or tostring(entry.itemID) == query then
+                    found = { itemKey = entry.itemKey, name = entry.name, itemID = entry.itemID, source = "log" }
+                    break
+                end
+            end
+        end
+        if not found and ns.db and ns.db.characters then
+            for charKey, charData in pairs(ns.db.characters) do
+                if charData.inventory and charData.inventory.items then
+                    for key, item in pairs(charData.inventory.items) do
+                        local nm = (item.name or ""):lower()
+                        if nm == query or nm:find(query, 1, true) or tostring(item.itemID) == query then
+                            found = { itemKey = key, name = item.name, itemID = item.itemID, source = "inventory:" .. charKey }
+                            break
+                        end
+                    end
+                end
+                if found then break end
+            end
+        end
+        if not found and ns.db and ns.db.warbank and ns.db.warbank.items then
+            for key, item in pairs(ns.db.warbank.items) do
+                local nm = (item.name or ""):lower()
+                if nm == query or nm:find(query, 1, true) or tostring(item.itemID) == query then
+                    found = { itemKey = key, name = item.name, itemID = item.itemID, source = "warbank" }
+                    break
+                end
+            end
+        end
+
+        -- If the user pasted a full hyperlink, derive a variant itemKey from
+        -- it directly so we can test the bonus-ID-decorated form even when
+        -- our log entry stored the stripped base form.
+        local linkItemKey = nil
+        if rawQuery:find("item:") and ns.ParseItemLink and ns.MakeItemKey then
+            local linkItemID, bonusIDs, modifiers = ns:ParseItemLink(rawQuery)
+            if linkItemID then
+                linkItemKey = ns:MakeItemKey(linkItemID, bonusIDs, modifiers)
+            end
+        end
+
+        if not found and not linkItemKey then
+            ns:Print("No item matching '" .. rawQuery .. "' found in log, inventory, or warbank.")
+            return
+        end
+
+        print("=== /fq debug pricing ===")
+        if found then
+            print("name:    " .. tostring(found.name))
+            print("itemID:  " .. tostring(found.itemID))
+            print("itemKey (from " .. found.source .. "): " .. tostring(found.itemKey))
+        end
+        if linkItemKey and (not found or found.itemKey ~= linkItemKey) then
+            print("itemKey (parsed from link): " .. linkItemKey)
+        end
+
+        if not ns.TSMRealms or not ns.TSMRealms:IsLoaded() then
+            print("(TSMRealms not loaded)")
+            return
+        end
+
+        -- Test pricing for each candidate itemKey we have (base form from
+        -- log, variant form from link). Reports per-realm hit/miss for each
+        -- so we can see whether the variant lookup is what's missing.
+        local function TestKey(label, itemKey)
+            print("--- pricing for " .. label .. " (itemKey=" .. itemKey .. ") ---")
+            local tsmStr = ns.TSM and ns.TSM.ItemKeyToTSMString
+                and ns.TSM:ItemKeyToTSMString(itemKey)
+                or nil
+            print("tsmStr:        " .. tostring(tsmStr))
+            -- Show the level-form variant we'd use as a fallback against
+            -- TSM's per-realm AuctionDB. If different from tsmStr, that's
+            -- the key actually used for the match.
+            if tsmStr and ns.TSMRealms and ns.TSMRealms.ToLevelForm then
+                local levelStr = ns.TSMRealms:ToLevelForm(tsmStr)
+                if levelStr and levelStr ~= tsmStr then
+                    print("level form:    " .. levelStr)
+                elseif levelStr == tsmStr then
+                    print("level form:    (same as tsmStr)")
+                else
+                    print("level form:    (could not derive — item may not be loaded)")
+                end
+            end
+            if not tsmStr then
+                print("(no TSM string — lookup not possible)")
+                return
+            end
+            local pricing = ns.TSMRealms:GetAllRealmPricing(tsmStr) or {}
+            local hits, misses = 0, 0
+            local realms = ns.TSMRealms:GetRealmList() or {}
+            for _, realmName in ipairs(realms) do
+                local p = pricing[realmName]
+                if p then
+                    hits = hits + 1
+                    local mb = p.minBuyout and ns:FormatGold(p.minBuyout) or "?"
+                    local mvr = p.marketValueRecent and ns:FormatGold(p.marketValueRecent) or "?"
+                    print(string.format("  HIT  %-20s minBuyout=%s recent=%s n=%s",
+                        realmName, mb, mvr, tostring(p.numAuctions)))
+                else
+                    misses = misses + 1
+                end
+            end
+            print(string.format("  %d hit(s), %d miss(es) across %d realms", hits, misses, #realms))
+        end
+
+        -- De-dup: only test each unique itemKey once.
+        local tested = {}
+        if found and found.itemKey and not tested[found.itemKey] then
+            TestKey("log/inventory entry", found.itemKey)
+            tested[found.itemKey] = true
+        end
+        if linkItemKey and not tested[linkItemKey] then
+            TestKey("pasted link (variant)", linkItemKey)
+            tested[linkItemKey] = true
+        end
+
+        -- Show TSM region/single-realm fallback values DealFinder would use.
+        if ns.TSM and ns.TSM.GetPrice then
+            print("TSM region fallbacks:")
+            print("  DBMinBuyout (current realm only): " ..
+                tostring(ns.TSM:GetPrice(found.itemKey, "DBMinBuyout") or "nil"))
+            print("  DBRegionMarketAvg: " ..
+                tostring(ns.TSM:GetPrice(found.itemKey, "DBRegionMarketAvg") or "nil"))
+            print("  DBRegionSaleAvg: " ..
+                tostring(ns.TSM:GetPrice(found.itemKey, "DBRegionSaleAvg") or "nil"))
+        end
+
+    elseif msg == "debug realms" then
+        -- /fq debug realms
+        -- Show whether TSMRealms has captured per-realm AuctionDB data, and
+        -- which realms it has. Used to diagnose "DealFinder shows the same
+        -- price for items on every realm" complaints — TSM ignores realm
+        -- data outside of (current realm, auctionDBAltRealm) so unless
+        -- FlipQueue's hook captured it before TSM, DealFinder falls back to
+        -- region-wide pricing for everything.
+        if not ns.TSMRealms then ns:Print("TSMRealms not loaded.") return end
+        local realms = ns.TSMRealms:GetRealmList() or {}
+        print("=== /fq debug realms ===")
+        print(string.format("captured %d realm(s)", #realms))
+        if ns._tsmRealmsHookInstalled then
+            print("hook: installed at file load")
+        else
+            print("hook: NOT installed (TSM_APPHELPER_LOAD_DATA was missing)")
+        end
+        if #realms == 0 then
+            print("(empty — TSM_AppHelper's AppData.lua likely fired before our")
+            print(" hook. DealFinder will use TSM region-wide pricing for all")
+            print(" non-current-realm targets, so prices will look identical.")
+            print(" Confirm by checking the realm rows in DealFinder Detail —")
+            print(" each line ends with 'Per-Realm TSM' or 'Regional Fallback'.)")
+        else
+            for i, realmName in ipairs(realms) do
+                local ts = ns.TSMRealms:GetRealmUpdateTime(realmName)
+                local age = ts and string.format("%.1fh ago", (time() - ts) / 3600) or "?"
+                print(string.format("  [%d] %s (updated %s)", i, realmName, age))
+            end
+        end
+
+    elseif msg == "debug expired" or msg == "debug expired clear" then
+        -- /fq debug expired         — list uncollected expired/cancelled entries.
+        -- /fq debug expired clear   — also finalize them as collected (no
+        --                             mail to recover; usually the mail was
+        --                             already taken on another character via
+        --                             warband mail, by Postal/automail, or
+        --                             during a session where ScanMailForSales
+        --                             didn't see them).
+        --
+        -- Diagnostic helper for phantom "N expired auction(s) to collect"
+        -- notifications when no mail actually exists (#122). The auto-cleanup
+        -- on mail-open handles the typical case; this is for log entries
+        -- that fall outside that path.
+        local doClear = (msg == "debug expired clear")
+        if not ns.db or not ns.db.log then ns:Print("Log not available.") return end
+        local charKey = ns:GetCharKey()
+        local now = time()
+        print("=== /fq debug expired" .. (doClear and " clear" or "") .. " ===")
+        print("character: " .. charKey)
+        if not doClear then
+            print("(Run `/fq reconcile` first — it now matches against TSM expired/")
+            print(" cancelled records and finalizes confirmed orphans automatically.")
+            print(" Use `/fq debug expired clear` only if reconcile didn't catch them")
+            print(" and you've verified there's no mail to collect.)")
+        end
+
+        -- Pre-build TSM record indexes once so per-entry annotation is O(1)
+        -- on the inner loop (#127). Skipped silently if TSM isn't loaded.
+        local tsmExpireByCharBase, tsmCancelByCharBase
+        if ns.Tracker and ns.Tracker.GetTSMExpireRecords and type(TradeSkillMasterDB) == "table" then
+            local function indexByCB(records)
+                local m = {}
+                for _, r in ipairs(records) do
+                    m[r.charKey] = m[r.charKey] or {}
+                    m[r.charKey][r.baseID] = m[r.charKey][r.baseID] or {}
+                    table.insert(m[r.charKey][r.baseID], r)
+                end
+                return m
+            end
+            tsmExpireByCharBase = indexByCB(ns.Tracker:GetTSMExpireRecords())
+            tsmCancelByCharBase = indexByCB(ns.Tracker:GetTSMCancelRecords())
+        end
+
+        local function CanonChar(s)
+            if not s then return nil end
+            return (s:gsub("%s+", ""))
+        end
+        local function FQBase(fqKey)
+            if not fqKey or fqKey == "" then return nil end
+            local pet = fqKey:match("^pet:(%d+)")
+            if pet then return "pet:" .. pet end
+            return fqKey:match("^(%d+)")
+        end
+
+        -- Look up TSM presence for one entry. Returns "expired YYYY-MM-DD",
+        -- "cancelled YYYY-MM-DD", or "no TSM record" / "TSM not loaded".
+        local function TSMNote(entry)
+            if not tsmExpireByCharBase then return "TSM not loaded" end
+            local canon = CanonChar(entry.charKey)
+            local baseID = FQBase(entry.itemKey)
+            if not canon or not baseID then return "no TSM record (no key)" end
+            local postedAt = entry.postedAt or 0
+            local earliest = postedAt - 60 * 60
+            local latest   = postedAt + 49 * 60 * 60
+            local function findIn(idx, label)
+                local list = idx[canon] and idx[canon][baseID]
+                if not list then return nil end
+                for _, r in ipairs(list) do
+                    if r.time >= earliest and r.time <= latest then
+                        return label .. " " .. date("%Y-%m-%d", r.time)
+                    end
+                end
+                return nil
+            end
+            return findIn(tsmExpireByCharBase, "expired")
+                or findIn(tsmCancelByCharBase, "cancelled")
+                or "no TSM record"
+        end
+
+        local mineCount, totalCount, cleared = 0, 0, 0
+        for i, entry in ipairs(ns.db.log) do
+            if (entry.auctionStatus == "expired" or entry.auctionStatus == "cancelled")
+                and not entry.collectedAt then
+                totalCount = totalCount + 1
+                if entry.charKey == charKey then
+                    mineCount = mineCount + 1
+                    local postedDate = entry.postedAt and date("%Y-%m-%d %H:%M", entry.postedAt) or "?"
+                    local expiredAge = entry.expiresAt and string.format("%.1fd ago", (now - entry.expiresAt) / 86400) or "?"
+                    print(string.format(
+                        "  [%d] %s | status=%s | postedAt=%s | expired=%s | itemKey=%s | TSM: %s",
+                        i, tostring(entry.name), tostring(entry.auctionStatus),
+                        postedDate, expiredAge, tostring(entry.itemKey), TSMNote(entry)))
+                    if doClear then
+                        local prior = entry.auctionStatus  -- "expired" or "cancelled"
+                        entry.auctionStatus = "collected"
+                        entry.saleOutcome = entry.saleOutcome or "expired"
+                        entry.endReason = entry.endReason or prior
+                        entry.collectedAt = now
+                        entry.finalReason = "manual_debug_clear"
+                        cleared = cleared + 1
+                    end
+                end
+            end
+        end
+        print(string.format("--- %d uncollected on %s (of %d total across all characters) ---",
+            mineCount, charKey, totalCount))
+        if doClear and cleared > 0 then
+            if ns.SalesIndex then ns.SalesIndex:Invalidate() end
+            if ns.UI and ns.UI.Refresh then ns.UI:Refresh() end
+            if ns.UI and ns.UI.RefreshMini then ns.UI:RefreshMini() end
+            ns:Print(ns.COLORS.GREEN .. "Cleared " .. cleared ..
+                " phantom expired entries on " .. charKey .. ".|r")
+        elseif doClear then
+            ns:Print("Nothing to clear.")
+        end
+
     elseif msg == "debug scan" or msg:match("^debug scan%s+%d+$") then
         -- /fq debug scan [N]
         -- Dump the live-AH-scan cache (populated passively from any addon's
@@ -794,6 +1103,10 @@ SlashCmdList["FLIPQUEUE"] = function(msg)
         print("  /fq debug scan [N] - Dump N (default 20) most recent entries from the live-AH-scan cache")
         print("  /fq debug bagprices - Walk bags, dump each item's fqKey + cache hit + DBMinBuyout + link")
         print("  /fq debug gold - Walk the gold-required calc per task, dump settings + skip reasons + final withdraw amount")
+        print("  /fq debug realms - Dump TSMRealms-captured realms; diagnose DealFinder flat-price-across-realms")
+        print("  /fq debug pricing <name|id> - Trace per-realm AuctionDB lookup for one item (hit/miss per realm + tsmStr used)")
+        print("  /fq debug expired - Dump uncollected expired/cancelled log entries for the current character (phantom-notification diagnosis)")
+        print("  /fq debug expired clear - Finalize the listed entries as collected (use after verifying there's no mail to recover)")
         print("  /fq tutorial - Show the first-time tutorial")
         print("  /fq settings - Open settings panel")
         print("  /fq link [bnet|local] <Char-Realm> - Link to another account (bnet=friend, local=same BNet)")

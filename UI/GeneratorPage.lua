@@ -1356,6 +1356,9 @@ function UI:RefreshGeneratorPage(pending)
                             profit    = item.profitAmount or "",
                             qty       = item.quantity or 1,
                             _sortStatus = statusSort,
+                            _tooltipItemString = item.itemKey and ns.ItemKeyToItemString
+                                and ns:ItemKeyToItemString(item.itemKey) or nil,
+                            _tooltipItemID = tonumber(item.itemID),
                             _tooltipText = item.name,
                             _rowColor = isCrossRealm and {0.1, 0.3, 0.5, 0.08} or nil,
                         })
@@ -2997,9 +3000,7 @@ function UI:RefreshGeneratorPage(pending)
                     self.bg:SetColorTexture(0.2, 0.15, 0.04, 0.7)
                     GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
                     local tipID = resolvedID or tonumber(rejItem.itemID)
-                    if tipID and tipID > 0 then
-                        GameTooltip:SetItemByID(tipID)
-                    else
+                    if not ns:SetTooltipItem(GameTooltip, rejItem.itemKey, tipID) then
                         GameTooltip:SetText(rejItem.name or "?", 1, 0.8, 0)
                     end
                     GameTooltip:AddLine(" ")
@@ -4221,12 +4222,11 @@ function UI:RefreshGeneratorPage(pending)
 
                     local capturedItem = item
                     local capturedID = resolvedID or tonumber(item.itemID)
+                    local capturedItemKey = item.itemKey
                     row:SetScript("OnEnter", function(self)
                         self.bg:SetColorTexture(1, 1, 1, 0.08)
                         GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
-                        if capturedID and capturedID > 0 then
-                            GameTooltip:SetItemByID(capturedID)
-                        else
+                        if not ns:SetTooltipItem(GameTooltip, capturedItemKey, capturedID) then
                             GameTooltip:SetText(capturedItem.name or "?", 1, 1, 1)
                         end
                         if capturedItem.action == "buy" then

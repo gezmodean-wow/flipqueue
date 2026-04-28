@@ -626,6 +626,7 @@ function ScrollTableMixin:Render()
         -- Tooltip (with battle pet support)
         if rowData._tooltipPetSpecies or rowData._tooltipItemID or rowData._tooltipItemString or rowData._tooltipText then
             row._onEnter = function()
+                local usedGameTooltip = false
                 if rowData._tooltipPetSpecies and BattlePetToolTip_Show then
                     BattlePetToolTip_Show(rowData._tooltipPetSpecies, 25, rowData._tooltipPetQuality or 3, 0, 0, 0)
                     if BattlePetTooltip then
@@ -635,15 +636,24 @@ function ScrollTableMixin:Render()
                 elseif rowData._tooltipItemString then
                     GameTooltip:SetOwner(row, "ANCHOR_RIGHT")
                     GameTooltip:SetHyperlink(rowData._tooltipItemString)
+                    usedGameTooltip = true
                 elseif tonumber(rowData._tooltipItemID) and tonumber(rowData._tooltipItemID) > 0 then
                     GameTooltip:SetOwner(row, "ANCHOR_RIGHT")
                     GameTooltip:SetItemByID(tonumber(rowData._tooltipItemID))
+                    usedGameTooltip = true
                 elseif rowData._tooltipText then
                     GameTooltip:SetOwner(row, "ANCHOR_RIGHT")
                     GameTooltip:SetText(rowData._tooltipText, 1, 1, 1)
-                    if rowData._tooltipExtra then
-                        GameTooltip:AddLine(rowData._tooltipExtra, 0.7, 0.7, 0.7, true)
-                    end
+                    usedGameTooltip = true
+                end
+                -- Append per-row metadata (realm, price, character, etc.)
+                -- to whichever tooltip backend rendered the item — previously
+                -- the extra was dropped on item/itemString rows because the
+                -- AddLine + Show call lived inside the text-only branch.
+                if usedGameTooltip and rowData._tooltipExtra and rowData._tooltipExtra ~= "" then
+                    GameTooltip:AddLine(rowData._tooltipExtra, 0.7, 0.7, 0.7, true)
+                end
+                if usedGameTooltip then
                     GameTooltip:Show()
                 end
             end

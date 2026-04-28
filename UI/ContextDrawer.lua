@@ -209,11 +209,43 @@ local function RunManualBankOp(spec)
 
     local ops = spec.ops
     local function RunOps()
-        ns.BankQueue:ProcessSync(ops, spec.processLabel, function(success, errors)
+        -- Per-IssueOne optimistic ticks: each successful issuance inside
+        -- ProcessSync fires onProgress(1, total, {opName}) so the popup bar
+        -- advances move-by-move during long executions instead of jumping
+        -- only at retry boundaries. ProcessSync emits a negative
+        -- compensation tick at the end for any ops that issued but failed
+        -- verification (#127). onProgress is cleared by BankPopupComplete /
+        -- HideBankPopup.
+        --
+        -- onWait drives the heartbeat countdown: ProcessSync fires it
+        -- before each timed wait (inter-move, verify, retry, panel-settle)
+        -- with the duration and reason, so the popup can render a definite
+        -- timer labelled with what the addon is waiting for.
+        if ns.BankQueue then
+            ns.BankQueue.onProgress = function(deltaSuccess, _total, deltaNames)
+                if ns.UI and ns.UI.BankOpProgress then
+                    ns.UI:BankOpProgress(deltaSuccess or 0, 0, spec.phase, deltaNames)
+                end
+            end
+            ns.BankQueue.onWait = function(seconds, reason)
+                if ns.UI and ns.UI.BeginHeartbeat then
+                    ns.UI:BeginHeartbeat(seconds, reason)
+                end
+            end
+        end
+        ns.BankQueue:ProcessSync(ops, spec.processLabel, function(success, errors, failed)
             if #success > 0 then ns:Print(spec.successWord .. ": " .. table.concat(success, ", ")) end
-            if errors > 0 then ns:Print(ns.COLORS.YELLOW .. errors .. " " .. spec.errorNoun .. "(s) failed|r") end
+            if errors > 0 then
+                local detail = (failed and #failed > 0)
+                    and (": " .. table.concat(failed, ", ")) or ""
+                ns:Print(ns.COLORS.YELLOW .. errors .. " " .. spec.errorNoun .. "(s) failed|r" .. detail)
+            end
+            -- Successes were already ticked in via onProgress above; the
+            -- final tick contributes the failure count (and the failed
+            -- names list, which the popup renders as red rows in the
+            -- completion summary).
             if ns.UI and ns.UI.BankOpProgress then
-                ns.UI:BankOpProgress(#success, errors, spec.phase, success)
+                ns.UI:BankOpProgress(0, errors, spec.phase, nil, failed)
             end
             PostOp()
             if ns.UI and ns.UI.BankPopupComplete then ns.UI:BankPopupComplete() end
@@ -547,13 +579,8 @@ local function GetOrCreateScanRow(parent, index)
         -- bonuses, which misrepresents upgraded gear and recipe ranks.
         if r.itemLink then
             GameTooltip:SetHyperlink(r.itemLink)
-        else
-            local numID = tonumber(r.itemID)
-            if numID and numID > 0 then
-                GameTooltip:SetItemByID(numID)
-            else
-                GameTooltip:SetText(r.name or "?", 1, 1, 1)
-            end
+        elseif not ns:SetTooltipItem(GameTooltip, r.itemKey, r.itemID) then
+            GameTooltip:SetText(r.name or "?", 1, 1, 1)
         end
         if r.pricing then
             GameTooltip:AddLine(" ")
@@ -710,10 +737,7 @@ local function GetOrCreateOwnedRow(parent, index)
         local a = self._auction
         if not a then return end
         GameTooltip:SetOwner(self, "ANCHOR_TOPRIGHT")
-        local numID = tonumber(a.itemID)
-        if numID and numID > 0 then
-            GameTooltip:SetItemByID(numID)
-        else
+        if not ns:SetTooltipItem(GameTooltip, a.itemKey, a.itemID) then
             GameTooltip:SetText(a.name or "?", 1, 1, 1)
         end
         GameTooltip:AddLine(" ")

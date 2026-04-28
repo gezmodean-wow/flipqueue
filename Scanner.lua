@@ -749,6 +749,14 @@ frame:SetScript("OnEvent", function(self, event, ...)
                     end
                 end
 
+                -- Finalize log entries past the 30-day mail window before
+                -- computing the uncollected counts, so phantom "expired
+                -- auction(s) to collect" notifications don't fire for mail
+                -- that's gone server-side or was collected externally (#122).
+                if ns.Tracker and ns.Tracker.FinalizeStaleExpired then
+                    ns.Tracker:FinalizeStaleExpired()
+                end
+
                 local currentCharKey = ns:GetCharKey()
                 local uncollected = ns.SalesIndex:GetUncollectedForChar(currentCharKey)
                 if uncollected.sold > 0 then

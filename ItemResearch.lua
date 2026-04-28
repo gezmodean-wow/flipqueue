@@ -70,7 +70,7 @@ function ItemResearch:BuildItemIndex()
 
     local nameMap = {}   -- lowercase name -> entry (for pet cage dedup)
 
-    local function Ensure(itemKey, itemID, name, icon, quality)
+    local function Ensure(itemKey, itemID, name, icon, quality, ilvl)
         if not itemKey or itemKey == "" then
             if itemID and itemID ~= "" then
                 itemKey = tostring(itemID) .. ";;"
@@ -133,6 +133,14 @@ function ItemResearch:BuildItemIndex()
         if not entry.itemID or entry.itemID == "" then
             entry.itemID = itemID or (not isCageEntry and ExtractNumericID(itemKey)) or ""
         end
+        -- Source ilvl wins over the GetItemInfo fallback (the source has the
+        -- correct variant value from when the item was scanned; the fallback
+        -- only knows base ilvl). Inventory items carry per-variant ilvl from
+        -- the scanner; deal imports may carry it from FP CSV; log entries
+        -- don't store ilvl directly so they pass nil here.
+        if ilvl and ilvl > 0 and (not entry.ilvl or entry.ilvl == 0) then
+            entry.ilvl = ilvl
+        end
         -- Register name for pet dedup (prefer pet: entries over cage entries)
         if name and name ~= "" then
             local nameKey = name:lower()
@@ -147,7 +155,7 @@ function ItemResearch:BuildItemIndex()
     for charKey, charData in pairs(ns.db.characters or {}) do
         if charData.inventory and charData.inventory.items then
             for key, item in pairs(charData.inventory.items) do
-                local e = Ensure(key, item.itemID, item.name, item.icon)
+                local e = Ensure(key, item.itemID, item.name, item.icon, nil, item.ilvl)
                 if e then
                     e.totalQty = e.totalQty + (item.quantity or 0)
                     e.hasInventory = true
@@ -159,7 +167,7 @@ function ItemResearch:BuildItemIndex()
     -- 2. Warbank
     if ns.db.warbank and ns.db.warbank.items then
         for key, item in pairs(ns.db.warbank.items) do
-            local e = Ensure(key, item.itemID, item.name, item.icon)
+            local e = Ensure(key, item.itemID, item.name, item.icon, nil, item.ilvl)
             if e then
                 e.totalQty = e.totalQty + (item.quantity or 0)
                 e.hasInventory = true
@@ -171,7 +179,7 @@ function ItemResearch:BuildItemIndex()
     for guildName, guildData in pairs(ns.db.guilds or {}) do
         if guildData.items then
             for key, item in pairs(guildData.items) do
-                local e = Ensure(key, item.itemID, item.name, item.icon)
+                local e = Ensure(key, item.itemID, item.name, item.icon, nil, item.ilvl)
                 if e then
                     e.totalQty = e.totalQty + (item.quantity or 0)
                     e.hasInventory = true
@@ -188,32 +196,49 @@ function ItemResearch:BuildItemIndex()
 
     -- 5. FP Scanner deals
     for _, deal in pairs(ns.db.imports and ns.db.imports.fpScanner or {}) do
-        local e = Ensure(deal.itemKey, deal.itemID, deal.name, deal.icon, deal.quality)
+        local e = Ensure(deal.itemKey, deal.itemID, deal.name, deal.icon, deal.quality, deal.ilvl)
         if e then e.hasDeals = true end
     end
 
     -- 6. FP Cross-Realm deals
     for _, deal in pairs(ns.db.imports and ns.db.imports.fpCrossRealm or {}) do
-        local e = Ensure(deal.itemKey, deal.itemID, deal.name, deal.icon, deal.quality)
+        local e = Ensure(deal.itemKey, deal.itemID, deal.name, deal.icon, deal.quality, deal.ilvl)
         if e then e.hasDeals = true end
     end
 
     -- 7. Deal Finder deals
     for _, deal in pairs(ns.db.imports and ns.db.imports.dealFinder or {}) do
-        local e = Ensure(deal.itemKey, deal.itemID, deal.name, deal.icon, deal.quality)
+        local e = Ensure(deal.itemKey, deal.itemID, deal.name, deal.icon, deal.quality, deal.ilvl)
         if e then e.hasDeals = true end
     end
 
-    -- Fallback ilvl: only use GetItemInfo for items WITHOUT bonus IDs (base = actual).
-    -- Items with bonuses show blank ilvl until rescanned by the scanner.
+    -- Fallback ilvl resolution. Two paths now:
+    --   - Item has bonus IDs (or modifiers): build the full itemString and
+    --     ask GetItemInfo, which returns the variant's actual ilvl. Without
+    --     this, an ilvl 253 ring with bonus IDs would render as ilvl 44
+    --     (base) because we'd previously skipped the lookup entirely.
+    --   - Item is a plain base item: GetItemInfo on the raw numeric ID.
+    -- Source-provided ilvl already wins via Ensure(); this only fires when
+    -- nothing in the inventory/warbank/log/deals chain knew the ilvl.
     for _, entry in pairs(map) do
         if not entry.ilvl or entry.ilvl == 0 then
             local ek = entry.itemKey or ""
-            local bp = ek:match("^[^;]+;([^;]*)") or ""
-            local mp = ek:match(";([^;]*)$") or ""
-            if bp == "" and mp == "" then
-                local nid = tonumber(tostring(entry.itemID):match("^(%d+)"))
-                if nid and nid > 0 and nid ~= PET_CAGE_ID then
+            local nid = tonumber(tostring(entry.itemID):match("^(%d+)"))
+            if nid and nid > 0 and nid ~= PET_CAGE_ID then
+                local bp = ek:match("^[^;]+;([^;]*)") or ""
+                local mp = ek:match(";([^;]*)$") or ""
+                local hasVariant = (bp ~= "" or mp ~= "")
+                if hasVariant and ns.ItemKeyToItemString then
+                    local itemString = ns:ItemKeyToItemString(ek)
+                    if itemString then
+                        local ok, _, _, _, ilvl = pcall(C_Item.GetItemInfo, itemString)
+                        if ok and ilvl and ilvl > 0 then entry.ilvl = ilvl end
+                    end
+                end
+                -- Either no variant data, or the variant lookup didn't
+                -- resolve (item not loaded yet). Fall back to base ilvl —
+                -- still better than blank.
+                if not entry.ilvl or entry.ilvl == 0 then
                     local ok, _, _, _, ilvl = pcall(C_Item.GetItemInfo, nid)
                     if ok and ilvl and ilvl > 0 then entry.ilvl = ilvl end
                 end
@@ -356,6 +381,7 @@ function ItemResearch:GetItemResearch(itemKey, itemName, skipCache)
                     postedAt = entry.postedAt,
                     auctionStatus = entry.auctionStatus,
                     saleOutcome = entry.saleOutcome,
+                    endReason = entry.endReason,
                     fee = entry.ahFee or 0,
                     totalFeesSpent = entry.totalFeesSpent or 0,
                     postAttempts = entry.postAttempts or 0,
@@ -407,12 +433,25 @@ function ItemResearch:GetItemResearch(itemKey, itemName, skipCache)
     }
 
     -- ---- Failure Summary ----
+    -- Prefer endReason (the precise cause that survives the auctionStatus
+    -- transition to "collected"). Fall back to auctionStatus for legacy
+    -- entries — once the entry transitions to "collected", auctionStatus
+    -- alone can't distinguish expired from cancelled, so legacy entries
+    -- with no endReason are bucketed by their last-known auctionStatus.
     local expCount, canCount, feesLost = 0, 0, 0
     for _, fail in ipairs(record.failures) do
-        if fail.auctionStatus == "expired" or fail.auctionStatus == "collected" then
-            expCount = expCount + 1
-        else
+        local reason = fail.endReason
+        if not reason then
+            if fail.auctionStatus == "cancelled" then
+                reason = "cancelled"
+            else
+                reason = "expired"
+            end
+        end
+        if reason == "cancelled" then
             canCount = canCount + 1
+        else
+            expCount = expCount + 1
         end
         feesLost = feesLost + (fail.totalFeesSpent or fail.fee or 0)
     end

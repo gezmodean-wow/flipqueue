@@ -180,6 +180,7 @@ function Tracker:CheckOwnedAuctions()
                 if pendingCancels > 0 then
                     entry.auctionStatus = "cancelled"
                     entry.saleOutcome = "expired" -- cancelled = unsold
+                    entry.endReason = "cancelled"
                     pendingCancels = pendingCancels - 1
                     cancelledCount = cancelledCount + 1
                 else

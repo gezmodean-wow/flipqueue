@@ -106,20 +106,15 @@ local function ResolveItemInfo(group)
             if ok and q then group.quality = q end
         end
     end
-    -- Prefer scanner ilvl. Fallback to GetItemInfo ONLY for items without bonuses.
+    -- Prefer scanner ilvl. Otherwise resolve from the full itemString so
+    -- bonus-ID variants don't fall back to base ilvl (e.g. ilvl 253 → 44).
     if not group._ilvl then
         if group.ilvl and group.ilvl > 0 then
             group._ilvl = group.ilvl
+        elseif ns.GetItemLevelFromKey then
+            group._ilvl = ns:GetItemLevelFromKey(group.itemKey, numID)
         else
-            local ek = group.itemKey or ""
-            local bp = ek:match("^[^;]+;([^;]*)") or ""
-            local mp = ek:match(";([^;]*)$") or ""
-            if bp == "" and mp == "" and numID and numID > 0 then
-                local ok, _, _, _, ilvl = pcall(C_Item.GetItemInfo, numID)
-                if ok and ilvl and ilvl > 0 then group._ilvl = ilvl end
-            else
-                group._ilvl = 0
-            end
+            group._ilvl = 0
         end
     end
 end
@@ -157,7 +152,7 @@ function UI:RenderDealFinderHeader(headerFrame, group)
             end
         elseif numID and numID > 0 then
             GameTooltip:SetOwner(self, "ANCHOR_BOTTOMRIGHT")
-            GameTooltip:SetItemByID(numID)
+            ns:SetTooltipItem(GameTooltip, group.itemKey, numID)
         end
     end)
     headerFrame:SetScript("OnLeave", function()

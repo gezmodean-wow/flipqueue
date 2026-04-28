@@ -177,12 +177,18 @@ function Tracker:ShowBankOpsPopup()
     local goldWithdraw, goldDeposit = 0, 0
     local hasBuyCosts = false
 
-    -- Estimate withdrawal / deposit need (show in popup regardless of auto setting).
-    -- Runs for every character — the goldBuffer min-balance applies even when
-    -- there are no tasks on this realm. With active tasks, the target bumps up
-    -- to cover fees + buy purchases (max with goldBuffer) so the player has
-    -- enough on hand. Symmetric with AutoWithdrawGold / AutoDepositGold.
+    -- Estimate withdrawal / deposit need. Mirror the gating that
+    -- AutoWithdrawGold / AutoDepositGold apply, so a setting that's
+    -- intentionally disabled or a hand-off to Warband Miser doesn't
+    -- show up as a queued op in the popup (and therefore doesn't get
+    -- recorded as a "failure" when the no-op actually runs). Player
+    -- expectation: if I disabled deposit-gold, the popup shouldn't
+    -- claim a gold deposit failed.
     if ns.db then
+        local wmActive = ns.IsWarbandMiserActive and ns:IsWarbandMiserActive()
+        local autoWithdraw = ns.db.settings.autoWithdrawGold and not wmActive
+        local autoDeposit  = ns.db.settings.autoDepositGold  and not wmActive
+
         local totalFees, _, details = Tracker:CalculateRequiredGold(charKey, currentRealm)
         for _, d in ipairs(details) do
             if d.duration == "buy" then hasBuyCosts = true; break end
@@ -192,15 +198,17 @@ function Tracker:ShowBankOpsPopup()
         local needed = math.max(bufferCopper, math.ceil(totalFees * 1.1))
         -- Round target up to whole gold so the resulting balance is even
         needed = math.ceil(needed / 10000) * 10000
-        if playerCopper < needed then
+        if autoWithdraw and playerCopper < needed then
             goldWithdraw = needed - playerCopper
         end
 
         -- Estimate deposit excess
-        local keepCopper = needed
-        if playerCopper > keepCopper then
-            local excess = playerCopper - keepCopper
-            if excess > 0 then goldDeposit = excess end
+        if autoDeposit then
+            local keepCopper = needed
+            if playerCopper > keepCopper then
+                local excess = playerCopper - keepCopper
+                if excess > 0 then goldDeposit = excess end
+            end
         end
     end
 
@@ -222,14 +230,34 @@ function Tracker:ShowBankOpsPopup()
         local function DoPulls(callback)
             if not hasPulls or #pullOps == 0 then callback() return end
             if ns.UI then ns.UI:BankOpProgress(0, 0, "Pulling") end
-            ns.BankQueue:ProcessSync(pullOps, "Pulling from bank...", function(successNames, errorCount)
+            -- Per-IssueOne optimistic ticks: each successful issuance inside
+            -- ProcessSync fires onProgress here so the popup bar advances
+            -- move-by-move during long pulls (#127). The final callback
+            -- contributes the failure count and the failed-names list.
+            -- onWait drives the heartbeat countdown so the player sees
+            -- what the addon is waiting for during inter-move pauses.
+            if ns.BankQueue then
+                ns.BankQueue.onProgress = function(deltaSuccess, _total, deltaNames)
+                    if ns.UI then
+                        ns.UI:BankOpProgress(deltaSuccess or 0, 0, "Pulling", deltaNames)
+                    end
+                end
+                ns.BankQueue.onWait = function(seconds, reason)
+                    if ns.UI and ns.UI.BeginHeartbeat then
+                        ns.UI:BeginHeartbeat(seconds, reason)
+                    end
+                end
+            end
+            ns.BankQueue:ProcessSync(pullOps, "Pulling from bank...", function(successNames, errorCount, failedNames)
                 if #successNames > 0 then
                     ns:Print("Pulled: " .. table.concat(successNames, ", "))
                 end
                 if errorCount > 0 then
-                    ns:Print(ns.COLORS.YELLOW .. errorCount .. " pull(s) failed|r")
+                    local detail = (failedNames and #failedNames > 0)
+                        and (": " .. table.concat(failedNames, ", ")) or ""
+                    ns:Print(ns.COLORS.YELLOW .. errorCount .. " pull(s) failed|r" .. detail)
                 end
-                if ns.UI then ns.UI:BankOpProgress(#successNames, errorCount, "Pulling", successNames) end
+                if ns.UI then ns.UI:BankOpProgress(0, errorCount, "Pulling", nil, failedNames) end
                 C_Timer.After(0.3, callback)
             end)
         end

@@ -884,6 +884,16 @@ end
 
 BankQueue.processing = false
 BankQueue.onProgress = nil  -- callback(current, total) for UI progress updates
+BankQueue.onWait = nil      -- callback(seconds, reason) fired before each
+                            -- known-duration wait inside ProcessSync, so the
+                            -- popup can render a definite-duration countdown
+                            -- labelled with what we're waiting for.
+
+local function NotifyWait(seconds, reason)
+    if BankQueue.onWait and seconds and seconds > 0 then
+        BankQueue.onWait(seconds, reason)
+    end
+end
 
 function BankQueue:Process(ops, label, callback)
     if #ops == 0 then
@@ -932,8 +942,49 @@ local SYNC_RETRY_DELAY = 0.2    -- pause between attempts
 local SYNC_INTER_MOVE_DELAY = 0.1  -- pause between successive UseContainerItem calls
                                    -- (Blizzard rate-limits container ops; ~16ms/frame
                                    -- isn't enough — 100ms is safe and barely noticeable)
+local SYNC_INTER_MOVE_DELAY_BOOST = 0.5  -- bumped delay applied for the rest of the
+                                          -- current execution after Blizzard fires an
+                                          -- "Internal bag error" — its per-frame
+                                          -- container-op rate limiter has tripped, so
+                                          -- continuing at 100ms/op leaks failures (#128)
 local SYNC_PANEL_SETTLE_DELAY = 0.05  -- pause after BankFrame:SetBankType() so the
                                        -- panel switch propagates before the next move
+
+-- Boosted inter-move delay: nil = use SYNC_INTER_MOVE_DELAY; non-nil = use this value.
+-- Set when an Internal Bag Error fires during execution; cleared on BANKFRAME_CLOSED
+-- so the next bank visit starts at the default cadence.
+local _interMoveDelayBoost = nil
+
+local function CurrentInterMoveDelay()
+    return _interMoveDelayBoost or SYNC_INTER_MOVE_DELAY
+end
+
+-- Module-level frame that watches for "Internal bag error" UI messages while
+-- BankQueue is processing, and bumps the inter-move delay for the rest of
+-- the current execution. Resets on bank close.
+do
+    local INTERNAL_BAG_ERROR = ERR_INTERNAL_BAG_ERROR or "Internal bag error"
+    local f = CreateFrame("Frame")
+    f:RegisterEvent("UI_ERROR_MESSAGE")
+    f:RegisterEvent("BANKFRAME_CLOSED")
+    f:SetScript("OnEvent", function(_, event, arg1, arg2)
+        if event == "BANKFRAME_CLOSED" then
+            _interMoveDelayBoost = nil
+        elseif event == "UI_ERROR_MESSAGE" and BankQueue.processing then
+            local errType, msg = arg1, arg2
+            local isBagError = (errType == 15)
+                or (type(msg) == "string" and msg == INTERNAL_BAG_ERROR)
+            if isBagError and (not _interMoveDelayBoost or _interMoveDelayBoost < SYNC_INTER_MOVE_DELAY_BOOST) then
+                _interMoveDelayBoost = SYNC_INTER_MOVE_DELAY_BOOST
+                if ns.PrintDebug then
+                    ns:PrintDebug(string.format(
+                        "[BankQueue] Internal Bag Error — boosting inter-move delay to %.2fs for the rest of this execution",
+                        SYNC_INTER_MOVE_DELAY_BOOST))
+                end
+            end
+        end
+    end)
+end
 
 function BankQueue:ProcessSync(ops, label, callback)
     if #ops == 0 then
@@ -949,6 +1000,28 @@ function BankQueue:ProcessSync(ops, label, callback)
     local bankBags = ns:GetEnabledBankTabs() or {}
 
     local successNames = {}
+    -- Names of ops that failed permanently (nonRetryable or retry-exhausted),
+    -- surfaced via the final callback so the popup summary can list which
+    -- items the player needs to investigate (#127). Without this the player
+    -- only sees a "N pull(s) failed" count with no item context.
+    local failedNames = {}
+    -- Optimistic-tick bookkeeping for #127. We emit a progress tick the
+    -- moment IssueOne actually issues a move (return true), so the popup
+    -- bar advances move-by-move during a long execution instead of jumping
+    -- only at retry boundaries. Some optimistically-ticked ops fail
+    -- verification; the final callback emits a negative compensation tick
+    -- equal to (optimisticCount - #successNames) to undo the over-count.
+    local optimisticCount = 0
+    local totalQueued = #ops
+
+    local function MarkOptimisticReported(op)
+        if op._optimisticReported then return end
+        op._optimisticReported = true
+        optimisticCount = optimisticCount + 1
+        if BankQueue.onProgress then
+            BankQueue.onProgress(1, totalQueued, op.name and { op.name } or nil)
+        end
+    end
 
     -- One attempt at moving the given ops. Failed ops are retried up to
     -- SYNC_MAX_RETRIES times — most "failed" pulls are transient (cursor
@@ -1038,6 +1111,7 @@ function BankQueue:ProcessSync(ops, label, callback)
             elseif op.op == "pull" then
                 if not bankOpen then
                     nonRetryableErrors = nonRetryableErrors + 1
+                    table.insert(failedNames, op.name or "?")
                     return false
                 end
                 -- Pulls use shift-click: bank → inventory direction is
@@ -1046,10 +1120,12 @@ function BankQueue:ProcessSync(ops, label, callback)
                 op._stackBefore = info.stackCount or 1
                 ShiftMove(op.srcBag, op.srcSlot)
                 table.insert(issuedOps, op)
+                MarkOptimisticReported(op)
                 return true
             elseif op.op == "deposit" then
                 if not bankOpen then
                     nonRetryableErrors = nonRetryableErrors + 1
+                    table.insert(failedNames, op.name or "?")
                     return false
                 end
                 -- CursorMove with an explicit destination slot, so we honour
@@ -1083,6 +1159,7 @@ function BankQueue:ProcessSync(ops, label, callback)
                     info, primary, secondary, overflowEnabled, crossStack, allocatedSlots, op.name)
                 if not destBag then
                     nonRetryableErrors = nonRetryableErrors + 1
+                    table.insert(failedNames, op.name or "?")
                     return false
                 end
 
@@ -1094,6 +1171,7 @@ function BankQueue:ProcessSync(ops, label, callback)
                 op._stackBefore = info.stackCount or 1
                 if CursorMove(op.srcBag, op.srcSlot, destBag, destSlot, info.itemID) then
                     table.insert(issuedOps, op)
+                    MarkOptimisticReported(op)
                     return true
                 else
                     -- Move rejected (guard tripped or pickup failed).
@@ -1118,6 +1196,7 @@ function BankQueue:ProcessSync(ops, label, callback)
                 return
             end
 
+            NotifyWait(SYNC_VERIFY_DELAY, "Verifying moves")
             C_Timer.After(SYNC_VERIFY_DELAY, function()
             local invAfter = CountItemsInBags(ns.INVENTORY_BAGS)
             local warbankAfter = CountItemsInBags(warbankBags)
@@ -1180,12 +1259,22 @@ function BankQueue:ProcessSync(ops, label, callback)
             if #nextRound > 0 and attemptNum < SYNC_MAX_RETRIES then
                 ns:PrintDebug("BankQueue: retry " .. attemptNum .. " for " ..
                     #nextRound .. " failed move(s)")
+                NotifyWait(SYNC_RETRY_DELAY,
+                    "Retrying " .. #nextRound .. " failed move" ..
+                    (#nextRound == 1 and "" or "s"))
                 C_Timer.After(SYNC_RETRY_DELAY, function()
                     Attempt(nextRound, attemptNum + 1, function(extraErrors)
                         finishAttempts(nonRetryableErrors + extraErrors)
                     end)
                 end)
             else
+                -- Retries exhausted (or none scheduled): the surviving ops in
+                -- nextRound are final failures. Capture their names so the
+                -- popup summary can list which items the player needs to
+                -- chase down.
+                for _, op in ipairs(nextRound) do
+                    table.insert(failedNames, op.name or "?")
+                end
                 finishAttempts(nonRetryableErrors + #nextRound)
             end
             end)  -- C_Timer.After(SYNC_VERIFY_DELAY, ...)
@@ -1213,12 +1302,15 @@ function BankQueue:ProcessSync(ops, label, callback)
             local doIssue = function()
                 IssueOne(op)
                 if i < #remainingOps then
-                    WaitForBagUpdate(SYNC_INTER_MOVE_DELAY, IssueNext)
+                    local delay = CurrentInterMoveDelay()
+                    NotifyWait(delay, "Waiting for bag update")
+                    WaitForBagUpdate(delay, IssueNext)
                 else
                     AfterAllIssued()
                 end
             end
             if panelChanged then
+                NotifyWait(SYNC_PANEL_SETTLE_DELAY, "Switching bank panel")
                 C_Timer.After(SYNC_PANEL_SETTLE_DELAY, doIssue)
             else
                 doIssue()
@@ -1229,7 +1321,15 @@ function BankQueue:ProcessSync(ops, label, callback)
 
     Attempt(ops, 1, function(totalErrors)
         BankQueue.processing = false
-        if callback then callback(successNames, totalErrors) end
+        -- Compensation tick: every IssueOne success ticked the popup
+        -- optimistically, but some of those ops failed verification and are
+        -- now counted in totalErrors instead. Emit a negative delta to undo
+        -- the over-count so completed + failed = totalQueued at the end.
+        local overTick = optimisticCount - #successNames
+        if BankQueue.onProgress and overTick > 0 then
+            BankQueue.onProgress(-overTick, totalQueued, nil)
+        end
+        if callback then callback(successNames, totalErrors, failedNames) end
     end)
 end
 

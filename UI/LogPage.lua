@@ -125,6 +125,8 @@ local function BuildLogData(startIdx, endIdx)
             end
         end
 
+        local tooltipItemString = entry.itemKey and ns.ItemKeyToItemString
+            and ns:ItemKeyToItemString(entry.itemKey) or nil
         table.insert(data, {
             name      = displayName,
             qty       = entry.postedQuantity or 1,
@@ -136,7 +138,8 @@ local function BuildLogData(startIdx, endIdx)
             date      = dateStr,
             _icon     = icon,
             _sortDate = entry.postedAt or 0,
-            _tooltipItemID = resolvedID,
+            _tooltipItemString = tooltipItemString,
+            _tooltipItemID = (not tooltipItemString) and resolvedID or nil,
             _tooltipText   = entry.name,
             _tooltipExtra  = tooltipExtra,
             _logIndex = i,
