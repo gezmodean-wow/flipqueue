@@ -103,6 +103,34 @@ local function GetPopup()
     progressBar:Hide()
     f.progressBar = progressBar
 
+    -- Render-side smoothing (#127). UpdateProgressBar sets _targetValue from
+    -- the data flow (onProgress ticks). OnUpdate lerps _currentValue toward
+    -- _targetValue at a fixed rate so the visible fill keeps moving during
+    -- the BAG_UPDATE_DELAYED gaps between ticks instead of stuttering. Tuned
+    -- so each tick's worth of width change completes in ~200ms.
+    progressBar._currentValue = 0
+    progressBar._targetValue = 0
+    progressBar._maxValue = 1
+    -- Approach: exponential lerp toward target. Per-second smoothing factor
+    -- chosen so we cover ~95% of the distance in 200ms (1 - 0.05^(dt/0.2)).
+    local LERP_HALFLIFE = 0.06  -- seconds; lower = snappier, higher = smoother
+    progressBar:SetScript("OnUpdate", function(self, delta)
+        local cur = self._currentValue or 0
+        local tgt = self._targetValue or 0
+        if math.abs(cur - tgt) < 0.001 then
+            if cur ~= tgt then
+                self._currentValue = tgt
+                self:SetValue(tgt)
+            end
+            return
+        end
+        -- Frame-rate independent exponential decay toward target.
+        local alpha = 1 - math.exp(-delta / LERP_HALFLIFE)
+        local newCur = cur + (tgt - cur) * alpha
+        self._currentValue = newCur
+        self:SetValue(newCur)
+    end)
+
     local progressBg = progressBar:CreateTexture(nil, "BACKGROUND")
     progressBg:SetAllPoints()
     progressBg:SetColorTexture(0.1, 0.1, 0.1, 0.8)
@@ -325,8 +353,28 @@ local function UpdateProgressBar(f)
     if not execState then return end
     local done = execState.completed + execState.failed
     local total = execState.totalOps
-    f.progressBar:SetMinMaxValues(0, total)
-    f.progressBar:SetValue(done)
+    -- Drive the lerp target rather than the immediate fill value (#127). The
+    -- progressBar's OnUpdate handler animates _currentValue → _targetValue so
+    -- the bar keeps moving smoothly during BAG_UPDATE_DELAYED gaps between
+    -- progress ticks. SetValue is still called on the same frame so the
+    -- initial render isn't blank, but subsequent frames are driven by the
+    -- lerp.
+    if f.progressBar._maxValue ~= total then
+        f.progressBar:SetMinMaxValues(0, total)
+        f.progressBar._maxValue = total
+        -- Clamp current to new range so a shrinking total doesn't strand the
+        -- visible fill past the new max.
+        if f.progressBar._currentValue > total then
+            f.progressBar._currentValue = total
+        end
+    end
+    f.progressBar._targetValue = done
+    -- On the very first tick (current still at 0) snap immediately so we
+    -- don't visibly crawl from 0 — the lerp is for between-tick smoothing,
+    -- not for a slow start.
+    if f.progressBar._currentValue == 0 and done == 0 then
+        f.progressBar:SetValue(0)
+    end
 
     local phase = execState.phase or ""
     if phase ~= "" then phase = phase .. "  " end
@@ -473,6 +521,15 @@ function UI:BeginBankExecution(totalOps)
         _goldOps = {},
         _failedNames = {},
     }
+    -- Reset the lerp bookkeeping so a new execution starts from an empty
+    -- bar even if the previous one ended at full (#127).
+    if popup and popup.progressBar then
+        popup.progressBar._currentValue = 0
+        popup.progressBar._targetValue = 0
+        popup.progressBar._maxValue = totalOps
+        popup.progressBar:SetMinMaxValues(0, totalOps)
+        popup.progressBar:SetValue(0)
+    end
 end
 
 -- Record progress during execution (called by Tracker after each sub-operation).
