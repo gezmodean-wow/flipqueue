@@ -54,6 +54,16 @@ When the user mentions a bug, regression, feature idea, or improvement during no
 
 Commit messages referencing a tracked issue should use `<type>(<ID>): <subject>` — e.g. `fix(FQ-004): sniper delay cancels on target change`.
 
+### Player-facing close summaries
+
+When closing a player-visible issue, add a `## Player summary` section to the issue body before clicking close. One short sentence, plain language — what changed for the player, not what code changed.
+
+Scribe pulls this text into:
+- The close announcement posted into the linked Discord thread.
+- The bulleted "What changed" list in the next release announcement.
+
+If you forgot before closing, you can put a fenced `release-notes` code block in the closing comment instead — same convention, first paragraph wins. Issues with no summary in either place render as `⚠️ no summary written` in the staff release draft; fix by editing the issue body and re-running `/release-redraft`.
+
 ## Cross-cog feature requests
 
 When you spot a gap in a sibling cog's library while working here — most often Cogworks (the shared core) needing a new helper, event, or primitive — offer to file a GitHub Issue on that cog's tracker via `gh issue create --repo gezmodean-wow/<target-cog>`. Mention FlipQueue as the source in the body so the maintainer can triage it as a cross-cog ask. Scribe will mirror it to the target cog's Discord forum where its players can follow along.
