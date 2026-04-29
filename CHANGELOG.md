@@ -1,5 +1,19 @@
 # Changelog
 
+## v0.12.0-alpha5
+
+Fifth alpha of v0.12. One fix, narrow scope: the Transform page's "Auctionator" output produces a format Auctionator can actually import again, and Auctionator-imported lists round-trip correctly through TSM-info enrichment.
+
+### Auctionator → Transformer → Auctionator now actually round-trips
+
+Two long-standing bugs in the Auctionator-list path were biting the same workflow:
+
+- **The "Auctionator" output format was a plain-text list** (`--- ListName\nName\nName`) that Auctionator could not import. The real wire format is `ListName^"Item1";;;;;;;;;;;;;qty^"Item2";;;;;;;;;;;;;qty` (14 semicolon-separated fields per item, `^` between items). Rewrote `OutputAuctionatorList` to emit the valid wire format, preserving the exact-match flag and quantity from imported metadata. For full constraint round-trip (ilvl filters, quality, tier), use the `PBS` output instead.
+
+- **Auctionator-imported items were stripping per-item metadata** during the import step — the parser only captured the name and threw away quantity, exact-match, ilvl filters, and quality. The discarded data was a problem in two ways: (a) the round-trip lost everything except the name, and (b) the resulting `itemKey` was set to the item name as a string, so downstream TSM price lookups (which expect an itemID-prefixed key like `12345;...`) silently fell through, leaving items without TSM info even when TSM had data for them.
+
+Now the import path routes the Auctionator search strings through `Import:ParsePBS`, which already knew how to parse all 14 fields. The full per-item metadata flows into the items' `_pbs` field, name resolution fills `itemKey` from the resolved itemID via the name→ID map (which includes TSM's persistent item DB), and TSM prices populate as expected.
+
 ## v0.12.0-alpha4
 
 Fourth alpha of v0.12. Bank operations get a determinate countdown timer between moves, deposit progress finally ticks per move (previously stuck for ~1s per batch), large pulls no longer "lose" tail items to a verify race, and a cross-session safety net keeps auto-deposit from undoing a failed-pull retry. Plus a Cogworks minimap canary, opt-in profit-% abbreviation in DealFinder, locale-aware gold parsing for German FlippingPal, and a chunked importer that handles full-region pastes without freezing the client.
