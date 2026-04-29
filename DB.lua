@@ -522,17 +522,20 @@ function ns:FormatGoldPrecise(copper)
     return gStr
 end
 
--- Parse gold strings like "1,377g", "22.8k", "1.3m" to numeric gold value
--- Handles WoW color-coded strings and abbreviated formats
+-- Parse gold strings like "1,377g", "22.8k", "1.3m" to numeric gold value.
+-- Handles WoW color-coded strings, abbreviated formats, and locale variance:
+--   k/m suffix: dot or comma is decimal ("1.5k" or "1,5k" → 1500)
+--   g suffix:   dot and comma are thousands separators
+--               ("1,500g" or "1.500g" → 1500); FP shows whole-gold values
 function ns:ParseGoldValue(str)
     if not str or str == "" then return 0 end
     local clean = str:gsub("|c%x%x%x%x%x%x%x%x", ""):gsub("|r", "")
     local m = clean:match("^([%d,.]+)m")
-    if m then return (tonumber((m:gsub(",", ""))) or 0) * 1000000 end
+    if m then return (tonumber((m:gsub(",", "."))) or 0) * 1000000 end
     local k = clean:match("^([%d,.]+)k")
-    if k then return (tonumber((k:gsub(",", ""))) or 0) * 1000 end
-    local g = clean:match("([%d,]+)g")
-    if g then return tonumber((g:gsub(",", ""))) or 0 end
+    if k then return (tonumber((k:gsub(",", "."))) or 0) * 1000 end
+    local g = clean:match("([%d,.]+)g")
+    if g then return tonumber((g:gsub("[,.]", ""))) or 0 end
     return 0
 end
 
