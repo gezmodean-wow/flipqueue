@@ -364,17 +364,18 @@ function Tracker:ShowBankOpsPopup()
             end
 
             -- Wire BankQueue.onProgress to a deposit-phase delta tracker.
-            -- BankQueue:Process emits CUMULATIVE successes per batch (line
-            -- 654 / 807), but BankOpProgress accumulates deltas — so without
-            -- this conversion the bar would over-count or stay labeled
-            -- "Pulling" from DoPulls' wiring. The closure resets per
-            -- sub-phase since each Process call starts fresh at 0.
+            -- BankQueue:Process emits CUMULATIVE successes — both optimistic
+            -- per-op (during a batch) and authoritative per-batch (after
+            -- VerifyBatch). The wrapper converts cumulative→delta. Negative
+            -- deltas are forwarded so a verify failure can decrement the
+            -- bar after the optimistic count went too high. The closure
+            -- resets per sub-phase since each Process call starts at 0.
             local function MakeDepositDeltaTracker()
                 local lastCumulative = 0
                 return function(cumulativeSuccess, _total, names)
                     local delta = (cumulativeSuccess or 0) - lastCumulative
                     lastCumulative = cumulativeSuccess or 0
-                    if delta > 0 and ns.UI then
+                    if delta ~= 0 and ns.UI then
                         ns.UI:BankOpProgress(delta, 0, "Depositing", names)
                     end
                 end

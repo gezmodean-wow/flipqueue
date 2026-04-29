@@ -658,7 +658,13 @@ local function VerifyBatch(issuedOps, snapshot)
     if BankQueue.onProgress then
         BankQueue.onProgress(#stats.successes, totalQueued)
     end
-    C_Timer.After(INTER_BATCH_DELAY, ProcessNextBatch)
+    -- Heartbeat for the inter-batch delay so the popup shows what we're
+    -- waiting for between batches (FQ-127 follow-up).
+    NotifyWait(INTER_BATCH_DELAY, "Next batch", "fixed")
+    C_Timer.After(INTER_BATCH_DELAY, function()
+        if BankQueue.onWaitEnd then BankQueue.onWaitEnd() end
+        ProcessNextBatch()
+    end)
 end
 
 ProcessNextBatch = function()
@@ -866,6 +872,12 @@ ProcessNextBatch = function()
     -- when too many UseContainerItem / PickupContainerItem calls fire in
     -- one tick). Skip-cases (source empty, locked, aborted) yield to the
     -- next frame instead so we don't blow the Lua call stack on big batches.
+    -- Optimistic per-op progress: fire onProgress for each successful issue
+    -- so the bar advances move-by-move within a batch (5dc5d95 only ticked
+    -- per batch, leaving the bar stuck for ~1s during the verify wait).
+    -- VerifyBatch's later cumulative fire corrects the count if any issued
+    -- move failed verification (negative delta — deposit wrapper accepts).
+    local optimistic = #stats.successes
     local i = 0
     local function NextOp()
         i = i + 1
@@ -873,8 +885,13 @@ ProcessNextBatch = function()
             FinishBatch()
             return
         end
-        local issuedAMove = HandleOp(batch[i])
+        local op = batch[i]
+        local issuedAMove = HandleOp(op)
         if issuedAMove then
+            optimistic = optimistic + 1
+            if BankQueue.onProgress then
+                BankQueue.onProgress(optimistic, totalQueued, op.name and { op.name } or nil)
+            end
             WaitForBagUpdate(INTER_MOVE_DELAY, NextOp)
         else
             C_Timer.After(0, NextOp)
