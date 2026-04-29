@@ -427,19 +427,20 @@ SlashCmdList["FLIPQUEUE"] = function(msg)
         end
         ns:Print("Bag prices: " .. lines .. " items")
 
-    elseif msg == "debug pulls" then
-        -- /fq debug pulls — toggle per-op trace for ProcessSync/Process pull
-        -- decisions. OFF by default for performance (logs ~6 lines per op
-        -- when on). Use to diagnose item-specific pull failures: each ISSUE,
-        -- SKIP source-empty, SKIP impostor, LOCKED, BANK-CLOSED, and
-        -- VERIFY-FAIL decision is captured in the debug ring buffer
-        -- (visible via /fq debug log or the popup).
+    elseif msg == "debug pulls" or msg == "debug ops" then
+        -- /fq debug pulls (alias /fq debug ops) — toggle per-op trace for
+        -- ProcessSync/Process bank ops (pulls AND deposits). OFF by default
+        -- for performance (logs ~6 lines per op when on). Captures every
+        -- ISSUE / ISSUE-DEPOSIT / SKIP source-empty / SKIP impostor /
+        -- LOCKED / BANK-CLOSED / NO-DEST / DEFERRED / CURSOR-REJECT /
+        -- VERIFY-FAIL decision in the debug ring buffer (visible via the
+        -- popup or chat dump).
         if not ns.BankQueue then ns:Print("BankQueue not loaded.") return end
         ns.BankQueue._tracePulls = not ns.BankQueue._tracePulls
         if ns.BankQueue._tracePulls then
-            ns:Print(ns.COLORS.YELLOW .. "Pull trace ON|r — per-op decisions go to debug log. Re-run to capture failures.")
+            ns:Print(ns.COLORS.YELLOW .. "Op trace ON|r — pull + deposit decisions go to debug log. Re-run to capture failures.")
         else
-            ns:Print(ns.COLORS.GREEN .. "Pull trace OFF.|r")
+            ns:Print(ns.COLORS.GREEN .. "Op trace OFF.|r")
         end
 
     elseif msg == "debug gold" then
@@ -1122,7 +1123,7 @@ SlashCmdList["FLIPQUEUE"] = function(msg)
         print("  /fq debug pricing <name|id> - Trace per-realm AuctionDB lookup for one item (hit/miss per realm + tsmStr used)")
         print("  /fq debug expired - Dump uncollected expired/cancelled log entries for the current character (phantom-notification diagnosis)")
         print("  /fq debug expired clear - Finalize the listed entries as collected (use after verifying there's no mail to recover)")
-        print("  /fq debug pulls - Toggle per-op pull-decision trace; off by default for perf, on for diagnosing item-specific failures")
+        print("  /fq debug pulls - Toggle per-op trace for pulls AND deposits; off by default for perf, on for diagnosing item-specific failures")
         print("  /fq tutorial - Show the first-time tutorial")
         print("  /fq settings - Open settings panel")
         print("  /fq link [bnet|local] <Char-Realm> - Link to another account (bnet=friend, local=same BNet)")

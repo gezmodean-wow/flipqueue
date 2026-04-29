@@ -639,12 +639,15 @@ local function VerifyBatch(issuedOps, snapshot)
             table.insert(stats.successes, op.name)
         else
             op._retries = (op._retries or 0) + 1
-            if BankQueue._tracePulls and op.op == "pull" then
+            if BankQueue._tracePulls then
                 ns:PrintDebug(string.format(
-                    "[pull-trace] VERIFY-FAIL %s @ bag=%s slot=%s itemID=%s expected_consume=%s invDelta=%s retry=%s/%s",
-                    tostring(op.name), tostring(op.srcBag), tostring(op.srcSlot),
+                    "[pull-trace] VERIFY-FAIL %s op=%s bag=%s slot=%s itemID=%s expected_consume=%s invDelta=%s wbDelta=%s bkDelta=%s retry=%s/%s",
+                    tostring(op.name), tostring(op.op),
+                    tostring(op.srcBag), tostring(op.srcSlot),
                     tostring(op._itemID), tostring(consume),
                     tostring(invDelta[op._itemID or -1]),
+                    tostring(warbankDelta[op._itemID or -1]),
+                    tostring(bankDelta[op._itemID or -1]),
                     tostring(op._retries), tostring(MAX_RETRIES)))
             end
             if op._retries <= MAX_RETRIES then
@@ -807,6 +810,11 @@ ProcessNextBatch = function()
             local destBag, destSlot = PickDepositSlot(
                 info, primary, secondary, overflowEnabled, crossStack, allocatedSlots, op.name)
             if not destBag then
+                if trace then
+                    ns:PrintDebug(string.format(
+                        "[pull-trace] DEFERRED %s @ src bag=%s slot=%s — no destination slot available",
+                        tostring(op.name), tostring(op.srcBag), tostring(op.srcSlot)))
+                end
                 -- No slot available for THIS op. Defer it (not an error)
                 -- and keep processing the rest of the batch: stack-merge ops
                 -- for other items can still succeed even when a full-slot
@@ -822,8 +830,23 @@ ProcessNextBatch = function()
             op._stackBefore = info.stackCount or 1
             if CursorMove(op.srcBag, op.srcSlot, destBag, destSlot, info.itemID) then
                 table.insert(issuedOps, op)
+                if trace then
+                    ns:PrintDebug(string.format(
+                        "[pull-trace] ISSUE-DEPOSIT %s @ src bag=%s slot=%s -> dst bag=%s slot=%s itemID=%s stack=%s retries=%s",
+                        tostring(op.name), tostring(op.srcBag), tostring(op.srcSlot),
+                        tostring(destBag), tostring(destSlot),
+                        tostring(info.itemID), tostring(op._stackBefore),
+                        tostring(op._retries or 0)))
+                end
                 return true
             else
+                if trace then
+                    ns:PrintDebug(string.format(
+                        "[pull-trace] CURSOR-REJECT %s @ src bag=%s slot=%s -> dst bag=%s slot=%s retries=%s",
+                        tostring(op.name), tostring(op.srcBag), tostring(op.srcSlot),
+                        tostring(destBag), tostring(destSlot),
+                        tostring((op._retries or 0) + 1)))
+                end
                 -- Move rejected (guard tripped, pickup failed). Release the
                 -- claim so another op can try it, and re-queue this op for
                 -- a fresh attempt.
@@ -1152,7 +1175,7 @@ function BankQueue:ProcessSync(ops, label, callback)
         end
 
         local function IssueOne(op)
-            local trace = BankQueue._tracePulls and op.op == "pull"
+            local trace = BankQueue._tracePulls
             local ok, info = pcall(C_Container.GetContainerItemInfo, op.srcBag, op.srcSlot)
             if not ok or not info then
                 -- Source slot empty: item is gone (already moved by a prior
@@ -1231,6 +1254,11 @@ function BankQueue:ProcessSync(ops, label, callback)
                 if not bankOpen then
                     nonRetryableErrors = nonRetryableErrors + 1
                     table.insert(failedNames, op.name or "?")
+                    if trace then
+                        ns:PrintDebug(string.format(
+                            "[pull-trace] BANK-CLOSED-DEPOSIT %s @ bag=%s slot=%s",
+                            tostring(op.name), tostring(op.srcBag), tostring(op.srcSlot)))
+                    end
                     return false
                 end
                 -- CursorMove with an explicit destination slot, so we honour
@@ -1265,6 +1293,12 @@ function BankQueue:ProcessSync(ops, label, callback)
                 if not destBag then
                     nonRetryableErrors = nonRetryableErrors + 1
                     table.insert(failedNames, op.name or "?")
+                    if trace then
+                        ns:PrintDebug(string.format(
+                            "[pull-trace] NO-DEST %s @ src bag=%s slot=%s destType=%s — no slot found",
+                            tostring(op.name), tostring(op.srcBag), tostring(op.srcSlot),
+                            tostring(op.destType)))
+                    end
                     return false
                 end
 
@@ -1277,6 +1311,14 @@ function BankQueue:ProcessSync(ops, label, callback)
                 if CursorMove(op.srcBag, op.srcSlot, destBag, destSlot, info.itemID) then
                     table.insert(issuedOps, op)
                     MarkOptimisticReported(op)
+                    if trace then
+                        ns:PrintDebug(string.format(
+                            "[pull-trace] ISSUE-DEPOSIT %s @ src bag=%s slot=%s -> dst bag=%s slot=%s itemID=%s stack=%s attempt=%s",
+                            tostring(op.name), tostring(op.srcBag), tostring(op.srcSlot),
+                            tostring(destBag), tostring(destSlot),
+                            tostring(info.itemID), tostring(op._stackBefore),
+                            tostring(attempt)))
+                    end
                     return true
                 else
                     -- Move rejected (guard tripped or pickup failed).
@@ -1354,11 +1396,15 @@ function BankQueue:ProcessSync(ops, label, callback)
                 if moved then
                     table.insert(successNames, op.name)
                 else
-                    if BankQueue._tracePulls and op.op == "pull" then
+                    if BankQueue._tracePulls then
                         ns:PrintDebug(string.format(
-                            "[pull-trace] VERIFY-FAIL %s @ bag=%s slot=%s itemID=%s stackBefore=%s attempt=%s",
-                            tostring(op.name), tostring(op.srcBag), tostring(op.srcSlot),
+                            "[pull-trace] VERIFY-FAIL %s op=%s bag=%s slot=%s itemID=%s stackBefore=%s invDelta=%s wbDelta=%s bkDelta=%s attempt=%s",
+                            tostring(op.name), tostring(op.op),
+                            tostring(op.srcBag), tostring(op.srcSlot),
                             tostring(op._itemID), tostring(op._stackBefore),
+                            tostring(invDelta[op._itemID or -1]),
+                            tostring(warbankDelta[op._itemID or -1]),
+                            tostring(bankDelta[op._itemID or -1]),
                             tostring(attemptNum)))
                     end
                     -- Reset captured fields so the retry recaptures fresh state.
