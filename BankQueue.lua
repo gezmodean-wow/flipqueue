@@ -667,8 +667,12 @@ local function VerifyBatch(issuedOps, snapshot)
         BankQueue.onProgress(#stats.successes, totalQueued)
     end
     -- Heartbeat for the inter-batch delay so the popup shows what we're
-    -- waiting for between batches (FQ-127 follow-up).
-    NotifyWait(INTER_BATCH_DELAY, "Next batch", "fixed")
+    -- waiting for between batches (FQ-127 follow-up). Inlined rather than
+    -- via NotifyWait — that helper is declared later in the file (after
+    -- BankQueue:Process) so it's not in scope here.
+    if BankQueue.onWait and INTER_BATCH_DELAY and INTER_BATCH_DELAY > 0 then
+        BankQueue.onWait(INTER_BATCH_DELAY, "Next batch", "fixed")
+    end
     C_Timer.After(INTER_BATCH_DELAY, function()
         if BankQueue.onWaitEnd then BankQueue.onWaitEnd() end
         ProcessNextBatch()
