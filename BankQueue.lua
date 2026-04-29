@@ -1188,10 +1188,12 @@ function BankQueue:ProcessSync(ops, label, callback)
                 -- items hasn't propagated yet. Recover as success rather
                 -- than letting the op vanish from the tally.
                 if attemptNum > 1 and op.op == "pull" then
+                    -- Recovery: the original ISSUE in attempt 1 already
+                    -- fired a +1 optimistic tick (and bumped optimisticCount).
+                    -- Just record the success now so the end-of-execution
+                    -- overTick correction sees it. Firing onProgress here
+                    -- again would double-count and push the bar past total.
                     table.insert(successNames, op.name or "?")
-                    if BankQueue.onProgress then
-                        BankQueue.onProgress(1, totalQueued, op.name and { op.name } or nil)
-                    end
                     if trace then
                         ns:PrintDebug(string.format(
                             "[pull-trace] RECOVERED source-empty: %s @ bag=%s slot=%s — verify missed it but slot is empty on retry attempt=%s",
