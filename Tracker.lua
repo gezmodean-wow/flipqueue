@@ -230,6 +230,24 @@ function Tracker:ShowBankOpsPopup()
     local hasExtras = extraOps and #extraOps > 0
     local hasGold = goldWithdraw > 0 or goldDeposit > 0
 
+    -- FQ-132: if the previous bank session ended with pull failures, suppress
+    -- auto-deposit on this open so items the player is reopening to retry
+    -- aren't shoveled back to the warbank before they can be pulled again.
+    -- One-shot: clear the flag here regardless of whether suppression fires.
+    if ns.db and ns.db._lastBankFailures and ns.db._lastBankFailures[charKey] then
+        local prev = ns.db._lastBankFailures[charKey]
+        ns.db._lastBankFailures[charKey] = nil
+        if hasDeposits or hasExtras then
+            local n = (prev.failedNames and #prev.failedNames) or prev.errorCount or 1
+            ns:Print(ns.COLORS.YELLOW .. n ..
+                " pull(s) failed last session — auto-deposit suppressed for this open so retries can finish first.|r")
+            depositOps = {}
+            extraOps = {}
+            hasDeposits = false
+            hasExtras = false
+        end
+    end
+
     ns:PrintDebug("Bank popup: " .. #pullOps .. " pulls, " .. #depositOps .. " deposits, " ..
         #extraOps .. " extras, withdraw=" .. goldWithdraw .. " deposit=" .. goldDeposit)
 
@@ -269,6 +287,17 @@ function Tracker:ShowBankOpsPopup()
                     local detail = (failedNames and #failedNames > 0)
                         and (": " .. table.concat(failedNames, ", ")) or ""
                     ns:Print(ns.COLORS.YELLOW .. errorCount .. " pull(s) failed|r" .. detail)
+                    -- FQ-132: persist a per-character flag so the next bank
+                    -- reopen suppresses auto-deposit, letting the user retry
+                    -- the failed pulls without items going back to warbank.
+                    if ns.db then
+                        ns.db._lastBankFailures = ns.db._lastBankFailures or {}
+                        ns.db._lastBankFailures[charKey] = {
+                            errorCount = errorCount,
+                            failedNames = failedNames,
+                            timestamp = time(),
+                        }
+                    end
                 end
                 if ns.UI then ns.UI:BankOpProgress(0, errorCount, "Pulling", nil, failedNames) end
                 C_Timer.After(0.3, callback)
