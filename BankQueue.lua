@@ -1178,10 +1178,28 @@ function BankQueue:ProcessSync(ops, label, callback)
             local trace = BankQueue._tracePulls
             local ok, info = pcall(C_Container.GetContainerItemInfo, op.srcBag, op.srcSlot)
             if not ok or not info then
-                -- Source slot empty: item is gone (already moved by a prior
-                -- attempt or removed externally). Don't count as success or
-                -- error here — if a prior attempt moved it, that was already
-                -- counted in successNames.
+                -- Source slot empty.
+                -- If we've already attempted this op and the slot is now
+                -- empty, the prior issue's move actually went through —
+                -- the verify pass just ran before Blizzard's bag cache
+                -- caught up. This is the FQ-128 tail-of-pull race: the
+                -- last few items in a long pull get issued, verify fires
+                -- on its 0.4s timer, but BAG_UPDATE_DELAYED for the tail
+                -- items hasn't propagated yet. Recover as success rather
+                -- than letting the op vanish from the tally.
+                if (op._retries or 0) > 0 and op.op == "pull" then
+                    table.insert(successNames, op.name or "?")
+                    if BankQueue.onProgress then
+                        BankQueue.onProgress(1, totalQueued, op.name and { op.name } or nil)
+                    end
+                    if trace then
+                        ns:PrintDebug(string.format(
+                            "[pull-trace] RECOVERED source-empty: %s @ bag=%s slot=%s — verify missed it but slot is empty on retry %s",
+                            tostring(op.name), tostring(op.srcBag), tostring(op.srcSlot),
+                            tostring(op._retries)))
+                    end
+                    return false
+                end
                 if trace then
                     ns:PrintDebug(string.format(
                         "[pull-trace] SKIP source-empty: %s @ bag=%s slot=%s expected=%s attempt=%s",
