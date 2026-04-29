@@ -216,7 +216,7 @@ function UI:RenderDealFinderHeader(headerFrame, group)
             local best = group.realms[1]
             if best.realProfit then
                 local profCol = best.realProfit > 0 and (C.GREEN or "") or (C.RED or "")
-                buyStr = buyStr .. " " .. profCol .. "(" .. (best.realProfitPct or 0) .. "% est)|r"
+                buyStr = buyStr .. " " .. profCol .. "(" .. ns:FormatPctNum(best.realProfitPct or 0) .. "% est)|r"
             end
         end
     end
@@ -228,7 +228,7 @@ function UI:RenderDealFinderHeader(headerFrame, group)
         local pctDiff = (group.regionMarketAvg and group.regionMarketAvg > 0)
             and math.floor(diff / group.regionMarketAvg * 100) or 0
         local col = pctDiff >= 0 and (C.GREEN or "") or (C.RED or "")
-        sellStr = G(ps.avgPrice) .. " " .. col .. "(" .. (pctDiff >= 0 and "+" or "") .. pctDiff .. "%)|r"
+        sellStr = G(ps.avgPrice) .. " " .. col .. "(" .. (pctDiff >= 0 and "+" or "") .. ns:FormatPctNum(pctDiff) .. "%)|r"
     end
     Stat("r2b", 150, L2, V2, "MY SELL PRICE", sellStr)
 
@@ -361,9 +361,9 @@ function UI:RenderDealFinderRealmTable(parent, group, numCols, onToggle)
         local spreadStr = ""
         local sp = realm.realProfitPct or realm.profitPct
         if sp and sp > 0 then
-            spreadStr = (C.GREEN or "") .. "+" .. sp .. "%|r"
+            spreadStr = (C.GREEN or "") .. "+" .. ns:FormatPctNum(sp) .. "%|r"
         elseif sp and sp < 0 then
-            spreadStr = (C.RED or "") .. sp .. "%|r"
+            spreadStr = (C.RED or "") .. ns:FormatPctNum(sp) .. "%|r"
         end
 
         local flags = {}
@@ -390,7 +390,7 @@ function UI:RenderDealFinderRealmTable(parent, group, numCols, onToggle)
             local baseline = group.regionMarketAvg or 0
             if baseline > 0 then
                 GameTooltip:AddDoubleLine("vs Regional Market",
-                    G(ref.profit) .. " (" .. ((ref.profitPct or 0) >= 0 and "+" or "") .. (ref.profitPct or 0) .. "%)",
+                    G(ref.profit) .. " (" .. ((ref.profitPct or 0) >= 0 and "+" or "") .. ns:FormatPctNum(ref.profitPct or 0) .. "%)",
                     0.7,0.7,0.7, (ref.profit or 0) > 0 and 0.3 or 1, (ref.profit or 0) > 0 and 1 or 0.3, 0.3)
             end
             if ref.hasPreviousSales then
@@ -402,7 +402,7 @@ function UI:RenderDealFinderRealmTable(parent, group, numCols, onToggle)
             if ref.realProfit then
                 local rp = ref.realProfit
                 GameTooltip:AddDoubleLine("Est. Profit (vs buy cost)",
-                    G(rp) .. " (" .. ((ref.realProfitPct or 0) >= 0 and "+" or "") .. (ref.realProfitPct or 0) .. "%)",
+                    G(rp) .. " (" .. ((ref.realProfitPct or 0) >= 0 and "+" or "") .. ns:FormatPctNum(ref.realProfitPct or 0) .. "%)",
                     0.7,0.7,0.7, rp > 0 and 0.3 or 1, rp > 0 and 1 or 0.3, 0.3)
             end
             GameTooltip:AddDoubleLine("Data Source", ref.dataQuality == "perRealm" and "Per-Realm TSM" or "Regional Fallback",
@@ -568,7 +568,7 @@ function UI:RenderDealFinderResearch(parent, group)
         local spreadStr = ""
         if sp and sp ~= 0 then
             local col = sp > 0 and (C.GREEN or "") or (C.RED or "")
-            spreadStr = col .. (sp > 0 and "+" or "") .. sp .. "%|r"
+            spreadStr = col .. (sp > 0 and "+" or "") .. ns:FormatPctNum(sp) .. "%|r"
         end
         local soldStr = (realm.personalCount and realm.personalCount > 0)
             and ((C.GREEN or "") .. realm.personalCount .. "|r") or "-"

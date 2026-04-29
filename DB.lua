@@ -177,6 +177,7 @@ function ns:InitDB()
     db.settings.dfMinProfitPct = db.settings.dfMinProfitPct or 5      -- 5%
     db.settings.dfOutlierMultiplier = db.settings.dfOutlierMultiplier or 1.5
     if db.settings.dfIgnoreOutliers == nil then db.settings.dfIgnoreOutliers = false end
+    if db.settings.dfAbbreviatePct == nil then db.settings.dfAbbreviatePct = false end
     db.settings.dfPriorityOrder = db.settings.dfPriorityOrder or {"profit", "noCompetition", "previousSales"}
     -- Skip deals that have no matching character (suppress "create character" tasks)
     if db.settings.skipUnassigned == nil then db.settings.skipUnassigned = false end
@@ -490,6 +491,22 @@ function ns:FormatGold(copper)
         return string.format("%.1fk", gold / 1000)
     end
     return tostring(gold) .. "g"
+end
+
+-- Format a percentage magnitude for display. When dfAbbreviatePct is on,
+-- 4+ digit values collapse to k/M form so DealFinder rows stay readable
+-- on items with extreme deal multiples. Caller appends "%" and any sign-
+-- driven color logic. Negative inputs keep their sign through formatting.
+function ns:FormatPctNum(n)
+    if not n then return "0" end
+    if not (ns.db and ns.db.settings and ns.db.settings.dfAbbreviatePct) then
+        return tostring(n)
+    end
+    local abs = math.abs(n)
+    if abs < 1000 then return tostring(n) end
+    if abs < 10000 then return string.format("%.1fk", n / 1000) end
+    if abs < 1000000 then return string.format("%dk", math.floor(n / 1000)) end
+    return string.format("%.1fM", n / 1000000)
 end
 
 -- Precise gold/silver/copper formatter — used for AH-side numbers (post

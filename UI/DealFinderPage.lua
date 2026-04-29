@@ -376,6 +376,15 @@ ignoreOutlierChk:SetScript("OnClick", function(self)
     if ns.db then ns.db.settings.dfIgnoreOutliers = self:GetChecked() end
 end)
 
+local abbrevPctChk = CreateFrame("CheckButton", nil, rightCol, "UICheckButtonTemplate")
+abbrevPctChk:SetSize(22, 22); abbrevPctChk:SetPoint("TOPLEFT", ignoreOutlierChk, "BOTTOMLEFT", 0, -2)
+local abbrevPctLbl = rightCol:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+abbrevPctLbl:SetPoint("LEFT", abbrevPctChk, "RIGHT", 2, 0)
+abbrevPctLbl:SetText("Abbreviate large profit % (1.5k%, 25M%)")
+abbrevPctChk:SetScript("OnClick", function(self)
+    if ns.db then ns.db.settings.dfAbbreviatePct = self:GetChecked() end
+end)
+
 -- ==========================================
 -- CONFIG: INVENTORY PREVIEW (2-column item list)
 -- ==========================================
@@ -955,6 +964,7 @@ function UI:RefreshDealFinderPage()
         if ns.db then
             outlierBox:SetText(tostring(ns.db.settings.dfOutlierMultiplier or 1.5))
             ignoreOutlierChk:SetChecked(ns.db.settings.dfIgnoreOutliers or false)
+            abbrevPctChk:SetChecked(ns.db.settings.dfAbbreviatePct or false)
         end
         local ready = ns.DealFinder and ns.DealFinder:IsReady()
         if not ready then scanBtn:Disable() else scanBtn:Enable() end
