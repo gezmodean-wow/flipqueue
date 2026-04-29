@@ -1,5 +1,67 @@
 # Changelog
 
+## v0.12.0-alpha4
+
+Fourth alpha of v0.12. Bank operations get a determinate countdown timer between moves, deposit progress finally ticks per move (previously stuck for ~1s per batch), large pulls no longer "lose" tail items to a verify race, and a cross-session safety net keeps auto-deposit from undoing a failed-pull retry. Plus a Cogworks minimap canary, opt-in profit-% abbreviation in DealFinder, locale-aware gold parsing for German FlippingPal, and a chunked importer that handles full-region pastes without freezing the client.
+
+### Bank operations: countdown timer instead of cycling animation
+
+The thin sub-bar under the main progress bar used to fill 0 → 100% over the wait, repeatedly cycling for fast pulls. It now shows a numeric countdown (`0.4s Verifying moves`) and disappears immediately when the wait resolves early — no more cycling for waits under 150 ms. For variable-duration waits (the inter-move bag-update wait), the countdown shows as a maximum (`≤ 0.1s Waiting for bag update`); for fixed waits (verify, retry, panel-settle, inter-batch), it shows the exact remaining time.
+
+### Bank operations: deposit bar updates per move, not per batch
+
+The deposit phase used to look frozen for ~1 second between batches, then jump 5 items at once when verify settled. Now each successful move ticks the bar individually, matching how the pull phase already worked. A heartbeat fires for the inter-batch delay too, so the gap between batches has visible "Next batch" feedback instead of dead air.
+
+### Long pulls: tail-of-pull items no longer "vanish"
+
+Pulling 80+ items at once could end with `1 pull(s) failed: <item>` reported even though the item actually moved — most often surfacing as a repeatable failure on a specific item near the end of the queue. The cause was a verify race: the last few items were issued, but Blizzard's bag cache hadn't caught up to their `BAG_UPDATE_DELAYED` events before our 0.4s verify deadline ran. The verify saw "didn't move" and queued a retry; on retry, the source slot was empty (proving the move did go through), but the addon's old code treated empty-on-retry as "vanished" — uncounted in either successes or failures, leaving a permanent tally drift.
+
+Now empty-on-retry is recognized as a delayed success and counted accordingly. The completion summary lands at the right total without the "forcing bar full" workaround, and items at the tail of large pulls no longer falsely show as failed.
+
+### Cross-session retry: auto-deposit suppressed after a partial pull failure
+
+If a pull op fails (rare, usually Blizzard's rate limiter on very high-volume sessions), the to-do task stays pending and your next bank reopen retries it automatically. But the auto chain ALSO ran the deposit phase on reopen, which silently shoveled newly-pulled-but-not-yet-listed items back to the warbank before the player could intervene.
+
+After a session ending with any pull failures, FlipQueue now suppresses auto-deposit on the next bank open and prints a yellow chat banner: `"N pull(s) failed last session — auto-deposit suppressed for this open so retries can finish first."` One-shot — clears on that reopen so subsequent visits behave normally.
+
+### Per-character gold management overrides
+
+The Characters page now has two new tri-state rows for gold management — **Withdraw Gold** and **Deposit Gold** — mirroring the existing item-flag toggles (Pull, Deposit, Deposit All). Each character can override the global gold settings independently, so you can let FlipQueue manage gold for the account but turn it off for a specific alt without touching the global flags. Defaults to "use global" — no behavior change for existing setups.
+
+### DealFinder profit %: opt-in abbreviation for crazy-high values
+
+For cheap items where DealFinder finds extreme deal multiples (`+12,500%`), the percentage was technically accurate but visually overwhelming. A new opt-in setting under DealFinder's config (`Abbreviate large profit %`) collapses 4-digit-plus values to `1.5k%`, `25k%`, `2.5M%` form. Off by default; flip it on if you sell deep-value items where the percentages routinely run into the thousands.
+
+### Posted item logs: bonus IDs preserved
+
+When an item with bonus IDs (most modern gear) was posted via the FlipQueue button, TSM, or the Blizzard UI, the log entry was storing the stripped base form (`itemID;;`) instead of the full variant key (`itemID;bonusIDs;modifiers`). This collapsed all variants of the same item into one log row — a Nullstrider's Boots ilvl 253 sale and an ilvl 44 base-form sale would share the same accounting. DealFinder lookups for posted items also missed per-variant pricing because they used the stripped form. Now the bag item's full key flows through to the log, preserving variant data going forward. (Existing entries aren't migrated; this is a going-forward fix.)
+
+### Pet auto-scan: multiple pets in one bag now work
+
+If you had two or more different battle pets in your bag queued to post (Cruncher + Lab Rat, etc.), the first one would scan and post correctly but every subsequent pet stayed in `scan pending` forever, even after re-running TSM's Post Scan. Three pet-specific gaps in the auto-scan path:
+
+- The Blizzard search query was malformed for pets (it was always asking for species 0, not the actual species), so the server returned nothing
+- The scan queue was de-duping on itemID — but every pet shares the same Pet Cage itemID, so only the first pet ever got queued
+- The scan-cache fallback regex was digit-prefixed and never matched pet keys
+
+All three fixed; multiple pets in one bag now scan and post like any other item.
+
+### FlippingPal in German EU: gold parsing handles dot-thousands-separator
+
+If you played on a German client and FlippingPal showed prices like `1.500g`, FlipQueue parsed them as `500g` — the regex only allowed comma as a thousands separator, not dot. So a 1,500g import would silently land in your buy-task list as a 500g target. Now both dot and comma are accepted as thousands separators on `g`-suffixed values, and as decimal markers on `k`/`m` abbreviations (`1.5k` and `1,5k` both correctly parse to 1500g). Auctionator shopping lists created from buy tasks will show the correct max price.
+
+### Importer: full-region FP pastes no longer crash
+
+Importing a very large FlippingPal dump (5,000+ items, e.g. a full-region paste covering every realm) would freeze the client long enough to crash. The synchronous parser was burning the entire UI thread without yielding. The importer now batches input over 500 items into 100-item chunks separated by frame-yields, with a status-line progress message during the run. Existing small-paste behavior is unchanged — the chunked path only kicks in for genuinely huge inputs. Can't be cancelled mid-stream from a UI button (use `/reload`).
+
+### Cogworks gear-border minimap (canary)
+
+The minimap button is now wrapped with the brass gear-border chrome shipped by the Cogworks suite library, replacing the default circular tracking border. First concrete validation of the Cogworks-as-hard-dep integration story for FlipQueue. Visual change only — click and drag behavior unchanged.
+
+### New debug command
+
+- **`/fq debug pulls`** (alias `/fq debug ops`) — toggle a per-op trace of bank-queue decisions during pulls and deposits. Off by default for performance. When on, every issue, skip, lock, recovery, and verify-fail decision logs a structured line to the debug ring buffer. Use to diagnose item-specific bank-op failures: re-run the failing flow with trace on, the decision branch that ate the move shows up in the log.
+
 ## v0.12.0-alpha3
 
 Third alpha of v0.12. Bank operations popup feels alive during long pulls instead of looking frozen, DealFinder resolves real per-realm prices for ilvl variants instead of falling back to a single flat regional value, and the phantom "N expired auction(s) to collect — check mail!" login nag finally clears.
