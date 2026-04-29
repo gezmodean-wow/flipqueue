@@ -7,6 +7,12 @@ local addonName, ns = ...
 local Import = {}
 ns.Import = Import
 
+-- Imports above this many parsed items use the async chunked path
+-- (PreviewAddChunked / SaveChunked) to avoid client freezes on full-region
+-- FlippingPal dumps. See FQ-131.
+Import.LARGE_THRESHOLD = 500
+Import.CHUNK_SIZE = 100
+
 -- Clean up realm strings: strip trailing "..." from truncated FP website data.
 -- "Kirin Tor, ..." → "Kirin Tor", "Aegwynn, ..." → "Aegwynn"
 local function CleanRealmString(realm)
@@ -1179,6 +1185,73 @@ function Import:PreviewAdd(items, source)
     end
 
     return results
+end
+
+-- Async chunked version of PreviewAdd — yields between batches via C_Timer
+-- so a multi-thousand-item paste doesn't freeze the client. See FQ-131.
+-- onProgress(processed, total) is called after each chunk.
+-- onComplete(results) is called when scanning is done.
+function Import:PreviewAddChunked(items, source, chunkSize, onProgress, onComplete)
+    if not ns.db or not ns.db.imports then
+        if onComplete then onComplete({}) end
+        return
+    end
+
+    chunkSize = chunkSize or Import.CHUNK_SIZE
+    local total = #items
+    local results = {}
+    local batchMap = {}
+    local idx = 1
+
+    local function ProcessChunk()
+        local chunkEnd = math.min(idx + chunkSize - 1, total)
+        for i = idx, chunkEnd do
+            local item = items[i]
+            local status = "new"
+            local dupeReason = nil
+            local key = ns:MakeImportKey(item.itemKey, item.name, item.targetRealm, item.ilvl)
+
+            if batchMap[key] then
+                status = "duplicate"
+                dupeReason = "same item & realm in paste"
+            else
+                local itemName = (item.name or ""):lower()
+                for existKey, existItem in pairs(batchMap) do
+                    local keyMatch = existItem.itemKey == item.itemKey
+                    local nameMatch = itemName ~= "" and existItem.name
+                        and existItem.name:lower() == itemName
+                    local ilvlConflict = (item.ilvl or 0) > 0 and (existItem.ilvl or 0) > 0
+                        and item.ilvl ~= existItem.ilvl
+                    if (keyMatch or nameMatch) and not ilvlConflict and ns:RealmsOverlap(existItem.targetRealm, item.targetRealm) then
+                        status = "duplicate"
+                        dupeReason = "connected realm: " .. (existItem.targetRealm or "?")
+                        break
+                    end
+                end
+            end
+
+            if status == "new" then
+                batchMap[key] = item
+            end
+
+            results[#results + 1] = {
+                item = item,
+                _importStatus = status,
+                _dupeReason = dupeReason,
+            }
+        end
+
+        idx = chunkEnd + 1
+        if onProgress then onProgress(math.min(idx - 1, total), total) end
+
+        if idx <= total then
+            C_Timer.After(0, ProcessChunk)
+        else
+            if onComplete then onComplete(results) end
+        end
+    end
+
+    ProcessChunk()
 end
 
 -- Save parsed items to the imports map. Always replaces existing imports

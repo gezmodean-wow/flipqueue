@@ -206,9 +206,31 @@ importEdit:SetScript("OnTextChanged", function(self, userInput)
                     end
                 )
             else
-                importPreviewData = items
-                importPreviewResults = ns.Import:PreviewAdd(items)
-                UI:RefreshImportPreview()
+                local total = #items
+                local threshold = ns.Import.LARGE_THRESHOLD or 500
+                if total >= threshold then
+                    -- Large paste: build preview asynchronously with progress so the
+                    -- client doesn't freeze on a multi-thousand-line FP dump (FQ-131).
+                    importBusy = true
+                    importPreviewData = items
+                    importPreviewResults = nil
+                    UI.importPreviewTable:SetData({})
+                    ShowProgress(0, total)
+                    importStatus:SetText(ns.COLORS.YELLOW .. "Scanning " .. total .. " items for duplicates...|r")
+                    ns.Import:PreviewAddChunked(items, nil, ns.Import.CHUNK_SIZE,
+                        function(processed, t) ShowProgress(processed, t) end,
+                        function(results)
+                            HideProgress()
+                            importBusy = false
+                            importPreviewResults = results
+                            UI:RefreshImportPreview()
+                        end
+                    )
+                else
+                    importPreviewData = items
+                    importPreviewResults = ns.Import:PreviewAdd(items)
+                    UI:RefreshImportPreview()
+                end
             end
         else
             importStatus:SetText(ns.COLORS.RED .. "No items found in pasted data.|r")

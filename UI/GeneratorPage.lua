@@ -938,21 +938,50 @@ function UI:RefreshGeneratorPage(pending)
                 local items = ns.Import:Parse(text)
                 if #items > 0 then
                     if s2.autoImportCheck:GetChecked() then
-                        local added = ns.Import:Save(items)
-                        ns:Print("Imported " .. added .. " new deals (" .. #items .. " parsed, duplicates merged).")
+                        local total = #items
                         s2.editBox:SetText("")
                         s2._previewData = nil
                         s2._previewResults = nil
                         s2.previewScroll:Hide()
                         for _, r in ipairs(s2.previewRows) do r:Hide() end
-                        s2.statusLabel:SetText(ns.COLORS.GREEN .. added .. " deals imported!|r")
                         s2._lastLen = 0
-                        -- Auto-advance to step 3 (generate) after auto-import
-                        SaveWizardState(UI._wizardTrack, 3)
-                        AutoGenerate()
-                        UI:Refresh()
-                        if UI.RefreshMini then UI:RefreshMini() end
+                        local function Finish(added)
+                            ns:Print("Imported " .. added .. " new deals (" .. total .. " parsed, duplicates merged).")
+                            s2.statusLabel:SetText(ns.COLORS.GREEN .. added .. " deals imported!|r")
+                            -- Auto-advance to step 3 (generate) after auto-import
+                            SaveWizardState(UI._wizardTrack, 3)
+                            AutoGenerate()
+                            UI:Refresh()
+                            if UI.RefreshMini then UI:RefreshMini() end
+                        end
+                        if total >= (ns.Import.LARGE_THRESHOLD or 500) then
+                            -- Large paste: chunk to avoid client freeze (FQ-131).
+                            s2.statusLabel:SetText(ns.COLORS.YELLOW .. "Importing " .. total .. " deals...|r")
+                            ns.Import:SaveChunked(items, nil, ns.Import.CHUNK_SIZE,
+                                function(processed, t)
+                                    s2.statusLabel:SetText(ns.COLORS.YELLOW
+                                        .. string.format("Importing... %d / %d", processed, t) .. "|r")
+                                end,
+                                Finish)
+                        else
+                            Finish(ns.Import:Save(items))
+                        end
                     else
+                        -- Large preview is expensive (O(N^2) dedup + per-row UI render).
+                        -- For full-region FP dumps, skip preview and route through the
+                        -- chunked save path so the client doesn't freeze (FQ-131).
+                        if #items >= (ns.Import.LARGE_THRESHOLD or 500) then
+                            s2.statusLabel:SetText(ns.COLORS.YELLOW
+                                .. "Large paste (" .. #items .. " deals) — preview skipped. "
+                                .. "Enable Auto-Import or click Next to import in chunks.|r")
+                            s2._previewData = items
+                            s2._previewResults = nil
+                            s2.previewScroll:Hide()
+                            for _, r in ipairs(s2.previewRows) do r:Hide() end
+                            s2._lastLen = newLen
+                            UI:Refresh()
+                            return
+                        end
                         s2._previewData = items
                         s2._previewResults = ns.Import:PreviewAdd(items)
 
@@ -1307,6 +1336,23 @@ function UI:RefreshGeneratorPage(pending)
                         else
                             table.insert(crossItems, item) -- include all for visibility
                         end
+                    end
+
+                    -- Large preview is expensive (O(N^2) dedup + per-row UI render).
+                    -- Skip preview rendering for full-region FP dumps so the client
+                    -- doesn't freeze; user can still click Next to import (FQ-131).
+                    if #crossItems >= (ns.Import.LARGE_THRESHOLD or 500) then
+                        cr1.statusLabel:SetText(ns.COLORS.YELLOW
+                            .. "Large paste (" .. #crossItems .. " deals) — preview skipped. "
+                            .. "Click Next to import in chunks.|r")
+                        cr1._previewData = crossItems
+                        cr1._previewResults = nil
+                        cr1.previewTable:SetData({})
+                        cr1.previewTable.headerFrame:Hide()
+                        cr1.previewTable.scrollFrame:Hide()
+                        cr1._lastLen = newLen
+                        UI:Refresh()
+                        return
                     end
 
                     cr1._previewData = crossItems
@@ -2056,28 +2102,49 @@ function UI:RefreshGeneratorPage(pending)
             gf.nextBtn:Show()
             gf.nextBtn.text:SetText(wizStep == 2 and "Import & Next" or "Next")
             gf.nextBtn:SetScript("OnClick", function()
-                -- Cross-realm step 1→2: save parsed deals to DB before advancing
+                -- Cross-realm step 1→2: save parsed deals to DB before advancing.
+                -- Use SaveChunked for large pastes to avoid client freeze (FQ-131).
                 if wizTrack == "crossrealm" and wizStep == 1 then
                     local cr1 = gf.crStepContainers[1]
                     if cr1._previewData and #cr1._previewData > 0 then
-                        local added = ns.Import:Save(cr1._previewData, "fpCrossRealm")
-                        ns:PrintDebug("Cross-realm import: saved " .. added .. " deals to DB.")
+                        local data = cr1._previewData
+                        local total = #data
                         cr1._previewData = nil
                         cr1._previewResults = nil
+                        if total >= (ns.Import.LARGE_THRESHOLD or 500) then
+                            ns:Print(ns.COLORS.YELLOW .. "Importing " .. total .. " cross-realm deals (large paste, please wait)...|r")
+                            ns.Import:SaveChunked(data, "fpCrossRealm", ns.Import.CHUNK_SIZE, nil, function(added)
+                                ns:Print("Cross-realm import: saved " .. added .. " deals to DB.")
+                            end)
+                        else
+                            local added = ns.Import:Save(data, "fpCrossRealm")
+                            ns:PrintDebug("Cross-realm import: saved " .. added .. " deals to DB.")
+                        end
                     end
                 end
-                -- Inventory step 2: import pasted data before advancing
+                -- Inventory step 2: import pasted data before advancing.
+                -- Use SaveChunked for large pastes to avoid client freeze (FQ-131).
                 if wizTrack == "inventory" and wizStep == 2 then
                     local s2 = gf.stepContainers[2]
                     if s2 and s2._previewData and #s2._previewData > 0 then
-                        local added = ns.Import:Save(s2._previewData)
-                        ns:Print("Imported " .. added .. " new deals (" .. #s2._previewData .. " parsed, duplicates merged).")
+                        local data = s2._previewData
+                        local total = #data
                         s2.editBox:SetText("")
                         s2._previewData = nil
                         s2._previewResults = nil
                         s2._lastLen = 0
                         s2.previewScroll:Hide()
                         for _, r in ipairs(s2.previewRows) do r:Hide() end
+                        if total >= (ns.Import.LARGE_THRESHOLD or 500) then
+                            ns:Print(ns.COLORS.YELLOW .. "Importing " .. total .. " deals (large paste, please wait)...|r")
+                            ns.Import:SaveChunked(data, nil, ns.Import.CHUNK_SIZE, nil, function(added)
+                                ns:Print("Imported " .. added .. " new deals (" .. total .. " parsed, duplicates merged).")
+                                if UI.Refresh then UI:Refresh() end
+                            end)
+                        else
+                            local added = ns.Import:Save(data)
+                            ns:Print("Imported " .. added .. " new deals (" .. total .. " parsed, duplicates merged).")
+                        end
                     end
                 end
                 SaveWizardState(wizTrack, wizStep + 1)
