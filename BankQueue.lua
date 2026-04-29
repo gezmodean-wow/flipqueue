@@ -639,6 +639,14 @@ local function VerifyBatch(issuedOps, snapshot)
             table.insert(stats.successes, op.name)
         else
             op._retries = (op._retries or 0) + 1
+            if BankQueue._tracePulls and op.op == "pull" then
+                ns:PrintDebug(string.format(
+                    "[pull-trace] VERIFY-FAIL %s @ bag=%s slot=%s itemID=%s expected_consume=%s invDelta=%s retry=%s/%s",
+                    tostring(op.name), tostring(op.srcBag), tostring(op.srcSlot),
+                    tostring(op._itemID), tostring(consume),
+                    tostring(invDelta[op._itemID or -1]),
+                    tostring(op._retries), tostring(MAX_RETRIES)))
+            end
             if op._retries <= MAX_RETRIES then
                 -- Clear captured snapshot fields so the retry recaptures fresh state.
                 op._itemID = nil
@@ -706,17 +714,37 @@ ProcessNextBatch = function()
     -- being picked, both for slot-cache freshness and Blizzard's per-frame
     -- container-op rate limit).
     local function HandleOp(op)
+        local trace = BankQueue._tracePulls
         local ok, info = pcall(C_Container.GetContainerItemInfo, op.srcBag, op.srcSlot)
         if not ok or not info then
             -- Source empty — already moved or gone
+            if trace then
+                ns:PrintDebug(string.format(
+                    "[pull-trace] SKIP source-empty: %s @ bag=%s slot=%s expected=%s retries=%s",
+                    tostring(op.name), tostring(op.srcBag), tostring(op.srcSlot),
+                    tostring(op._expectedItemID), tostring(op._retries or 0)))
+            end
             return false
         elseif op._expectedItemID and info.itemID ~= op._expectedItemID then
             -- Source item has changed since the op was first attempted —
             -- a prior move or user action displaced the original item.
             -- Do not move the impostor.
+            if trace then
+                ns:PrintDebug(string.format(
+                    "[pull-trace] SKIP impostor: %s @ bag=%s slot=%s expected=%s actual=%s retries=%s",
+                    tostring(op.name), tostring(op.srcBag), tostring(op.srcSlot),
+                    tostring(op._expectedItemID), tostring(info.itemID),
+                    tostring(op._retries or 0)))
+            end
             return false
         elseif info.isLocked then
             op._lockWaits = (op._lockWaits or 0) + 1
+            if trace then
+                ns:PrintDebug(string.format(
+                    "[pull-trace] LOCKED %s @ bag=%s slot=%s lockWaits=%d/10",
+                    tostring(op.name), tostring(op.srcBag), tostring(op.srcSlot),
+                    op._lockWaits))
+            end
             if op._lockWaits > 10 then
                 stats.errors = stats.errors + 1
             else
@@ -736,6 +764,13 @@ ProcessNextBatch = function()
             op._stackBefore = info.stackCount or 1
             ShiftMove(op.srcBag, op.srcSlot)
             table.insert(issuedOps, op)
+            if trace then
+                ns:PrintDebug(string.format(
+                    "[pull-trace] ISSUE %s @ bag=%s slot=%s itemID=%s stack=%s retries=%s",
+                    tostring(op.name), tostring(op.srcBag), tostring(op.srcSlot),
+                    tostring(info.itemID), tostring(op._stackBefore),
+                    tostring(op._retries or 0)))
+            end
             return true
         elseif op.op == "deposit" then
             if abortDeposits then return false end
@@ -906,6 +941,10 @@ end
 
 BankQueue.processing = false
 BankQueue.onProgress = nil  -- callback(current, total) for UI progress updates
+-- Per-op trace flag for diagnosing repeatable pull failures (FQ-128 follow-up).
+-- Off by default — when on, HandleOp prints why each op was skipped/issued.
+-- Toggled via /fq debug pulls. Module-local so it doesn't persist across reloads.
+BankQueue._tracePulls = false
 BankQueue.onWait = nil      -- callback(seconds, reason, kind) fired before
                             -- each known-duration wait inside ProcessSync,
                             -- so the popup can render a definite-duration
@@ -1109,12 +1148,19 @@ function BankQueue:ProcessSync(ops, label, callback)
         end
 
         local function IssueOne(op)
+            local trace = BankQueue._tracePulls and op.op == "pull"
             local ok, info = pcall(C_Container.GetContainerItemInfo, op.srcBag, op.srcSlot)
             if not ok or not info then
                 -- Source slot empty: item is gone (already moved by a prior
                 -- attempt or removed externally). Don't count as success or
                 -- error here — if a prior attempt moved it, that was already
                 -- counted in successNames.
+                if trace then
+                    ns:PrintDebug(string.format(
+                        "[pull-trace] SKIP source-empty: %s @ bag=%s slot=%s expected=%s attempt=%s",
+                        tostring(op.name), tostring(op.srcBag), tostring(op.srcSlot),
+                        tostring(op._expectedItemID), tostring(attempt)))
+                end
                 return false
             end
             -- Source item validation. The op references a specific (bag, slot)
@@ -1126,6 +1172,13 @@ function BankQueue:ProcessSync(ops, label, callback)
             -- _expectedItemID is set on the first successful read and compared
             -- on every subsequent attempt.
             if op._expectedItemID and info.itemID ~= op._expectedItemID then
+                if trace then
+                    ns:PrintDebug(string.format(
+                        "[pull-trace] SKIP impostor: %s @ bag=%s slot=%s expected=%s actual=%s attempt=%s",
+                        tostring(op.name), tostring(op.srcBag), tostring(op.srcSlot),
+                        tostring(op._expectedItemID), tostring(info.itemID),
+                        tostring(attempt)))
+                end
                 return false
             end
             if not op._expectedItemID then
@@ -1134,6 +1187,12 @@ function BankQueue:ProcessSync(ops, label, callback)
             if info.isLocked then
                 -- Locked from a prior in-flight move. Treat as retryable —
                 -- queue it for the next attempt.
+                if trace then
+                    ns:PrintDebug(string.format(
+                        "[pull-trace] LOCKED %s @ bag=%s slot=%s itemID=%s attempt=%s",
+                        tostring(op.name), tostring(op.srcBag), tostring(op.srcSlot),
+                        tostring(info.itemID), tostring(attempt)))
+                end
                 op._itemID = info.itemID
                 op._stackBefore = info.stackCount or 1
                 table.insert(issuedOps, op)
@@ -1142,6 +1201,11 @@ function BankQueue:ProcessSync(ops, label, callback)
                 if not bankOpen then
                     nonRetryableErrors = nonRetryableErrors + 1
                     table.insert(failedNames, op.name or "?")
+                    if trace then
+                        ns:PrintDebug(string.format(
+                            "[pull-trace] BANK-CLOSED %s @ bag=%s slot=%s",
+                            tostring(op.name), tostring(op.srcBag), tostring(op.srcSlot)))
+                    end
                     return false
                 end
                 -- Pulls use shift-click: bank → inventory direction is
@@ -1151,6 +1215,13 @@ function BankQueue:ProcessSync(ops, label, callback)
                 ShiftMove(op.srcBag, op.srcSlot)
                 table.insert(issuedOps, op)
                 MarkOptimisticReported(op)
+                if trace then
+                    ns:PrintDebug(string.format(
+                        "[pull-trace] ISSUE %s @ bag=%s slot=%s itemID=%s stack=%s attempt=%s",
+                        tostring(op.name), tostring(op.srcBag), tostring(op.srcSlot),
+                        tostring(info.itemID), tostring(op._stackBefore),
+                        tostring(attempt)))
+                end
                 return true
             elseif op.op == "deposit" then
                 if not bankOpen then
@@ -1279,6 +1350,13 @@ function BankQueue:ProcessSync(ops, label, callback)
                 if moved then
                     table.insert(successNames, op.name)
                 else
+                    if BankQueue._tracePulls and op.op == "pull" then
+                        ns:PrintDebug(string.format(
+                            "[pull-trace] VERIFY-FAIL %s @ bag=%s slot=%s itemID=%s stackBefore=%s attempt=%s",
+                            tostring(op.name), tostring(op.srcBag), tostring(op.srcSlot),
+                            tostring(op._itemID), tostring(op._stackBefore),
+                            tostring(attemptNum)))
+                    end
                     -- Reset captured fields so the retry recaptures fresh state.
                     op._itemID = nil
                     op._stackBefore = nil
