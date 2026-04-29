@@ -300,8 +300,20 @@ function Transformer:InputFromAuctionatorList(name)
         end
     end
 
-    if not searchStrings then return {} end
+    if not searchStrings or #searchStrings == 0 then return {} end
 
+    -- Reuse Import:ParsePBS so per-item metadata (isExact, quantity, ilvl
+    -- filters, quality, tier) flows through to _pbs and survives round-trip
+    -- back to OutputAuctionatorList / OutputPBS. The previous name-only
+    -- path threw away everything but the search string and produced
+    -- output that couldn't be re-imported into Auctionator (FQ-109).
+    if ns.Import and ns.Import.ParsePBS then
+        local pbsText = name .. "^" .. table.concat(searchStrings, "^")
+        return ns.Import:ParsePBS(pbsText)
+    end
+
+    -- Fallback: name-only path if Import isn't available (shouldn't happen
+    -- in practice — Import loads before Transformer in the .toc).
     local items = {}
     for _, searchStr in ipairs(searchStrings) do
         local itemName = searchStr:match('^"([^"]+)"') or searchStr:match("^([^;]+)")
@@ -696,24 +708,47 @@ end
 function Transformer:OutputAuctionatorList(items, listName)
     listName = listName or "FlipQueue Export"
 
-    local terms = {}
+    -- Produce Auctionator's actual import wire format:
+    --     listName^entry^entry^...
+    -- where each entry is the 14-field semicolon-separated search string
+    --     name;cat;minIlvl;maxIlvl;minLvl;maxLvl;minCraftLvl;maxCraftLvl;
+    --     minPrice;maxPrice;quality;tier;expansion;quantity
+    -- The previous "--- listName\nname\nname" format was plain text and
+    -- not importable into Auctionator at all (FQ-109). For the simple
+    -- list case we drop all per-item constraints (just name + quantity);
+    -- callers wanting full constraint round-trip should use OutputPBS.
+    local parts = { listName }
     local seen = {}
+    local written = 0
+
     for _, item in ipairs(items) do
         local name = item.name or ""
         if name ~= "" and not seen[name:lower()] then
             seen[name:lower()] = true
-            -- Auctionator search terms: just the item name, quoted if it has special chars
-            if name:find("[,;]") then
-                table.insert(terms, '"' .. name .. '"')
-            else
-                table.insert(terms, name)
-            end
+
+            -- Quote when the source flagged exact-match (preserved from
+            -- ParsePBS via _pbs.isExact) OR when the name contains the
+            -- separator characters Auctionator uses (`;` `^`) so the
+            -- field stays intact.
+            local pbs = item._pbs
+            local isExact = (pbs and pbs.isExact) or name:find("[;^]") ~= nil
+            local searchStr = isExact and ('"' .. name .. '"') or name
+
+            -- Quantity: prefer PBS round-trip value, fall back to item.quantity
+            -- when explicitly > 1 (1 is the default for sourced items and
+            -- shouldn't pin the search to a single-result constraint).
+            local qty = (pbs and pbs.quantity) or item.quantity
+            local qtyField = ""
+            local qNum = tonumber(qty)
+            if qNum and qNum > 1 then qtyField = tostring(qNum) end
+
+            -- 13 empty separators between name and quantity (= 14 fields)
+            parts[#parts + 1] = searchStr .. ";;;;;;;;;;;;;" .. qtyField
+            written = written + 1
         end
     end
 
-    local header = "--- " .. listName
-    local output = header .. "\n" .. table.concat(terms, "\n")
-    return output, #terms
+    return table.concat(parts, "^"), written
 end
 
 -- Produce PBS / Auctionator shopping list export format. Reconstructs the
