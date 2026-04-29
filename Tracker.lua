@@ -312,17 +312,35 @@ function Tracker:ShowBankOpsPopup()
             if not hasDeposits and not hasExtras then callback() return end
             if ns.UI then ns.UI:BankOpProgress(0, 0, "Depositing") end
 
+            -- Wire BankQueue.onProgress to a deposit-phase delta tracker.
+            -- BankQueue:Process emits CUMULATIVE successes per batch (line
+            -- 654 / 807), but BankOpProgress accumulates deltas — so without
+            -- this conversion the bar would over-count or stay labeled
+            -- "Pulling" from DoPulls' wiring. The closure resets per
+            -- sub-phase since each Process call starts fresh at 0.
+            local function MakeDepositDeltaTracker()
+                local lastCumulative = 0
+                return function(cumulativeSuccess, _total, names)
+                    local delta = (cumulativeSuccess or 0) - lastCumulative
+                    lastCumulative = cumulativeSuccess or 0
+                    if delta > 0 and ns.UI then
+                        ns.UI:BankOpProgress(delta, 0, "Depositing", names)
+                    end
+                end
+            end
+
             -- Sub-phase A: warbank deposits driven by depositFrom tasks.
-            -- AutoDepositToWarbank now reports its actual successNames and
-            -- errorCount via the third callback arg.
+            -- AutoDepositToWarbank reports actual successNames and errorCount
+            -- via callback. Successes already counted via the delta tracker;
+            -- callback only contributes the error count.
             local function DoExtras()
                 if not hasExtras then callback() return end
-                Tracker:AutoDepositExtraItems(function(extraSuccessNames, extraErrorCount)
-                    if ns.UI then
-                        ns.UI:BankOpProgress(
-                            extraSuccessNames and #extraSuccessNames or 0,
-                            extraErrorCount or 0,
-                            "Depositing")
+                if ns.BankQueue then
+                    ns.BankQueue.onProgress = MakeDepositDeltaTracker()
+                end
+                Tracker:AutoDepositExtraItems(function(_extraSuccessNames, extraErrorCount)
+                    if ns.UI and extraErrorCount and extraErrorCount > 0 then
+                        ns.UI:BankOpProgress(0, extraErrorCount, "Depositing")
                     end
                     callback()
                 end)
@@ -333,12 +351,12 @@ function Tracker:ShowBankOpsPopup()
                 return
             end
 
-            Tracker:AutoDepositToWarbank(function(warbankSuccessNames, warbankErrorCount)
-                if ns.UI then
-                    ns.UI:BankOpProgress(
-                        warbankSuccessNames and #warbankSuccessNames or 0,
-                        warbankErrorCount or 0,
-                        "Depositing")
+            if ns.BankQueue then
+                ns.BankQueue.onProgress = MakeDepositDeltaTracker()
+            end
+            Tracker:AutoDepositToWarbank(function(_warbankSuccessNames, warbankErrorCount)
+                if ns.UI and warbankErrorCount and warbankErrorCount > 0 then
+                    ns.UI:BankOpProgress(0, warbankErrorCount, "Depositing")
                 end
                 DoExtras()
             end)
