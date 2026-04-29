@@ -273,9 +273,14 @@ function Tracker:ShowBankOpsPopup()
                         ns.UI:BankOpProgress(deltaSuccess or 0, 0, "Pulling", deltaNames)
                     end
                 end
-                ns.BankQueue.onWait = function(seconds, reason)
+                ns.BankQueue.onWait = function(seconds, reason, kind)
                     if ns.UI and ns.UI.BeginHeartbeat then
-                        ns.UI:BeginHeartbeat(seconds, reason)
+                        ns.UI:BeginHeartbeat(seconds, reason, kind)
+                    end
+                end
+                ns.BankQueue.onWaitEnd = function()
+                    if ns.UI and ns.UI.EndHeartbeat then
+                        ns.UI:EndHeartbeat()
                     end
                 end
             end
@@ -340,6 +345,23 @@ function Tracker:ShowBankOpsPopup()
         local function DoDeposits(callback)
             if not hasDeposits and not hasExtras then callback() return end
             if ns.UI then ns.UI:BankOpProgress(0, 0, "Depositing") end
+
+            -- Wire heartbeat hooks for deposit-only flows (no pulls).
+            -- DoPulls would have set these, but it early-returns when
+            -- there's nothing to pull; without re-wiring here a pure
+            -- deposit run never shows the wait countdown (#127).
+            if ns.BankQueue then
+                ns.BankQueue.onWait = function(seconds, reason, kind)
+                    if ns.UI and ns.UI.BeginHeartbeat then
+                        ns.UI:BeginHeartbeat(seconds, reason, kind)
+                    end
+                end
+                ns.BankQueue.onWaitEnd = function()
+                    if ns.UI and ns.UI.EndHeartbeat then
+                        ns.UI:EndHeartbeat()
+                    end
+                end
+            end
 
             -- Wire BankQueue.onProgress to a deposit-phase delta tracker.
             -- BankQueue:Process emits CUMULATIVE successes per batch (line

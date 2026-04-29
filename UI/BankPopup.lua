@@ -141,10 +141,13 @@ local function GetPopup()
     -- Heartbeat sub-bar overlaid on the bottom edge of the main bar. Now
     -- driven by BankQueue.onWait (#127): each timed wait inside ProcessSync
     -- (inter-move, verify, retry, panel-settle) fires the callback with its
-    -- duration and a human-readable reason. The popup renders the heartbeat
-    -- as a fill 0 → 100% over that duration and appends the reason to the
-    -- progress text, so the player sees both how long the pause will be
-    -- and what we're waiting for. Hidden when no wait is active.
+    -- duration, reason and kind ("fixed"/"variable"). The popup renders the
+    -- heartbeat as a countdown — bar fills 0 → 100% as remaining time
+    -- decreases, and the numeric remaining seconds appear inline in the
+    -- progress text (with an "≤" prefix on variable waits, since those can
+    -- resolve early via BankQueue.onWaitEnd). Sub-150ms waits suppress the
+    -- bar entirely — they're below human perception of the visual change
+    -- and the cycling otherwise reads as noise during fast pulls.
     local heartbeat = CreateFrame("StatusBar", nil, progressBar)
     heartbeat:SetHeight(2)
     heartbeat:SetPoint("BOTTOMLEFT", progressBar, "BOTTOMLEFT", 0, 0)
@@ -155,12 +158,29 @@ local function GetPopup()
     heartbeat:SetValue(0)
     heartbeat:Hide()
     heartbeat._duration = nil
-    heartbeat._elapsed = 0
-    heartbeat:SetScript("OnUpdate", function(self, delta)
-        if not self._duration then return end
-        self._elapsed = self._elapsed + delta
-        local pct = math.min(1, self._elapsed / self._duration)
+    heartbeat._startedAt = nil
+    heartbeat._kind = nil
+    heartbeat:SetScript("OnUpdate", function(self)
+        if not self._duration or not self._startedAt then return end
+        local remaining = self._duration - (GetTime() - self._startedAt)
+        if remaining < 0 then remaining = 0 end
+        local pct = 1 - (remaining / self._duration)
+        if pct < 0 then pct = 0 elseif pct > 1 then pct = 1 end
         self:SetValue(pct)
+        if execState then
+            -- "\226\137\164" is UTF-8 for "≤" (U+2264). On variable waits
+            -- the numeric countdown is a maximum, since the bag-update
+            -- event can resolve us early.
+            local prefix = (self._kind == "variable") and "\226\137\164 " or ""
+            local countdown = string.format("%s%.1fs", prefix, remaining)
+            -- Only re-render the progress text when the displayed value
+            -- changes (10 times/sec at most given the %.1f format), not
+            -- every frame — UpdateProgressBar is heavy.
+            if countdown ~= execState._waitCountdown then
+                execState._waitCountdown = countdown
+                if popup then UpdateProgressBar(popup) end
+            end
+        end
     end)
     f.heartbeat = heartbeat
 
@@ -379,11 +399,19 @@ local function UpdateProgressBar(f)
     local phase = execState.phase or ""
     if phase ~= "" then phase = phase .. "  " end
     local text = phase .. done .. " / " .. total
-    -- Append the current wait reason if BeginHeartbeat has set one. Lets
-    -- the player tell e.g. "we're verifying moves" from "we're between
-    -- container ops" when otherwise the bar would just say "Pulling 97/97".
+    -- Append the current wait reason + numeric countdown if BeginHeartbeat
+    -- has set one. The countdown is the primary signal — players want to
+    -- know how long until the next op, not just what we're waiting for
+    -- (#127 player feedback). On variable waits the OnUpdate prepends "≤"
+    -- since the actual resolve usually fires earlier than the displayed time.
     if execState._waitLabel and execState._waitLabel ~= "" then
-        text = text .. "  |cffaaaaaa(" .. execState._waitLabel .. ")|r"
+        local countdown = execState._waitCountdown
+        if countdown and countdown ~= "" then
+            text = text .. "  |cffaaaaaa(" .. countdown .. " " ..
+                execState._waitLabel .. ")|r"
+        else
+            text = text .. "  |cffaaaaaa(" .. execState._waitLabel .. ")|r"
+        end
     end
     f.progressText:SetText(text)
 
@@ -410,8 +438,11 @@ local function UpdateProgressBar(f)
     -- wait state — once the operation settles, the countdown is irrelevant.
     if f.heartbeat and execState.phase == "Complete" then
         f.heartbeat._duration = nil
+        f.heartbeat._startedAt = nil
+        f.heartbeat._kind = nil
         f.heartbeat:Hide()
         execState._waitLabel = nil
+        execState._waitCountdown = nil
     end
 
     f.UpdateContentAnchor()
@@ -578,35 +609,57 @@ function UI:BankOpProgress(successCount, failCount, phase, details, failedDetail
     if popup then UpdateProgressBar(popup) end
 end
 
+-- Sub-threshold suppress: don't show the heartbeat for waits below 150ms.
+-- Below human visual-change perception, and during fast pulls the rapid
+-- show/hide cycling otherwise reads as noise (#127 player feedback).
+local HEARTBEAT_MIN_DURATION = 0.15
+
 -- Begin a definite-duration heartbeat. Called from BankQueue.onWait
 -- subscribers each time ProcessSync enters a known timed wait (#127).
--- Resets the fill so consecutive short waits produce visible pulses.
-function UI:BeginHeartbeat(duration, label)
+-- duration: seconds remaining
+-- label: human-readable reason (e.g. "Verifying moves")
+-- kind: "fixed" (exact) or "variable" (max — may resolve early via onWaitEnd)
+function UI:BeginHeartbeat(duration, label, kind)
     if not popup or not popup.heartbeat then return end
     if not duration or duration <= 0 then return end
+    if duration < HEARTBEAT_MIN_DURATION then
+        -- Hide any straggler from a previous wait so the label doesn't
+        -- linger past the sub-threshold transition (player-visible bug).
+        UI:EndHeartbeat()
+        return
+    end
     local hb = popup.heartbeat
     hb._duration = duration
-    hb._elapsed = 0
+    hb._startedAt = GetTime()
+    hb._kind = kind or "fixed"
     hb:SetValue(0)
     -- Don't show the heartbeat on the completion summary (phase=Complete
     -- means execution has settled and any further wait events are stragglers).
     if execState and execState.phase ~= "Complete" then
         hb:Show()
         execState._waitLabel = label or ""
+        -- Seed the countdown text so the first render shows the full
+        -- duration rather than just the label; OnUpdate refreshes it
+        -- ~10x/sec as the wait elapses.
+        local prefix = (hb._kind == "variable") and "\226\137\164 " or ""
+        execState._waitCountdown = string.format("%s%.1fs", prefix, duration)
         UpdateProgressBar(popup)
     end
 end
 
 -- Stop the heartbeat and clear its label. Called when BankPopupComplete
--- fires or the popup is hidden, so the bar doesn't keep ticking after the
--- operation settles.
+-- fires, the popup is hidden, or BankQueue.onWaitEnd signals an early
+-- resolve (variable wait beat its ceiling).
 function UI:EndHeartbeat()
     if popup and popup.heartbeat then
         popup.heartbeat._duration = nil
+        popup.heartbeat._startedAt = nil
+        popup.heartbeat._kind = nil
         popup.heartbeat:Hide()
     end
     if execState then
         execState._waitLabel = nil
+        execState._waitCountdown = nil
         if popup then UpdateProgressBar(popup) end
     end
 end
@@ -625,6 +678,7 @@ function UI:BankPopupComplete()
     -- callback (verify-then-callback timing leaves a small window).
     UI:EndHeartbeat()
     ns.BankQueue.onWait = nil
+    ns.BankQueue.onWaitEnd = nil
     if popup and popup:IsShown() and execState then
         ShowCompletionSummary(popup)
     else
@@ -761,6 +815,7 @@ function UI:HideBankPopup()
     UI:EndHeartbeat()
     ns.BankQueue.onProgress = nil
     ns.BankQueue.onWait = nil
+    ns.BankQueue.onWaitEnd = nil
     execState = nil
     if popup then popup:Hide() end
     if UI.HideMiniProgress then UI:HideMiniProgress() end

@@ -531,6 +531,11 @@ local function WaitForBagUpdate(minDelay, callback)
         released = true
         frame:UnregisterAllEvents()
         frame:SetScript("OnEvent", nil)
+        -- #127: signal the popup heartbeat to hide immediately when this
+        -- variable wait resolves, so the countdown bar doesn't sit at 100%
+        -- (or keep visibly lingering past the next op's start) when the
+        -- bag update fired before the hard ceiling.
+        if BankQueue.onWaitEnd then BankQueue.onWaitEnd() end
         callback()
     end
     frame:RegisterEvent("BAG_UPDATE_DELAYED")
@@ -884,14 +889,22 @@ end
 
 BankQueue.processing = false
 BankQueue.onProgress = nil  -- callback(current, total) for UI progress updates
-BankQueue.onWait = nil      -- callback(seconds, reason) fired before each
-                            -- known-duration wait inside ProcessSync, so the
-                            -- popup can render a definite-duration countdown
-                            -- labelled with what we're waiting for.
+BankQueue.onWait = nil      -- callback(seconds, reason, kind) fired before
+                            -- each known-duration wait inside ProcessSync,
+                            -- so the popup can render a definite-duration
+                            -- countdown labelled with what we're waiting for.
+                            -- kind is "fixed" (exact estimate) or "variable"
+                            -- (a maximum — actual resolve usually fires
+                            -- earlier and triggers onWaitEnd) so subscribers
+                            -- can render an "≤" prefix on variable waits.
+BankQueue.onWaitEnd = nil   -- callback() fired when a variable wait resolves
+                            -- before its ceiling (BAG_UPDATE_DELAYED arrived
+                            -- early), so the popup can hide the heartbeat
+                            -- immediately instead of letting it sit at 100%.
 
-local function NotifyWait(seconds, reason)
+local function NotifyWait(seconds, reason, kind)
     if BankQueue.onWait and seconds and seconds > 0 then
-        BankQueue.onWait(seconds, reason)
+        BankQueue.onWait(seconds, reason, kind)
     end
 end
 
@@ -1196,7 +1209,7 @@ function BankQueue:ProcessSync(ops, label, callback)
                 return
             end
 
-            NotifyWait(SYNC_VERIFY_DELAY, "Verifying moves")
+            NotifyWait(SYNC_VERIFY_DELAY, "Verifying moves", "fixed")
             C_Timer.After(SYNC_VERIFY_DELAY, function()
             local invAfter = CountItemsInBags(ns.INVENTORY_BAGS)
             local warbankAfter = CountItemsInBags(warbankBags)
@@ -1261,7 +1274,7 @@ function BankQueue:ProcessSync(ops, label, callback)
                     #nextRound .. " failed move(s)")
                 NotifyWait(SYNC_RETRY_DELAY,
                     "Retrying " .. #nextRound .. " failed move" ..
-                    (#nextRound == 1 and "" or "s"))
+                    (#nextRound == 1 and "" or "s"), "fixed")
                 C_Timer.After(SYNC_RETRY_DELAY, function()
                     Attempt(nextRound, attemptNum + 1, function(extraErrors)
                         finishAttempts(nonRetryableErrors + extraErrors)
@@ -1303,14 +1316,14 @@ function BankQueue:ProcessSync(ops, label, callback)
                 IssueOne(op)
                 if i < #remainingOps then
                     local delay = CurrentInterMoveDelay()
-                    NotifyWait(delay, "Waiting for bag update")
+                    NotifyWait(delay, "Waiting for bag update", "variable")
                     WaitForBagUpdate(delay, IssueNext)
                 else
                     AfterAllIssued()
                 end
             end
             if panelChanged then
-                NotifyWait(SYNC_PANEL_SETTLE_DELAY, "Switching bank panel")
+                NotifyWait(SYNC_PANEL_SETTLE_DELAY, "Switching bank panel", "fixed")
                 C_Timer.After(SYNC_PANEL_SETTLE_DELAY, doIssue)
             else
                 doIssue()

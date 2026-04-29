@@ -227,9 +227,14 @@ local function RunManualBankOp(spec)
                     ns.UI:BankOpProgress(deltaSuccess or 0, 0, spec.phase, deltaNames)
                 end
             end
-            ns.BankQueue.onWait = function(seconds, reason)
+            ns.BankQueue.onWait = function(seconds, reason, kind)
                 if ns.UI and ns.UI.BeginHeartbeat then
-                    ns.UI:BeginHeartbeat(seconds, reason)
+                    ns.UI:BeginHeartbeat(seconds, reason, kind)
+                end
+            end
+            ns.BankQueue.onWaitEnd = function()
+                if ns.UI and ns.UI.EndHeartbeat then
+                    ns.UI:EndHeartbeat()
                 end
             end
         end
