@@ -1187,16 +1187,16 @@ function BankQueue:ProcessSync(ops, label, callback)
                 -- on its 0.4s timer, but BAG_UPDATE_DELAYED for the tail
                 -- items hasn't propagated yet. Recover as success rather
                 -- than letting the op vanish from the tally.
-                if (op._retries or 0) > 0 and op.op == "pull" then
+                if attemptNum > 1 and op.op == "pull" then
                     table.insert(successNames, op.name or "?")
                     if BankQueue.onProgress then
                         BankQueue.onProgress(1, totalQueued, op.name and { op.name } or nil)
                     end
                     if trace then
                         ns:PrintDebug(string.format(
-                            "[pull-trace] RECOVERED source-empty: %s @ bag=%s slot=%s — verify missed it but slot is empty on retry %s",
+                            "[pull-trace] RECOVERED source-empty: %s @ bag=%s slot=%s — verify missed it but slot is empty on retry attempt=%s",
                             tostring(op.name), tostring(op.srcBag), tostring(op.srcSlot),
-                            tostring(op._retries)))
+                            tostring(attemptNum)))
                     end
                     return false
                 end
@@ -1204,7 +1204,7 @@ function BankQueue:ProcessSync(ops, label, callback)
                     ns:PrintDebug(string.format(
                         "[pull-trace] SKIP source-empty: %s @ bag=%s slot=%s expected=%s attempt=%s",
                         tostring(op.name), tostring(op.srcBag), tostring(op.srcSlot),
-                        tostring(op._expectedItemID), tostring(attempt)))
+                        tostring(op._expectedItemID), tostring(attemptNum)))
                 end
                 return false
             end
@@ -1222,7 +1222,7 @@ function BankQueue:ProcessSync(ops, label, callback)
                         "[pull-trace] SKIP impostor: %s @ bag=%s slot=%s expected=%s actual=%s attempt=%s",
                         tostring(op.name), tostring(op.srcBag), tostring(op.srcSlot),
                         tostring(op._expectedItemID), tostring(info.itemID),
-                        tostring(attempt)))
+                        tostring(attemptNum)))
                 end
                 return false
             end
@@ -1236,7 +1236,7 @@ function BankQueue:ProcessSync(ops, label, callback)
                     ns:PrintDebug(string.format(
                         "[pull-trace] LOCKED %s @ bag=%s slot=%s itemID=%s attempt=%s",
                         tostring(op.name), tostring(op.srcBag), tostring(op.srcSlot),
-                        tostring(info.itemID), tostring(attempt)))
+                        tostring(info.itemID), tostring(attemptNum)))
                 end
                 op._itemID = info.itemID
                 op._stackBefore = info.stackCount or 1
@@ -1265,7 +1265,7 @@ function BankQueue:ProcessSync(ops, label, callback)
                         "[pull-trace] ISSUE %s @ bag=%s slot=%s itemID=%s stack=%s attempt=%s",
                         tostring(op.name), tostring(op.srcBag), tostring(op.srcSlot),
                         tostring(info.itemID), tostring(op._stackBefore),
-                        tostring(attempt)))
+                        tostring(attemptNum)))
                 end
                 return true
             elseif op.op == "deposit" then
@@ -1335,7 +1335,7 @@ function BankQueue:ProcessSync(ops, label, callback)
                             tostring(op.name), tostring(op.srcBag), tostring(op.srcSlot),
                             tostring(destBag), tostring(destSlot),
                             tostring(info.itemID), tostring(op._stackBefore),
-                            tostring(attempt)))
+                            tostring(attemptNum)))
                     end
                     return true
                 else

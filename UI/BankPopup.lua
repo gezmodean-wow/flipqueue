@@ -18,6 +18,12 @@ local execState = nil  -- { totalOps, completed, failed, phase }
 -- Frame Construction
 --------------------------
 
+-- Forward declaration: GetPopup's heartbeat OnUpdate (line ~163) needs to
+-- call UpdateProgressBar to refresh the countdown text, but the function
+-- itself is defined later in the file. Without this forward-decl, Lua's
+-- upvalue resolution captures the global (nil) at OnUpdate-creation time.
+local UpdateProgressBar
+
 local function GetPopup()
     if popup then return popup end
 
@@ -369,7 +375,7 @@ end
 -- Unified Progress Tracking
 --------------------------
 
-local function UpdateProgressBar(f)
+UpdateProgressBar = function(f)
     if not execState then return end
     local done = execState.completed + execState.failed
     local total = execState.totalOps
