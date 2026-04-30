@@ -32,13 +32,15 @@ local AH_ERROR_NAMES = {
     [15] = "Bag",
 }
 
--- Debounced owned-auctions requery. After a successful post or cancel we
--- re-query the server so the OWNED_AUCTIONS_UPDATED event fires, which causes
--- FlipQueue (via Tracker:CheckOwnedAuctions), TSM, Auctionator, and any
--- other addon listening for the event to refresh their owned-auctions view.
--- Blizzard doesn't always fire the event automatically after PostItem, so
--- we force it. Debounce collapses rapid sequential posts (e.g., multiple
--- commodity stacks posted back-to-back) into a single requery.
+-- Debounced owned-auctions requery. After a successful post or cancel
+-- *initiated by FlipQueue's own post/cancel flow* we re-query the server
+-- so the OWNED_AUCTIONS_UPDATED event fires and FQ's view of owned
+-- auctions stays current. The requery is gated by `_fqInitiatedAction`
+-- (set right before our C_AuctionHouse.PostItem/PostCommodity/CancelAuction
+-- calls and cleared by the matching server event) — without that gate
+-- this fired for every AUCTION_HOUSE_AUCTION_CREATED event regardless of
+-- which addon initiated the post, which competed with TSM's own posting
+-- loop and made TSM occasionally skip queue items (FQ-138).
 local _queryTimer = nil
 local function RequestOwnedAuctionsRefresh()
     if _queryTimer then return end
@@ -57,6 +59,31 @@ local function RequestOwnedAuctionsRefresh()
     end)
 end
 
+-- True between MarkFQInitiated() and the matching server event (or the
+-- safety timeout). The post-result frame consults this to decide whether
+-- to fire RequestOwnedAuctionsRefresh — TSM-initiated posts/cancels see
+-- AUCTION_HOUSE_AUCTION_CREATED too, but the flag stays false for those
+-- so we don't compete with TSM's own state machine.
+local _fqInitiatedAction = false
+local _fqInitiatedClearTimer = nil
+local function ClearFQInitiated()
+    _fqInitiatedAction = false
+    if _fqInitiatedClearTimer then
+        _fqInitiatedClearTimer:Cancel()
+        _fqInitiatedClearTimer = nil
+    end
+end
+local function MarkFQInitiated()
+    _fqInitiatedAction = true
+    if _fqInitiatedClearTimer then _fqInitiatedClearTimer:Cancel() end
+    -- Safety: if the post fails silently (no AUCTION_HOUSE_AUCTION_CREATED,
+    -- no AUCTION_HOUSE_SHOW_ERROR), the flag would stick and the next
+    -- TSM-initiated event would incorrectly fire our requery. 3s is well
+    -- past the longest legitimate post round-trip.
+    _fqInitiatedClearTimer = C_Timer.NewTimer(3.0, ClearFQInitiated)
+end
+AuctionPost._MarkFQInitiated = MarkFQInitiated  -- for CancelAuction reuse
+
 -- Listen for server responses to PostItem/PostCommodity to verify success.
 local postResultFrame = CreateFrame("Frame")
 postResultFrame:RegisterEvent("AUCTION_HOUSE_AUCTION_CREATED")
@@ -66,13 +93,21 @@ postResultFrame:RegisterEvent("UI_ERROR_MESSAGE")
 postResultFrame:RegisterEvent("ADDON_ACTION_BLOCKED")
 postResultFrame:SetScript("OnEvent", function(_, event, ...)
     if event == "AUCTION_HOUSE_AUCTION_CREATED" then
-        ns:PrintDebug("[AuctionPost] Server confirmed: auction created")
-        RequestOwnedAuctionsRefresh()
+        ns:PrintDebug("[AuctionPost] Server confirmed: auction created (fqInitiated="
+            .. tostring(_fqInitiatedAction) .. ")")
+        if _fqInitiatedAction then
+            ClearFQInitiated()
+            RequestOwnedAuctionsRefresh()
+        end
+        -- TSM-initiated posts: do nothing. TSM has its own OWNED_AUCTIONS_UPDATED
+        -- consumer; our forced requery used to compete with TSM's queue and
+        -- caused it to occasionally skip items (FQ-138).
     elseif event == "AUCTION_HOUSE_SHOW_ERROR" then
         local errIdx = ...
         local name = errIdx and AH_ERROR_NAMES[errIdx] or "Unknown"
         ns:PrintDebug("[AuctionPost] Server error: " .. tostring(errIdx) ..
             " (" .. name .. ")")
+        if _fqInitiatedAction then ClearFQInitiated() end
     elseif event == "AUCTION_HOUSE_SHOW_FORMATTED_NOTIFICATION" then
         local notification = ...
         ns:PrintDebug("[AuctionPost] Server notification: " .. tostring(notification))
@@ -853,6 +888,12 @@ function AuctionPost:PostItem(scanResult, callback)
     --
     -- Both honor postCap via scanResult.postQty (pre-capped during scan).
     local loggedQuantity = quantity
+    -- Mark this post as FQ-initiated so the post-result frame's listener
+    -- knows to fire its owned-auctions requery for OUR post and not for
+    -- TSM-initiated posts that happen to land in the same event stream
+    -- (FQ-138). The flag self-clears via the 3s safety timer if neither
+    -- AUCTION_HOUSE_AUCTION_CREATED nor AUCTION_HOUSE_SHOW_ERROR arrives.
+    MarkFQInitiated()
     if isCommodity then
         ns:PrintDebug("[AuctionPost] calling PostCommodity: dur=" .. duration ..
             " qty=" .. quantity .. " unitPrice=" .. unitPrice)
