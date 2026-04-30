@@ -960,7 +960,7 @@ function UI:CreateSettingsPanel(parent)
 
     settingsWidgets.ahAutoScan, h = CreateSettingsCheckbox(sc, sy,
         "Auto-scan inventory when the Auction House opens",
-        "Automatically run a to-do scan when you open the AH, populating the posting drawer with items ready to post.",
+        "When on, FlipQueue scans bags and issues live AH price queries the moment you open the AH. Off by default — running this in parallel with TSM's Post Scan can slow both addons down. With it off, use the Scan To-Do / Scan All buttons in the AH drawer when you want fresh prices.",
         "ahAutoScanOnOpen")
     sy = sy - h - SECTION_SPACING
 

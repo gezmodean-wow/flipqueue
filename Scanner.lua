@@ -256,6 +256,19 @@ end
 -- ns.db.characters[fqKey].inventory, stamps the syndicatorBacked flag,
 -- emits the sync delta, and fires the shared Cogworks event. Used by
 -- both current-character refresh and alt bulk-projection.
+-- Cheap signature of an items table: count of unique keys + sum of quantities.
+-- Two refreshes that produce the same signature are treated as no-ops for
+-- sync-emit purposes — bag moves that net to zero (item picked up and put
+-- back, or moved bag-to-bag) don't broadcast a CHAR delta to BNet partners.
+local function InventorySignature(items)
+    local count, qty = 0, 0
+    for _, e in pairs(items) do
+        count = count + 1
+        qty = qty + (e.quantity or 0)
+    end
+    return count .. ":" .. qty
+end
+
 local function WriteProjectedInventory(fqKey, charData, sourceLabel)
     if not ns.db then return end
     -- Tombstoned characters are intentionally kept out of db.characters;
@@ -265,13 +278,16 @@ local function WriteProjectedInventory(fqKey, charData, sourceLabel)
     local charEntry = ns.db.characters[fqKey]
 
     local prevInv = charEntry.inventory
+    local prevSig = charEntry._invSig
     local items = ProjectCharacterInventory(charData)
+    local newSig = InventorySignature(items)
 
     charEntry.inventory = {
         lastScan     = time(),
         lastBankScan = prevInv and prevInv.lastBankScan or time(),
         items        = items,
     }
+    charEntry._invSig = newSig
     -- Migration indicator: this character's inventory came from a
     -- Syndicator projection, not from the old C_Container scanner.
     -- The Characters tab reads this flag to render a "Live" badge.
@@ -280,11 +296,13 @@ local function WriteProjectedInventory(fqKey, charData, sourceLabel)
     local count = 0
     for _ in pairs(items) do count = count + 1 end
     ns:PrintDebug("Syndicator refresh (" .. sourceLabel .. "): " .. count
-        .. " unique items on " .. fqKey)
+        .. " unique items on " .. fqKey ..
+        (prevSig == newSig and " [unchanged]" or ""))
 
     EnrichDealsFromInventory(items)
 
-    if ns.Sync and ns.Sync.IsLinked and ns.Sync:IsLinked() and not ns.Sync._applying then
+    if ns.Sync and ns.Sync.IsLinked and ns.Sync:IsLinked() and not ns.Sync._applying
+        and prevSig ~= newSig then
         ns.Sync:EmitDelta("CHAR", { charKey = fqKey, charData = charEntry })
     end
 
@@ -608,6 +626,28 @@ frame:RegisterEvent("GUILDBANKBAGSLOTS_CHANGED")
 
 local syndicatorReady = false
 
+-- Coalesce BagCacheUpdate / WarbandBankCacheUpdate bursts into one refresh.
+-- TSM Post Scans post many auctions in rapid succession; each post fires a
+-- BAG_UPDATE which Syndicator processes on its next OnUpdate tick and emits
+-- a BagCacheUpdate. Without a debounce on our side, we'd re-walk the full
+-- bag/bank/projection + emit a Sync delta per Syndicator tick. 0.3s collapses
+-- a typical posting burst to one projection.
+local refreshBagsTimer, refreshWarbankTimer
+local function ScheduleBagRefresh()
+    if refreshBagsTimer then return end
+    refreshBagsTimer = C_Timer.NewTimer(0.3, function()
+        refreshBagsTimer = nil
+        Scanner:RefreshCurrentCharacterFromSyndicator()
+    end)
+end
+local function ScheduleWarbankRefresh()
+    if refreshWarbankTimer then return end
+    refreshWarbankTimer = C_Timer.NewTimer(0.3, function()
+        refreshWarbankTimer = nil
+        Scanner:RefreshWarbankFromSyndicator()
+    end)
+end
+
 -- Register Syndicator callbacks once. The refresh functions are no-ops if
 -- Syndicator isn't ready yet, so re-invoking them on the Ready callback
 -- backfills the initial state.
@@ -621,13 +661,13 @@ local function RegisterSyndicatorCallbacks()
             -- don't touch those (Sync.lua handles partner data).
             local synKey = CurrentSyndicatorKey()
             if characterName == synKey then
-                Scanner:RefreshCurrentCharacterFromSyndicator()
+                ScheduleBagRefresh()
             end
         end, Scanner)
 
     Syndicator.CallbackRegistry:RegisterCallback("WarbandBankCacheUpdate",
         function()
-            Scanner:RefreshWarbankFromSyndicator()
+            ScheduleWarbankRefresh()
         end, Scanner)
 end
 

@@ -1252,7 +1252,7 @@ local function BuildAHContent(parent)
 
     -- Top row: [Scan To-Do] [Scan All]
     ahScanTodo = CreateActionButton(ahContentFrame, "Scan To-Do",
-        "Scan bags for items on your to-do list", function()
+        "Scan bags for items on your to-do list and refresh live AH prices for them. Use this when auto-scan-on-open is off and you want fresh data now.", function()
             local ap = ns.AuctionPost
             if ap and ap.ScanBags then
                 currentScanResults = ap:ScanBags(true) or {}
@@ -1276,7 +1276,7 @@ local function BuildAHContent(parent)
     ahScanTodo:SetPoint("TOPLEFT", ahContentFrame, "TOPLEFT", 0, -HEADER_HEIGHT)
 
     ahScanAll = CreateActionButton(ahContentFrame, "Scan All",
-        "Scan all bag items for posting", function()
+        "Scan all postable bag items and refresh live AH prices for them. Heavier than Scan To-Do — only use when you want a full sweep.", function()
             local ap = ns.AuctionPost
             if ap and ap.ScanBags then
                 currentScanResults = ap:ScanBags(false) or {}
@@ -1594,24 +1594,10 @@ local function ShowContext(ctx)
     elseif ctx == "auction" then
         local af = BuildAHContent(contextContent)
         af:Show()
-        -- Auto-scan on AH open if enabled (and posting flow is on at all).
-        if ns.db and ns.db.settings.ahAutoScanOnOpen
-            and ns.db.settings.ahPostingEnabled ~= false then
-            local ap = ns.AuctionPost
-            if ap and ap.ScanBags then
-                currentScanResults = ap:ScanBags(true) or {}
-                ns._currentAHScanResults = currentScanResults
-                if #currentScanResults > 0 then
-                    ns:Print(ns.COLORS.GREEN .. #currentScanResults .. " item(s)|r ready to post")
-                    -- Kick the per-item live-AH scanner so we have fresh
-                    -- competitor data for the posting decision tree. Cheap
-                    -- when the cache is already fresh — auto-scan dedups.
-                    if ns.AuctionAutoScan and ns.AuctionAutoScan.ScanQueue then
-                        ns.AuctionAutoScan:ScanQueue(currentScanResults)
-                    end
-                end
-            end
-        end
+        -- Auto-scan-on-AH-open is handled by AuctionAutoScan's AUCTION_HOUSE_SHOW
+        -- handler (gated by ns.db.settings.ahAutoScanOnOpen). When the player
+        -- has it off — the default — the Scan To-Do / Scan All buttons below
+        -- are the manual triggers. Don't duplicate the scan here.
         -- Fetch owned auctions
         local ap2 = ns.AuctionPost
         if ap2 and ap2.GetOwnedAuctions then

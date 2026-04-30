@@ -431,10 +431,19 @@ hookFrame:RegisterEvent("AUCTION_HOUSE_CLOSED")
 hookFrame:SetScript("OnEvent", function(_, event)
     if event == "AUCTION_HOUSE_SHOW" then
         ns:PrintDebug("[AutoScan] AH opened, posting=" .. tostring(PostingEnabled()))
-        -- ContextDrawer typically runs ScanBags on AH open; the resulting
-        -- scanResults are exposed via ns._currentAHScanResults so we can
-        -- batch-scan without rewalking bags. Fall back to a fresh ScanBags
-        -- if the drawer hasn't published yet.
+        -- Auto-scan-on-open is opt-in via Settings → AH → "Auto-scan on AH
+        -- open" (ahAutoScanOnOpen, default false). Without this gate FQ used
+        -- to issue SendSearchQuery for every postable bag item on every AH
+        -- open — running in parallel with TSM's Post Scan, doubling the
+        -- AH-side load and producing the slowness reported in FQ-137. The
+        -- passive AuctionScanCache listener still harvests whatever TSM
+        -- scans regardless, and the drawer ships a "Scan Now" button for
+        -- on-demand refresh.
+        local autoOn = ns.db and ns.db.settings and ns.db.settings.ahAutoScanOnOpen
+        if not autoOn then
+            ns:PrintDebug("[AutoScan] auto-scan-on-open disabled — skipping")
+            return
+        end
         C_Timer.After(0.3, function()
             local results = ns._currentAHScanResults
             local source = "_currentAHScanResults"

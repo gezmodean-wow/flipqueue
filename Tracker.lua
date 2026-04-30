@@ -775,30 +775,41 @@ frame:SetScript("OnEvent", function(self, event)
         isAHOpen = true
         Tracker._isAHOpen = true
         Tracker._pendingCancels = 0
+
+        -- Critical fast-path only: snapshot bags so post-detection works,
+        -- and ask the server for owned auctions. Everything else is deferred
+        -- so the AH can open without blocking on TSM/task work (FQ-137).
         SnapshotBags()
-
-        -- Refresh task steps (items pulled from bank may now be ready to post)
-        if ns.TodoList and ns.TodoList.RefreshTaskSteps then
-            ns.TodoList:RefreshTaskSteps()
-        end
-
-        -- TSM threshold check: skip/reassign items that can't be posted
-        if ns.TodoList and ns.TodoList.HandleTSMRejections then
-            ns.TodoList:HandleTSMRejections()
-        end
-
-        if ns.TodoList then
-            local charKey = ns:GetCharKey()
-            local todoTasks = ns.TodoList:GetCharacterTasks(charKey)
-            if #todoTasks > 0 then
-                ns:Print(ns.COLORS.GREEN .. #todoTasks .. " items|r ready to post!")
-            end
-        end
-
-        -- Request owned auctions to check for already-listed items
         if C_AuctionHouse and C_AuctionHouse.QueryOwnedAuctions then
             C_AuctionHouse.QueryOwnedAuctions({})
         end
+
+        -- Defer the heavy chain. Each step is independently guarded by
+        -- _isAHOpen so closing the AH while these are pending becomes a no-op.
+        C_Timer.After(0.1, function()
+            if not Tracker._isAHOpen then return end
+            if ns.TodoList and ns.TodoList.RefreshTaskSteps then
+                ns.TodoList:RefreshTaskSteps()
+            end
+            if ns.TodoList and ns.TodoList.HandleTSMRejections then
+                ns.TodoList:HandleTSMRejections()
+            end
+            if ns.TodoList then
+                local charKey = ns:GetCharKey()
+                local todoTasks = ns.TodoList:GetCharacterTasks(charKey)
+                if #todoTasks > 0 then
+                    ns:Print(ns.COLORS.GREEN .. #todoTasks .. " items|r ready to post!")
+                end
+            end
+        end)
+
+        C_Timer.After(0.3, function()
+            if not Tracker._isAHOpen then return end
+            if ns.UI then
+                if ns.UI.RefreshMini then ns.UI:RefreshMini() end
+                if ns.UI.Refresh then ns.UI:Refresh() end
+            end
+        end)
 
         -- Throttle TSM reconcile to once per hour — TSM's sales CSV is only
         -- rewritten on logout, so running it on every AH open would just
@@ -809,15 +820,11 @@ frame:SetScript("OnEvent", function(self, event)
             if time() - last > 3600 then
                 Tracker._tsmLastReconcile = time()
                 C_Timer.After(2, function()
-                    Tracker:ReconcileWithTSM(false)
+                    if Tracker._isAHOpen then
+                        Tracker:ReconcileWithTSM(false)
+                    end
                 end)
             end
-        end
-
-        -- Refresh UI after AH opens (task steps may have changed)
-        if ns.UI then
-            if ns.UI.RefreshMini then ns.UI:RefreshMini() end
-            if ns.UI.Refresh then ns.UI:Refresh() end
         end
 
     elseif event == "AUCTION_HOUSE_CLOSED" then
@@ -832,16 +839,15 @@ frame:SetScript("OnEvent", function(self, event)
         -- Skip refresh during active deposit/pull — FinishDeposit handles it with fresh scans
         if (ns.BankQueue and ns.BankQueue.processing) then return end
         -- Debounce: collapse a burst of bag updates into a single refresh chain.
-        -- BAG_UPDATE_DELAYED can fire several times during AH/mailbox activity,
-        -- and the chain it kicks off (Scanner + RefreshLocations + RefreshTaskSteps
-        -- + UI:Refresh + RefreshMini + Sync delta emit) is expensive enough that
-        -- running it 5x in a second was a major source of micro-lag.
+        -- The Syndicator BagCacheUpdate path (Scanner.lua) handles the actual
+        -- inventory projection on its own debounce; we no longer call
+        -- Scanner:ScanCurrentCharacter here. Calling it on every BAG_UPDATE_DELAYED
+        -- as well doubled the projection cost during TSM Post Scan bursts (FQ-137).
         if Tracker._bagUpdatePending then return end
         Tracker._bagUpdatePending = true
         C_Timer.After(0.5, function()
             Tracker._bagUpdatePending = false
             if (ns.BankQueue and ns.BankQueue.processing) then return end
-            if ns.Scanner then ns.Scanner:ScanCurrentCharacter() end
             if ns.TodoList then
                 if ns.TodoList.RefreshLocations then
                     ns.TodoList:RefreshLocations()
@@ -885,13 +891,21 @@ frame:SetScript("OnEvent", function(self, event)
 
     elseif event == "OWNED_AUCTIONS_UPDATED" then
         if isAHOpen then
-            -- Delay slightly so AUCTION_CANCELED (which fires after) can set the counter first
-            C_Timer.After(0.3, function()
-                if Tracker._isAHOpen then
-                    Tracker:CheckOwnedAuctions()
-                    Tracker:UpdateLogExpiry()
-                end
-            end)
+            -- Debounce. TSM Cancel Scan and rapid posting bursts can fire
+            -- OWNED_AUCTIONS_UPDATED many times in a few seconds; CheckOwnedAuctions
+            -- walks every owned auction × every todo task per call. Without a
+            -- debounce we'd re-do that O(auctions × tasks) work per event (FQ-137).
+            -- 0.3s delay also gives AUCTION_CANCELED (which fires after) time to
+            -- bump _pendingCancels for the reconciliation check.
+            if not Tracker._ownedAuctionsTimer then
+                Tracker._ownedAuctionsTimer = C_Timer.NewTimer(0.3, function()
+                    Tracker._ownedAuctionsTimer = nil
+                    if Tracker._isAHOpen then
+                        Tracker:CheckOwnedAuctions()
+                        Tracker:UpdateLogExpiry()
+                    end
+                end)
+            end
             -- Fire the shared Cogworks event so sibling cogs (a future
             -- Ledger, etc.) can react to auction state changes.
             if ns.cw and ns.cw.Fire then
