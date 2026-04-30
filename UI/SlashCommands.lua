@@ -427,6 +427,48 @@ SlashCmdList["FLIPQUEUE"] = function(msg)
         end
         ns:Print("Bag prices: " .. lines .. " items")
 
+    elseif msg:match("^debug parsegold") then
+        -- /fq debug parsegold <input>     → print parsed gold value
+        -- /fq debug parsegold             → run self-test of locale variants
+        -- Lets a maintainer or tester verify the gold-string parser without
+        -- being on the locale that produces the format (German "1.500g",
+        -- English "1,500g", abbreviated "1.5k", etc.). Surfaces the parser's
+        -- output as a number so you can confirm the FQ-121 family of bugs
+        -- are fixed end-to-end.
+        local input = msg:match("^debug parsegold%s+(.+)$")
+        if input then
+            local v = ns:ParseGoldValue(input)
+            print(string.format("=== /fq debug parsegold ===\ninput: [%s]  len=%d\nparsed: %s gold",
+                input, #input, tostring(v)))
+        else
+            print("=== /fq debug parsegold (self-test) ===")
+            local cases = {
+                -- input,           expected, comment
+                {"1,999g",          1999,    "EN thousands separator"},
+                {"1.999g",          1999,    "DE thousands separator"},
+                {"2.000g",          2000,    "DE four-digit-style format"},
+                {"2,000g",          2000,    "EN four-digit-style format"},
+                {"500g",            500,     "no separator"},
+                {"1.5k",            1500,    "EN k-abbreviation decimal"},
+                {"1,5k",            1500,    "DE k-abbreviation decimal"},
+                {"1.3m",            1300000, "EN m-abbreviation decimal"},
+                {"1,3m",            1300000, "DE m-abbreviation decimal"},
+                {"|cffffd700200g|r", 200,    "WoW color-coded"},
+                {"",                0,       "empty"},
+                {"junk",            0,       "no recognizable suffix"},
+            }
+            local pass, fail = 0, 0
+            for _, c in ipairs(cases) do
+                local got = ns:ParseGoldValue(c[1])
+                local ok = got == c[2]
+                if ok then pass = pass + 1 else fail = fail + 1 end
+                print(string.format("  %s [%s] -> %s (expected %s) %s",
+                    ok and "PASS" or "FAIL", c[1], tostring(got), tostring(c[2]), c[3]))
+            end
+            print(string.format("Total: %d pass, %d fail", pass, fail))
+            print("Use: /fq debug parsegold <string>  to test a specific input")
+        end
+
     elseif msg == "debug pulls" or msg == "debug ops" then
         -- /fq debug pulls (alias /fq debug ops) — toggle per-op trace for
         -- ProcessSync/Process bank ops (pulls AND deposits). OFF by default
@@ -1124,6 +1166,7 @@ SlashCmdList["FLIPQUEUE"] = function(msg)
         print("  /fq debug expired - Dump uncollected expired/cancelled log entries for the current character (phantom-notification diagnosis)")
         print("  /fq debug expired clear - Finalize the listed entries as collected (use after verifying there's no mail to recover)")
         print("  /fq debug pulls - Toggle per-op trace for pulls AND deposits; off by default for perf, on for diagnosing item-specific failures")
+        print("  /fq debug parsegold [<string>] - Run gold-string parser against input or self-test locale variants (German/EN dot/comma)")
         print("  /fq tutorial - Show the first-time tutorial")
         print("  /fq settings - Open settings panel")
         print("  /fq link [bnet|local] <Char-Realm> - Link to another account (bnet=friend, local=same BNet)")

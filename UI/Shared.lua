@@ -626,9 +626,19 @@ UI.BuildCurrentCharTasks = BuildCurrentCharTasks
 -- Format: "ItemName";category;minIlvl;maxIlvl;?;?;?;?;?;price;quality;#;;
 local function BuildAuctionatorSearchString(item)
     local name = '"' .. (item.name or "") .. '"'
-    -- Parse buy price to gold integer
+    -- Parse buy price to gold integer, then add 0.9999 of headroom so the
+    -- Auctionator search captures items priced just under the next whole
+    -- gold. Without this, a 200g target excludes items at 200g 99s 99c
+    -- (Auctionator: maxPrice * 10000 → 2000000c, item is 2009999c → no
+    -- match). With +0.9999 → 200.9999 * 10000 → 2009999c, exactly the
+    -- "≤ 200g 99s 99c" interpretation a player expects from a snipe
+    -- ceiling. Doesn't over-match to 201g.
     local priceGold = ns:ParseGoldValue(item.buyPrice or "")
-    local priceStr = priceGold > 0 and tostring(math.ceil(priceGold)) or ""
+    local priceStr = ""
+    if priceGold > 0 then
+        local ceiling = math.ceil(priceGold) + 0.9999
+        priceStr = string.format("%.4f", ceiling)
+    end
     -- Quality: map string to number if needed
     local qualNum = ""
     if item.quality then
