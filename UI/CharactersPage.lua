@@ -1067,6 +1067,101 @@ local globalDefaultsBar
 local globalDefaultsWidgets = {}
 local viewTogglesWidgets = {}
 
+-- Loading banner shown above the Global Defaults bar while Scanner's
+-- bulk-project pass is mid-flight (FQ-137 followup). The pass yields
+-- one alt per frame so the relog hitch is gone, but during the drain
+-- window the Characters page would otherwise show stale or partial alt
+-- inventory data with no indication anything was happening. Banner
+-- surfaces "Loading inventory data: X / Y characters" and clears when
+-- the pass completes.
+local loadingBanner
+local loadingBannerLabel
+local loadingBannerBar
+local loadingBannerBarFill
+
+local function EnsureLoadingBanner(tableContainer)
+    if loadingBanner then return end
+
+    loadingBanner = CreateFrame("Frame", nil, tableContainer, "BackdropTemplate")
+    loadingBanner:SetHeight(24)
+    loadingBanner:SetPoint("TOPLEFT", tableContainer, "TOPLEFT", 0, 0)
+    loadingBanner:SetPoint("TOPRIGHT", tableContainer, "TOPRIGHT", 0, 0)
+    loadingBanner:SetBackdrop({
+        bgFile = "Interface\\Tooltips\\UI-Tooltip-Background",
+    })
+    loadingBanner:SetBackdropColor(0.18, 0.14, 0.05, 0.9)  -- amber tint
+    loadingBanner:Hide()
+
+    loadingBannerLabel = loadingBanner:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    loadingBannerLabel:SetPoint("LEFT", loadingBanner, "LEFT", 8, 0)
+    loadingBannerLabel:SetTextColor(1, 0.85, 0.4)
+    loadingBannerLabel:SetText("Loading inventory data...")
+
+    -- Slim progress bar pinned to the right side of the banner.
+    loadingBannerBar = CreateFrame("Frame", nil, loadingBanner, "BackdropTemplate")
+    loadingBannerBar:SetHeight(8)
+    loadingBannerBar:SetWidth(160)
+    loadingBannerBar:SetPoint("RIGHT", loadingBanner, "RIGHT", -8, 0)
+    loadingBannerBar:SetBackdrop({
+        bgFile = "Interface\\Tooltips\\UI-Tooltip-Background",
+        edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
+        edgeSize = 6,
+        insets = { left = 1, right = 1, top = 1, bottom = 1 },
+    })
+    loadingBannerBar:SetBackdropColor(0.05, 0.05, 0.05, 1)
+    loadingBannerBar:SetBackdropBorderColor(0.4, 0.3, 0.1, 1)
+
+    loadingBannerBarFill = loadingBannerBar:CreateTexture(nil, "ARTWORK")
+    loadingBannerBarFill:SetPoint("TOPLEFT", loadingBannerBar, "TOPLEFT", 1, -1)
+    loadingBannerBarFill:SetPoint("BOTTOMLEFT", loadingBannerBar, "BOTTOMLEFT", 1, 1)
+    loadingBannerBarFill:SetColorTexture(0.9, 0.7, 0.2, 0.95)
+    loadingBannerBarFill:SetWidth(0)
+end
+
+-- Update the banner from Scanner's bulk-project status. Returns the
+-- height the banner occupies (0 when hidden) so callers can adjust the
+-- global-defaults bar's anchor.
+local function RefreshLoadingBanner()
+    if not loadingBanner then return 0 end
+    local status = ns.Scanner and ns.Scanner._bulkProjectStatus
+    if not status or not status.active or status.total == 0 then
+        loadingBanner:Hide()
+        return 0
+    end
+    loadingBanner:Show()
+    local frac = status.done / status.total
+    if frac < 0 then frac = 0 elseif frac > 1 then frac = 1 end
+    loadingBannerLabel:SetFormattedText("Loading inventory data: %d / %d characters",
+        status.done, status.total)
+    local barInner = loadingBannerBar:GetWidth() - 2
+    if barInner < 0 then barInner = 0 end
+    loadingBannerBarFill:SetWidth(barInner * frac)
+    return loadingBanner:GetHeight()
+end
+
+-- Lightweight per-alt refresh hook: the bulk-project pass calls this
+-- after each alt projection so the banner ticks down without us having
+-- to rebuild the whole Characters table. Safe to call when the page
+-- isn't current — the EnsureLoadingBanner / RefreshLoadingBanner pair
+-- noop until the page has been built once.
+function UI:RefreshCharactersLoadingBanner()
+    if not loadingBanner then return end
+    local bannerH = RefreshLoadingBanner()
+    if globalDefaultsBar then
+        globalDefaultsBar:ClearAllPoints()
+        if bannerH > 0 then
+            globalDefaultsBar:SetPoint("TOPLEFT", loadingBanner, "BOTTOMLEFT", 0, -1)
+            globalDefaultsBar:SetPoint("TOPRIGHT", loadingBanner, "BOTTOMRIGHT", 0, -1)
+        else
+            local tableContainer = UI.tableContainer
+            if tableContainer then
+                globalDefaultsBar:SetPoint("TOPLEFT", tableContainer, "TOPLEFT", 0, 0)
+                globalDefaultsBar:SetPoint("TOPRIGHT", tableContainer, "TOPRIGHT", 0, 0)
+            end
+        end
+    end
+end
+
 local function EnsureGlobalDefaultsBar(tableContainer)
     if globalDefaultsBar then return end
 
@@ -1217,8 +1312,23 @@ function UI:RefreshCharactersPage()
     mainFrame.pageTitle:SetText("Characters & Realms")
     UI._HideAllActionBtns()
 
+    EnsureLoadingBanner(tableContainer)
     EnsureGlobalDefaultsBar(tableContainer)
     EnsureConfigPanel(tableContainer)
+
+    -- Re-anchor the Global Defaults bar below the loading banner if
+    -- the banner is showing, otherwise back to the container top.
+    -- Banner sits topmost; defaults bar tucks under it; the chars table
+    -- header anchors to the defaults bar (further down in this fn).
+    local bannerH = RefreshLoadingBanner()
+    globalDefaultsBar:ClearAllPoints()
+    if bannerH > 0 then
+        globalDefaultsBar:SetPoint("TOPLEFT", loadingBanner, "BOTTOMLEFT", 0, -1)
+        globalDefaultsBar:SetPoint("TOPRIGHT", loadingBanner, "BOTTOMRIGHT", 0, -1)
+    else
+        globalDefaultsBar:SetPoint("TOPLEFT", tableContainer, "TOPLEFT", 0, 0)
+        globalDefaultsBar:SetPoint("TOPRIGHT", tableContainer, "TOPRIGHT", 0, 0)
+    end
 
     RefreshGlobalDefaultsBar()
 

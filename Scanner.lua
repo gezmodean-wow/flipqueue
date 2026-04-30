@@ -334,9 +334,20 @@ end
 -- Spreading one alt per frame via C_Timer.After(0) keeps the relog
 -- snappy at the cost of seeing the full alt picture a fraction of a
 -- second later (FQ-137 followup).
-local bulkProjectInflight = false
+--
+-- Progress state at Scanner._bulkProjectStatus is what UI banners read
+-- so the Characters page can show "Loading X of Y..." while the work
+-- drains. Active=false when idle.
+Scanner._bulkProjectStatus = {
+    active   = false,
+    total    = 0,
+    done     = 0,
+    skipped  = 0,
+    current  = nil,  -- fqKey of the alt currently being projected
+}
+
 local function BulkProjectKnownAlts()
-    if bulkProjectInflight then return end
+    if Scanner._bulkProjectStatus.active then return end
     if not (Syndicator and Syndicator.API and Syndicator.API.GetAllCharacters
         and Syndicator.API.GetByCharacterFullName) then
         return
@@ -371,24 +382,62 @@ local function BulkProjectKnownAlts()
         return
     end
 
-    bulkProjectInflight = true
-    local projected = 0
+    local status = Scanner._bulkProjectStatus
+    status.active  = true
+    status.total   = #todo
+    status.done    = 0
+    status.skipped = skipped
+    status.current = nil
+    -- Fire the InventoryChanged event so UI listeners (Characters page)
+    -- show the "loading" banner immediately rather than waiting for the
+    -- first alt's projection to fire it.
+    if ns.cw and ns.cw.Fire then
+        ns.cw:Fire(ns.cw.Events.InventoryChanged, nil)
+    end
+
     local function ProjectNext()
         local item = table.remove(todo, 1)
         if not item then
-            bulkProjectInflight = false
-            ns:PrintDebug("Bulk-project: " .. projected .. " alt(s) refreshed, "
-                .. skipped .. " skipped (realm not in alias map)")
+            status.active  = false
+            status.current = nil
+            ns:PrintDebug("Bulk-project: " .. status.done .. " alt(s) refreshed, "
+                .. status.skipped .. " skipped (realm not in alias map)")
+            -- Final fire so the banner clears.
+            if ns.cw and ns.cw.Fire then
+                ns.cw:Fire(ns.cw.Events.InventoryChanged, nil)
+            end
+            if ns.UI and ns.UI.RefreshCharactersLoadingBanner then
+                ns.UI:RefreshCharactersLoadingBanner()
+            end
             return
         end
+        status.current = item.fqKey
         local okChar, charData = pcall(Syndicator.API.GetByCharacterFullName, item.synKey)
         if okChar and type(charData) == "table" then
             WriteProjectedInventory(item.fqKey, charData, "alt")
-            projected = projected + 1
+            status.done = status.done + 1
+        end
+        -- Tick the Characters-page loading banner so the player sees
+        -- progress as alts drain across frames.
+        if ns.UI and ns.UI.RefreshCharactersLoadingBanner then
+            ns.UI:RefreshCharactersLoadingBanner()
         end
         C_Timer.After(0, ProjectNext)
     end
+    -- Fire the banner refresh once before the first frame so the banner
+    -- appears immediately when the work starts (not after the first alt
+    -- finishes projecting).
+    if ns.UI and ns.UI.RefreshCharactersLoadingBanner then
+        ns.UI:RefreshCharactersLoadingBanner()
+    end
     C_Timer.After(0, ProjectNext)
+end
+
+-- Public accessor. UI listens for the Cogworks InventoryChanged event
+-- to know when to re-read this; it doesn't need to subscribe to the
+-- file-local status table directly.
+function Scanner:GetBulkProjectStatus()
+    return Scanner._bulkProjectStatus
 end
 
 function Scanner:RefreshCurrentCharacterFromSyndicator()
