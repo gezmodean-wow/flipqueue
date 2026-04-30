@@ -16,6 +16,17 @@ externals:
     tag: v0.10.0
     path: Cogworks-1.0
 
+# CurseForge / Wago dependency relations. Mirrors the toc's
+# `## Dependencies` and `## OptionalDeps`. Without these, the CurseForge
+# App and Wago client don't know to auto-install Syndicator alongside
+# FlipQueue — which leaves players in the "addon installed but won't
+# load (Missing Dependencies)" state.
+required-dependencies:
+  - syndicator
+optional-dependencies:
+  - auctionator
+  - tradeskill-master
+
 wowi-archive-previous: no
 
 ignore:
