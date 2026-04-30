@@ -7,7 +7,7 @@ local addonName, ns = ...
 --------------------------
 
 -- Current schema version
-local CURRENT_SCHEMA = 8
+local CURRENT_SCHEMA = 9
 
 -- Schema history:
 -- nil/0  = v0.5.0 (stable release): queue array, separate inventory/characters/hiddenCharacters
@@ -22,6 +22,10 @@ local CURRENT_SCHEMA = 8
 -- 8      = Character tombstones: db.deletedCharacters table. Tombstoned
 --          chars are kept out of db.characters despite TSM/Syndicator/sync
 --          re-detection, until the user explicitly restores.
+-- 9      = ahAutoScanOnOpen smart default: when TSM or Auctionator is
+--          loaded, force the setting to false so FlipQueue doesn't compete
+--          with their scans (FQ-137 root cause). One-shot — players can
+--          re-enable from Settings if they prefer the old behavior.
 
 local function RunMigrations(db)
     db.schemaVersion = db.schemaVersion or 0
@@ -284,6 +288,44 @@ local function RunMigrations(db)
         db.deletedCharacters = db.deletedCharacters or {}
         db.schemaVersion = 8
     end  -- migration 8
+
+    -- Migration 9: ahAutoScanOnOpen smart default (FQ-137 root cause).
+    -- Players running TSM or Auctionator alongside FlipQueue had three
+    -- addons issuing SendSearchQuery calls in parallel, all queueing
+    -- behind Blizzard's global AH rate limit. With auto-scan-on-open
+    -- enabled, FQ added 350ms × bag-item-count to the cumulative wait.
+    -- Force-flip to off when either of those addons is loaded; the
+    -- player can re-enable from Settings if they prefer the old behavior.
+    -- One-shot, so players who explicitly turn it back on don't get
+    -- repeatedly reset on subsequent migrations.
+    if db.schemaVersion < 9 then
+        db.settings = db.settings or {}
+        local hasTSM, hasAuctionator
+        if C_AddOns and C_AddOns.IsAddOnLoaded then
+            hasTSM = C_AddOns.IsAddOnLoaded("TradeSkillMaster")
+            hasAuctionator = C_AddOns.IsAddOnLoaded("Auctionator")
+        elseif IsAddOnLoaded then
+            hasTSM = IsAddOnLoaded("TradeSkillMaster")
+            hasAuctionator = IsAddOnLoaded("Auctionator")
+        end
+        if hasTSM or hasAuctionator then
+            local wasOn = db.settings.ahAutoScanOnOpen == true
+            db.settings.ahAutoScanOnOpen = false
+            if wasOn then
+                -- Surface the change so a player who explicitly enabled it
+                -- isn't surprised when their setting flipped. Stashed for
+                -- Scanner.lua's PLAYER_LOGIN handler to print alongside
+                -- the existing _cleanupSummary / _phase6aMessage path.
+                local who = (hasTSM and hasAuctionator) and "TradeSkillMaster and Auctionator"
+                    or (hasTSM and "TradeSkillMaster" or "Auctionator")
+                db._autoScanMigrationMessage =
+                    "FlipQueue: " .. who .. " detected — auto-scan-on-AH-open turned off " ..
+                    "to avoid competing with their scans. Use the Scan To-Do button in " ..
+                    "the AH drawer when you want fresh prices, or re-enable in /fq settings."
+            end
+        end
+        db.schemaVersion = 9
+    end  -- migration 9
 end  -- RunMigrations
 
 -- Expose for DB.lua

@@ -960,7 +960,12 @@ function UI:CreateSettingsPanel(parent)
 
     settingsWidgets.ahAutoScan, h = CreateSettingsCheckbox(sc, sy,
         "Auto-scan inventory when the Auction House opens",
-        "When on, FlipQueue scans bags and issues live AH price queries the moment you open the AH. Off by default — running this in parallel with TSM's Post Scan can slow both addons down. With it off, use the Scan To-Do / Scan All buttons in the AH drawer when you want fresh prices.",
+        "When on, FlipQueue scans bags and issues live AH price queries the moment you open the AH. " ..
+        "|cffff7777Strongly recommended OFF if you also use TradeSkillMaster or Auctionator|r — " ..
+        "all three addons share Blizzard's global AH query rate limit, and running them in parallel " ..
+        "stacks delays into the tens-of-seconds-to-minutes range during posting. " ..
+        "With this off, the Scan To-Do / Scan All buttons in the AH drawer are your manual triggers, " ..
+        "and FlipQueue still passively reads any prices the other addons fetch.",
         "ahAutoScanOnOpen")
     sy = sy - h - SECTION_SPACING
 

@@ -466,7 +466,17 @@ hookFrame:SetScript("OnEvent", function(_, event)
             ns:PrintDebug("[AutoScan] post-open: " .. (results and #results or 0) ..
                 " items via " .. source)
             if results and #results > 0 then
-                AutoScan:ScanQueue(results)
+                -- Pass math.huge as the freshness ceiling so ScanQueue
+                -- only queries items with NO cache entry at all. Persisted
+                -- entries from prior sessions count as "fresh enough" for
+                -- the auto path, even when older than the 30-min freshness
+                -- ceiling. Other addons (TSM/Auctionator/default UI) will
+                -- naturally refresh stale entries via the passive harvester
+                -- when the player triggers their own scans, and the manual
+                -- Scan To-Do / Scan All buttons keep the default 30-min
+                -- freshness behavior (FQ-137 followup — eliminates the
+                -- relog "150 bag items × 350ms" storm).
+                AutoScan:ScanQueue(results, math.huge)
             end
         end)
     elseif event == "AUCTION_HOUSE_CLOSED" then

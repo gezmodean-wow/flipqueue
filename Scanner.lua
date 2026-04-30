@@ -770,6 +770,10 @@ frame:SetScript("OnEvent", function(self, event, ...)
             ns:Print(ns.COLORS.YELLOW .. ns.db._phase6aMessage .. "|r")
             ns.db._phase6aMessage = nil
         end
+        if ns.db._autoScanMigrationMessage then
+            ns:Print(ns.COLORS.YELLOW .. ns.db._autoScanMigrationMessage .. "|r")
+            ns.db._autoScanMigrationMessage = nil
+        end
 
         -- Deleted-character login prompt. When the user logs in on a char
         -- they previously deleted from FlipQueue, give them a chance to
