@@ -333,6 +333,172 @@ SlashCmdList["FLIPQUEUE"] = function(msg)
             UI:ShowExportPopup(output, #lines .. " lines, " .. #output .. " chars — Ctrl+A, Ctrl+C to copy")
         end
 
+    elseif msg == "debug perf" then
+        -- /fq debug perf — perf diagnostic snapshot. Bundles per-addon CPU
+        -- and memory, FlipQueue scale stats, perf-relevant settings, and
+        -- the current runtime state into one copy-pasteable text dump.
+        -- Used to triage "FQ feels slow" reports (see FQ-137 follow-ups);
+        -- gives us hard numbers instead of guessing which subsystem is hot.
+        local lines = {}
+        local function L(s) lines[#lines + 1] = s or "" end
+
+        local now = date("%Y-%m-%d %H:%M:%S")
+        local version
+        if C_AddOns and C_AddOns.GetAddOnMetadata then
+            version = C_AddOns.GetAddOnMetadata("flipqueue", "Version")
+        elseif GetAddOnMetadata then
+            version = GetAddOnMetadata("flipqueue", "Version")
+        end
+        L("[FlipQueue perf snapshot " .. now .. "  v" .. (version or "?") .. "]")
+
+        -- CPU profiling. Requires `/console scriptProfile 1` + /reload.
+        L("")
+        L("--- Addon CPU (ms total since profile reset) ---")
+        local profilingOn = (GetCVar and GetCVar("scriptProfile")) == "1"
+        if not profilingOn then
+            L("  scriptProfile is OFF. To enable:")
+            L("    /console scriptProfile 1")
+            L("    /reload")
+            L("    <reproduce slowness for ~30 seconds>")
+            L("    /fq debug perf")
+        else
+            if UpdateAddOnCPUUsage then UpdateAddOnCPUUsage() end
+            local function cpu(name)
+                local v = (GetAddOnCPUUsage and GetAddOnCPUUsage(name)) or 0
+                return string.format("%10.1f  %s", v, name)
+            end
+            L("  " .. cpu("flipqueue"))
+            L("  " .. cpu("TradeSkillMaster"))
+            L("  " .. cpu("Syndicator"))
+            L("  " .. cpu("Auctionator"))
+            L("  " .. cpu("Baganator"))
+            L("  " .. cpu("BagSync"))
+        end
+
+        -- Memory. Always available.
+        L("")
+        L("--- Addon memory (KB) ---")
+        if UpdateAddOnMemoryUsage then UpdateAddOnMemoryUsage() end
+        local function mem(name)
+            local v = (GetAddOnMemoryUsage and GetAddOnMemoryUsage(name)) or 0
+            return string.format("%10.1f  %s", v, name)
+        end
+        L("  " .. mem("flipqueue"))
+        L("  " .. mem("TradeSkillMaster"))
+        L("  " .. mem("Syndicator"))
+        L("  " .. mem("Auctionator"))
+        L("  " .. mem("Baganator"))
+        L("  " .. mem("BagSync"))
+
+        -- FlipQueue scale. Big DBs / long lists are usually the smoking gun
+        -- when a player's session has slowed down over weeks of use.
+        L("")
+        L("--- FlipQueue scale ---")
+        if ns.db then
+            local charCount, charWithInv, totalItems = 0, 0, 0
+            for _, c in pairs(ns.db.characters or {}) do
+                charCount = charCount + 1
+                if c.inventory and c.inventory.items then
+                    charWithInv = charWithInv + 1
+                    for _ in pairs(c.inventory.items) do totalItems = totalItems + 1 end
+                end
+            end
+            L(string.format("  characters:        %d (%d with inventory, %d unique items total)",
+                charCount, charWithInv, totalItems))
+
+            local logCount = #(ns.db.log or {})
+            L("  log entries:       " .. logCount)
+
+            local todoCount = 0
+            if ns.db.todoLists and ns.db.todoLists.active and ns.db.todoLists.active.tasks then
+                todoCount = #ns.db.todoLists.active.tasks
+            end
+            local upcoming = (ns.db.todoLists and ns.db.todoLists.upcoming) or {}
+            L(string.format("  to-do:             %d active, %d upcoming list(s)",
+                todoCount, #upcoming))
+
+            local importTotal = 0
+            for _, srcMap in pairs(ns.db.imports or {}) do
+                for _ in pairs(srcMap) do importTotal = importTotal + 1 end
+            end
+            L("  imports (deals):   " .. importTotal)
+        end
+
+        if ns.AuctionScanCache and ns.AuctionScanCache.GetSize then
+            L("  AuctionScanCache:  " .. ns.AuctionScanCache:GetSize() .. " entries")
+        end
+
+        if ns.AuctionAutoScan and ns.AuctionAutoScan.GetStats then
+            local s = ns.AuctionAutoScan:GetStats()
+            L(string.format("  inflight scans:    %d queued, %d inflight",
+                s.queued or 0, s.inflight or 0))
+        end
+
+        -- Settings most likely to influence perf.
+        L("")
+        L("--- Settings (perf-relevant) ---")
+        local s = (ns.db and ns.db.settings) or {}
+        L("  ahPostingEnabled:  " .. tostring(s.ahPostingEnabled ~= false))
+        L("  ahAutoScanOnOpen:  " .. tostring(s.ahAutoScanOnOpen and true or false))
+        L("  autoScan:          " .. tostring(s.autoScan and true or false))
+        L("  tsmEnabled:        " .. tostring(s.tsmEnabled and true or false))
+        L("  debugMessages:     " .. tostring(s.debugMessages and true or false))
+
+        -- Runtime state.
+        L("")
+        L("--- Runtime ---")
+        local ahOpen = (ns.Tracker and ns.Tracker._isAHOpen) and true or false
+        L("  AH open:           " .. tostring(ahOpen))
+        local synReady = false
+        if Syndicator and Syndicator.API and Syndicator.API.IsReady then
+            local ok, v = pcall(Syndicator.API.IsReady)
+            if ok then synReady = v and true or false end
+        end
+        L("  Syndicator ready:  " .. tostring(synReady))
+        local tsmAvail = false
+        if ns.TSM and ns.TSM.IsAvailable then
+            local ok, v = pcall(ns.TSM.IsAvailable, ns.TSM)
+            if ok then tsmAvail = v and true or false end
+        end
+        L("  TSM API available: " .. tostring(tsmAvail))
+        local syncLinked = false
+        if ns.Sync and ns.Sync.IsLinked then
+            local ok, v = pcall(ns.Sync.IsLinked, ns.Sync)
+            if ok then syncLinked = v and true or false end
+        end
+        L("  Sync linked:       " .. tostring(syncLinked))
+
+        -- Loaded AH-adjacent peer addons. Sometimes the offender isn't FQ
+        -- or TSM but a third addon doing its own AH listening.
+        L("")
+        L("--- AH-relevant addons loaded ---")
+        local function loaded(name)
+            if C_AddOns and C_AddOns.IsAddOnLoaded then
+                local v = C_AddOns.IsAddOnLoaded(name)
+                return v and true or false
+            elseif IsAddOnLoaded then
+                local v = IsAddOnLoaded(name)
+                return v and true or false
+            end
+            return false
+        end
+        local peers = {
+            "TradeSkillMaster", "Syndicator", "Auctionator", "Baganator",
+            "BagSync", "Postal", "ArkInventory", "Bagnon",
+        }
+        for _, p in ipairs(peers) do
+            L(string.format("  %-18s %s", p, loaded(p) and "loaded" or "-"))
+        end
+
+        local output = table.concat(lines, "\n")
+        if ns.db then
+            ns.db._debugPerf = output
+            ns.db._debugPerfAt = now
+        end
+        UI:ShowExportPopup(output,
+            #lines .. " lines — Ctrl+A, Ctrl+C to copy. " ..
+            "Saved to FlipQueueDB._debugPerf as backup.")
+
     elseif msg == "debug" or msg == "debug console" then
         -- Open the in-game debug console (buttons + live debug log).
         if UI.ToggleDebugConsole then UI:ToggleDebugConsole() end

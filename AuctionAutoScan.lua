@@ -249,6 +249,17 @@ local function PostingEnabled()
     return not (ns.db and ns.db.settings and ns.db.settings.ahPostingEnabled == false)
 end
 
+-- Snapshot for /fq debug perf. Exposes the queue/inflight counts so the
+-- diagnostic command can report them without reaching into the file-locals.
+function AutoScan:GetStats()
+    local inflightCount = 0
+    for _ in pairs(inflight) do inflightCount = inflightCount + 1 end
+    return {
+        queued   = #pendingQueue,
+        inflight = inflightCount,
+    }
+end
+
 -- Queue a single-item search. callback(gotResults) fires after the result
 -- event lands or the timeout elapses. Idempotent on (itemID, isCommodity)
 -- — if a scan is already inflight for this item, the callback chains on.
