@@ -113,11 +113,18 @@ local function FoldContainerSlots(slots, items, location)
                         -- bindType is index 14 — downstream code filters on
                         -- it (BoP=1, Quest=4, BtA=7, BtW=8) to exclude
                         -- non-tradeable items from the deal pool.
-                        local ok, _, _, _, _, _, _, _, _, _, _, _, _, _, bt =
+                        -- Single combined call: previously this fired
+                        -- C_Item.GetItemInfo twice per unique slot (once for
+                        -- bindType, once for name). Halving the call count
+                        -- materially reduces relog projection cost when many
+                        -- alts are bulk-projected at PLAYER_LOGIN (FQ-137
+                        -- followup).
+                        local ok, n, _, _, _, _, _, _, _, _, _, _, _, _, bt =
                             pcall(C_Item.GetItemInfo, link)
-                        if ok and bt then bindType = bt end
-                        local okName, n = pcall(C_Item.GetItemInfo, link)
-                        itemName = okName and n or nil
+                        if ok then
+                            itemName = n
+                            if bt then bindType = bt end
+                        end
                         if GetDetailedItemLevelInfo then
                             local okIlvl, result = pcall(GetDetailedItemLevelInfo, link)
                             if okIlvl and result then ilvl = tonumber(result) or 0 end
@@ -319,7 +326,17 @@ end
 -- realm is already in our alias map (meaning the user has logged into
 -- that realm at least once). Skips the current character (already
 -- refreshed) and any char outside the alias coverage. Debounced.
+--
+-- Yielded across frames: a player with many alts pays a multi-second
+-- frame hitch on PLAYER_LOGIN if all projections run synchronously
+-- (each alt walks its full bag/bank slot list, calls C_Item.GetItemInfo
+-- per unique item, runs EnrichDealsFromInventory, emits a Sync delta).
+-- Spreading one alt per frame via C_Timer.After(0) keeps the relog
+-- snappy at the cost of seeing the full alt picture a fraction of a
+-- second later (FQ-137 followup).
+local bulkProjectInflight = false
 local function BulkProjectKnownAlts()
+    if bulkProjectInflight then return end
     if not (Syndicator and Syndicator.API and Syndicator.API.GetAllCharacters
         and Syndicator.API.GetByCharacterFullName) then
         return
@@ -331,28 +348,47 @@ local function BulkProjectKnownAlts()
     local ok, allChars = pcall(Syndicator.API.GetAllCharacters)
     if not ok or type(allChars) ~= "table" then return end
 
+    -- Build the work list synchronously, then drain it across frames.
     local currentSyn = CurrentSyndicatorKey()
-    local projected, skipped = 0, 0
-
+    local todo = {}
+    local skipped = 0
     for _, synKey in ipairs(allChars) do
         if synKey ~= currentSyn then
             local fqKey = TranslateSyndicatorKey(synKey)
             if fqKey then
-                local okChar, charData = pcall(Syndicator.API.GetByCharacterFullName, synKey)
-                if okChar and type(charData) == "table" then
-                    WriteProjectedInventory(fqKey, charData, "alt")
-                    projected = projected + 1
-                end
+                todo[#todo + 1] = { synKey = synKey, fqKey = fqKey }
             else
                 skipped = skipped + 1
             end
         end
     end
 
-    if projected > 0 or skipped > 0 then
-        ns:PrintDebug("Bulk-project: " .. projected .. " alt(s) refreshed, "
-            .. skipped .. " skipped (realm not in alias map)")
+    if #todo == 0 then
+        if skipped > 0 then
+            ns:PrintDebug("Bulk-project: 0 alt(s) refreshed, " .. skipped
+                .. " skipped (realm not in alias map)")
+        end
+        return
     end
+
+    bulkProjectInflight = true
+    local projected = 0
+    local function ProjectNext()
+        local item = table.remove(todo, 1)
+        if not item then
+            bulkProjectInflight = false
+            ns:PrintDebug("Bulk-project: " .. projected .. " alt(s) refreshed, "
+                .. skipped .. " skipped (realm not in alias map)")
+            return
+        end
+        local okChar, charData = pcall(Syndicator.API.GetByCharacterFullName, item.synKey)
+        if okChar and type(charData) == "table" then
+            WriteProjectedInventory(item.fqKey, charData, "alt")
+            projected = projected + 1
+        end
+        C_Timer.After(0, ProjectNext)
+    end
+    C_Timer.After(0, ProjectNext)
 end
 
 function Scanner:RefreshCurrentCharacterFromSyndicator()
