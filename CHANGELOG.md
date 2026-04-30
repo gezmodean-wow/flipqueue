@@ -1,5 +1,27 @@
 # Changelog
 
+## v0.12.0-alpha7
+
+Seventh alpha of v0.12. Hardening pass after alpha6 — small fixes and a new diagnostic command for triaging player-reported slowness.
+
+### Better diagnostics for "FlipQueue feels slow" reports
+
+A new `/fq debug perf` slash command bundles everything we need to triage a perf complaint into one copy-pasteable text dump: per-addon CPU and memory (when WoW's script profiler is on), FlipQueue's internal scale numbers (character / inventory / log / to-do / scan-cache / inflight scan counts), the perf-relevant settings (`ahPostingEnabled`, `ahAutoScanOnOpen`, `autoScan`, `tsmEnabled`), the current runtime state (AH open, Syndicator ready, TSM API available, multi-account sync linked), and a list of which AH-adjacent addons are loaded.
+
+To capture a CPU profile, the player runs `/console scriptProfile 1`, `/reload`, reproduces the slowness for ~30 seconds, then `/fq debug perf`. The resulting export tells us whether FlipQueue is actually the hot path or whether another addon is — without us having to guess. Output is also saved to `FlipQueueDB._debugPerf` as a backup if the popup is closed before copying.
+
+### TradeSkillMaster stays optional, even mid-session
+
+The auction-house posting price resolver had a defensive gap — the inner `EvalLevel` and `EvalCanonical` closures indexed `TSM_API.GetCustomPriceValue` *before* `pcall` wrapped the call, so if TSM unloaded mid-session the index would throw past pcall instead of getting caught. Hardened the closures to early-exit on a nil `TSM_API`. The intended invariant — TSM is `OptionalDeps`, never required at runtime — is now properly enforced.
+
+### Install: dependency relations registered with CurseForge / Wago
+
+A player reported installing FlipQueue and getting a "Missing Dependencies" error from the WoW client. The toc has always declared `## Dependencies: Syndicator`, which is what blocks the load — but we never told CurseForge to register Syndicator as a required dependency on the project page, so the CurseForge App didn't auto-install it alongside FlipQueue. Now declared in `.pkgmeta` (`required-dependencies: syndicator`, `optional-dependencies: auctionator`, `tradeskill-master`) so future uploads register those relations automatically. The CurseForge project page Relations were also set manually so existing alpha6 builds get auto-install retroactively.
+
+### Interface version: current retail only
+
+Dropped 12.0.1 from the supported Interface set; FlipQueue now targets 12.0.5 only. 12.0.1 was the initial War Within launch and is no longer relevant. Subsequent versions will keep the toc Interface line at the current retail patch.
+
 ## v0.12.0-alpha6
 
 Sixth alpha of v0.12. The big fix is auction house performance when running alongside TSM. Plus a shopping-list ceiling fix for FlippingPal-imported buy tasks.
