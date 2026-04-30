@@ -1,5 +1,27 @@
 # Changelog
 
+## v0.12.0-alpha6
+
+Sixth alpha of v0.12. The big fix is auction house performance when running alongside TSM. Plus a shopping-list ceiling fix for FlippingPal-imported buy tasks.
+
+### AH scanning and posting: FlipQueue stays out of TSM's way
+
+Players running FlipQueue with TSM reported AH scanning and posting were "very slow" — to the point that disabling FlipQueue alone made the slowness go away. The problem was that FlipQueue was doing its own work in parallel with TSM's: every time you opened the AH, FlipQueue ran its own price scan on top of TSM's, and every post or cancel triggered redundant rescans of your bags and to-do list. Two addons hammering the AH at the same time made both of them feel sluggish.
+
+The fix is to step back. FlipQueue now does the minimum on AH open — just the things its own UI needs — and leaves TSM alone unless you specifically ask FlipQueue to scan. Posting and cancelling no longer kick off duplicate work in the background, and your inventory only gets re-broadcast to your other accounts when something actually changed.
+
+If you liked the old behavior — FlipQueue auto-scanning the AH the moment you opened it — flip **Settings → Auction House → "Auto-scan inventory when the Auction House opens"** back on. It's *off by default* because it makes a real perf trade-off when running with TSM, but it's there for players who want it. With auto-scan off, the **Scan To-Do** and **Scan All** buttons in the AH drawer are your manual "give me fresh AH prices now" triggers — use them whenever you want a refresh.
+
+The auction house also opens faster now — the per-character to-do refresh and TSM-rejection check happen a fraction of a second after the AH window comes up instead of blocking it.
+
+### Shopping-list max price: inclusive of the gold value you typed
+
+A buy task with a target price of 200g was generating an Auctionator search with `maxPrice` set to a strict ≤200g. That excluded any listing priced at 200g 0s 1c through 200g 99s 99c — exactly the listings you'd want to snipe at a 200g ceiling. The shopping-list export now treats the entered gold value as inclusive of "anything below the next whole gold," so a 200g target accepts up to 200g 99s 99c but won't bleed into 201g.
+
+### New debug command
+
+- **`/fq debug parsegold <string>`** (or no arg for a self-test) — trace how FlipQueue parses a gold string. Covers German/EU thousands separators (`1.500g`, `2.000g`), k/m abbreviations, color codes, and degenerate inputs. Useful for diagnosing locale-specific buy-task parse failures without needing an EU client.
+
 ## v0.12.0-alpha5
 
 Fifth alpha of v0.12. One fix, narrow scope: the Transform page's "Auctionator" output produces a format Auctionator can actually import again, and Auctionator-imported lists round-trip correctly through TSM-info enrichment.
