@@ -402,13 +402,19 @@ function AuctionPost:ResolvePostPrice(itemKey, itemID, itemLink, isCommodity)
     -- own op settings), level form for raw DB price sources.
     local levelStr = ns.TSM:ItemKeyToLevelString(itemKey, itemLink)
     local tsmStr   = ns.TSM:ItemKeyToTSMString(itemKey)
+    -- Defense-in-depth: the outer `ns.TSM:IsEnabled()` gate at the top of
+    -- ResolvePostPrice catches the "TSM never loaded" case, but if TSM is
+    -- present at function entry and disappears before these closures fire
+    -- (or if `IsEnabled` returns a stale-true snapshot), the
+    -- `TSM_API.GetCustomPriceValue` index would throw before pcall catches
+    -- anything. TSM is OptionalDeps and must never be a hard dep at runtime.
     local function EvalLevel(source)
-        if not levelStr or not source or source == "" then return nil end
+        if not TSM_API or not levelStr or not source or source == "" then return nil end
         local ok, v = pcall(TSM_API.GetCustomPriceValue, source, levelStr)
         return ok and v or nil
     end
     local function EvalCanonical(source)
-        if not tsmStr or not source or source == "" then return nil end
+        if not TSM_API or not tsmStr or not source or source == "" then return nil end
         local ok, v = pcall(TSM_API.GetCustomPriceValue, source, tsmStr)
         return ok and v or nil
     end
