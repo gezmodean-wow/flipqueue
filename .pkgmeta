@@ -2,6 +2,16 @@ package-as: flipqueue
 
 enable-nolib-creation: no
 
+# Use the project's CHANGELOG.md as the per-release changelog on
+# CurseForge / Wago. Without this the packager auto-generates from git
+# commit messages, which are commit-readerese (file paths, fix(FQ-NNN):,
+# etc.) — fine for engineers, useless to players reading the project
+# page. Pointing at CHANGELOG.md means the project-page release notes
+# match what we ship in the addon itself.
+manual-changelog:
+  filename: CHANGELOG.md
+  markup-type: markdown
+
 # Most libraries are vendored directly in Libs/ — the previous wowace SVN
 # externals broke builds when repos.wowace.com returned 502/503, so we
 # stopped relying on that host. Cogworks-1.0 is fetched from our own
