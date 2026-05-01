@@ -1,5 +1,57 @@
 # Changelog
 
+## v0.12.0-alpha8
+
+Eighth alpha of v0.12. The headliner is the FQ-138 fix — TSM's posting queue no longer occasionally skips items when FlipQueue is loaded. Plus a coordinated improvement to the FQ-137 cluster (smart defaults for the auto-scan setting), a relog-hitch fix, a loading banner on the Characters page, and the dual changelog / storefront restructure for a sustainable CurseForge / Wago workflow.
+
+### TSM post-skip fixed (FQ-138)
+
+TSM Post Scan was occasionally jumping over items in its queue when FlipQueue was loaded. Disabling FlipQueue made the skipping stop. Root cause: FlipQueue's post-result frame fired `RequestOwnedAuctionsRefresh` on every `AUCTION_HOUSE_AUCTION_CREATED` event — including TSM-initiated posts. The forced `QueryOwnedAuctions({})` 1 second later competed with TSM's expected event sequence, consuming a slot in Blizzard's AH server throttle and producing a delayed/duplicate `OWNED_AUCTIONS_UPDATED` that confused TSM's posting state machine into thinking the next item was already posted.
+
+Fix: a new `_fqInitiatedAction` flag set right before our `PostItem` / `PostCommodity` calls, cleared by the matching server event. The post-result frame's listener only fires the requery for FlipQueue's own posts now. TSM-initiated posts pass through silently. A 3-second safety timer clears the flag if the post fails without firing either `AUCTION_HOUSE_AUCTION_CREATED` or `AUCTION_HOUSE_SHOW_ERROR`.
+
+The Cancel path is unaffected — `RequestOwnedAuctionsRefresh` after `AuctionPost:CancelAuction` is FlipQueue-initiated by construction, and TSM's Cancel Scan calls `C_AuctionHouse.CancelAuction` directly without going through our flow.
+
+### Auto-scan smart default + cache-aware skip (FQ-137 cluster, continued)
+
+Three coordinated changes targeting the root cause of the FQ-137 reports — players running TSM, Auctionator, *and* FlipQueue all issuing `SendSearchQuery` calls in parallel against Blizzard's shared global rate limit, stacking delays into the minutes range.
+
+- **Schema migration #9** — when TSM or Auctionator is loaded at the time of migration, force `ahAutoScanOnOpen = false`. One-shot, so players who explicitly re-enable later won't get reset on subsequent migrations. Surfaces a chat note explaining the change so the player isn't surprised that their setting flipped.
+- **AuctionAutoScan AH_SHOW path** now passes `math.huge` as the freshness ceiling to `ScanQueue`. The auto-scan only queries items with NO cache entry — persisted scan-cache entries from prior sessions count as good-enough for the auto path, instead of re-querying everything older than `DEFAULT_FRESH_AGE_SEC = 1800`. TSM/Auctionator's passive scans naturally refresh stale entries when the player runs their own scans, and the manual Scan To-Do / Scan All buttons keep the original 30-min freshness behavior.
+- **Settings tooltip** rewritten to flag the parallel-scan cost prominently in red — "Strongly recommended OFF if you also use TradeSkillMaster or Auctionator" — and explain that the passive listener still reads prices from other addons' scans.
+
+Combined, these eliminate the cold-cache storm that hit Niduin on every relog: even with the setting on, persisted cache entries skip the `SendSearchQuery` queue, and new installs / fresh players with TSM see the setting default to off automatically.
+
+### Relog hitch fix: yielded bulk-project + halved `C_Item.GetItemInfo` calls
+
+A player with many alts pays a multi-second frame hitch on every character switch / `/reload` as `BulkProjectKnownAlts` walks every Syndicator-known character and projects each one's full inventory synchronously. Two changes:
+
+1. **`BulkProjectKnownAlts` now drains its work list one alt per frame** via `C_Timer.After(0, ...)` instead of looping synchronously. Each alt's projection still walks bags/bank, calls `C_Item.GetItemInfo` per unique item, runs `EnrichDealsFromInventory`, and emits a Sync delta — but spreading the work across frames keeps the relog snappy. The full alt picture lands a fraction of a second later instead of in one giant hitch.
+
+2. **`FoldContainerSlots` was calling `C_Item.GetItemInfo` twice per unique slot** (once for `bindType` at index 14, once for `name` at index 1). Combining into one call halves the API hit count during projection, compounding with #1 for relog cost.
+
+The existing 30s `lastBulkProjectAt` debounce is preserved — a relog within 30s still skips the bulk pass since Syndicator's data hasn't changed.
+
+### Characters page: loading banner during bulk-project
+
+Surfaces async work the player would otherwise not see. With the yielded `BulkProjectKnownAlts` draining one alt per frame, the Characters page would show partial / stale alt inventory data with no indication anything was happening. Now an amber banner with a progress fill sits above the Global Defaults bar reading "Loading inventory data: X / Y characters" while the pass runs, and clears when it completes.
+
+`Scanner` exposes status via `ns.Scanner._bulkProjectStatus` and a public `GetBulkProjectStatus()` accessor. After each alt projection, Scanner calls `UI:RefreshCharactersLoadingBanner()` so the banner ticks per-frame without rebuilding the whole table. When idle, the bar pins back to the container top so non-loading sessions look unchanged.
+
+Establishes the precedent for surfacing async work elsewhere — same pattern will apply to the mini view eventually.
+
+### Sustainable CurseForge / Wago workflow
+
+Three structural changes for keeping project-page artifacts in sync without per-release manual labor:
+
+1. **`RELEASES.md` — new player-facing changelog.** Plain language, no commit references or file paths. Replaces `CHANGELOG.md` as the `manual-changelog` source in `.pkgmeta`, so the project-page changelog tab stops getting engineering jargon bled into it.
+
+2. **`CHANGELOG.md` stays as-is** — full alpha-by-alpha engineering record, internal terminology, file:line references. Used during development; not pushed to project pages.
+
+3. **`docs/storefront/`** — versioned source of truth for project-page materials that have no API to push them: `description.md`, `short-description.md`, `screenshots/`, future `faq.md`. CurseForge has no description-update API ([CF-I-6366](https://curseforge-ideas.overwolf.com/ideas/CF-I-6366) in "Future consideration" since 2024-06), Wago similarly. Hand-pasted to dashboards on **public releases only** — alphas leave the project page on whatever the last public release described.
+
+`CLAUDE.md` and the working memory get a `Release artifacts` block documenting the convention so future sessions know which file to update when.
+
 ## v0.12.0-alpha7
 
 Seventh alpha of v0.12. Hardening pass after alpha6 — small fixes and a new diagnostic command for triaging player-reported slowness.
