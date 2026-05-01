@@ -169,71 +169,109 @@ local importPreviewResults = nil
 local importLastLen = 0
 local importBusy = false -- guard against re-entrant pastes during async save
 
+-- Inputs above this many characters route through the async chunked
+-- parser to avoid client freezes during the parse stage. The previous
+-- chunking only covered the save / preview stages — Parse itself was
+-- still O(N) synchronous and froze the client on full-region FP
+-- pastes (~700KB / 4500 items, FQ-131).
+local PARSE_CHUNK_THRESHOLD = 50000  -- ~50KB ≈ 330 FP-website items
+
+-- Continuation after parse completes, factored out so both the sync
+-- and chunked parse paths share it. Routes the parsed item list into
+-- the existing save / preview pipeline (which already chunks).
+local function HandleParsedItems(items)
+    HideProgress()
+    if not items or #items == 0 then
+        importBusy = false
+        importStatus:SetText(ns.COLORS.RED .. "No items found in pasted data.|r")
+        return
+    end
+
+    if importSkipCheck:GetChecked() then
+        -- Auto-import: process async with progress bar
+        importBusy = true
+        importEdit:SetText("")
+        importEdit:ClearFocus()
+        importPreviewData = nil
+        importPreviewResults = nil
+        UI.importPreviewTable:SetData({})
+        importLastLen = 0
+
+        local total = #items
+        ShowProgress(0, total)
+        importStatus:SetText(ns.COLORS.YELLOW .. "Processing " .. total .. " items...|r")
+
+        ns.Import:SaveChunked(items, nil, 50,
+            function(processed, t) ShowProgress(processed, t) end,
+            function(added)
+                HideProgress()
+                importBusy = false
+                ns:Print("Imported " .. added .. " new items (" .. total .. " parsed, duplicates merged).")
+                importStatus:SetText(ns.COLORS.GREEN .. added .. " items imported!|r")
+                TryAutoGenerateTodo()
+                UI:Refresh()
+                UI:RefreshMini()
+            end
+        )
+    else
+        local total = #items
+        local threshold = ns.Import.LARGE_THRESHOLD or 500
+        if total >= threshold then
+            importBusy = true
+            importPreviewData = items
+            importPreviewResults = nil
+            UI.importPreviewTable:SetData({})
+            ShowProgress(0, total)
+            importStatus:SetText(ns.COLORS.YELLOW .. "Scanning " .. total .. " items for duplicates...|r")
+            ns.Import:PreviewAddChunked(items, nil, ns.Import.CHUNK_SIZE,
+                function(processed, t) ShowProgress(processed, t) end,
+                function(results)
+                    HideProgress()
+                    importBusy = false
+                    importPreviewResults = results
+                    UI:RefreshImportPreview()
+                end
+            )
+        else
+            importBusy = false
+            importPreviewData = items
+            importPreviewResults = ns.Import:PreviewAdd(items)
+            UI:RefreshImportPreview()
+        end
+    end
+end
+
 importEdit:SetScript("OnTextChanged", function(self, userInput)
     if not userInput then return end
     if importBusy then return end
     local text = self:GetText()
     local newLen = #text
     if importLastLen < 10 and newLen > 50 and text:find("\n") then
-        local items = ns.Import:Parse(text)
-        if #items > 0 then
-            if importSkipCheck:GetChecked() then
-                -- Auto-import: accept paste immediately, process async with progress bar
-                importBusy = true
-                importEdit:SetText("")
-                importEdit:ClearFocus()
-                importPreviewData = nil
-                importPreviewResults = nil
-                UI.importPreviewTable:SetData({})
-                importLastLen = 0
-
-                local total = #items
-                ShowProgress(0, total)
-                importStatus:SetText(ns.COLORS.YELLOW .. "Processing " .. total .. " items...|r")
-
-                ns.Import:SaveChunked(items, nil, 50,
-                    function(processed, t) -- onProgress
-                        ShowProgress(processed, t)
-                    end,
-                    function(added) -- onComplete
-                        HideProgress()
-                        importBusy = false
-                        ns:Print("Imported " .. added .. " new items (" .. total .. " parsed, duplicates merged).")
-                        importStatus:SetText(ns.COLORS.GREEN .. added .. " items imported!|r")
-                        TryAutoGenerateTodo()
-                        UI:Refresh()
-                        UI:RefreshMini()
-                    end
-                )
-            else
-                local total = #items
-                local threshold = ns.Import.LARGE_THRESHOLD or 500
-                if total >= threshold then
-                    -- Large paste: build preview asynchronously with progress so the
-                    -- client doesn't freeze on a multi-thousand-line FP dump (FQ-131).
-                    importBusy = true
-                    importPreviewData = items
-                    importPreviewResults = nil
-                    UI.importPreviewTable:SetData({})
-                    ShowProgress(0, total)
-                    importStatus:SetText(ns.COLORS.YELLOW .. "Scanning " .. total .. " items for duplicates...|r")
-                    ns.Import:PreviewAddChunked(items, nil, ns.Import.CHUNK_SIZE,
-                        function(processed, t) ShowProgress(processed, t) end,
-                        function(results)
-                            HideProgress()
-                            importBusy = false
-                            importPreviewResults = results
-                            UI:RefreshImportPreview()
-                        end
-                    )
-                else
-                    importPreviewData = items
-                    importPreviewResults = ns.Import:PreviewAdd(items)
-                    UI:RefreshImportPreview()
+        if newLen > PARSE_CHUNK_THRESHOLD then
+            -- Large paste: chunked parse so the parse stage doesn't
+            -- freeze the client. Show a status banner immediately so
+            -- the player knows we're working and has feedback during
+            -- the multi-second parse window.
+            importBusy = true
+            importStatus:SetText(ns.COLORS.YELLOW ..
+                "Parsing large paste... please wait.|r")
+            ShowProgress(0, 1)  -- indeterminate until parse reports first chunk
+            ns.Import:ParseChunked(text,
+                function(processed, total)
+                    importStatus:SetText(ns.COLORS.YELLOW ..
+                        ("Parsing %d / %d items...|r"):format(processed, total))
+                    ShowProgress(processed, total)
+                end,
+                function(items)
+                    importBusy = false  -- HandleParsedItems may flip it back on
+                    HandleParsedItems(items)
                 end
-            end
+            )
         else
-            importStatus:SetText(ns.COLORS.RED .. "No items found in pasted data.|r")
+            -- Small paste: synchronous parse keeps the existing behavior
+            -- (preview shows up instantly, no progress bar flash).
+            local items = ns.Import:Parse(text)
+            HandleParsedItems(items)
         end
     end
     importLastLen = newLen

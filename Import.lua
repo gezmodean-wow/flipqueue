@@ -204,10 +204,12 @@ end
 --   [NOCOMP: "No competition"]
 --   REALM:  SellRealm  BuyPrice  BuyRealm
 
-function Import:ParseFPWebsite(text)
+-- Internal: line classification + block finding for FP website format.
+-- Stages 1-2 of the parse — cheap relative to the per-block processing.
+-- Returns (itemBlocks, allLines, allTypes) so both the synchronous and
+-- chunked entry points share this work.
+local function FPWebsiteScan(text)
     text = text:gsub("\r\n", "\n"):gsub("\r", "\n")
-
-    local items = {}
     local allLines = {}
     local allTypes = {}
 
@@ -225,24 +227,21 @@ function Import:ParseFPWebsite(text)
             break
         end
     end
-    -- Also skip leading empty lines
     while startIdx <= #allLines and allTypes[startIdx] == "EMPTY" do
         startIdx = startIdx + 1
     end
 
     -- Find item blocks: a NAME line followed (within 2 lines) by a DATA line
-    local itemBlocks = {} -- {nameIdx, dataIdx}
+    local itemBlocks = {}
     local i = startIdx
     while i <= #allLines do
         if allTypes[i] == "NAME" then
-            -- Look ahead for a DATA line (next 1-3 lines)
             for j = i + 1, math.min(i + 3, #allLines) do
                 if allTypes[j] == "DATA" then
                     table.insert(itemBlocks, {nameIdx = i, dataIdx = j})
                     i = j + 1
                     break
                 elseif allTypes[j] == "NAME" then
-                    -- Next NAME without a DATA → this NAME is not an item, skip
                     break
                 end
             end
@@ -251,101 +250,136 @@ function Import:ParseFPWebsite(text)
     end
 
     -- Filter out FP website header words that can be misidentified as item names
-    -- (happens when the "/" separator is missing from the paste)
     local FP_HEADER_WORDS = { ["Name"] = true, ["Item"] = true, ["Item Name"] = true }
-    do
-        local filtered = {}
-        for _, block in ipairs(itemBlocks) do
-            if not FP_HEADER_WORDS[allLines[block.nameIdx]] then
-                table.insert(filtered, block)
-            end
+    local filtered = {}
+    for _, block in ipairs(itemBlocks) do
+        if not FP_HEADER_WORDS[allLines[block.nameIdx]] then
+            table.insert(filtered, block)
         end
-        itemBlocks = filtered
+    end
+    return filtered, allLines, allTypes
+end
+
+-- Internal: process one FP website item block into a parsed item record.
+-- Stage 3 of the parse — the heaviest stage, called per-block. Both the
+-- synchronous and chunked entry points loop over this; the chunked
+-- variant just yields between batches.
+local function ProcessFPWebsiteBlock(allLines, allTypes, itemBlocks, idx)
+    local block = itemBlocks[idx]
+    local fullName = allLines[block.nameIdx]
+    local dataLine = allLines[block.dataIdx]
+    local sellRate, quality, category, ilvl, expansion = ParseDataFields(dataLine)
+
+    local blockEnd
+    if idx < #itemBlocks then
+        blockEnd = itemBlocks[idx + 1].nameIdx - 1
+    else
+        blockEnd = #allLines
     end
 
-    -- Process each item block
-    for idx, block in ipairs(itemBlocks) do
-        local fullName = allLines[block.nameIdx]
-        local dataLine = allLines[block.dataIdx]
-        local sellRate, quality, category, ilvl, expansion = ParseDataFields(dataLine)
+    local goldValues = {}
+    local sellRealm = ""
+    local buyPrice = nil
+    local buyRealm = nil
+    local noCompetition = false
 
-        -- Determine block end: everything until the next item block starts
-        local blockEnd
-        if idx < #itemBlocks then
-            blockEnd = itemBlocks[idx + 1].nameIdx - 1
-        else
-            blockEnd = #allLines
-        end
-
-        -- Collect gold values, nocomp, and realm from the block
-        local goldValues = {}
-        local sellRealm = ""
-        local buyPrice = nil
-        local buyRealm = nil
-        local noCompetition = false
-
-        for j = block.dataIdx + 1, blockEnd do
-            local lineType = allTypes[j]
-            if lineType == "GOLD" then
-                table.insert(goldValues, allLines[j])
-            elseif lineType == "NOCOMP" then
-                noCompetition = true
-            elseif lineType == "REALM" then
-                local sr, bp, br = ParseRealmLine(allLines[j])
-                sellRealm = sr
-                if bp then
-                    buyPrice = bp
-                    buyRealm = br
-                end
-            end
-            -- PCT, EMPTY, NAME (stray), STATS → skip
-        end
-
-        -- Gold values order: [1] Sale Avg, [2] Sale Avg vs Buy, [3] Net revenue, [4] Listing price
-        local sellPrice = goldValues[4] or goldValues[3] or goldValues[1] or "0g"
-        local saleAvg = goldValues[1] or ""
-
-        -- Determine deal type and profit
-        local dealType = "sell"
-        local profitAmount = nil
-        local profitPct = nil
-        if buyRealm and buyRealm ~= "" and buyPrice and buyPrice ~= "" then
-            dealType = "flip"
-            -- Net revenue is goldValues[3], buy price is buyPrice
-            -- Profit = net revenue - buy price (approximate)
-            local sellGold = ns:ParseGoldValue(goldValues[3] or sellPrice)
-            local buyGold = ns:ParseGoldValue(buyPrice)
-            if sellGold > 0 and buyGold > 0 then
-                profitAmount = tostring(sellGold - buyGold) .. "g"
-                profitPct = math.floor((sellGold - buyGold) / buyGold * 100)
+    for j = block.dataIdx + 1, blockEnd do
+        local lineType = allTypes[j]
+        if lineType == "GOLD" then
+            table.insert(goldValues, allLines[j])
+        elseif lineType == "NOCOMP" then
+            noCompetition = true
+        elseif lineType == "REALM" then
+            local sr, bp, br = ParseRealmLine(allLines[j])
+            sellRealm = sr
+            if bp then
+                buyPrice = bp
+                buyRealm = br
             end
         end
-
-        table.insert(items, {
-            itemKey       = fullName,
-            itemID        = "",
-            name          = fullName,
-            quality       = quality,
-            ilvl          = ilvl,
-            bonusIDs      = "",
-            modifiers     = "",
-            quantity      = 1,
-            sellRate      = sellRate,
-            category      = category,
-            expansion     = expansion,
-            targetRealm   = sellRealm,
-            expectedPrice = sellPrice,
-            noCompetition = noCompetition,
-            dealType      = dealType,
-            buyRealm      = buyRealm,
-            buyPrice      = buyPrice,
-            profitAmount  = profitAmount,
-            profitPct     = profitPct,
-            saleAvg       = saleAvg,
-        })
     end
 
+    -- Gold values order: [1] Sale Avg, [2] Sale Avg vs Buy, [3] Net revenue, [4] Listing price
+    local sellPrice = goldValues[4] or goldValues[3] or goldValues[1] or "0g"
+    local saleAvg = goldValues[1] or ""
+
+    local dealType = "sell"
+    local profitAmount = nil
+    local profitPct = nil
+    if buyRealm and buyRealm ~= "" and buyPrice and buyPrice ~= "" then
+        dealType = "flip"
+        local sellGold = ns:ParseGoldValue(goldValues[3] or sellPrice)
+        local buyGold = ns:ParseGoldValue(buyPrice)
+        if sellGold > 0 and buyGold > 0 then
+            profitAmount = tostring(sellGold - buyGold) .. "g"
+            profitPct = math.floor((sellGold - buyGold) / buyGold * 100)
+        end
+    end
+
+    return {
+        itemKey       = fullName,
+        itemID        = "",
+        name          = fullName,
+        quality       = quality,
+        ilvl          = ilvl,
+        bonusIDs      = "",
+        modifiers     = "",
+        quantity      = 1,
+        sellRate      = sellRate,
+        category      = category,
+        expansion     = expansion,
+        targetRealm   = sellRealm,
+        expectedPrice = sellPrice,
+        noCompetition = noCompetition,
+        dealType      = dealType,
+        buyRealm      = buyRealm,
+        buyPrice      = buyPrice,
+        profitAmount  = profitAmount,
+        profitPct     = profitPct,
+        saleAvg       = saleAvg,
+    }
+end
+
+function Import:ParseFPWebsite(text)
+    local itemBlocks, allLines, allTypes = FPWebsiteScan(text)
+    local items = {}
+    for idx = 1, #itemBlocks do
+        items[#items + 1] = ProcessFPWebsiteBlock(allLines, allTypes, itemBlocks, idx)
+    end
     return items
+end
+
+-- Async variant of ParseFPWebsite. Yields between batches so a 4500-item
+-- full-region paste doesn't freeze the client during parse (FQ-131).
+-- Stages 1-2 (line classification + block finding) still run synchronously
+-- since each is bounded ~22k iterations of cheap regex; stage 3 (per-block
+-- processing) is the expensive part and gets the chunked treatment.
+function Import:ParseFPWebsiteChunked(text, chunkSize, onProgress, onComplete)
+    chunkSize = chunkSize or Import.CHUNK_SIZE
+    local itemBlocks, allLines, allTypes = FPWebsiteScan(text)
+    local total = #itemBlocks
+    local items = {}
+
+    if total == 0 then
+        if onComplete then onComplete(items) end
+        return
+    end
+
+    local idx = 1
+    local function ProcessNextChunk()
+        local chunkEnd = math.min(idx + chunkSize - 1, total)
+        for blockIdx = idx, chunkEnd do
+            items[#items + 1] = ProcessFPWebsiteBlock(allLines, allTypes, itemBlocks, blockIdx)
+        end
+        idx = chunkEnd + 1
+        if onProgress then onProgress(math.min(idx - 1, total), total) end
+        if idx > total then
+            if onComplete then onComplete(items) end
+        else
+            C_Timer.After(0, ProcessNextChunk)
+        end
+    end
+    ProcessNextChunk()
 end
 
 --------------------------
@@ -1065,6 +1099,44 @@ function Import:Parse(text)
         end
     end
     return items
+end
+
+-- Async parse entry point — detects format and dispatches to a chunked
+-- parser when one exists for that format. Today only the FP website
+-- format has a chunked variant since it's the heaviest parser and the
+-- one that hit FQ-131 (4500-item full-region pastes freezing the
+-- client). Other formats fall back to the synchronous Parse — they're
+-- typically smaller and / or cheaper per-line.
+--
+-- Calls onComplete(items) once parsing finishes. onProgress(done, total)
+-- fires per chunk during the FP-website chunked path; for fallback
+-- synchronous formats it's called once with (total, total) at the end.
+function Import:ParseChunked(text, onProgress, onComplete)
+    if not text or text == "" then
+        if onComplete then onComplete({}) end
+        return
+    end
+
+    text = text:gsub("\r\n", "\n"):gsub("\r", "\n")
+
+    -- Same FP website detection as Parse() — only the FP website branch
+    -- supports chunking today; other branches dispatch synchronously.
+    local hasGoldLine = text:find("\n%d[%d,]*g\n") or text:match("^%d[%d,]*g\n")
+    local hasPctLine  = text:find("\n%d[%d,]*%%\n") or text:match("^%d[%d,]*%%\n")
+    local hasDecimal  = text:find("%d+%.%d+")
+
+    if hasGoldLine and hasPctLine and hasDecimal then
+        self:ParseFPWebsiteChunked(text, Import.CHUNK_SIZE, onProgress, onComplete)
+        return
+    end
+
+    -- Other formats: parse synchronously, then surface as a single
+    -- "100% done" progress tick and complete callback so callers get
+    -- a uniform interface.
+    local items = self:Parse(text)
+    local total = #items
+    if onProgress then onProgress(total, total) end
+    if onComplete then onComplete(items) end
 end
 
 --------------------------
