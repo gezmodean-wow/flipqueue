@@ -54,15 +54,33 @@ When the user mentions a bug, regression, feature idea, or improvement during no
 
 Commit messages referencing a tracked issue should use `<type>(<ID>): <subject>` — e.g. `fix(FQ-004): sniper delay cancels on target change`.
 
-### Player-facing close summaries
+### Player-facing standards (canonical source)
 
-When closing a player-visible issue, add a `## Player summary` section to the issue body before clicking close. One short sentence, plain language — what changed for the player, not what code changed.
+Conventions for `## Player summary` (issue body), `## Player update` (issue comments), and player-facing release copy live in the SCRIBE repo. This file is the single source of truth — do not restate the rules here.
 
-Scribe pulls this text into:
-- The close announcement posted into the linked Discord thread.
-- The bulleted "What changed" list in the next release announcement.
+**Required:** `WebFetch` the canonical doc before any of the following:
 
-If you forgot before closing, you can put a fenced `release-notes` code block in the closing comment instead — same convention, first paragraph wins. Issues with no summary in either place render as `⚠️ no summary written` in the staff release draft; fix by editing the issue body and re-running `/release-redraft`.
+- Closing a player-visible issue
+- Writing a GitHub comment that wants a player response
+- Tagging a release or writing a `CHANGELOG.md` entry
+
+URL: https://raw.githubusercontent.com/gezmodean-wow/scribe/main/docs/PLAYER_FACING_CONVENTIONS.md
+
+The doc has a `## Changelog` section at the top. Compare its most recent entry code to the line below. If newer entries exist, prefix your first response with `Standards updated:` plus a one-line summary of each new entry, then update the code below in this file.
+
+**Last acknowledged:** 2026-04-30e
+
+## Release artifacts: dual changelog + storefront
+
+FlipQueue maintains two changelogs and a separate storefront-materials directory:
+
+- **`CHANGELOG.md`** — engineering-focused. Internal terminology, file:line references, full alpha-by-alpha breakdown. Used during development; not pushed to project pages. Update on every alpha as part of the release commit.
+- **`RELEASES.md`** — player-facing. Plain language, organized by what players see and do, no commit references or file paths. **This is the file that flows through `.pkgmeta`'s `manual-changelog` directive to the CurseForge / Wago changelog tabs on every release.** Update on every alpha *and* when refining prose for clarity — the project-page tab will pick up the new wording on the next upload.
+- **`docs/storefront/`** — long-form project-page assets (description, short description, screenshots). Versioned in repo, **hand-pasted to CurseForge / Wago dashboards on public releases only**. See `docs/storefront/README.md` for the full workflow.
+
+When tagging an alpha or beta: only `CHANGELOG.md` and `RELEASES.md` need touching. The storefront stays on whatever the last public release described.
+
+When tagging a public release (no `-alphaN` / `-betaN` suffix): also review `docs/storefront/description.md`, refresh screenshots if UI changed materially, then paste `description.md` into both project dashboards. The release commit updates `CHANGELOG.md` and finalizes the relevant section of `RELEASES.md`.
 
 ## Cross-cog feature requests
 

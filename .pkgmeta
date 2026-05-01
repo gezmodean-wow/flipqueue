@@ -2,14 +2,14 @@ package-as: flipqueue
 
 enable-nolib-creation: no
 
-# Use the project's CHANGELOG.md as the per-release changelog on
-# CurseForge / Wago. Without this the packager auto-generates from git
-# commit messages, which are commit-readerese (file paths, fix(FQ-NNN):,
-# etc.) — fine for engineers, useless to players reading the project
-# page. Pointing at CHANGELOG.md means the project-page release notes
-# match what we ship in the addon itself.
+# Use RELEASES.md (player-facing release notes) as the per-release
+# changelog on CurseForge / Wago. CHANGELOG.md stays as the engineering
+# log — internal terminology, file:line references, full alpha-by-alpha
+# breakdown — and is not pushed to the project pages. Players reading
+# the project-page changelog tab see only what RELEASES.md writes.
+# See `docs/storefront/README.md` for the full project-page workflow.
 manual-changelog:
-  filename: CHANGELOG.md
+  filename: RELEASES.md
   markup-type: markdown
 
 # Most libraries are vendored directly in Libs/ — the previous wowace SVN
