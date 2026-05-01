@@ -333,6 +333,106 @@ SlashCmdList["FLIPQUEUE"] = function(msg)
             UI:ShowExportPopup(output, #lines .. " lines, " .. #output .. " chars — Ctrl+A, Ctrl+C to copy")
         end
 
+    elseif msg:match("^debug log%s+") then
+        -- /fq debug log <name|itemID> — dump every ns.db.log entry whose
+        -- itemKey/itemID/name matches the search term. Used to triage
+        -- ledger / Item Research over-count reports — gives us the full
+        -- list of entries Item Research counted, with date, charKey,
+        -- status, sold-at, sync provenance, etc., so we can tell whether
+        -- they're real posts, sync replays, or reconcile phantoms.
+        local query = msg:match("^debug log%s+(.+)$")
+        query = query and strtrim(query) or ""
+        if query == "" or not ns.db or not ns.db.log then
+            ns:Print(ns.COLORS.YELLOW .. "Usage: /fq debug log <itemName|itemID>|r")
+            return
+        end
+
+        local queryLower = query:lower()
+        local queryNumID = tonumber(query)
+        local lines = {}
+        local function L(s) lines[#lines + 1] = s or "" end
+
+        L("[FlipQueue log search " .. date("%Y-%m-%d %H:%M:%S") .. "]")
+        L("query: " .. query)
+        L("total log entries: " .. #ns.db.log)
+        L("")
+
+        local matches = 0
+        local statusCounts = {}
+        for i, e in ipairs(ns.db.log) do
+            -- Match on itemID (numeric prefix of itemKey), itemKey full
+            -- string, or name substring (case-insensitive).
+            local entryNumID = e.itemKey and tonumber(e.itemKey:match("^(%d+)")) or nil
+            local entryName = (e.name or ""):lower()
+            local matched = false
+            if queryNumID and entryNumID and queryNumID == entryNumID then
+                matched = true
+            elseif e.itemKey and e.itemKey == query then
+                matched = true
+            elseif entryName ~= "" and entryName:find(queryLower, 1, true) then
+                matched = true
+            end
+
+            if matched then
+                matches = matches + 1
+                local statusKey = e.auctionStatus or "?"
+                if e.saleOutcome then statusKey = statusKey .. "/" .. e.saleOutcome end
+                statusCounts[statusKey] = (statusCounts[statusKey] or 0) + 1
+
+                L(string.format("[%d] %s", i, e.name or "?"))
+                L("    itemKey:  " .. (e.itemKey or "-"))
+                L("    charKey:  " .. (e.charKey or "-"))
+                L("    realm:    " .. (e.targetRealm or "-"))
+                L("    status:   " .. (e.auctionStatus or "-")
+                    .. (e.saleOutcome and ("  (outcome=" .. e.saleOutcome .. ")") or "")
+                    .. (e.endReason and ("  (endReason=" .. e.endReason .. ")") or ""))
+                L("    posted:   " .. (e.postedAt and date("%Y-%m-%d %H:%M:%S", e.postedAt) or "-")
+                    .. "  qty=" .. tostring(e.postedQuantity or 1)
+                    .. "  price=" .. (e.postedPrice or e.expectedPrice or "-"))
+                if e.soldAt or e.soldPrice then
+                    L("    sold:     " .. (e.soldAt and date("%Y-%m-%d %H:%M:%S", e.soldAt) or "-")
+                        .. "  for=" .. (e.soldPrice and ns:FormatGold(e.soldPrice) or "-"))
+                end
+                if e.collectedAt then
+                    L("    collected: " .. date("%Y-%m-%d %H:%M:%S", e.collectedAt))
+                end
+                if e.expiresAt then
+                    L("    expires:  " .. date("%Y-%m-%d %H:%M:%S", e.expiresAt))
+                end
+                if e._tsmReconciled or e._tsmMatchedAt or e._tsmExpireMatchedAt or e._tsmCancelMatchedAt then
+                    L("    tsm reconcile: matched=" .. tostring(e._tsmReconciled and true or false)
+                        .. (e._tsmMatchedAt and ("  saleAt=" .. date("%H:%M:%S", e._tsmMatchedAt)) or "")
+                        .. (e._tsmExpireMatchedAt and ("  expireAt=" .. date("%H:%M:%S", e._tsmExpireMatchedAt)) or "")
+                        .. (e._tsmCancelMatchedAt and ("  cancelAt=" .. date("%H:%M:%S", e._tsmCancelMatchedAt)) or ""))
+                end
+                if e.isRecovered then
+                    L("    isRecovered: true (entry was reconstructed from AH state, not a fresh post)")
+                end
+                if e.failReason then
+                    L("    failReason: " .. tostring(e.failReason))
+                end
+                if (e.postAttempts or 0) > 0 then
+                    L("    postAttempts: " .. e.postAttempts
+                        .. "  totalFeesSpent=" .. ns:FormatGold(e.totalFeesSpent or 0))
+                end
+                L("")
+            end
+        end
+
+        L("--- summary ---")
+        L("matches: " .. matches)
+        local statusList = {}
+        for k, v in pairs(statusCounts) do statusList[#statusList + 1] = k .. "=" .. v end
+        table.sort(statusList)
+        L("status breakdown: " .. table.concat(statusList, ", "))
+
+        local output = table.concat(lines, "\n")
+        if ns.db then
+            ns.db._debugLogSearch = output
+            ns.db._debugLogSearchAt = date("%Y-%m-%d %H:%M:%S")
+        end
+        UI:ShowExportPopup(output, matches .. " match(es) — Ctrl+A, Ctrl+C to copy")
+
     elseif msg == "debug perf" then
         -- /fq debug perf — perf diagnostic snapshot. Bundles per-addon CPU
         -- and memory, FlipQueue scale stats, perf-relevant settings, and
