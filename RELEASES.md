@@ -31,6 +31,7 @@ The bank operations popup that drives Pull, Deposit, and Pull Saleable used to l
 - Long pulls (80+ items) no longer report "1 pull failed" for items that actually moved — the verify-race that caused tail items to look stuck has been fixed.
 - After a session ends with a failed pull, the next bank reopen automatically retries instead of skipping straight to deposit. A yellow banner explains what's happening.
 - Failed items show by name in the completion summary instead of just an error count.
+- The bank operations popup no longer plans "Deposit Extras" ops when that setting is turned off. Previously these ghost ops left the popup's progress bar showing wrong-looking "complete" states with items still in the bag.
 
 ### Per-character gold management overrides
 
@@ -55,6 +56,7 @@ DealFinder was showing a single flat regional value for variant gear (most moder
 - Auctionator-imported shopping lists now preserve their full per-item metadata (quantity, exact-match flag, ilvl filters, quality) instead of stripping everything except the name.
 - Importing a very large FlippingPal paste (5,000+ items, e.g. a full-region dump) no longer freezes the game. A progress message shows status during long imports.
 - FlippingPal prices in German EU client formats (`1.500g`, `2.000g`) parse correctly to 1500g and 2000g respectively, instead of being misread as 500g and 0g.
+- The Transform page's AAA JSON output now shows when items couldn't be included because their names hadn't been resolved to item IDs yet — instead of silently producing a smaller list than the source. With an Auctionator-imported source where the WoW item cache hasn't seen the names, the output prompts you to click the **Deep Search** button (which warms the cache from your TSM and Auctionator data) to resolve them.
 
 ### DealFinder profit %: optional abbreviation
 

@@ -1,5 +1,37 @@
 # Changelog
 
+## v0.12.0-alpha10
+
+Tenth alpha of v0.12. Two correctness fixes surfaced from player triage on alpha9: the bank popup planner was queueing "Deposit Extras" ops even when the player had that setting turned off (FQ-110 root cause for Zong's repeat reports), and the Transform page's AAA JSON output was silently dropping items whose names hadn't resolved to IDs (the never-fully-closed FQ-109 partial-output symptom, now filed as FQ-141).
+
+### FQ-110 extras planner gated against `autoDepositAll`
+
+`Tracker:ShowBankOpsPopup` was unconditionally calling `BuildExtraDepositOps` regardless of the per-character `autoDepositAll` setting. The executor's `AutoDepositExtraItems` correctly skipped when the setting was off, but the planned extras still flowed into the popup's `totalOps` — so `ShowCompletionSummary`'s tally-drift detector saw `completed << total` and force-filled the bar to "complete" without the player ever knowing the planned ops never ran.
+
+Zong's 2026-05-02 log gave the clean reproducer:
+
+```
+Bank popup: 1 pulls, 1 deposits, 7 extras, withdraw=0 deposit=0
+... 1 pull executes, 1 deposit executes ...
+ShowCompletionSummary: tally drift completed=2 failed=0 total=9 — forcing bar full
+```
+
+He had `autoDepositAll` explicitly off; the 7 extras were planner ghosts.
+
+Fix mirrors the FQ-117 alpha3 pattern (`autoWithdrawGold` / `autoDepositGold` gating on the gold ops) — when `autoDepositAll` is off, `extraOps` becomes `{}` at planner time and never enters `totalOps`. The same drift could affect pulls / deposits if `autoPullBank` / `autoDepositWarbank` disagree with planner output, but no current report shows that mode — leaving those gates for if/when reproducers surface (toeknee's older `completed=0 failed=1 total=2` shape may be that case).
+
+The manual "Deposit Extras" button on the bank tool drawer is a separate code path that calls `BuildExtraDepositOps` directly and is unaffected by this gate.
+
+### FQ-141 AAA dropped-item count surfaced
+
+`Transformer:OutputAAAJSON` resolves each item's numeric ID via `resolveItemID`; items where neither `item.itemID` is numeric nor `item.itemKey` starts with a numeric token were silently skipped from the output map. The AAA output area showed "Items (N)" with no indication that more items were lost — the original FQ-109 "only transforms some of the items" report from 2026-04-26 was hitting exactly this. The alpha5 metadata-preservation fix (`618daea`) routed Auctionator imports through `Import:ParsePBS` so per-item metadata survived, but the drop in `OutputAAAJSON` itself was never surfaced.
+
+Adds `droppedItems` / `droppedPets` counters to `OutputAAAJSON`'s return tuple. `DoTransform` renders "X dropped" in red next to the item / pet count labels when non-zero. When drops exist AND the existing Deep Search button is currently visible (TSM realm data or Auctionator DB present), the item label appends "click Deep Search to resolve" so the player can connect the AAA drop count to the existing remediation.
+
+The Deep Search button itself was already wired for paste-source unresolved items — it works the same for Auctionator sources. This fix is purely about visibility: surfacing what was previously silent and tying the drop count to the existing one-click fix.
+
+Other callers of `OutputAAAJSON` (`PresetTSMToAAA`, `PresetInventoryToAAA`) ignore the new return values, so the signature change is backward-compatible.
+
 ## v0.12.0-alpha9
 
 Ninth alpha of v0.12. Headline fix is the deeper FQ-131 chunked-parse rewrite — alpha8's prior chunking covered SAVE / PREVIEW but left the parse itself synchronous, and zpectre confirmed that 4509 FP-website items still froze the client. Plus a `/fq debug log` diagnostic for ledger-discrepancy triage and a Cogworks-1.0 library bump that pulls in the Phase A/B/C UI primitive set and Phase D suite-settings persistence.
