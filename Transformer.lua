@@ -586,6 +586,13 @@ function Transformer:OutputAAAJSON(input, discount, priceSource, priceMode)
     local itemsMap = {} -- numericID -> goldPrice
     local petsMap = {}  -- speciesID -> goldPrice
     local unpricedItems, unpricedPets = 0, 0
+    -- Items whose name → ID resolution failed silently get dropped from the
+    -- AAA map. Surfacing the count lets the player see "47 items, 12 dropped"
+    -- instead of guessing why the JSON came back smaller than the source.
+    -- Common cause: Auctionator-imported lists where the WoW client item
+    -- cache hasn't seen the item names yet — the Deep Search button warms
+    -- the cache from TSM realm data + Auctionator DB.
+    local droppedItems, droppedPets = 0, 0
 
     for _, item in ipairs(itemsList) do
         local numID = resolveItemID(item)
@@ -598,6 +605,8 @@ function Transformer:OutputAAAJSON(input, discount, priceSource, priceMode)
             elseif goldPrice > 0 and (itemsMap[numIDStr] == 0 or goldPrice < itemsMap[numIDStr]) then
                 itemsMap[numIDStr] = goldPrice
             end
+        else
+            droppedItems = droppedItems + 1
         end
     end
 
@@ -611,6 +620,8 @@ function Transformer:OutputAAAJSON(input, discount, priceSource, priceMode)
             elseif goldPrice > 0 and (petsMap[sid] == 0 or goldPrice < petsMap[sid]) then
                 petsMap[sid] = goldPrice
             end
+        else
+            droppedPets = droppedPets + 1
         end
     end
 
@@ -632,7 +643,8 @@ function Transformer:OutputAAAJSON(input, discount, priceSource, priceMode)
     for _ in pairs(itemsMap) do itemCount = itemCount + 1 end
     for _ in pairs(petsMap) do petCount = petCount + 1 end
 
-    return formatJSON(itemsMap), formatJSON(petsMap), itemCount, petCount, unpricedItems, unpricedPets
+    return formatJSON(itemsMap), formatJSON(petsMap), itemCount, petCount,
+        unpricedItems, unpricedPets, droppedItems, droppedPets
 end
 
 -- Produce FlippingPal-compatible semicolon CSV

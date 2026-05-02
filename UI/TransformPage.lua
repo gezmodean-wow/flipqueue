@@ -2082,13 +2082,21 @@ local function DoTransform()
     RepositionLayout()
 
     if outputFormat == "aaa" then
-        local itemsJSON, petsJSON, ic, pc, uic, upc =
+        local itemsJSON, petsJSON, ic, pc, uic, upc, dic, dpc =
             T:OutputAAAJSON(currentItems, priceDiscount, priceSource, priceMode)
+        -- When items dropped due to unresolved IDs and the Deep Search
+        -- button is visible (TSM realm data or Auctionator DB available),
+        -- nudge the player toward it. The button itself already shows
+        -- "(X missing)"; the hint connects the AAA dropped count to it.
+        local hint = (dic and dic > 0 and warmCacheBtn and warmCacheBtn:IsShown())
+            and ("  " .. ns.COLORS.YELLOW .. "click Deep Search to resolve|r") or ""
         local itemLabel = "Items (" .. ic .. ")"
+        if dic and dic > 0 then itemLabel = itemLabel .. "  " .. ns.COLORS.RED .. dic .. " dropped|r" .. hint end
         if uic and uic > 0 then itemLabel = itemLabel .. "  " .. ns.COLORS.GRAY .. uic .. " unpriced|r" end
         itemsOutputLabel:SetText(itemLabel .. ":")
         itemsOutputEdit:SetText(itemsJSON)
         local petLabel = "Pets (" .. pc .. ")"
+        if dpc and dpc > 0 then petLabel = petLabel .. "  " .. ns.COLORS.RED .. dpc .. " dropped|r" end
         if upc and upc > 0 then petLabel = petLabel .. "  " .. ns.COLORS.GRAY .. upc .. " unpriced|r" end
         petsOutputLabel:SetText(petLabel .. ":")
         petsOutputEdit:SetText(petsJSON)
