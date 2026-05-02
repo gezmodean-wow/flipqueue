@@ -182,7 +182,13 @@ function Tracker:ShowBankOpsPopup()
     for _, op in ipairs(depositOps) do
         depositSlots[op.srcBag .. ":" .. op.srcSlot] = true
     end
-    local extraOps = Tracker:BuildExtraDepositOps(depositSlots)
+    -- Same gate the gold ops below carry: when autoDepositAll is off, the
+    -- executor's AutoDepositExtraItems silently skips. Letting extras into
+    -- totalOps drifts the completion tally and forces the bar to "full"
+    -- while the planned ops were never attempted.
+    local autoDepositAll = ns.db and ns:GetCharSetting(charKey, "autoDepositAll")
+        and not ns._automationPaused
+    local extraOps = autoDepositAll and Tracker:BuildExtraDepositOps(depositSlots) or {}
 
     -- Calculate gold operations
     local charKey = ns:GetCharKey()
