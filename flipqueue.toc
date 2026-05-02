@@ -3,7 +3,7 @@
 ## Notes: FlippingPal workflow assistant - character routing, inventory tracking, and post management for cross-realm arbitrage
 ## Author: Gezmodean
 ## Version: @project-version@
-## SavedVariables: FlipQueueDB
+## SavedVariables: FlipQueueDB, CogworksSharedDB
 ## Dependencies: Syndicator
 ## OptionalDeps: Auctionator, TradeSkillMaster
 ## IconTexture: Interface\AddOns\flipqueue\Art\flipqueue-icon
