@@ -68,7 +68,7 @@ URL: https://raw.githubusercontent.com/gezmodean-wow/scribe/main/docs/PLAYER_FAC
 
 The doc has a `## Changelog` section at the top. Compare its most recent entry code to the line below. If newer entries exist, prefix your first response with `Standards updated:` plus a one-line summary of each new entry, then update the code below in this file.
 
-**Last acknowledged:** 2026-04-30e
+**Last acknowledged:** 2026-04-30f
 
 ## Release artifacts: dual changelog + storefront
 
