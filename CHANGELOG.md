@@ -1,5 +1,37 @@
 # Changelog
 
+## v0.12.0-alpha9
+
+Ninth alpha of v0.12. Headline fix is the deeper FQ-131 chunked-parse rewrite — alpha8's prior chunking covered SAVE / PREVIEW but left the parse itself synchronous, and zpectre confirmed that 4509 FP-website items still froze the client. Plus a `/fq debug log` diagnostic for ledger-discrepancy triage and a Cogworks-1.0 library bump that pulls in the Phase A/B/C UI primitive set and Phase D suite-settings persistence.
+
+### FQ-131 chunked parse for full-region FP-website pastes
+
+Earlier work (`1524cee`) chunked the SAVE and PREVIEW stages of the FP-website import path. Stage 3 (per-block field extraction, the heaviest stage) was still O(N) synchronous and continued to freeze the client on full-region pastes. zpectre reported 4509 items still crashed alpha8.
+
+Refactor (`cafb213`):
+- Extract `FPWebsiteScan` (line classification + block finding) and `ProcessFPWebsiteBlock` (per-block field extraction) as internals shared by sync and chunked entry points.
+- Add `Import:ParseFPWebsiteChunked` which yields between batches of `CHUNK_SIZE` blocks via `C_Timer.After(0)`. Stages 1-2 still run synchronously (cheap, ~22k regex iterations); stage 3 gets chunked.
+- `Import:ParseChunked` top-level dispatcher detects FP-website format and routes to chunked, falls back to sync `Parse` for other formats.
+- `ImportPage.OnTextChanged` switches to `ParseChunked` when input exceeds `PARSE_CHUNK_THRESHOLD = 50000` chars (~330 FP-website items). Status banner reads "Parsing N / M items..." and the progress bar ticks per chunk so the player has feedback during the multi-second parse window.
+
+Smaller pastes keep the synchronous path so preview shows up instantly without a progress-bar flash.
+
+### `/fq debug log <name|itemID>` for ledger-discrepancy triage
+
+New diagnostic slash command (`0c87153`). Dumps every `ns.db.log` entry whose itemKey/itemID/name matches the search term, with full metadata: itemKey, charKey, targetRealm, auctionStatus + saleOutcome + endReason, postedAt + qty + price, soldAt + soldPrice, collectedAt, expiresAt, `_tsmReconciled` flags, isRecovered, failReason, postAttempts, totalFeesSpent.
+
+Use case: Item Research shows N sales, the player believes N is wrong. Run `/fq debug log <name>` to dump the actual entries Item Research counted, then compare against memory / TSM accounting CSV to figure out whether the entries are real posts, reconcile phantoms, sync-replay duplicates, or recovered AH state. Output saved to `FlipQueueDB._debugLogSearch` as backup if the export popup is closed before copy.
+
+### Cogworks-1.0 library bump v0.10.0 → v0.12.0
+
+Two MINOR releases of the shared core library landed since FlipQueue last pinned its external. `.pkgmeta` external pin moves from `v0.10.0` to `v0.12.0`, and `flipqueue.toc` declares `## SavedVariables: CogworksSharedDB` per the v0.12.0 suite-settings persistence model. FlipQueue continues to own `FlipQueueDB`; Cogworks owns `CogworksSharedDB`.
+
+What this pulls in (no FlipQueue-side consumption yet — these unblock future migrations):
+- **Phase A/B/C UI primitive set** (cogworks v0.11.0): Forms, Sections, TabPanel, MiniView, Wizard, Tree, ReorderableList, plus per-module load guards so older vendored copies in sibling cogs no longer clobber newer methods.
+- **Phase D suite-settings persistence** (cogworks v0.12.0): `CogworksSharedDB` shared SV with profile system, `lib:RegisterScalingFrame` for automatic position/size persistence (the FQ-139 unblock), `lib:CreateUIScalingSettingsBlock` drop-in scaling settings panel.
+
+No behavior change visible from the bump alone. Migrations of FlipQueue's existing UI scaffolding onto these primitives will land in subsequent alphas.
+
 ## v0.12.0-alpha8
 
 Eighth alpha of v0.12. The headliner is the FQ-138 fix — TSM's posting queue no longer occasionally skips items when FlipQueue is loaded. Plus a coordinated improvement to the FQ-137 cluster (smart defaults for the auto-scan setting), a relog-hitch fix, a loading banner on the Characters page, and the dual changelog / storefront restructure for a sustainable CurseForge / Wago workflow.
