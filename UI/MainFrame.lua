@@ -226,6 +226,7 @@ local NAV_ITEMS = {
     {key = "log",        label = "Log",            icon = "Interface\\Icons\\INV_Misc_Book_09"},
     {key = "debug",      label = "Task Debug",     icon = "Interface\\Icons\\INV_Misc_Wrench_01"},
     {key = "settings",   label = "Settings",       icon = "Interface\\Icons\\INV_Gizmo_02"},
+    {key = "about",      label = "About",          icon = "Interface\\Icons\\INV_Misc_QuestionMark"},
 }
 
 -- Scrollable nav container — prevents overflow when the frame is short
@@ -849,6 +850,7 @@ local function HideAllTables()
     if UI._debugPage then UI._debugPage:Hide() end
     if UI._researchPage then UI._researchPage:Hide() end
     if UI._dealFinderPage then UI._dealFinderPage:Hide() end
+    if UI._aboutPage then UI._aboutPage:Hide() end
     if UI.HideSetupWizard then UI:HideSetupWizard() end
 end
 
@@ -1054,6 +1056,9 @@ function UI:Refresh()
         HideAllActionBtns()
         self:ShowSettingsPage()
         mainFrame.statusText:SetText("FlipQueue v" .. ns.VERSION)
+
+    elseif self.currentPage == "about" then
+        self:RefreshAboutPage()
     end
 
     -- Tutorial overlay: show callouts on top of the rendered page

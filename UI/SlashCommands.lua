@@ -7,10 +7,37 @@ local UI = ns.UI
 SLASH_FLIPQUEUE1 = "/flipqueue"
 SLASH_FLIPQUEUE2 = "/fq"
 
+-- Build the version banner used to prefix every /fq debug output dump.
+-- Players paste these dumps into bug reports — the prefix lets us verify
+-- their installed version at a glance without asking separately.
+local function VersionLine()
+    if UI and UI.GetVersionLine then
+        return UI:GetVersionLine()
+    end
+    return string.format("FlipQueue v%s", ns.VERSION or "dev")
+end
+local function DumpHeader(label)
+    return string.format("=== %s — %s ===", VersionLine(), label)
+end
+ns._VersionLine = VersionLine
+ns._DumpHeader = DumpHeader
+
 SlashCmdList["FLIPQUEUE"] = function(msg)
     msg = (msg or ""):lower():trim()
 
-    if msg == "import" then
+    if msg == "version" or msg == "ver" then
+        if UI and UI.PrintVersion then
+            UI:PrintVersion()
+        else
+            ns:Print(VersionLine())
+        end
+
+    elseif msg == "about" then
+        UI.currentPage = "about"
+        if UI.mainFrame then UI.mainFrame:Show() end
+        UI:Refresh()
+
+    elseif msg == "import" then
         UI.currentPage = "transform"
         UI.mainFrame:Show()
         UI:Refresh()
@@ -352,8 +379,8 @@ SlashCmdList["FLIPQUEUE"] = function(msg)
         local lines = {}
         local function L(s) lines[#lines + 1] = s or "" end
 
-        L("[FlipQueue log search " .. date("%Y-%m-%d %H:%M:%S") .. "]")
-        L("query: " .. query)
+        L(DumpHeader("/fq debug log " .. query))
+        L("captured: " .. date("%Y-%m-%d %H:%M:%S"))
         L("total log entries: " .. #ns.db.log)
         L("")
 
@@ -443,13 +470,8 @@ SlashCmdList["FLIPQUEUE"] = function(msg)
         local function L(s) lines[#lines + 1] = s or "" end
 
         local now = date("%Y-%m-%d %H:%M:%S")
-        local version
-        if C_AddOns and C_AddOns.GetAddOnMetadata then
-            version = C_AddOns.GetAddOnMetadata("flipqueue", "Version")
-        elseif GetAddOnMetadata then
-            version = GetAddOnMetadata("flipqueue", "Version")
-        end
-        L("[FlipQueue perf snapshot " .. now .. "  v" .. (version or "?") .. "]")
+        L(DumpHeader("/fq debug perf"))
+        L("captured: " .. now)
 
         -- CPU profiling. Requires `/console scriptProfile 1` + /reload.
         L("")
@@ -704,10 +726,11 @@ SlashCmdList["FLIPQUEUE"] = function(msg)
         local input = msg:match("^debug parsegold%s+(.+)$")
         if input then
             local v = ns:ParseGoldValue(input)
-            print(string.format("=== /fq debug parsegold ===\ninput: [%s]  len=%d\nparsed: %s gold",
+            print(string.format("%s\ninput: [%s]  len=%d\nparsed: %s gold",
+                DumpHeader("/fq debug parsegold"),
                 input, #input, tostring(v)))
         else
-            print("=== /fq debug parsegold (self-test) ===")
+            print(DumpHeader("/fq debug parsegold (self-test)"))
             local cases = {
                 -- input,           expected, comment
                 {"1,999g",          1999,    "EN thousands separator"},
@@ -761,7 +784,7 @@ SlashCmdList["FLIPQUEUE"] = function(msg)
         if not ns.Tracker then ns:Print("Tracker not available.") return end
         local charKey = ns:GetCharKey()
         local currentRealm = charKey:match("%-(.+)$") or GetRealmName()
-        print("=== /fq debug gold ===")
+        print(DumpHeader("/fq debug gold"))
         print("character:    " .. charKey)
         print("currentRealm: " .. currentRealm)
 
@@ -930,7 +953,7 @@ SlashCmdList["FLIPQUEUE"] = function(msg)
             return
         end
 
-        print("=== /fq debug pricing ===")
+        print(DumpHeader("/fq debug pricing"))
         if found then
             print("name:    " .. tostring(found.name))
             print("itemID:  " .. tostring(found.itemID))
@@ -1021,7 +1044,7 @@ SlashCmdList["FLIPQUEUE"] = function(msg)
         -- region-wide pricing for everything.
         if not ns.TSMRealms then ns:Print("TSMRealms not loaded.") return end
         local realms = ns.TSMRealms:GetRealmList() or {}
-        print("=== /fq debug realms ===")
+        print(DumpHeader("/fq debug realms"))
         print(string.format("captured %d realm(s)", #realms))
         if ns._tsmRealmsHookInstalled then
             print("hook: installed at file load")
@@ -1059,7 +1082,7 @@ SlashCmdList["FLIPQUEUE"] = function(msg)
         if not ns.db or not ns.db.log then ns:Print("Log not available.") return end
         local charKey = ns:GetCharKey()
         local now = time()
-        print("=== /fq debug expired" .. (doClear and " clear" or "") .. " ===")
+        print(DumpHeader("/fq debug expired" .. (doClear and " clear" or "")))
         print("character: " .. charKey)
         if not doClear then
             print("(Run `/fq reconcile` first — it now matches against TSM expired/")

@@ -1,5 +1,110 @@
 # Changelog
 
+## v0.12.0-alpha11
+
+Eleventh alpha of v0.12. Three encapsulated features bundled into one alpha — they share a release window. The big one is **#148** (settings architecture rebuild with the scope-vs-trigger split), which closes FQ-110's toeknee branch as a side effect by unifying the planner and executor on a single `Tracker:InScope` predicate. **#147** adds combat / pet-battle lockdown gates to BankQueue to address niduin's #144 taint report. **#146** ships the About page + version-surfacing pass for tester triage.
+
+### #146 — About page + version surfacing
+
+New `UI/AboutPage.lua` standalone sidebar tab (between Settings and Tutorial) with banner, version (large, prominent), Cogworks-1.0 MINOR + WoW build sub-line, credits, four selectable URL boxes (GitHub / Discord / CurseForge / Wago), and a "Copy diagnostics" button that pipes through the existing `UI:ShowExportPopup`. Replaces the old in-settings credits/version block (`UI/SettingsFrame.lua:1709-1764` removed).
+
+`/fq version` slash command added — chat-prints `FlipQueue v0.12.0-alpha11 (Cogworks-1.0 MINOR <N>)`. Every `/fq debug *` output dump now prefixes with `=== FlipQueue v… — <command> ===` via the new `DumpHeader` helper at the top of `UI/SlashCommands.lua`. SV backups (`_debugLogSearch`, `_debugPerf`, etc.) capture the version line in their first row. The DebugConsole window's title bar reads `FlipQueue Debug Console — vX`, and its **Copy debug log** button now prefixes the export with version + timestamp so bug-report pastes self-identify.
+
+`Core.lua:7-15` strips a leading `v` from the toc-substituted version (some packager toolchains include it from the git tag). Display code can now always prepend `v` cleanly without producing `vv0.12.0-alpha10`. Source installs (where `@project-version@` substitution didn't run) show `vdev` and the About page surfaces a yellow warning.
+
+### #147 — Pet-battle / combat lockdown gates in BankQueue
+
+Niduin reported (#144) `[ADDON_ACTION_FORBIDDEN] AddOn 'flipqueue' tried to call protected function 'UNKNOWN()'` chained through `ContainerFrameItemButton_OnClick` → `UseContainerItem` after a pet battle. Root cause: `pcall(C_Container.UseContainerItem, srcBag, srcSlot)` at `BankQueue.lua:499` runs in non-secure timer continuation context. `UseContainerItem` is a protected function — calls from non-secure code taint downstream state even when wrapped in `pcall`. Pet battles raise UI lockdown sensitivity, so the latent issue surfaced on the first hardware-event bag click after battle exit.
+
+New `IsLockdownActive()` helper (`InCombatLockdown` + `C_PetBattles.IsInBattle`), a deferred-call queue, and an event listener frame for `PLAYER_REGEN_ENABLED` + `PET_BATTLE_CLOSE`. Drains on clear with a chat banner. Two gates installed:
+
+- **ProcessSync entry-gate** — defers the entire call when locked, re-fires from the head once both lockdowns clear.
+- **IssueOne mid-flight gate** — aborts ops if lockdown begins during execution; the existing retry mechanism handles re-issue when lockdown clears within the retry window.
+
+Path (a) chosen — NOT a `SecureActionButtonTemplate` migration (would require a hardware-event click per move and break the auto-bank-open chain). Cursor hardening (`pcall(ClearCursor)` immediately before `UseContainerItem`) was already at `BankQueue.lua:498` and stays.
+
+### #148 — Settings architecture rebuild: Manage Items / Manage Gold masters with scope/trigger split
+
+The recurring class of bugs FQ-117 / FQ-110 / FQ-110-toeknee all stem from a single architectural seam: the per-action `auto*` flags were asked to mean both "is FlipQueue allowed to manage X for this character?" (scope) and "should it auto-fire on bank open?" (trigger). The two axes are independent — players want master scope ON with selective auto-fire — but the legacy model conflated them, producing the recurring "FlipQueue did something I didn't expect" reports.
+
+#### Two masters
+
+```
+manageItems  — Authority for FQ to move items between bag and warbank/bank
+manageGold   — Authority for FQ to move gold between bag and warbank
+```
+
+Per-character override on the Characters page tri-state. Per-action triggers (`autoPullBank`, `autoDepositWarbank`, `autoDepositAll`, `autoWithdrawGold`, `autoDepositGold`) become independent toggles under their parent master.
+
+#### Combination matrix
+
+| Master | Trigger | Behavior |
+|---|---|---|
+| OFF | n/a | Action does not exist. Section hidden from popup. Drawer button hidden. |
+| ON | OFF | Action available — appears in popup, requires manual Execute. Drawer button works. |
+| ON | ON | Action auto-executes on bank open. Drawer button still available. |
+
+#### Architectural consolidation
+
+- **`Tracker:InScope(charKey, kind)`** — single predicate, single source of truth. Both planners and executors funnel through it. Cannot disagree.
+- **`Tracker:WalkBagsInScope(opKind, cb)`** — single bag-walk helper. Both `BuildExtraDepositOps` (planner) and `AutoDepositExtraItems` (executor) walk the same bag set under the same reagent / soulbound rules. The previous mismatch (`ALL_PLAYER_BAGS = {0,1,2,3,4,5}` vs `INVENTORY_BAGS = {0,1,2,3,4}`) is structurally impossible — closes FQ-110 toeknee root cause.
+- **Per-section auto-fire** — `Tracker:ShowBankOpsPopup` computes `itemsAuto` and `goldAuto` separately, passes them in the popup payload alongside combined `isAuto`. (Separate per-section Execute buttons deferred to alpha12 polish.)
+
+#### Migration #10
+
+```lua
+manageItems = (autoPullBank or autoDepositWarbank or autoDepositAll) and true or false
+manageGold  = (autoWithdrawGold or autoDepositGold) and true or false
+```
+
+Existing per-action flags preserve their values — they become the trigger toggles under their master. One chat line on first post-upgrade load: `[FlipQueue] Settings layout updated — see /fq settings or /fq about for details — your existing behavior is unchanged.`
+
+#### Settings page restructure
+
+Old "FlipQueue manages…" section + "Bank & Warbank" section removed. Replaced with:
+
+- **General** (existing) — gains the relocated "Show Tutorial Again" + "Run Setup Wizard" buttons.
+- **Item Management** (new) — Manage my items master at top → Move reagents → Deposit to bank when warbank is full → Combine partial stacks → Items moved per batch.
+- **Gold Management** (new) — Manage my gold master at top → Warband Miser banner (when applicable) → Withdraw gold from warbank → Maximum gold to withdraw → Deposit extra gold → Default gold per character.
+
+`sectionOrder` updated to `{ "automation", "items", "gold", "auctionhouse", "notifications", "miniview", "data", "deletedchars", "multiaccount" }`. New `items` and `gold` sections default to expanded.
+
+When a master is OFF, every row in its section dims to 0.4 alpha and becomes non-interactive. Master toggles trigger immediate refresh of the drawer, characters page (when visible), and settings page.
+
+#### Characters page Global Defaults bar rebuild
+
+Renamed "Global Defaults:" → "Character Defaults:" so it isn't conflated with global settings page. Layout:
+
+```
+Character Defaults: [☑ Items | Pull Deposit Dep.All]  [☑ Gold | Withdraw Deposit]  …  Show Hidden Show Deleted
+```
+
+Items group sits behind a soft-blue backdrop with a light-blue accent line. Gold group sits behind a soft-amber backdrop with a brass accent line. Vertical light-grey separator between the two groups. When a master is OFF, sub-checkboxes hide and a centered `(disabled)` label appears in the colored space.
+
+Per-character config panel (per-character row click-through) gets two new tri-state rows above the existing per-action overrides — Items master + Gold master — with the existing five rows (Pull / Deposit / Dep. All / Withdraw Gold / Deposit Gold) nested beneath.
+
+#### Drawer button visibility
+
+Item buttons (Pull / Deposit / Pull Saleable / Deposit Extras) hide when `manageItems` is OFF. Gold buttons (Withdraw / Deposit gold) hide when `manageGold` is OFF. Hide, not disable — keeps the drawer surface clean for players who turned a master off intentionally.
+
+### Bonus polish from in-game testing
+
+- `vv0.12.0` doubled-v fix in version display: `Core.lua` strips any leading `v` so all `"v" .. ns.VERSION` display sites produce a single `v` prefix.
+- DebugConsole title bar shows version (`FlipQueue Debug Console — vX`).
+- DebugConsole's "Copy debug log" export prefixes with version + capture timestamp.
+- The settings sectionOrder bug (`manage` not in `sectionOrder` list) that caused the masters block to overlay "General" — fixed by adding the new section keys to the order.
+
+### Files
+
+- New: `UI/AboutPage.lua` (~280 LOC).
+- Touched: `Core.lua`, `DB.lua`, `Migration.lua`, `Scanner.lua`, `Tracker.lua`, `TrackerBank.lua`, `BankQueue.lua`, `UI/CharactersPage.lua`, `UI/ContextDrawer.lua`, `UI/DebugConsole.lua`, `UI/MainFrame.lua`, `UI/SettingsFrame.lua`, `UI/SlashCommands.lua`, `flipqueue.toc`.
+- Schema bumped to v10 (silent migration).
+
+### Issues opened during the alpha11 cycle
+
+- #145 — bundle item-reference cache to bootstrap name→itemID resolution (greenlit for v0.13.0).
+- #149 — per-character custom gold balance overrides in character settings (slated for v0.13.x alongside FQ-129 Phase 5/6).
+
 ## v0.12.0-alpha10
 
 Tenth alpha of v0.12. Two correctness fixes surfaced from player triage on alpha9: the bank popup planner was queueing "Deposit Extras" ops even when the player had that setting turned off (FQ-110 root cause for Zong's repeat reports), and the Transform page's AAA JSON output was silently dropping items whose names hadn't resolved to IDs (the never-fully-closed FQ-109 partial-output symptom, now filed as FQ-141).

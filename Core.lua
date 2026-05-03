@@ -3,9 +3,17 @@
 local addonName, ns = ...
 
 ns.ADDON_NAME = "FlipQueue"
--- @project-version@ is replaced by CurseForge packager on release
+-- @project-version@ is replaced by the CurseForge / Wago / BigWigs packager
+-- on release. The packager normally substitutes the bare version number
+-- (e.g. "0.12.0-alpha10") but some toolchains include the leading "v" from
+-- the git tag (e.g. "v0.12.0-alpha10") — strip it here so display code
+-- always prepends "v" cleanly without producing "vv0.12.0-alpha10".
 local tocVersion = C_AddOns and C_AddOns.GetAddOnMetadata(addonName, "Version") or "dev"
-ns.VERSION = tocVersion:find("@") and "dev" or tocVersion
+if tocVersion:find("@") then
+    ns.VERSION = "dev"
+else
+    ns.VERSION = tocVersion:gsub("^v", "")
+end
 
 -- Cogworks suite library (fetched via .pkgmeta external at package time from
 -- github.com/gezmodean-wow/cogworks tag v0.1.0). Cache the library reference

@@ -39,6 +39,12 @@ function ns:InitDB()
     db.accounts.external = db.accounts.external or {}
     db.accounts.linked   = db.accounts.linked or {}
     db.settings     = db.settings or {
+        -- Authority masters (#148): the two scope axes — "is FlipQueue
+        -- allowed to manage items/gold for this character?" Independent of
+        -- the per-action `auto*` triggers below, which control "when does
+        -- FlipQueue act on what it's allowed to manage?"
+        manageItems      = true,
+        manageGold       = true,
         autoScan         = true,
         autoPullBank     = false,
         autoDepositWarbank = false,
@@ -48,6 +54,12 @@ function ns:InitDB()
         maxWithdrawGold = 500,
     }
     db.settings.collapsed = db.settings.collapsed or {}
+    -- Default the v0.12.0-alpha11 settings sections to expanded so players
+    -- can see the new master switches on first load. Without this, the
+    -- nil-defaults-to-collapsed rule in CreateCollapsibleSection would hide
+    -- the new sections behind a collapsed header.
+    if db.settings.collapsed.items == nil then db.settings.collapsed.items = false end
+    if db.settings.collapsed.gold  == nil then db.settings.collapsed.gold  = false end
     db.settings.sortMode  = db.settings.sortMode or "realm"
     -- Migrate old expiryAlertHours to expiryAlertMinutes
     if db.settings.expiryAlertHours and not db.settings.expiryAlertMinutes then
@@ -115,6 +127,12 @@ function ns:InitDB()
     if db.settings.debugMessages == nil then db.settings.debugMessages = false end
     -- Auto-deposit earnings to warbank (off by default — players may want to keep earnings)
     if db.settings.autoDepositGold == nil then db.settings.autoDepositGold = false end
+    -- Master scope flags (#148). Re-applied here so existing installs that
+    -- skip the constructor block above pick up sensible defaults. The actual
+    -- migration that derives the right initial value from existing per-action
+    -- flags lives in Migration.lua schema #10.
+    if db.settings.manageItems == nil then db.settings.manageItems = true end
+    if db.settings.manageGold == nil then db.settings.manageGold = true end
     db.settings.goldBuffer = db.settings.goldBuffer or 50  -- absolute min gold to keep on character (floor vs AH fees)
     -- Warband Miser override: when true, FlipQueue manages gold even if
     -- Warband Miser is loaded. Default off — WM owns gold by default when

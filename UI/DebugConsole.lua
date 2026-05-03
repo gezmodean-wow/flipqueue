@@ -139,12 +139,25 @@ local actions = {
         label = "Copy debug log",
         run = function()
             local log = ns._debugLog or {}
-            local text
-            if #log == 0 then
-                text = "(debug log empty)"
+            -- Prefix with version + capture timestamp so bug-report pastes
+            -- self-identify which build and when the log was captured.
+            local versionLine
+            if UI and UI.GetVersionLine then
+                versionLine = UI:GetVersionLine()
             else
-                text = table.concat(log, "\n")
+                versionLine = "FlipQueue v" .. (ns.VERSION or "dev")
             end
+            local header = string.format(
+                "=== %s — debug log ===\ncaptured: %s\n",
+                versionLine, date("%Y-%m-%d %H:%M:%S"))
+
+            local body
+            if #log == 0 then
+                body = "(debug log empty)"
+            else
+                body = table.concat(log, "\n")
+            end
+            local text = header .. "\n" .. body
             if UI.ShowExportPopup then
                 UI:ShowExportPopup(text, #log .. " line(s) — Ctrl+A, Ctrl+C to copy")
             end
@@ -218,7 +231,9 @@ local function GetConsole()
 
     f.title = bar:CreateFontString(nil, "OVERLAY", "GameFontNormal")
     f.title:SetPoint("LEFT", bar, "LEFT", 8, 0)
-    f.title:SetText(ns.COLORS.YELLOW .. "FlipQueue|r Debug Console")
+    -- #146: surface version in the title bar so testers grabbing a screenshot
+    -- of the console window still capture which build they're running.
+    f.title:SetText(ns.COLORS.YELLOW .. "FlipQueue|r Debug Console — v" .. (ns.VERSION or "dev"))
 
     local closeBtn = CreateFrame("Button", nil, bar)
     closeBtn:SetSize(18, 18)

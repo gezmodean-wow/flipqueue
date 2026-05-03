@@ -506,6 +506,66 @@ local function IsBankOpen()
     return BankFrame and BankFrame:IsShown()
 end
 
+--------------------------
+-- Lockdown gate (#147)
+--------------------------
+-- UseContainerItem is a protected function — calls from non-secure timer
+-- continuations taint downstream state even when wrapped in pcall, and the
+-- taint propagates to ContainerFrame click handlers. Pet battles and combat
+-- raise lockdown sensitivity, so a queue running during a pet battle (timers
+-- continue firing) leaves taint that surfaces on the first bag click after
+-- battle exit. Niduin's #144 was the canonical reproducer.
+--
+-- The mitigation: gate ProcessSync entry on `IsLockdownActive()`. If locked,
+-- defer the entire call until both `PLAYER_REGEN_ENABLED` and
+-- `PET_BATTLE_CLOSE` have fired (whichever is relevant). This is path (a)
+-- from the FQ-147 design — keeps the auto-bank-open chain intact, unlike
+-- a SecureActionButtonTemplate refactor which would require a hardware-event
+-- click per move.
+local function IsLockdownActive()
+    if InCombatLockdown() then return true, "combat" end
+    if C_PetBattles and C_PetBattles.IsInBattle and C_PetBattles.IsInBattle() then
+        return true, "pet battle"
+    end
+    return false
+end
+
+local _deferredCalls = {}
+local _lockdownFrame
+
+local function DrainDeferred()
+    if IsLockdownActive() then return end
+    if #_deferredCalls == 0 then return end
+    local pending = _deferredCalls
+    _deferredCalls = {}
+    if ns.Print then
+        ns:Print(ns.COLORS.GREEN .. "Bank ops resumed.|r")
+    end
+    for _, fn in ipairs(pending) do
+        pcall(fn)
+    end
+end
+
+local function GetLockdownFrame()
+    if _lockdownFrame then return _lockdownFrame end
+    _lockdownFrame = CreateFrame("Frame")
+    _lockdownFrame:RegisterEvent("PLAYER_REGEN_ENABLED")
+    _lockdownFrame:RegisterEvent("PET_BATTLE_CLOSE")
+    _lockdownFrame:SetScript("OnEvent", DrainDeferred)
+    return _lockdownFrame
+end
+
+local function DeferUntilLockdownClear(fn, why)
+    GetLockdownFrame()
+    table.insert(_deferredCalls, fn)
+    if ns.Print then
+        ns:Print(ns.COLORS.YELLOW .. "Bank ops paused: " .. (why or "lockdown") ..
+            " — will resume when clear.|r")
+    end
+end
+
+BankQueue._IsLockdownActive = IsLockdownActive  -- exposed for tests/diagnostics
+
 -- Wait between successive container moves. Two conditions must both be
 -- satisfied before `callback` runs:
 --
@@ -1088,6 +1148,20 @@ function BankQueue:ProcessSync(ops, label, callback)
         return
     end
 
+    -- #147: defer the entire call when combat / pet-battle lockdown is active.
+    -- The taint chain that bit niduin's bag-click flow originates here — every
+    -- ShiftMove inside Attempt eventually calls UseContainerItem, which is
+    -- protected. Re-armed via PLAYER_REGEN_ENABLED + PET_BATTLE_CLOSE.
+    do
+        local locked, why = IsLockdownActive()
+        if locked then
+            DeferUntilLockdownClear(function()
+                BankQueue:ProcessSync(ops, label, callback)
+            end, why)
+            return
+        end
+    end
+
     BankQueue.processing = true
 
     -- Cache enabled bag lists once so every snapshot scans identical bag sets,
@@ -1175,6 +1249,15 @@ function BankQueue:ProcessSync(ops, label, callback)
         end
 
         local function IssueOne(op)
+            -- #147: secondary gate. If lockdown began mid-execution (player
+            -- aggroed at the bank, pet battle started during the queue),
+            -- abort this op rather than firing a protected call. The retry
+            -- mechanism re-attempts on the next pass; if lockdown clears
+            -- before MAX_RETRIES exhausts, the op succeeds. If it doesn't,
+            -- the op surfaces in failedNames as a normal failure.
+            if IsLockdownActive() then
+                return false
+            end
             local trace = BankQueue._tracePulls
             local ok, info = pcall(C_Container.GetContainerItemInfo, op.srcBag, op.srcSlot)
             if not ok or not info then

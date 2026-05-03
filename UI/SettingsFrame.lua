@@ -310,7 +310,7 @@ end
 --------------------------
 
 -- Section ordering for reflow
-local sectionOrder = { "automation", "bankops", "auctionhouse", "notifications", "miniview", "data", "deletedchars", "multiaccount" }
+local sectionOrder = { "automation", "items", "gold", "auctionhouse", "notifications", "miniview", "data", "deletedchars", "multiaccount" }
 
 -- Rebuild the pooled row list inside the "Deleted Characters" section.
 -- Keeps the section height in sync with how many tombstones exist. Called
@@ -663,20 +663,264 @@ function UI:CreateSettingsPanel(parent)
 
     -- Bank Tab Selection moved to Characters page (per-character config panel)
 
+    -- Tutorial + Setup Wizard buttons (relocated from the multi-account tail
+    -- section so they sit with the rest of the general account-level controls).
+    -- The About page lives in the sidebar nav now, so its in-settings link
+    -- was removed.
+    do
+        local tutorialBtn = CreateFrame("Button", nil, sc, "BackdropTemplate")
+        tutorialBtn:SetSize(180, 26)
+        tutorialBtn:SetPoint("TOPLEFT", sc, "TOPLEFT", LEFT_MARGIN, sy)
+        tutorialBtn:SetBackdrop({
+            bgFile = "Interface\\Tooltips\\UI-Tooltip-Background",
+            edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
+            edgeSize = 10,
+            insets = {left = 2, right = 2, top = 2, bottom = 2},
+        })
+        tutorialBtn:SetBackdropColor(0.15, 0.15, 0.2, 1)
+        tutorialBtn:SetBackdropBorderColor(0.3, 0.3, 0.4, 0.8)
+        local tutBtnText = tutorialBtn:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+        tutBtnText:SetPoint("CENTER")
+        tutBtnText:SetText("Show Tutorial Again")
+        tutorialBtn:SetScript("OnEnter", function(self) self:SetBackdropColor(0.2, 0.2, 0.3, 1) end)
+        tutorialBtn:SetScript("OnLeave", function(self) self:SetBackdropColor(0.15, 0.15, 0.2, 1) end)
+        tutorialBtn:SetScript("OnClick", function()
+            ns.db.settings.tutorialDone = false
+            UI._tutorialActive = true
+            UI._tutorialStep = 1
+            UI._tutorialCallout = 1
+            UI.currentPage = "todo"
+            UI:Refresh()
+        end)
+
+        local tutDesc = sc:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+        tutDesc:SetPoint("LEFT", tutorialBtn, "RIGHT", 8, 0)
+        tutDesc:SetTextColor(DESC_COLOR[1], DESC_COLOR[2], DESC_COLOR[3])
+        tutDesc:SetText("Walk through the first-time setup again")
+    end
+    sy = sy - 30 - ITEM_SPACING
+
+    do
+        local wizardBtn = CreateFrame("Button", nil, sc, "BackdropTemplate")
+        wizardBtn:SetSize(180, 26)
+        wizardBtn:SetPoint("TOPLEFT", sc, "TOPLEFT", LEFT_MARGIN, sy)
+        wizardBtn:SetBackdrop({
+            bgFile = "Interface\\Tooltips\\UI-Tooltip-Background",
+            edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
+            edgeSize = 10,
+            insets = {left = 2, right = 2, top = 2, bottom = 2},
+        })
+        wizardBtn:SetBackdropColor(0.15, 0.15, 0.2, 1)
+        wizardBtn:SetBackdropBorderColor(0.3, 0.3, 0.4, 0.8)
+        local wizBtnText = wizardBtn:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+        wizBtnText:SetPoint("CENTER")
+        wizBtnText:SetText("Run Setup Wizard")
+        wizardBtn:SetScript("OnEnter", function(self) self:SetBackdropColor(0.2, 0.2, 0.3, 1) end)
+        wizardBtn:SetScript("OnLeave", function(self) self:SetBackdropColor(0.15, 0.15, 0.2, 1) end)
+        wizardBtn:SetScript("OnClick", function()
+            ns.db.settings.setupDone = false
+            UI:Refresh()
+        end)
+
+        local wizDesc = sc:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+        wizDesc:SetPoint("LEFT", wizardBtn, "RIGHT", 8, 0)
+        wizDesc:SetTextColor(DESC_COLOR[1], DESC_COLOR[2], DESC_COLOR[3])
+        wizDesc:SetText("Walk through settings step by step")
+    end
+    sy = sy - 30 - SECTION_SPACING
+
     secAuto.contentHeight = math.abs(sy)
 
     ------------------------------------------------
-    -- Section: Bank & Warbank
+    -- Section: Item Management (#148 master + item-related settings)
     ------------------------------------------------
-    local secBank = CreateCollapsibleSection(content, y, "bankops",
-        "Bank & Warbank",
-        "Gold withdrawals, auto-deposits, reagents, overflow, batch size")
-    sc = secBank.content
+    local secItems = CreateCollapsibleSection(content, y, "items",
+        "Item Management",
+        "Manage my items, reagents, deposit overflow, batch size")
+    sc = secItems.content
     sy = 0
 
+    -- Master switch — top of the section. When OFF, every item-related
+    -- row in this section dims and goes non-interactive (handled in
+    -- RefreshSettings).
+    settingsWidgets.manageItems, h = CreateSettingsCheckbox(sc, sy,
+        "Manage my items",
+        "Allow FlipQueue to move items between your bag, bank, and warbank. " ..
+        "Off: FlipQueue won't plan or execute item moves for this character. " ..
+        "Per-character overrides on the Characters page take precedence.",
+        "manageItems")
+    settingsWidgets.manageItems:HookScript("OnClick", function()
+        if UI.RefreshContextDrawer then UI:RefreshContextDrawer() end
+        if UI.currentPage == "characters" and UI.RefreshCharactersPage then
+            UI:RefreshCharactersPage()
+        end
+        if UI.RefreshSettings then UI:RefreshSettings() end
+    end)
+    sy = sy - h - SECTION_SPACING
+
+    settingsWidgets.depositIncludeReagents, h = CreateSettingsCheckbox(sc, sy,
+        "Move reagents to warbank when depositing all",
+        "Include reagents when auto-depositing extra items in your bags to the warbank. This is off by default, as reagents are not tracked for sale.",
+        "depositIncludeReagents")
+    sy = sy - h - ITEM_SPACING
+
+    -- Deposit overflow (nested setting — built by hand instead of via
+    -- CreateSettingsCheckbox which only writes to ns.db.settings[key]).
+    do
+        local row = CreateFrame("Frame", nil, sc)
+        row:SetPoint("TOPLEFT", sc, "TOPLEFT", LEFT_MARGIN, sy)
+        row:SetPoint("RIGHT", sc, "RIGHT", RIGHT_MARGIN, 0)
+        settingsWidgets.depositOverflowRow = row
+
+        local cb = CreateFrame("CheckButton", nil, row, "UICheckButtonTemplate")
+        cb:SetSize(22, 22)
+        cb:SetPoint("TOPLEFT", row, "TOPLEFT", 0, 0)
+        cb.text:SetText("Deposit to bank when warbank is full")
+        cb.text:SetFontObject("GameFontHighlightSmall")
+
+        local desc = row:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+        desc:SetPoint("TOPLEFT", cb.text, "BOTTOMLEFT", 0, -1)
+        desc:SetPoint("RIGHT", row, "RIGHT", 0, 0)
+        desc:SetJustifyH("LEFT")
+        desc:SetWordWrap(true)
+        desc:SetTextColor(DESC_COLOR[1], DESC_COLOR[2], DESC_COLOR[3])
+        desc:SetText("When trying to deposit to the warbank, automatically deposit to the player bank if the warbank is full.")
+
+        cb:SetScript("OnClick", function(self)
+            if not (ns.db and ns.db.settings.depositOverflow) then return end
+            ns.db.settings.depositOverflow.enabled = self:GetChecked() and true or false
+            if settingsWidgets.depositOverflowCrossStack then
+                local sub = settingsWidgets.depositOverflowCrossStack
+                if ns.db.settings.depositOverflow.enabled then
+                    sub:Enable()
+                    sub.text:SetTextColor(1, 1, 1)
+                else
+                    sub:Disable()
+                    sub.text:SetTextColor(0.5, 0.5, 0.5)
+                end
+            end
+        end)
+
+        row:SetScript("OnShow", function(self)
+            local descH = desc:GetStringHeight() or 12
+            self:SetHeight(22 + descH + 4)
+        end)
+        row:SetHeight(38)
+        settingsWidgets.depositOverflow = cb
+    end
+    sy = sy - 42 - ITEM_SPACING
+
+    -- Sub-setting: combine partial stacks across both banks
+    do
+        local row = CreateFrame("Frame", nil, sc)
+        row:SetPoint("TOPLEFT", sc, "TOPLEFT", LEFT_MARGIN + 20, sy)
+        row:SetPoint("RIGHT", sc, "RIGHT", RIGHT_MARGIN, 0)
+        settingsWidgets.depositOverflowCrossStackRow = row
+
+        local cb = CreateFrame("CheckButton", nil, row, "UICheckButtonTemplate")
+        cb:SetSize(20, 20)
+        cb:SetPoint("TOPLEFT", row, "TOPLEFT", 0, 0)
+        cb.text:SetText("Combine partial stacks across both banks")
+        cb.text:SetFontObject("GameFontHighlightSmall")
+
+        local desc = row:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+        desc:SetPoint("TOPLEFT", cb.text, "BOTTOMLEFT", 0, -1)
+        desc:SetPoint("RIGHT", row, "RIGHT", 0, 0)
+        desc:SetJustifyH("LEFT")
+        desc:SetWordWrap(true)
+        desc:SetTextColor(DESC_COLOR[1], DESC_COLOR[2], DESC_COLOR[3])
+        desc:SetText("When depositing to the player bank because the warbank is full, also top up existing stacks of the same item. Otherwise only empty slots in the bank are used.")
+
+        cb:SetScript("OnClick", function(self)
+            if not (ns.db and ns.db.settings.depositOverflow) then return end
+            ns.db.settings.depositOverflow.crossStack = self:GetChecked() and true or false
+        end)
+
+        row:SetScript("OnShow", function(self)
+            local descH = desc:GetStringHeight() or 12
+            self:SetHeight(20 + descH + 4)
+        end)
+        row:SetHeight(36)
+        settingsWidgets.depositOverflowCrossStack = cb
+    end
+    sy = sy - 40 - ITEM_SPACING
+
+    -- Items per batch slider
+    do
+        local row = CreateFrame("Frame", nil, sc)
+        row:SetPoint("TOPLEFT", sc, "TOPLEFT", LEFT_MARGIN, sy)
+        row:SetPoint("RIGHT", sc, "RIGHT", RIGHT_MARGIN, 0)
+        row:SetHeight(68)
+        settingsWidgets.batchSizeRow = row
+
+        local title = row:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+        title:SetPoint("TOPLEFT", row, "TOPLEFT", 0, 0)
+        title:SetText("Items moved per batch")
+
+        local slider = CreateFrame("Slider", "FlipQueueBatchSizeSlider", row, "OptionsSliderTemplate")
+        slider:SetWidth(180)
+        slider:SetHeight(16)
+        slider:SetPoint("TOPLEFT", title, "BOTTOMLEFT", 4, -8)
+        slider:SetMinMaxValues(1, 10)
+        slider:SetValueStep(1)
+        slider:SetObeyStepOnDrag(true)
+        slider.Low:SetText("1")
+        slider.High:SetText("10")
+
+        local valLabel = row:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+        valLabel:SetPoint("LEFT", slider, "RIGHT", 8, 0)
+        valLabel:SetTextColor(1, 1, 1)
+
+        slider:SetScript("OnValueChanged", function(self, value)
+            value = math.floor(value + 0.5)
+            valLabel:SetText(tostring(value))
+            if ns.db then
+                ns.db.settings.pullBatchSize = value
+            end
+        end)
+
+        local descText = row:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+        descText:SetPoint("TOPLEFT", slider, "BOTTOMLEFT", -4, -4)
+        descText:SetPoint("RIGHT", row, "RIGHT", 0, 0)
+        descText:SetJustifyH("LEFT")
+        descText:SetWordWrap(true)
+        descText:SetTextColor(DESC_COLOR[1], DESC_COLOR[2], DESC_COLOR[3])
+        descText:SetText("How many items to withdraw or deposit at once. Lower values are safer but slower.")
+
+        settingsWidgets.batchSizeSlider = slider
+        settingsWidgets.batchSizeLabel = valLabel
+    end
+    sy = sy - 68 - SECTION_SPACING
+
+    secItems.contentHeight = math.abs(sy)
+
+    ------------------------------------------------
+    -- Section: Gold Management (#148 master + gold-related settings)
+    ------------------------------------------------
+    local secGold = CreateCollapsibleSection(content, y, "gold",
+        "Gold Management",
+        "Manage my gold, withdrawals, deposits, buffer, Warband Miser integration")
+    sc = secGold.content
+    sy = 0
+
+    settingsWidgets.manageGold, h = CreateSettingsCheckbox(sc, sy,
+        "Manage my gold",
+        "Allow FlipQueue to move gold between your bag and warbank for AH " ..
+        "fees and buffer maintenance. Off: FlipQueue won't plan or execute " ..
+        "gold moves for this character. Per-character overrides on the " ..
+        "Characters page take precedence.",
+        "manageGold")
+    settingsWidgets.manageGold:HookScript("OnClick", function()
+        if UI.RefreshContextDrawer then UI:RefreshContextDrawer() end
+        if UI.currentPage == "characters" and UI.RefreshCharactersPage then
+            UI:RefreshCharactersPage()
+        end
+        if UI.RefreshSettings then UI:RefreshSettings() end
+    end)
+    sy = sy - h - SECTION_SPACING
+
     -- Warband Miser detection banner. If the addon is loaded, FlipQueue's
-    -- auto-gold routines defer to it. Show a note so users know why the
-    -- checkboxes below don't appear to do anything, and expose the override.
+    -- auto-gold routines defer to it. The override re-takes control.
     if ns.IsWarbandMiserActive and
        C_AddOns and C_AddOns.IsAddOnLoaded and C_AddOns.IsAddOnLoaded("WarbandMiser") then
         local banner = CreateFrame("Frame", nil, sc, "BackdropTemplate")
@@ -728,6 +972,7 @@ function UI:CreateSettingsPanel(parent)
         row:SetPoint("TOPLEFT", sc, "TOPLEFT", LEFT_MARGIN, sy)
         row:SetPoint("RIGHT", sc, "RIGHT", RIGHT_MARGIN, 0)
         row:SetHeight(52)
+        settingsWidgets.maxWithdrawRow = row
 
         local title = row:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
         title:SetPoint("TOPLEFT", row, "TOPLEFT", 0, 0)
@@ -762,23 +1007,24 @@ function UI:CreateSettingsPanel(parent)
     end
     sy = sy - 52 - ITEM_SPACING
 
-    -- Send extra gold back to warbank
+    -- Deposit extra gold back to warbank
     settingsWidgets.autoDepositGold, h = CreateSettingsCheckbox(sc, sy,
-        "Send extra gold back to the warbank",
+        "Deposit extra gold back to the warbank",
         "When you open the bank, deposit gold beyond what's needed for fees plus your buffer.",
         "autoDepositGold")
     sy = sy - h - ITEM_SPACING
 
-    -- Gold buffer input
+    -- Default gold per character (gold buffer)
     do
         local row = CreateFrame("Frame", nil, sc)
         row:SetPoint("TOPLEFT", sc, "TOPLEFT", LEFT_MARGIN, sy)
         row:SetPoint("RIGHT", sc, "RIGHT", RIGHT_MARGIN, 0)
         row:SetHeight(52)
+        settingsWidgets.goldBufferRow = row
 
         local title = row:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
         title:SetPoint("TOPLEFT", row, "TOPLEFT", 0, 0)
-        title:SetText("Gold to keep on the character")
+        title:SetText("Default gold per character (gold to keep)")
 
         local box = CreateFrame("EditBox", nil, row, "InputBoxTemplate")
         box:SetSize(100, 20)
@@ -803,145 +1049,13 @@ function UI:CreateSettingsPanel(parent)
         descText:SetJustifyH("LEFT")
         descText:SetWordWrap(true)
         descText:SetTextColor(DESC_COLOR[1], DESC_COLOR[2], DESC_COLOR[3])
-        descText:SetText("Minimum gold to keep on character. Used as a floor — if AH fees exceed this, fees win.")
+        descText:SetText("Minimum gold to keep on each character. Used as a floor — if AH fees exceed this, fees win. (Per-character overrides coming in #149.)")
 
         settingsWidgets.goldBufferBox = box
     end
-    sy = sy - 52 - ITEM_SPACING
+    sy = sy - 52 - SECTION_SPACING
 
-    settingsWidgets.depositIncludeReagents, h = CreateSettingsCheckbox(sc, sy,
-        "Move reagents to warbank when depositing all",
-        "Include reagents when auto-depositing extra items in your bags to the warbank. This is off by default, as reagents are not tracked for sale.",
-        "depositIncludeReagents")
-    sy = sy - h - ITEM_SPACING
-
-    -- Deposit overflow (nested setting — built by hand instead of via
-    -- CreateSettingsCheckbox which only writes to ns.db.settings[key]).
-    do
-        local row = CreateFrame("Frame", nil, sc)
-        row:SetPoint("TOPLEFT", sc, "TOPLEFT", LEFT_MARGIN, sy)
-        row:SetPoint("RIGHT", sc, "RIGHT", RIGHT_MARGIN, 0)
-
-        local cb = CreateFrame("CheckButton", nil, row, "UICheckButtonTemplate")
-        cb:SetSize(22, 22)
-        cb:SetPoint("TOPLEFT", row, "TOPLEFT", 0, 0)
-        cb.text:SetText("Deposit to bank when warbank is full")
-        cb.text:SetFontObject("GameFontHighlightSmall")
-
-        local desc = row:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
-        desc:SetPoint("TOPLEFT", cb.text, "BOTTOMLEFT", 0, -1)
-        desc:SetPoint("RIGHT", row, "RIGHT", 0, 0)
-        desc:SetJustifyH("LEFT")
-        desc:SetWordWrap(true)
-        desc:SetTextColor(DESC_COLOR[1], DESC_COLOR[2], DESC_COLOR[3])
-        desc:SetText("When trying to deposit to the warbank, automatically deposit to the player bank if the warbank is full.")
-
-        cb:SetScript("OnClick", function(self)
-            if not (ns.db and ns.db.settings.depositOverflow) then return end
-            ns.db.settings.depositOverflow.enabled = self:GetChecked() and true or false
-            -- Refresh the sub-checkbox enabled state.
-            if settingsWidgets.depositOverflowCrossStack then
-                local sub = settingsWidgets.depositOverflowCrossStack
-                if ns.db.settings.depositOverflow.enabled then
-                    sub:Enable()
-                    sub.text:SetTextColor(1, 1, 1)
-                else
-                    sub:Disable()
-                    sub.text:SetTextColor(0.5, 0.5, 0.5)
-                end
-            end
-        end)
-
-        row:SetScript("OnShow", function(self)
-            local descH = desc:GetStringHeight() or 12
-            self:SetHeight(22 + descH + 4)
-        end)
-        row:SetHeight(38)
-        settingsWidgets.depositOverflow = cb
-    end
-    sy = sy - 42 - ITEM_SPACING
-
-    -- Sub-setting: combine partial stacks across both banks
-    do
-        local row = CreateFrame("Frame", nil, sc)
-        row:SetPoint("TOPLEFT", sc, "TOPLEFT", LEFT_MARGIN + 20, sy)
-        row:SetPoint("RIGHT", sc, "RIGHT", RIGHT_MARGIN, 0)
-
-        local cb = CreateFrame("CheckButton", nil, row, "UICheckButtonTemplate")
-        cb:SetSize(20, 20)
-        cb:SetPoint("TOPLEFT", row, "TOPLEFT", 0, 0)
-        cb.text:SetText("Combine partial stacks across both banks")
-        cb.text:SetFontObject("GameFontHighlightSmall")
-
-        local desc = row:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
-        desc:SetPoint("TOPLEFT", cb.text, "BOTTOMLEFT", 0, -1)
-        desc:SetPoint("RIGHT", row, "RIGHT", 0, 0)
-        desc:SetJustifyH("LEFT")
-        desc:SetWordWrap(true)
-        desc:SetTextColor(DESC_COLOR[1], DESC_COLOR[2], DESC_COLOR[3])
-        desc:SetText("When depositing to the player bank because the warbank is full, also top up existing stacks of the same item. Otherwise only empty slots in the bank are used.")
-
-        cb:SetScript("OnClick", function(self)
-            if not (ns.db and ns.db.settings.depositOverflow) then return end
-            ns.db.settings.depositOverflow.crossStack = self:GetChecked() and true or false
-        end)
-
-        row:SetScript("OnShow", function(self)
-            local descH = desc:GetStringHeight() or 12
-            self:SetHeight(20 + descH + 4)
-        end)
-        row:SetHeight(36)
-        settingsWidgets.depositOverflowCrossStack = cb
-    end
-    sy = sy - 40 - ITEM_SPACING
-
-    -- Items per batch slider (was "Bank pull batch size")
-    do
-        local row = CreateFrame("Frame", nil, sc)
-        row:SetPoint("TOPLEFT", sc, "TOPLEFT", LEFT_MARGIN, sy)
-        row:SetPoint("RIGHT", sc, "RIGHT", RIGHT_MARGIN, 0)
-        row:SetHeight(68)
-
-        local title = row:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-        title:SetPoint("TOPLEFT", row, "TOPLEFT", 0, 0)
-        title:SetText("Items moved per batch")
-
-        local slider = CreateFrame("Slider", "FlipQueueBatchSizeSlider", row, "OptionsSliderTemplate")
-        slider:SetWidth(180)
-        slider:SetHeight(16)
-        slider:SetPoint("TOPLEFT", title, "BOTTOMLEFT", 4, -8)
-        slider:SetMinMaxValues(1, 10)
-        slider:SetValueStep(1)
-        slider:SetObeyStepOnDrag(true)
-        slider.Low:SetText("1")
-        slider.High:SetText("10")
-
-        local valLabel = row:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-        valLabel:SetPoint("LEFT", slider, "RIGHT", 8, 0)
-        valLabel:SetTextColor(1, 1, 1)
-
-        slider:SetScript("OnValueChanged", function(self, value)
-            value = math.floor(value + 0.5)
-            valLabel:SetText(tostring(value))
-            if ns.db then
-                ns.db.settings.pullBatchSize = value
-            end
-        end)
-
-        local descText = row:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
-        descText:SetPoint("TOPLEFT", slider, "BOTTOMLEFT", -4, -4)
-        descText:SetPoint("RIGHT", row, "RIGHT", 0, 0)
-        descText:SetJustifyH("LEFT")
-        descText:SetWordWrap(true)
-        descText:SetTextColor(DESC_COLOR[1], DESC_COLOR[2], DESC_COLOR[3])
-        descText:SetText("How many items to withdraw or deposit at once. Lower values are safer but slower.")
-
-        settingsWidgets.batchSizeSlider = slider
-        settingsWidgets.batchSizeLabel = valLabel
-    end
-    sy = sy - 68 - SECTION_SPACING
-
-    secBank.contentHeight = math.abs(sy)
+    secGold.contentHeight = math.abs(sy)
 
     ------------------------------------------------
     -- Section: Auction House
@@ -1619,149 +1733,11 @@ function UI:CreateSettingsPanel(parent)
         end)
     end
 
-    -- Everything below the sync log goes into belowSync container
+    -- Everything below the sync log goes into belowSync container.
+    -- Tutorial + Setup Wizard moved to the General section above.
+    -- About link removed entirely — the About page lives in the sidebar nav.
     local belowSync = settingsWidgets.belowSyncFrame
-    local bsy = 0
-
-    ------------------------------------------------
-    -- Tutorial
-    ------------------------------------------------
-    -- Divider
-    local tutDivider = belowSync:CreateTexture(nil, "ARTWORK")
-    tutDivider:SetHeight(1)
-    tutDivider:SetPoint("TOPLEFT", belowSync, "TOPLEFT", LEFT_MARGIN, bsy)
-    tutDivider:SetPoint("RIGHT", belowSync, "RIGHT", RIGHT_MARGIN, 0)
-    tutDivider:SetColorTexture(0.35, 0.35, 0.45, 0.6)
-    local tutHeader = belowSync:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-    tutHeader:SetPoint("TOPLEFT", belowSync, "TOPLEFT", LEFT_MARGIN, bsy - 6)
-    tutHeader:SetTextColor(0.9, 0.8, 0.3)
-    tutHeader:SetText("Tutorial")
-    bsy = bsy - 22 - ITEM_SPACING
-
-    local tutorialBtn = CreateFrame("Button", nil, belowSync, "BackdropTemplate")
-    tutorialBtn:SetSize(180, 26)
-    tutorialBtn:SetPoint("TOPLEFT", belowSync, "TOPLEFT", LEFT_MARGIN, bsy)
-    tutorialBtn:SetBackdrop({
-        bgFile = "Interface\\Tooltips\\UI-Tooltip-Background",
-        edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
-        edgeSize = 10,
-        insets = {left = 2, right = 2, top = 2, bottom = 2},
-    })
-    tutorialBtn:SetBackdropColor(0.15, 0.15, 0.2, 1)
-    tutorialBtn:SetBackdropBorderColor(0.3, 0.3, 0.4, 0.8)
-    local tutBtnText = tutorialBtn:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-    tutBtnText:SetPoint("CENTER")
-    tutBtnText:SetText("Show Tutorial Again")
-    tutorialBtn:SetScript("OnEnter", function(self)
-        self:SetBackdropColor(0.2, 0.2, 0.3, 1)
-    end)
-    tutorialBtn:SetScript("OnLeave", function(self)
-        self:SetBackdropColor(0.15, 0.15, 0.2, 1)
-    end)
-    tutorialBtn:SetScript("OnClick", function()
-        ns.db.settings.tutorialDone = false
-        UI._tutorialActive = true
-        UI._tutorialStep = 1
-        UI._tutorialCallout = 1
-        UI.currentPage = "todo"
-        UI:Refresh()
-    end)
-
-    local tutDesc = belowSync:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-    tutDesc:SetPoint("LEFT", tutorialBtn, "RIGHT", 8, 0)
-    tutDesc:SetTextColor(DESC_COLOR[1], DESC_COLOR[2], DESC_COLOR[3])
-    tutDesc:SetText("Walk through the first-time setup again")
-    bsy = bsy - 30 - ITEM_SPACING
-
-    -- Setup Wizard button
-    local wizardBtn = CreateFrame("Button", nil, belowSync, "BackdropTemplate")
-    wizardBtn:SetSize(180, 26)
-    wizardBtn:SetPoint("TOPLEFT", belowSync, "TOPLEFT", LEFT_MARGIN, bsy)
-    wizardBtn:SetBackdrop({
-        bgFile = "Interface\\Tooltips\\UI-Tooltip-Background",
-        edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
-        edgeSize = 10,
-        insets = {left = 2, right = 2, top = 2, bottom = 2},
-    })
-    wizardBtn:SetBackdropColor(0.15, 0.15, 0.2, 1)
-    wizardBtn:SetBackdropBorderColor(0.3, 0.3, 0.4, 0.8)
-    local wizBtnText = wizardBtn:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-    wizBtnText:SetPoint("CENTER")
-    wizBtnText:SetText("Run Setup Wizard")
-    wizardBtn:SetScript("OnEnter", function(self)
-        self:SetBackdropColor(0.2, 0.2, 0.3, 1)
-    end)
-    wizardBtn:SetScript("OnLeave", function(self)
-        self:SetBackdropColor(0.15, 0.15, 0.2, 1)
-    end)
-    wizardBtn:SetScript("OnClick", function()
-        ns.db.settings.setupDone = false
-        UI:Refresh()  -- triggers wizard detection with proper page cleanup
-    end)
-
-    local wizDesc = belowSync:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-    wizDesc:SetPoint("LEFT", wizardBtn, "RIGHT", 8, 0)
-    wizDesc:SetTextColor(DESC_COLOR[1], DESC_COLOR[2], DESC_COLOR[3])
-    wizDesc:SetText("Walk through settings step by step")
-    bsy = bsy - 30 - SECTION_SPACING
-
-    ------------------------------------------------
-    -- Credits
-    ------------------------------------------------
-    local credDivider = belowSync:CreateTexture(nil, "ARTWORK")
-    credDivider:SetHeight(1)
-    credDivider:SetPoint("TOPLEFT", belowSync, "TOPLEFT", LEFT_MARGIN, bsy)
-    credDivider:SetPoint("RIGHT", belowSync, "RIGHT", RIGHT_MARGIN, 0)
-    credDivider:SetColorTexture(0.35, 0.35, 0.45, 0.6)
-    local credHeader = belowSync:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-    credHeader:SetPoint("TOPLEFT", belowSync, "TOPLEFT", LEFT_MARGIN, bsy - 6)
-    credHeader:SetTextColor(0.9, 0.8, 0.3)
-    credHeader:SetText("Credits")
-    bsy = bsy - 22
-
-    -- Banner logo
-    local banner = belowSync:CreateTexture(nil, "ARTWORK")
-    banner:SetSize(340, 86)
-    banner:SetPoint("TOP", belowSync, "TOP", 0, bsy)
-    banner:SetTexture("Interface\\AddOns\\flipqueue\\Art\\flipqueue-banner")
-    bsy = bsy - 92
-
-    -- Version
-    local ver = belowSync:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-    ver:SetPoint("TOP", belowSync, "TOP", 0, bsy)
-    ver:SetTextColor(0.8, 0.75, 0.5)
-    ver:SetText("v" .. ns.VERSION)
-    bsy = bsy - 20
-
-    -- Credits text
-    local function AddCreditLine(parent, yOff, label, value)
-        local line = parent:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-        line:SetPoint("TOP", parent, "TOP", 0, yOff)
-        line:SetJustifyH("CENTER")
-        line:SetText(ns.COLORS.YELLOW .. label .. "|r  " .. value)
-        return 14
-    end
-
-    bsy = bsy - 4
-    bsy = bsy - AddCreditLine(belowSync, bsy, "Developed by", "Gezmodean & Claude")
-    bsy = bsy - 4
-    bsy = bsy - AddCreditLine(belowSync, bsy, "Additional support by", "Berick")
-    bsy = bsy - 4
-    bsy = bsy - AddCreditLine(belowSync, bsy, "Additional testing by", "KittyKiller, Niduin, Artificer Skills")
-    bsy = bsy - 12
-
-    local thanksLabel = belowSync:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-    thanksLabel:SetPoint("TOP", belowSync, "TOP", 0, bsy)
-    thanksLabel:SetJustifyH("CENTER")
-    thanksLabel:SetTextColor(DESC_COLOR[1], DESC_COLOR[2], DESC_COLOR[3])
-    thanksLabel:SetText("Special thanks to")
-    bsy = bsy - 14
-
-    local thanksNames = belowSync:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-    thanksNames:SetPoint("TOP", belowSync, "TOP", 0, bsy)
-    thanksNames:SetJustifyH("CENTER")
-    thanksNames:SetText("FlippingPal  |  TradeSkillMaster  |  Auctionator  |  Epos")
-    bsy = bsy - 24
+    local bsy = -10  -- small buffer so the multi-account section doesn't end flush
 
     settingsWidgets.belowSyncContentHeight = math.abs(bsy)
     belowSync:SetHeight(math.abs(bsy) + 10)
@@ -1799,6 +1775,15 @@ function UI:RefreshSettings()
     if UI._RefreshDeletedCharactersSection then
         UI._RefreshDeletedCharactersSection()
     end
+    local manageItemsOn = ns.db.settings.manageItems ~= false
+    local manageGoldOn  = ns.db.settings.manageGold  ~= false
+
+    if settingsWidgets.manageItems then
+        settingsWidgets.manageItems:SetChecked(manageItemsOn)
+    end
+    if settingsWidgets.manageGold then
+        settingsWidgets.manageGold:SetChecked(manageGoldOn)
+    end
     if settingsWidgets.autoScan then
         settingsWidgets.autoScan:SetChecked(ns.db.settings.autoScan)
     end
@@ -1806,6 +1791,35 @@ function UI:RefreshSettings()
     if settingsWidgets.autoGold then
         settingsWidgets.autoGold:SetChecked(ns.db.settings.autoWithdrawGold)
     end
+
+    -- #148: dim + disable rows in Bank & Warbank whose master is off.
+    -- Setting the row's alpha cascades to its children (title, description,
+    -- input border) for a uniform "this section is inactive" appearance.
+    -- Disabling the interactive widget keeps the row from accepting clicks
+    -- while the master is off.
+    local function ApplyRowState(rowFrame, widget, enabled)
+        local alpha = enabled and 1.0 or 0.4
+        if rowFrame and rowFrame.SetAlpha then rowFrame:SetAlpha(alpha) end
+        if widget and widget.SetEnabled then widget:SetEnabled(enabled) end
+    end
+
+    -- Gold-related rows (Withdraw / Max withdraw / Deposit excess / Buffer)
+    if settingsWidgets.autoGold then
+        ApplyRowState(settingsWidgets.autoGold:GetParent(), settingsWidgets.autoGold, manageGoldOn)
+    end
+    ApplyRowState(settingsWidgets.maxWithdrawRow, settingsWidgets.maxWithdrawBox, manageGoldOn)
+    if settingsWidgets.autoDepositGold then
+        ApplyRowState(settingsWidgets.autoDepositGold:GetParent(), settingsWidgets.autoDepositGold, manageGoldOn)
+    end
+    ApplyRowState(settingsWidgets.goldBufferRow, settingsWidgets.goldBufferBox, manageGoldOn)
+
+    -- Items-related rows (Move reagents / Deposit to bank overflow / per-batch slider)
+    if settingsWidgets.depositIncludeReagents then
+        ApplyRowState(settingsWidgets.depositIncludeReagents:GetParent(), settingsWidgets.depositIncludeReagents, manageItemsOn)
+    end
+    ApplyRowState(settingsWidgets.depositOverflowRow, settingsWidgets.depositOverflow, manageItemsOn)
+    ApplyRowState(settingsWidgets.depositOverflowCrossStackRow, settingsWidgets.depositOverflowCrossStack, manageItemsOn)
+    ApplyRowState(settingsWidgets.batchSizeRow, settingsWidgets.batchSizeSlider, manageItemsOn)
     if settingsWidgets.maxWithdrawBox then
         local val = ns.db.settings.maxWithdrawGold or 0
         settingsWidgets.maxWithdrawBox:SetText(tostring(val))

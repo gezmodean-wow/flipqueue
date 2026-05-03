@@ -388,6 +388,11 @@ end
 function Tracker:AutoWithdrawGold()
     if not ns.db then return end
     local charKey = ns:GetCharKey()
+    -- #148: gold master gate.
+    if not Tracker:InScope(charKey, "gold") then
+        ns:PrintDebug("AutoWithdrawGold: skipped — manageGold off for char")
+        return
+    end
     if not ns:GetCharSetting(charKey, "autoWithdrawGold") then
         ns:PrintDebug("AutoWithdrawGold: skipped — setting disabled")
         return
@@ -534,6 +539,11 @@ end
 function Tracker:AutoDepositGold()
     if not ns.db then return end
     local charKey = ns:GetCharKey()
+    -- #148: gold master gate.
+    if not Tracker:InScope(charKey, "gold") then
+        ns:PrintDebug("AutoDepositGold: skipped — manageGold off for char")
+        return
+    end
     if not ns:GetCharSetting(charKey, "autoDepositGold") then
         ns:PrintDebug("AutoDepositGold: skipped — setting disabled")
         return
@@ -608,12 +618,21 @@ end
 --------------------------
 
 function Tracker:AutoDepositToWarbank(onComplete)
-    if not ns.db or not ns:GetCharSetting(ns:GetCharKey(), "autoDepositWarbank") then
+    if not ns.db then
         if onComplete then onComplete({}, 0) end
         return
     end
-
     local charKey = ns:GetCharKey()
+    -- #148: items master gate. Returns the same shape as a no-op success
+    -- so the popup chain advances cleanly without firing a phantom failure.
+    if not Tracker:InScope(charKey, "items") then
+        if onComplete then onComplete({}, 0) end
+        return
+    end
+    if not ns:GetCharSetting(charKey, "autoDepositWarbank") then
+        if onComplete then onComplete({}, 0) end
+        return
+    end
     local todoList = ns.TodoList and ns.TodoList:GetCurrentList()
     if not todoList or not todoList.tasks then
         if onComplete then onComplete({}, 0) end
@@ -769,12 +788,21 @@ end
 -- on early-return paths. The popup chain awaits this so progress reports
 -- reflect actual moves, not optimistic counts.
 function Tracker:AutoDepositExtraItems(onComplete)
-    if not ns.db or not ns:GetCharSetting(ns:GetCharKey(), "autoDepositAll") then
+    if not ns.db then
         if onComplete then onComplete({}, 0) end
         return
     end
-
     local charKey = ns:GetCharKey()
+    -- #148: items master gate. If FQ doesn't have authority to manage items
+    -- for this character, no extras execute regardless of trigger flags.
+    if not Tracker:InScope(charKey, "items") then
+        if onComplete then onComplete({}, 0) end
+        return
+    end
+    if not ns:GetCharSetting(charKey, "autoDepositAll") then
+        if onComplete then onComplete({}, 0) end
+        return
+    end
 
     -- Build set of items the current character needs in bags for tasks
     local keepKeys = {}  -- itemKey -> qty needed
@@ -796,82 +824,56 @@ function Tracker:AutoDepositExtraItems(onComplete)
     -- Items to never deposit (keep in bags always)
     local KEEP_ITEM_IDS = { [6948] = true } -- Hearthstone
 
-    -- Scan bags for items to deposit (everything not in keepKeys/keepNames)
-    -- Split into warbank-eligible and bank-only (soulbound items can't go to warbank)
+    -- Scan bags for items to deposit. #148: walks via Tracker:WalkBagsInScope
+    -- so the same bag set + same reagent / soulbound rules apply that the
+    -- planner used. The previous mismatch (planner walked ALL_PLAYER_BAGS,
+    -- executor walked INVENTORY_BAGS, planner respected reagent settings,
+    -- executor didn't) was the FQ-110 toeknee silent-skip root cause.
     local warbankMoves = {} -- { bag, slot, name } — can go to warbank or bank
     local bankOnlyMoves = {} -- { bag, slot, name } — soulbound, bank only
     local consumedKeys = {}  -- itemKey -> qty consumed by keep
     local consumedNames = {} -- lname -> qty consumed by keep
 
-    for _, bagIndex in ipairs(ns.INVENTORY_BAGS) do
-        local ok, numSlots = pcall(C_Container.GetContainerNumSlots, bagIndex)
-        if ok and numSlots then
-            for slot = 1, numSlots do
-                local ok2, info = pcall(C_Container.GetContainerItemInfo, bagIndex, slot)
-                if ok2 and info and info.hyperlink then
-                    local itemID, bonusIDs, modifiers = ns:ParseItemLink(info.hyperlink)
-                    if itemID then
-                        local numID = tonumber(itemID) or tonumber((itemID:gsub(";.*", "")))
+    Tracker:WalkBagsInScope("extras", function(bagIndex, slot, info, itemID, bonusIDs, modifiers, isSoulbound)
+        local numID = tonumber(itemID) or tonumber((itemID:gsub(";.*", "")))
+        if KEEP_ITEM_IDS[numID] then return end  -- Hearthstone etc
 
-                        -- Skip items that should never be deposited
-                        if KEEP_ITEM_IDS[numID] then
-                            -- Hearthstone etc — always keep in bags
-                        else
-                            local key = ns:MakeItemKey(itemID, bonusIDs, modifiers)
-                            local stackCount = info.stackCount or 1
+        local key = ns:MakeItemKey(itemID, bonusIDs, modifiers)
+        local stackCount = info.stackCount or 1
 
-                            -- Check if this item should be kept for tasks
-                            local shouldKeep = false
-                            local neededByKey = keepKeys[key] or 0
-                            local usedByKey = consumedKeys[key] or 0
-                            if neededByKey > usedByKey then
-                                consumedKeys[key] = usedByKey + stackCount
-                                shouldKeep = true
-                            else
-                                -- Name fallback
-                                local itemName = Tracker._GetNameFromLink(info.hyperlink)
-                                if itemName then
-                                    local ln = itemName:lower()
-                                    local neededByName = keepNames[ln] or 0
-                                    local usedByName = consumedNames[ln] or 0
-                                    if neededByName > usedByName then
-                                        consumedNames[ln] = usedByName + stackCount
-                                        shouldKeep = true
-                                    end
-                                end
-                            end
-
-                            if not shouldKeep then
-                                local itemName = Tracker._GetNameFromLink(info.hyperlink)
-                                local moveEntry = {
-                                    bag = bagIndex,
-                                    slot = slot,
-                                    name = itemName or ("Item " .. key),
-                                }
-                                -- Check bind type: BoP (1) and Quest (4) can't go to warbank.
-                                -- If bind type unknown (async GetItemInfo), assume soulbound.
-                                local isSoulbound = false
-                                if info.isBound then
-                                    local ok3, _, _, _, _, _, _, _, _, _, _, _, _, _, bindType =
-                                        pcall(C_Item.GetItemInfo, info.hyperlink)
-                                    if not ok3 or not bindType then
-                                        isSoulbound = true  -- unknown, assume soulbound
-                                    elseif bindType ~= 7 and bindType ~= 8 then
-                                        isSoulbound = true  -- Only BtA (7) / BtW (8) can move when bound
-                                    end
-                                end
-                                if isSoulbound then
-                                    table.insert(bankOnlyMoves, moveEntry)
-                                else
-                                    table.insert(warbankMoves, moveEntry)
-                                end
-                            end
-                        end
-                    end
+        local shouldKeep = false
+        local neededByKey = keepKeys[key] or 0
+        local usedByKey = consumedKeys[key] or 0
+        if neededByKey > usedByKey then
+            consumedKeys[key] = usedByKey + stackCount
+            shouldKeep = true
+        else
+            local itemName = Tracker._GetNameFromLink(info.hyperlink)
+            if itemName then
+                local ln = itemName:lower()
+                local neededByName = keepNames[ln] or 0
+                local usedByName = consumedNames[ln] or 0
+                if neededByName > usedByName then
+                    consumedNames[ln] = usedByName + stackCount
+                    shouldKeep = true
                 end
             end
         end
-    end
+
+        if not shouldKeep then
+            local itemName = Tracker._GetNameFromLink(info.hyperlink)
+            local moveEntry = {
+                bag = bagIndex,
+                slot = slot,
+                name = itemName or ("Item " .. key),
+            }
+            if isSoulbound then
+                table.insert(bankOnlyMoves, moveEntry)
+            else
+                table.insert(warbankMoves, moveEntry)
+            end
+        end
+    end)
 
     if #warbankMoves == 0 and #bankOnlyMoves == 0 then
         if onComplete then onComplete({}, 0) end

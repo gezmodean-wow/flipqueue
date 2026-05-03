@@ -153,6 +153,87 @@ local function CheckForPosts()
 end
 
 --------------------------
+-- Authority Scope (#148)
+--------------------------
+-- The scope-vs-trigger split. `InScope` answers "does FlipQueue have
+-- authority to manage X for this character right now?" — the per-action
+-- `auto*` flags answer "should it auto-fire?" These two questions used to
+-- collapse into a single boolean, which produced the recurring class of
+-- bugs FQ-117 / FQ-110 / FQ-110-toeknee all stem from.
+--
+-- Both the planners and the executors call into `InScope` first. They can
+-- never disagree about what's in scope because they share this predicate.
+function Tracker:InScope(charKey, kind)
+    if not ns.db then return false end
+    if ns._automationPaused then return false end
+    local master = (kind == "gold") and "manageGold" or "manageItems"
+    -- Per-character override takes precedence; falls back to global.
+    return ns:GetCharSetting(charKey, master) == true
+end
+
+-- Single source of truth for "which bags should we walk for an extras-class
+-- deposit op?" Both `BuildExtraDepositOps` (planner) and
+-- `AutoDepositExtraItems` (executor) used to walk different bag sets — the
+-- planner included the reagent bag, the executor skipped it — which produced
+-- the FQ-110 toeknee silent-skip when a player had `depositIncludeReagents`
+-- on with items in bag 5. Funneling both through this helper guarantees they
+-- can never disagree.
+--
+-- Callback signature:
+--   cb(bagIndex, slot, info, itemID, bonusIDs, modifiers, isSoulbound)
+function Tracker:WalkBagsInScope(opKind, cb)
+    if not ns.db then return end
+    local includeReagents = ns.db.settings.depositIncludeReagents
+
+    for _, bagIndex in ipairs(ns.ALL_PLAYER_BAGS) do
+        local ok, numSlots = pcall(C_Container.GetContainerNumSlots, bagIndex)
+        if ok and numSlots then
+            for slot = 1, numSlots do
+                local ok2, info = pcall(C_Container.GetContainerItemInfo, bagIndex, slot)
+                if ok2 and info and info.hyperlink then
+                    -- Reagent / tradegoods filter — same rule the planner used:
+                    -- bag 5 is unconditionally reagents; other bags are checked
+                    -- by item classID. Skipped entirely unless the user opted
+                    -- in via depositIncludeReagents.
+                    local skipReagent = false
+                    if not includeReagents then
+                        if bagIndex == ns.REAGENT_BAG then
+                            skipReagent = true
+                        else
+                            local _, _, _, _, _, _, _, _, _, _, _, classID =
+                                GetItemInfo(info.hyperlink)
+                            if classID == Enum.ItemClass.Tradegoods then
+                                skipReagent = true
+                            end
+                        end
+                    end
+
+                    -- BoP/Quest detection: warbound (7) and BoA (8) can move
+                    -- to warbank; everything else with isBound stays bank-only.
+                    local isSoulbound = false
+                    if info.isBound then
+                        local okBind, _, _, _, _, _, _, _, _, _, _, _, _, _, bt =
+                            pcall(C_Item.GetItemInfo, info.hyperlink)
+                        if not okBind or not bt then
+                            isSoulbound = true
+                        elseif bt ~= 7 and bt ~= 8 then
+                            isSoulbound = true
+                        end
+                    end
+
+                    if not skipReagent then
+                        local itemID, bonusIDs, modifiers = ns:ParseItemLink(info.hyperlink)
+                        if itemID then
+                            cb(bagIndex, slot, info, itemID, bonusIDs, modifiers, isSoulbound)
+                        end
+                    end
+                end
+            end
+        end
+    end
+end
+
+--------------------------
 -- Bank Operations Popup
 --------------------------
 
@@ -172,7 +253,6 @@ function Tracker:ShowBankOpsPopup()
     end
 
     local charKey = ns:GetCharKey()
-    local isAuto = ns.db and ns:GetCharSetting(charKey, "autoPullBank") and not ns._automationPaused
 
     -- Collect pull operations (reuse AutoPullFromBank's logic but don't execute)
     local pullOps = Tracker:BuildPullOps()
@@ -182,16 +262,15 @@ function Tracker:ShowBankOpsPopup()
     for _, op in ipairs(depositOps) do
         depositSlots[op.srcBag .. ":" .. op.srcSlot] = true
     end
-    -- Same gate the gold ops below carry: when autoDepositAll is off, the
-    -- executor's AutoDepositExtraItems silently skips. Letting extras into
-    -- totalOps drifts the completion tally and forces the bar to "full"
-    -- while the planned ops were never attempted.
-    local autoDepositAll = ns.db and ns:GetCharSetting(charKey, "autoDepositAll")
-        and not ns._automationPaused
+    -- #148: extras require BOTH the items master AND the autoDepositAll
+    -- trigger flag. The InScope check covers manageItems + automationPaused;
+    -- BuildExtraDepositOps internally also gates on InScope (defense in depth)
+    -- so an out-of-scope character returns [] regardless.
+    local autoDepositAll = Tracker:InScope(charKey, "items")
+        and ns:GetCharSetting(charKey, "autoDepositAll")
     local extraOps = autoDepositAll and Tracker:BuildExtraDepositOps(depositSlots) or {}
 
     -- Calculate gold operations
-    local charKey = ns:GetCharKey()
     local currentRealm = charKey:match("%-(.+)$") or GetRealmName()
     local goldWithdraw, goldDeposit = 0, 0
     local hasBuyCosts = false
@@ -200,13 +279,13 @@ function Tracker:ShowBankOpsPopup()
     -- AutoWithdrawGold / AutoDepositGold apply, so a setting that's
     -- intentionally disabled or a hand-off to Warband Miser doesn't
     -- show up as a queued op in the popup (and therefore doesn't get
-    -- recorded as a "failure" when the no-op actually runs). Player
-    -- expectation: if I disabled deposit-gold, the popup shouldn't
-    -- claim a gold deposit failed.
-    if ns.db then
+    -- recorded as a "failure" when the no-op actually runs).
+    -- #148: gate on the gold master first, then the per-action triggers.
+    -- Out-of-scope characters skip gold planning entirely.
+    if ns.db and Tracker:InScope(charKey, "gold") then
         local wmActive = ns.IsWarbandMiserActive and ns:IsWarbandMiserActive()
-        local autoWithdraw = ns.db.settings.autoWithdrawGold and not wmActive
-        local autoDeposit  = ns.db.settings.autoDepositGold  and not wmActive
+        local autoWithdraw = ns:GetCharSetting(charKey, "autoWithdrawGold") and not wmActive
+        local autoDeposit  = ns:GetCharSetting(charKey, "autoDepositGold")  and not wmActive
 
         local totalFees, _, details = Tracker:CalculateRequiredGold(charKey, currentRealm)
         for _, d in ipairs(details) do
@@ -451,6 +530,26 @@ function Tracker:ShowBankOpsPopup()
         ns.UI:BeginBankExecution(totalOps)
     end
 
+    -- #148: per-section auto flags. The popup only auto-fires sections
+    -- where the master is on AND every action in that section has its
+    -- trigger on. Mixed cases (one section auto, the other manual)
+    -- currently fall back to a single Execute button — separate per-
+    -- section Execute buttons are alpha12 polish work.
+    local itemsInScope = Tracker:InScope(charKey, "items")
+    local goldInScope  = Tracker:InScope(charKey, "gold")
+    local itemsAuto = itemsInScope
+        and (not hasPulls    or ns:GetCharSetting(charKey, "autoPullBank"))
+        and (not hasDeposits or ns:GetCharSetting(charKey, "autoDepositWarbank"))
+        and (not hasExtras   or ns:GetCharSetting(charKey, "autoDepositAll"))
+    local goldAutoWithdraw = goldInScope and ns:GetCharSetting(charKey, "autoWithdrawGold")
+    local goldAutoDeposit  = goldInScope and ns:GetCharSetting(charKey, "autoDepositGold")
+    local goldAuto = (goldWithdraw == 0 or goldAutoWithdraw)
+        and (goldDeposit  == 0 or goldAutoDeposit)
+    -- Combined isAuto: every active section is in auto-fire. Otherwise the
+    -- popup waits for explicit Execute click. Preserves the all-auto and
+    -- all-manual common cases without surprise auto-fires in mixed setups.
+    local isAuto = itemsAuto and goldAuto
+
     ns.UI:ShowBankPopup({
         pulls = pullOps,
         deposits = depositOps,
@@ -459,6 +558,10 @@ function Tracker:ShowBankOpsPopup()
         goldDeposit = goldDeposit,
         hasBuyCosts = hasBuyCosts,
         isAuto = isAuto,
+        -- Per-section flags — popup may use these for separate Execute
+        -- buttons in alpha12. Architectural prep for FQ-129 Phase 3.
+        itemsAuto = itemsAuto,
+        goldAuto = goldAuto,
     }, ExecuteAllOps)
 end
 
@@ -468,6 +571,9 @@ function Tracker:BuildPullOps()
     if not ns.db then return {} end
 
     local charKey = ns:GetCharKey()
+    -- #148: gate the planner on the items master. Out-of-scope characters
+    -- never have pull ops planned, so they can't drift the popup tally.
+    if not Tracker:InScope(charKey, "items") then return {} end
     local currentRealm = charKey:match("%-(.+)$") or GetRealmName()
     local needed = {}
 
@@ -562,6 +668,8 @@ function Tracker:BuildDepositOps()
     if not ns.db then return {} end
 
     local charKey = ns:GetCharKey()
+    -- #148: items master gate.
+    if not Tracker:InScope(charKey, "items") then return {} end
     local todoList = ns.TodoList and ns.TodoList:GetCurrentList()
     if not todoList or not todoList.tasks then return {} end
 
@@ -643,10 +751,19 @@ end
 
 -- Build extra deposit operation list (items not needed by current char).
 -- excludeSlots: optional table of "bag:slot" keys already claimed by BuildDepositOps
+--
+-- #148: routes through `Tracker:WalkBagsInScope` so the executor
+-- (`AutoDepositExtraItems`) can use the same helper and never disagree about
+-- which bags / which filter rules count. The previous mismatch — planner
+-- walking ALL_PLAYER_BAGS, executor walking INVENTORY_BAGS — was the
+-- FQ-110 toeknee root cause.
 function Tracker:BuildExtraDepositOps(excludeSlots)
     if not ns.db then return {} end
 
     local charKey = ns:GetCharKey()
+    -- #148: items master gate.
+    if not Tracker:InScope(charKey, "items") then return {} end
+
     local keepKeys = {}
     local keepNames = {}
     if ns.TodoList then
@@ -669,97 +786,52 @@ function Tracker:BuildExtraDepositOps(excludeSlots)
     local consumedNames = {}
     excludeSlots = excludeSlots or {}
 
-    -- Reagents/materials are not tracked for sales or to-dos (not
-    -- cross-region), so by default we leave them on the character. The user
-    -- can opt in to sweep them into the warbank via depositIncludeReagents.
-    local includeReagents = ns.db and ns.db.settings.depositIncludeReagents
+    Tracker:WalkBagsInScope("extras", function(bagIndex, slot, info, itemID, bonusIDs, modifiers, isSoulbound)
+        local slotKey = bagIndex .. ":" .. slot
+        if excludeSlots[slotKey] then return end
+        -- Skip soulbound items entirely (matches the previous BuildDepositOps
+        -- behavior — warbank can't accept BoP items even if everything else
+        -- about the candidate is fine).
+        if isSoulbound then return end
 
-    for _, bagIndex in ipairs(ns.ALL_PLAYER_BAGS) do
-        local ok, numSlots = pcall(C_Container.GetContainerNumSlots, bagIndex)
-        if ok and numSlots then
-            for slot = 1, numSlots do
-                local ok2, info = pcall(C_Container.GetContainerItemInfo, bagIndex, slot)
-                if ok2 and info and info.hyperlink then
-                    local slotKey = bagIndex .. ":" .. slot
-                    -- Skip soulbound items entirely (matches BuildDepositOps).
-                    -- Warbound items (bind types 7 and 8) are still allowed —
-                    -- they can go to the warbank.
-                    local skipBound = false
-                    if info.isBound then
-                        local okBind, _, _, _, _, _, _, _, _, _, _, _, _, _, bt =
-                            pcall(C_Item.GetItemInfo, info.hyperlink)
-                        if not okBind or not bt then
-                            skipBound = true
-                        elseif bt ~= 7 and bt ~= 8 then
-                            skipBound = true
-                        end
-                    end
-                    -- Skip reagents/materials (class Tradegoods) unless the
-                    -- user opted in. Items in the dedicated reagent bag are
-                    -- always reagents by definition; items in regular bags
-                    -- are checked by item class.
-                    local skipReagent = false
-                    if not includeReagents then
-                        if bagIndex == ns.REAGENT_BAG then
-                            skipReagent = true
-                        else
-                            local _, _, _, _, _, _, _, _, _, _, _, classID =
-                                GetItemInfo(info.hyperlink)
-                            if classID == Enum.ItemClass.Tradegoods then
-                                skipReagent = true
-                            end
-                        end
-                    end
-                    if not excludeSlots[slotKey] and not skipBound and not skipReagent then
-                    local itemID, bonusIDs, modifiers = ns:ParseItemLink(info.hyperlink)
-                    if itemID then
-                        local numID = tonumber(itemID) or tonumber((itemID:gsub(";.*", "")))
-                        if not KEEP_ITEM_IDS[numID] then
-                            local key = ns:MakeItemKey(itemID, bonusIDs, modifiers)
-                            local stackCount = info.stackCount or 1
-                            local shouldKeep = false
+        local numID = tonumber(itemID) or tonumber((itemID:gsub(";.*", "")))
+        if KEEP_ITEM_IDS[numID] then return end
 
-                            local neededByKey = keepKeys[key] or 0
-                            local usedByKey = consumedKeys[key] or 0
-                            if neededByKey > usedByKey then
-                                consumedKeys[key] = usedByKey + stackCount
-                                shouldKeep = true
-                            else
-                                local itemName = Tracker._GetNameFromLink(info.hyperlink)
-                                if itemName then
-                                    local ln = itemName:lower()
-                                    local neededByName = keepNames[ln] or 0
-                                    local usedByName = consumedNames[ln] or 0
-                                    if neededByName > usedByName then
-                                        consumedNames[ln] = usedByName + stackCount
-                                        shouldKeep = true
-                                    end
-                                end
-                            end
+        local key = ns:MakeItemKey(itemID, bonusIDs, modifiers)
+        local stackCount = info.stackCount or 1
+        local shouldKeep = false
 
-                            if not shouldKeep then
-                                -- Soulbound items were already filtered out
-                                -- by the skipBound check above. Anything that
-                                -- reaches here is either unbound or warbound,
-                                -- so warbank is always a valid destination.
-                                local itemName = Tracker._GetNameFromLink(info.hyperlink)
-                                table.insert(ops, {
-                                    op = "deposit",
-                                    srcBag = bagIndex,
-                                    srcSlot = slot,
-                                    name = itemName or ("Item " .. key),
-                                    icon = info.iconFileID,
-                                    quantity = stackCount,
-                                    destType = "warbank",
-                                })
-                            end
-                        end
-                    end
+        local neededByKey = keepKeys[key] or 0
+        local usedByKey = consumedKeys[key] or 0
+        if neededByKey > usedByKey then
+            consumedKeys[key] = usedByKey + stackCount
+            shouldKeep = true
+        else
+            local itemName = Tracker._GetNameFromLink(info.hyperlink)
+            if itemName then
+                local ln = itemName:lower()
+                local neededByName = keepNames[ln] or 0
+                local usedByName = consumedNames[ln] or 0
+                if neededByName > usedByName then
+                    consumedNames[ln] = usedByName + stackCount
+                    shouldKeep = true
                 end
-                end -- excludeSlots check
             end
         end
-    end
+
+        if not shouldKeep then
+            local itemName = Tracker._GetNameFromLink(info.hyperlink)
+            table.insert(ops, {
+                op = "deposit",
+                srcBag = bagIndex,
+                srcSlot = slot,
+                name = itemName or ("Item " .. key),
+                icon = info.iconFileID,
+                quantity = stackCount,
+                destType = "warbank",
+            })
+        end
+    end)
 
     return ops
 end

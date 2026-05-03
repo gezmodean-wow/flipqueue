@@ -876,6 +876,29 @@ local function BuildBankContent(parent)
     return bankFrame
 end
 
+-- #148: hide drawer item / gold buttons when their master is OFF.
+-- The Pause button stays visible regardless because pausing is meta-control,
+-- not a managed action.
+local function ApplyMasterVisibility()
+    local Tracker = ns.Tracker
+    if not Tracker or not Tracker.InScope then return end
+    local charKey = ns.GetCharKey and ns:GetCharKey()
+    if not charKey then return end
+
+    local items = Tracker:InScope(charKey, "items")
+    local gold  = Tracker:InScope(charKey, "gold")
+
+    -- Item buttons
+    if bankButtons.pull     then if items then bankButtons.pull:Show()     else bankButtons.pull:Hide()     end end
+    if bankButtons.deposit  then if items then bankButtons.deposit:Show()  else bankButtons.deposit:Hide()  end end
+    if bankButtons.extras   then if items then bankButtons.extras:Show()   else bankButtons.extras:Hide()   end end
+    if bankButtons.pullAll  then if items then bankButtons.pullAll:Show()  else bankButtons.pullAll:Hide()  end end
+
+    -- Gold buttons
+    if bankButtons.pullGold then if gold  then bankButtons.pullGold:Show() else bankButtons.pullGold:Hide() end end
+    if bankButtons.depGold  then if gold  then bankButtons.depGold:Show()  else bankButtons.depGold:Hide()  end end
+end
+
 local function RefreshBankLabels()
     if bankButtons.pullGold then
         bankButtons.pullGold.label:SetText(GetWithdrawLabel())
@@ -883,6 +906,7 @@ local function RefreshBankLabels()
     if bankButtons.depGold then
         bankButtons.depGold.label:SetText(GetDepositLabel())
     end
+    ApplyMasterVisibility()
     RefreshPauseButton()
 end
 

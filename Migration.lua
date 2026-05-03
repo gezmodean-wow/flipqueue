@@ -7,7 +7,7 @@ local addonName, ns = ...
 --------------------------
 
 -- Current schema version
-local CURRENT_SCHEMA = 9
+local CURRENT_SCHEMA = 10
 
 -- Schema history:
 -- nil/0  = v0.5.0 (stable release): queue array, separate inventory/characters/hiddenCharacters
@@ -26,6 +26,10 @@ local CURRENT_SCHEMA = 9
 --          loaded, force the setting to false so FlipQueue doesn't compete
 --          with their scans (FQ-137 root cause). One-shot — players can
 --          re-enable from Settings if they prefer the old behavior.
+-- 10     = #148: manageItems / manageGold authority masters with scope-vs-
+--          trigger split. Derives initial values from the existing per-
+--          action `auto*` flags so behavior is preserved across the upgrade.
+--          One-shot; player can flip the masters from Settings afterward.
 
 local function RunMigrations(db)
     db.schemaVersion = db.schemaVersion or 0
@@ -326,6 +330,58 @@ local function RunMigrations(db)
         end
         db.schemaVersion = 9
     end  -- migration 9
+
+    -- Migration 10: #148 authority masters.
+    --
+    -- The legacy model conflated "is FQ allowed to manage X?" with "should
+    -- FQ auto-fire on bank open?" — every gating bug we've patched
+    -- (FQ-117 alpha3, FQ-110 alpha10, FQ-110 toeknee branch) was a symptom
+    -- of that conflation. The new model splits the two axes: master switches
+    -- (manageItems / manageGold) own scope; per-action flags (autoPullBank,
+    -- autoDepositWarbank, autoDepositAll, autoWithdrawGold, autoDepositGold)
+    -- become trigger toggles under their parent master.
+    --
+    -- Derivation: a master defaults ON if ANY of its child auto-flags was
+    -- on at migration time, OFF only if all child flags were off. This
+    -- preserves behavior — a player who had auto-pull-on and auto-deposit-
+    -- off keeps that exact behavior because manageItems is ON and the per-
+    -- action triggers carry their existing values forward.
+    if db.schemaVersion < 10 then
+        db.settings = db.settings or {}
+        if db.settings.manageItems == nil then
+            db.settings.manageItems = (
+                db.settings.autoPullBank
+                or db.settings.autoDepositWarbank
+                or db.settings.autoDepositAll
+            ) and true or false
+            -- Fresh installs (where all autos default false) still want the
+            -- master ON by default — otherwise the masters appear "off" on a
+            -- new install and the player can't see the rest of the settings.
+            -- The migration only sees install state on first run; if every
+            -- auto-flag is false at this exact moment we default ON, then
+            -- the player can opt out from Settings.
+            if db.settings.manageItems == false then
+                db.settings.manageItems = true
+            end
+        end
+        if db.settings.manageGold == nil then
+            db.settings.manageGold = (
+                db.settings.autoWithdrawGold
+                or db.settings.autoDepositGold
+            ) and true or false
+            if db.settings.manageGold == false then
+                db.settings.manageGold = true
+            end
+        end
+        -- Surface the layout change so the player isn't surprised by the
+        -- new top-level masters in Settings. Re-uses the migration-message
+        -- pattern Scanner.lua's PLAYER_LOGIN handler already drains.
+        db._mastersMigrationMessage =
+            "FlipQueue: settings reorganized. New top-level toggles control whether " ..
+            "FlipQueue manages your items / gold per character. " ..
+            "See /fq settings or /fq about for details — your existing behavior is unchanged."
+        db.schemaVersion = 10
+    end  -- migration 10
 end  -- RunMigrations
 
 -- Expose for DB.lua

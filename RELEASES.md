@@ -10,6 +10,32 @@ The engineering-detail companion lives in `CHANGELOG.md` (commit-readerese — f
 
 The v0.12.0 line is currently in alpha. The notes below describe what will land in the public release once the alpha series stabilizes.
 
+### New: Manage my items / Manage my gold master switches
+
+The Settings page now opens with two big switches: **Manage my items** and **Manage my gold**. Each one decides whether FlipQueue is allowed to move that resource for a given character. Per-character overrides on the Characters page take precedence — useful for letting FlipQueue handle items globally but turning it off for a specific alt without touching anything else. When a master is off, the corresponding drawer buttons hide, the bank popup skips that section entirely, and the related sub-settings dim to make it clear they're inactive.
+
+The Characters page's defaults bar got the same treatment — renamed to **Character Defaults**, with the Items group on a blue background and the Gold group on a gold background, each with its own master switch. When you turn a master off, its sub-checkboxes hide and a `(disabled)` label appears in their place. The bar header is now distinct from the broader **Settings** page so they aren't conflated.
+
+Existing setups migrate silently — your current behavior is preserved, with a single chat line on first load explaining where to find the new switches. Behind the scenes, the planner and executor now share a single source of truth for "is FlipQueue allowed to move this?" — which closes a long-standing class of bugs where deposit operations would silently skip without explanation (toeknee's repeating "deposit completed but didn't actually move anything" report).
+
+### Settings menu reorganized
+
+The settings page now reads top-down as **General** → **Item Management** → **Gold Management** → (existing sections). Item Management collects the master switch plus reagent / overflow / batch-size controls. Gold Management collects the master switch plus Warband Miser integration / withdrawal / max-cap / deposit / default-gold-to-keep. The old "Bank & Warbank" section is gone — its contents redistributed under the two management sections.
+
+The "Show Tutorial Again" and "Run Setup Wizard" buttons moved from the bottom of the settings page into the General section so they sit with the rest of the account-level controls. The in-settings "About FlipQueue" link is gone — see the new About sidebar tab below.
+
+### New: About page in the sidebar
+
+A standalone **About** page in the main FlipQueue window (between Settings and Tutorial in the sidebar) now shows your installed version prominently, along with the embedded Cogworks-1.0 library version and current WoW build. Plus credits, links to GitHub / Discord / CurseForge / Wago, and a one-click **Copy diagnostics** button that bundles version + relevant addon list into a clipboard-ready block for bug reports.
+
+`/fq version` is a new chat command that prints `FlipQueue v0.12.0-alpha11 (Cogworks-1.0 MINOR …)` in one line, useful for confirming your installed version when reporting bugs. Every `/fq debug *` output now starts with that same version line, and the in-game debug console window's title bar shows it too — so screenshots / pastes self-identify which build they came from.
+
+### Pet bandage / bag-click error after pet battle: fixed
+
+If you fought a pet battle while FlipQueue was in the middle of bank operations, your first bag click after the battle could produce a red `ADDON_ACTION_FORBIDDEN` error and pet bandages / bag access would refuse to work for a while. Cause: FlipQueue's bank queue was running protected container operations through timer continuations, which left a taint trail that pet-battle UI lockdown surfaced on subsequent clicks.
+
+FlipQueue's bank queue now pauses cleanly when combat or a pet battle starts, and resumes when both clear (with a chat banner so you know what's happening). Cursor state is also defensively cleared between every move to keep taint from chaining forward. If you've been seeing the error, alpha11 should close it.
+
 ### Auction house scanning and posting works smoothly with TSM
 
 Players running FlipQueue alongside TradeSkillMaster reported that the auction house felt sluggish — scans took tens of seconds to start, posts occasionally got skipped from TSM's queue, and the slowness scaled with how many items were in the bag. The root cause was FlipQueue doing its own work in parallel with TSM and competing for Blizzard's auction house rate limits.

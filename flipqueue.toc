@@ -73,5 +73,6 @@ UI\GeneratorPage.lua
 UI\DebugPage.lua
 UI\DebugConsole.lua
 UI\TutorialPage.lua
+UI\AboutPage.lua
 UI\SetupWizard.lua
 UI\SlashCommands.lua

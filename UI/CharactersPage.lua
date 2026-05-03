@@ -545,11 +545,11 @@ local function EnsureConfigPanel(tableContainer)
     div2:SetPoint("RIGHT", configPanel, "RIGHT", R_MARGIN, 0)
     div2:SetColorTexture(0.35, 0.35, 0.45, 0.6)
 
-    -- Section label: Automation Overrides
-    local autoLabel = configPanel:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-    autoLabel:SetPoint("TOPLEFT", div2, "BOTTOMLEFT", 0, -4)
-    autoLabel:SetTextColor(0.9, 0.8, 0.3)
-    autoLabel:SetText("Automation Overrides")
+    -- Section label: FlipQueue manages… (#148 master switches)
+    local manageLabel = configPanel:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    manageLabel:SetPoint("TOPLEFT", div2, "BOTTOMLEFT", 0, -4)
+    manageLabel:SetTextColor(0.9, 0.8, 0.3)
+    manageLabel:SetText("FlipQueue manages…")
 
     -- Helper to create a 3-state toggle row
     local function Create3StateRow(anchorBelow, labelText, settingKey)
@@ -580,6 +580,28 @@ local function EnsureConfigPanel(tableContainer)
         btn._settingKey = settingKey
         return row, btn
     end
+
+    -- Manage masters (per-character override of global manageItems/manageGold)
+    local manageItemsRow, manageItemsBtn = Create3StateRow(manageLabel, "Items:", "manageItems")
+    configWidgets.manageItemsRow = manageItemsRow
+    configWidgets.manageItemsBtn = manageItemsBtn
+
+    local manageGoldRow, manageGoldBtn = Create3StateRow(manageItemsRow, "Gold:", "manageGold")
+    configWidgets.manageGoldRow = manageGoldRow
+    configWidgets.manageGoldBtn = manageGoldBtn
+
+    -- Divider between master switches and per-action triggers
+    local divManage = configPanel:CreateTexture(nil, "ARTWORK")
+    divManage:SetHeight(1)
+    divManage:SetPoint("TOPLEFT", manageGoldRow, "BOTTOMLEFT", 0, -8)
+    divManage:SetPoint("RIGHT", configPanel, "RIGHT", R_MARGIN, 0)
+    divManage:SetColorTexture(0.35, 0.35, 0.45, 0.6)
+
+    -- Section label: Automation Overrides (per-action triggers)
+    local autoLabel = configPanel:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    autoLabel:SetPoint("TOPLEFT", divManage, "BOTTOMLEFT", 0, -4)
+    autoLabel:SetTextColor(0.9, 0.8, 0.3)
+    autoLabel:SetText("Automation Overrides")
 
     -- Auto-Pull
     local pullRow, pullBtn = Create3StateRow(autoLabel, "Pull:", "autoPullBank")
@@ -906,6 +928,8 @@ local function ShowConfigPanel(charKey)
         btn:SetScript("OnLeave", function() GameTooltip:Hide() end)
     end
 
+    SetupTriStateBtn(configWidgets.manageItemsBtn, "manageItems")
+    SetupTriStateBtn(configWidgets.manageGoldBtn, "manageGold")
     SetupTriStateBtn(configWidgets.pullBtn, "autoPullBank")
     SetupTriStateBtn(configWidgets.depBtn, "autoDepositWarbank")
     SetupTriStateBtn(configWidgets.depAllBtn, "autoDepositAll")
@@ -1178,20 +1202,27 @@ local function EnsureGlobalDefaultsBar(tableContainer)
     local lbl = globalDefaultsBar:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
     lbl:SetPoint("LEFT", globalDefaultsBar, "LEFT", 6, 0)
     lbl:SetTextColor(0.9, 0.8, 0.3)
-    lbl:SetText("Global Defaults:")
+    -- Renamed from "Global Defaults" to "Character Defaults" so the bar
+    -- isn't conflated with the global settings page (#148 maintainer ask).
+    lbl:SetText("Character Defaults:")
 
-    -- Helper: create a small checkbox
-    local function MakeGlobalCB(anchorTo, label, settingKey, tooltipDesc)
+    -- Helper: create a small checkbox. The optional `bold` flag draws the
+    -- label in the gold accent color used for master toggles, so the master
+    -- visually outranks its child triggers.
+    local function MakeGlobalCB(anchorTo, label, settingKey, tooltipDesc, bold)
         local cb = CreateFrame("CheckButton", nil, globalDefaultsBar, "UICheckButtonTemplate")
         cb:SetSize(18, 18)
         cb:SetPoint("LEFT", anchorTo, "RIGHT", 8, 0)
         cb.text:SetText(label)
-        cb.text:SetFontObject("GameFontHighlightSmall")
+        cb.text:SetFontObject(bold and "GameFontNormalSmall" or "GameFontHighlightSmall")
+        if bold then cb.text:SetTextColor(0.9, 0.8, 0.3) end
 
         cb:SetScript("OnClick", function(self)
             if ns.db then
                 ns.db.settings[settingKey] = self:GetChecked()
                 RefreshCharactersTable()
+                if UI.RefreshContextDrawer then UI:RefreshContextDrawer() end
+                if UI.RefreshSettings then UI:RefreshSettings() end
             end
         end)
 
@@ -1206,7 +1237,45 @@ local function EnsureGlobalDefaultsBar(tableContainer)
         return cb
     end
 
-    globalDefaultsWidgets.pullCB = MakeGlobalCB(lbl, "Pull",
+    -- Group backdrops — built up-front so they paint underneath the
+    -- checkboxes that anchor to them. Items group uses a soft blue tint;
+    -- gold group uses a soft gold tint. Both span from the master checkbox
+    -- to the last child trigger's label, with a small inset for visual
+    -- breathing room.
+    -- Items group: deeper blue with a light blue top border for definition.
+    local itemsBg = globalDefaultsBar:CreateTexture(nil, "BACKGROUND")
+    itemsBg:SetColorTexture(0.10, 0.20, 0.45, 0.75)
+    globalDefaultsWidgets.itemsBg = itemsBg
+
+    local itemsBorder = globalDefaultsBar:CreateTexture(nil, "BORDER")
+    itemsBorder:SetColorTexture(0.40, 0.55, 0.85, 0.9)
+    itemsBorder:SetHeight(1)
+    globalDefaultsWidgets.itemsBorder = itemsBorder
+
+    -- Gold group: deeper gold with a brass top border.
+    local goldBg = globalDefaultsBar:CreateTexture(nil, "BACKGROUND")
+    goldBg:SetColorTexture(0.45, 0.32, 0.05, 0.85)
+    globalDefaultsWidgets.goldBg = goldBg
+
+    local goldBorder = globalDefaultsBar:CreateTexture(nil, "BORDER")
+    goldBorder:SetColorTexture(0.95, 0.78, 0.30, 0.9)
+    goldBorder:SetHeight(1)
+    globalDefaultsWidgets.goldBorder = goldBorder
+
+    -- Vertical separator between the two groups for unmistakable division.
+    local groupSep = globalDefaultsBar:CreateTexture(nil, "OVERLAY")
+    groupSep:SetColorTexture(0.7, 0.7, 0.75, 0.6)
+    groupSep:SetWidth(2)
+    globalDefaultsWidgets.groupSep = groupSep
+
+    -- #148: Items master + child triggers
+    globalDefaultsWidgets.itemsCB = MakeGlobalCB(lbl, "Items",
+        "manageItems",
+        "Master switch for item movement. Off: FlipQueue won't pull / deposit items by default. " ..
+        "Per-character overrides on the table to the right take precedence.",
+        true)
+
+    globalDefaultsWidgets.pullCB = MakeGlobalCB(globalDefaultsWidgets.itemsCB.text, "Pull",
         "autoPullBank", "Auto-pull queued items from bank when opening bank")
 
     globalDefaultsWidgets.depCB = MakeGlobalCB(globalDefaultsWidgets.pullCB.text, "Deposit",
@@ -1214,6 +1283,56 @@ local function EnsureGlobalDefaultsBar(tableContainer)
 
     globalDefaultsWidgets.depAllCB = MakeGlobalCB(globalDefaultsWidgets.depCB.text, "Dep. All",
         "autoDepositAll", "Auto-deposit ALL extra items to bank/warbank")
+
+    -- Anchor the items backdrop now that all four item-group widgets exist.
+    -- Anchors resolve dynamically so the backdrop tracks layout shifts.
+    itemsBg:SetPoint("TOPLEFT",     globalDefaultsWidgets.itemsCB,        "TOPLEFT",     -6, 3)
+    itemsBg:SetPoint("BOTTOMRIGHT", globalDefaultsWidgets.depAllCB.text,  "BOTTOMRIGHT", 6, -3)
+    itemsBorder:SetPoint("TOPLEFT",     itemsBg, "TOPLEFT",  0, 0)
+    itemsBorder:SetPoint("TOPRIGHT",    itemsBg, "TOPRIGHT", 0, 0)
+
+    -- "disabled" overlay shown when the master is off (sub-checkboxes hide,
+    -- the colored space remains as a visible group affordance).
+    local itemsOff = globalDefaultsBar:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+    itemsOff:SetPoint("LEFT",  globalDefaultsWidgets.pullCB,       "LEFT",  -2, 0)
+    itemsOff:SetPoint("RIGHT", globalDefaultsWidgets.depAllCB.text, "RIGHT", 2, 0)
+    itemsOff:SetJustifyH("CENTER")
+    itemsOff:SetText("(disabled)")
+    itemsOff:Hide()
+    globalDefaultsWidgets.itemsOff = itemsOff
+
+    -- #148: Gold master + child triggers. Re-anchored with extra spacing so
+    -- the items / gold backdrops have a clear gap between them for the
+    -- vertical separator.
+    globalDefaultsWidgets.goldCB = MakeGlobalCB(globalDefaultsWidgets.depAllCB.text, "Gold",
+        "manageGold",
+        "Master switch for gold movement. Off: FlipQueue won't withdraw / deposit gold by default.",
+        true)
+    globalDefaultsWidgets.goldCB:ClearAllPoints()
+    globalDefaultsWidgets.goldCB:SetPoint("LEFT", globalDefaultsWidgets.depAllCB.text, "RIGHT", 22, 0)
+
+    globalDefaultsWidgets.wdGoldCB = MakeGlobalCB(globalDefaultsWidgets.goldCB.text, "Withdraw",
+        "autoWithdrawGold", "Auto-withdraw gold from warbank for fees + purchases")
+
+    globalDefaultsWidgets.depGoldCB = MakeGlobalCB(globalDefaultsWidgets.wdGoldCB.text, "Deposit",
+        "autoDepositGold", "Auto-deposit excess gold back to warbank")
+
+    goldBg:SetPoint("TOPLEFT",     globalDefaultsWidgets.goldCB,           "TOPLEFT",     -6, 3)
+    goldBg:SetPoint("BOTTOMRIGHT", globalDefaultsWidgets.depGoldCB.text,   "BOTTOMRIGHT", 6, -3)
+    goldBorder:SetPoint("TOPLEFT",     goldBg, "TOPLEFT",  0, 0)
+    goldBorder:SetPoint("TOPRIGHT",    goldBg, "TOPRIGHT", 0, 0)
+
+    -- Vertical separator sits in the gap between the two backdrops.
+    groupSep:SetPoint("TOP",    itemsBg, "TOPRIGHT",    3, 0)
+    groupSep:SetPoint("BOTTOM", itemsBg, "BOTTOMRIGHT", 3, 0)
+
+    local goldOff = globalDefaultsBar:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+    goldOff:SetPoint("LEFT",  globalDefaultsWidgets.wdGoldCB,        "LEFT",  -2, 0)
+    goldOff:SetPoint("RIGHT", globalDefaultsWidgets.depGoldCB.text,  "RIGHT", 2, 0)
+    goldOff:SetJustifyH("CENTER")
+    goldOff:SetText("(disabled)")
+    goldOff:Hide()
+    globalDefaultsWidgets.goldOff = goldOff
 
     -- Right-justified view toggles. We pin each checkbox's LABEL to the
     -- bar's right edge (not the checkbox), so the label's right edge —
@@ -1264,9 +1383,53 @@ end
 
 local function RefreshGlobalDefaultsBar()
     if not globalDefaultsBar or not ns.db then return end
+
+    -- #148: master switches
+    local itemsOn = ns.db.settings.manageItems ~= false
+    local goldOn  = ns.db.settings.manageGold  ~= false
+
+    if globalDefaultsWidgets.itemsCB then
+        globalDefaultsWidgets.itemsCB:SetChecked(itemsOn)
+    end
+    if globalDefaultsWidgets.goldCB then
+        globalDefaultsWidgets.goldCB:SetChecked(goldOn)
+    end
+
+    -- Sub-checkboxes: keep checked state in sync with settings, then hide /
+    -- show based on master state. Hidden-when-off matches the maintainer's
+    -- spec — sub-checkboxes are meaningless when their master is OFF.
     globalDefaultsWidgets.pullCB:SetChecked(ns.db.settings.autoPullBank)
     globalDefaultsWidgets.depCB:SetChecked(ns.db.settings.autoDepositWarbank)
     globalDefaultsWidgets.depAllCB:SetChecked(ns.db.settings.autoDepositAll)
+    if globalDefaultsWidgets.wdGoldCB then
+        globalDefaultsWidgets.wdGoldCB:SetChecked(ns.db.settings.autoWithdrawGold and true or false)
+    end
+    if globalDefaultsWidgets.depGoldCB then
+        globalDefaultsWidgets.depGoldCB:SetChecked(ns.db.settings.autoDepositGold and true or false)
+    end
+
+    if itemsOn then
+        globalDefaultsWidgets.pullCB:Show()
+        globalDefaultsWidgets.depCB:Show()
+        globalDefaultsWidgets.depAllCB:Show()
+        if globalDefaultsWidgets.itemsOff then globalDefaultsWidgets.itemsOff:Hide() end
+    else
+        globalDefaultsWidgets.pullCB:Hide()
+        globalDefaultsWidgets.depCB:Hide()
+        globalDefaultsWidgets.depAllCB:Hide()
+        if globalDefaultsWidgets.itemsOff then globalDefaultsWidgets.itemsOff:Show() end
+    end
+
+    if goldOn then
+        if globalDefaultsWidgets.wdGoldCB  then globalDefaultsWidgets.wdGoldCB:Show()  end
+        if globalDefaultsWidgets.depGoldCB then globalDefaultsWidgets.depGoldCB:Show() end
+        if globalDefaultsWidgets.goldOff   then globalDefaultsWidgets.goldOff:Hide()   end
+    else
+        if globalDefaultsWidgets.wdGoldCB  then globalDefaultsWidgets.wdGoldCB:Hide()  end
+        if globalDefaultsWidgets.depGoldCB then globalDefaultsWidgets.depGoldCB:Hide() end
+        if globalDefaultsWidgets.goldOff   then globalDefaultsWidgets.goldOff:Show()   end
+    end
+
     if viewTogglesWidgets.hiddenCB then
         viewTogglesWidgets.hiddenCB:SetChecked(ns.db.settings.showHiddenChars and true or false)
     end
