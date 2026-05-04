@@ -32,9 +32,13 @@ A standalone **About** page in the main FlipQueue window (between Settings and T
 
 ### Pet bandage / bag-click error after pet battle: fixed
 
-If you fought a pet battle while FlipQueue was in the middle of bank operations, your first bag click after the battle could produce a red `ADDON_ACTION_FORBIDDEN` error and pet bandages / bag access would refuse to work for a while. Cause: FlipQueue's bank queue was running protected container operations through timer continuations, which left a taint trail that pet-battle UI lockdown surfaced on subsequent clicks.
+If you saw a red `ADDON_ACTION_FORBIDDEN` error after a pet battle — pet bandages refusing to work, the bag UI partly locked, the game menu / logout silently broken until `/reload` — there were two separate causes contributing, and both are now closed.
 
-FlipQueue's bank queue now pauses cleanly when combat or a pet battle starts, and resumes when both clear (with a chat banner so you know what's happening). Cursor state is also defensively cleared between every move to keep taint from chaining forward. If you've been seeing the error, alpha11 should close it.
+The first surfaced when FlipQueue was mid-bank-operation as a pet battle started: protected container calls running through timer continuations left a taint trail that pet-battle UI lockdown surfaced on the next click. FlipQueue's bank queue now pauses cleanly when combat or a pet battle starts and resumes when both clear, with a chat banner so you know what's happening. Cursor state is defensively cleared between every move to keep taint from chaining forward.
+
+The second was upstream — Cogworks (the shared library FlipQueue, Tempo, and the rest of the suite use) had a key handler that intercepted ESCAPE in a way that interfered with Blizzard's secure game-menu path. This one fired even when FlipQueue itself was idle, because the library is loaded with the addon. Players who hit the issue while FlipQueue was doing nothing in particular (the niduin case in our tracker) were on this path. Fixed by bumping the embedded Cogworks library to v0.13.1.
+
+If you've been seeing the error in any flavor, this build should close it.
 
 ### Auction house scanning and posting works smoothly with TSM
 
@@ -80,7 +84,7 @@ DealFinder was showing a single flat regional value for variant gear (most moder
 - Auctionator shopping lists generated from buy tasks now use a max-price ceiling that correctly captures items priced just below the next whole gold (a 200g target accepts up to 200g 99s 99c).
 - The "Auctionator" output format on the Transform page now produces the actual Auctionator wire format that the addon can re-import.
 - Auctionator-imported shopping lists now preserve their full per-item metadata (quantity, exact-match flag, ilvl filters, quality) instead of stripping everything except the name.
-- Importing a very large FlippingPal paste (5,000+ items, e.g. a full-region dump) no longer freezes the game. A progress message shows status during long imports.
+- Importing a very large to-do list (4,000+ items — full-region FlippingPal dumps in any of the supported formats: website copy-paste, downloadable CSV, the FP-extractor addon's semicolon export, or a tab-delimited table) no longer freezes the game. A progress message shows status during long imports. Earlier alphas only covered the website copy-paste path; this one covers the CSV / semicolon / tab-delimited paths too, including the regex-heavy line-classification pre-roll that ran before the per-item progress started ticking.
 - FlippingPal prices in German EU client formats (`1.500g`, `2.000g`) parse correctly to 1500g and 2000g respectively, instead of being misread as 500g and 0g.
 - The Transform page's AAA JSON output now shows when items couldn't be included because their names hadn't been resolved to item IDs yet — instead of silently producing a smaller list than the source. With an Auctionator-imported source where the WoW item cache hasn't seen the names, the output prompts you to click the **Deep Search** button (which warms the cache from your TSM and Auctionator data) to resolve them.
 

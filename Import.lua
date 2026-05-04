@@ -204,21 +204,19 @@ end
 --   [NOCOMP: "No competition"]
 --   REALM:  SellRealm  BuyPrice  BuyRealm
 
--- Internal: line classification + block finding for FP website format.
--- Stages 1-2 of the parse — cheap relative to the per-block processing.
--- Returns (itemBlocks, allLines, allTypes) so both the synchronous and
--- chunked entry points share this work.
-local function FPWebsiteScan(text)
-    text = text:gsub("\r\n", "\n"):gsub("\r", "\n")
-    local allLines = {}
-    local allTypes = {}
+-- FP website header words that can be misidentified as item names by the
+-- block-finder; filtered out at the end of FPWebsiteScan / its chunked twin.
+local FP_HEADER_WORDS = { ["Name"] = true, ["Item"] = true, ["Item Name"] = true }
 
-    for line in (text .. "\n"):gmatch("(.-)\n") do
-        local trimmed = strtrim(line)
-        table.insert(allLines, trimmed)
-        table.insert(allTypes, ClassifyLine(trimmed))
-    end
+-- Lines processed per yield in the chunked scan. Each line costs ~5-6
+-- regex matches in ClassifyLine; 500 lines per chunk lands at ~3000 regex
+-- ops per yield (sub-frame).
+local SCAN_CHUNK_SIZE = 500
 
+-- Stages 2-4 of the FP website scan, all O(allLines) in cheap operations
+-- (no regex). Pulled out so the sync and chunked variants both call into
+-- the same back-end after stage 1 (line classification) completes.
+local function FPWebsiteFindBlocks(allLines, allTypes)
     -- Skip header: everything up to and including the "/" separator
     local startIdx = 1
     for i, t in ipairs(allTypes) do
@@ -250,14 +248,80 @@ local function FPWebsiteScan(text)
     end
 
     -- Filter out FP website header words that can be misidentified as item names
-    local FP_HEADER_WORDS = { ["Name"] = true, ["Item"] = true, ["Item Name"] = true }
     local filtered = {}
     for _, block in ipairs(itemBlocks) do
         if not FP_HEADER_WORDS[allLines[block.nameIdx]] then
             table.insert(filtered, block)
         end
     end
-    return filtered, allLines, allTypes
+    return filtered
+end
+
+-- Internal: line classification + block finding for FP website format.
+-- Stages 1-2 of the parse — cheap relative to the per-block processing
+-- on smallish inputs, but stage 1 (~6 regexes per line) dominates total
+-- parse time on multi-thousand-item full-region pastes.
+-- Returns (itemBlocks, allLines, allTypes) so both the synchronous and
+-- chunked entry points share this work.
+local function FPWebsiteScan(text)
+    text = text:gsub("\r\n", "\n"):gsub("\r", "\n")
+    local allLines = {}
+    local allTypes = {}
+
+    for line in (text .. "\n"):gmatch("(.-)\n") do
+        local trimmed = strtrim(line)
+        table.insert(allLines, trimmed)
+        table.insert(allTypes, ClassifyLine(trimmed))
+    end
+
+    return FPWebsiteFindBlocks(allLines, allTypes), allLines, allTypes
+end
+
+-- Async variant of FPWebsiteScan. Stage 1 (the ~6-regex-per-line classify
+-- loop) is the dominant cost on big pastes — ~270k regex calls for a
+-- 45k-line / 4500-item full-region dump. Chunking it across frames keeps
+-- the client responsive during the multi-second pre-roll before
+-- per-block processing starts. Stages 2-4 (FPWebsiteFindBlocks) run sync
+-- after stage 1 — they're O(n) over allLines in cheap pure-Lua loops with
+-- no regex, so they don't contribute meaningfully to the freeze. See FQ-131.
+local function FPWebsiteScanChunked(text, onComplete)
+    text = text:gsub("\r\n", "\n"):gsub("\r", "\n")
+
+    -- Phase 1a: split into raw lines (sync — gmatch is C-implemented and
+    -- linear; not the bottleneck even at 45k lines).
+    local rawLines = {}
+    for line in (text .. "\n"):gmatch("(.-)\n") do
+        rawLines[#rawLines + 1] = line
+    end
+
+    local total = #rawLines
+    local allLines = {}
+    local allTypes = {}
+
+    if total == 0 then
+        onComplete({}, allLines, allTypes)
+        return
+    end
+
+    -- Phase 1b: classify each line in chunks. This is the regex-heavy
+    -- stage; each chunk yields via C_Timer.After(0).
+    local idx = 1
+    local function ClassifyChunk()
+        local chunkEnd = math.min(idx + SCAN_CHUNK_SIZE - 1, total)
+        for li = idx, chunkEnd do
+            local trimmed = strtrim(rawLines[li])
+            allLines[li] = trimmed
+            allTypes[li] = ClassifyLine(trimmed)
+        end
+        idx = chunkEnd + 1
+        if idx > total then
+            -- Stages 2-4 sync (fast, no regex)
+            onComplete(FPWebsiteFindBlocks(allLines, allTypes), allLines, allTypes)
+        else
+            C_Timer.After(0, ClassifyChunk)
+        end
+    end
+    ClassifyChunk()
 end
 
 -- Internal: process one FP website item block into a parsed item record.
@@ -349,17 +413,101 @@ function Import:ParseFPWebsite(text)
     return items
 end
 
--- Async variant of ParseFPWebsite. Yields between batches so a 4500-item
--- full-region paste doesn't freeze the client during parse (FQ-131).
--- Stages 1-2 (line classification + block finding) still run synchronously
--- since each is bounded ~22k iterations of cheap regex; stage 3 (per-block
--- processing) is the expensive part and gets the chunked treatment.
+-- Async variant of ParseFPWebsite. Yields across both stages so a 4500-item
+-- full-region paste doesn't freeze the client during parse (FQ-131):
+--   - Stage 1 (line classification, regex-heavy) runs via FPWebsiteScanChunked
+--   - Stage 3 (per-block field extraction) runs in chunks of `chunkSize` items
+-- Stages 2 + 4 (block-finding + header-word filter) are O(n) cheap loops
+-- and run synchronously between the two chunked stages.
 function Import:ParseFPWebsiteChunked(text, chunkSize, onProgress, onComplete)
     chunkSize = chunkSize or Import.CHUNK_SIZE
-    local itemBlocks, allLines, allTypes = FPWebsiteScan(text)
-    local total = #itemBlocks
+
+    FPWebsiteScanChunked(text, function(itemBlocks, allLines, allTypes)
+        local total = #itemBlocks
+        local items = {}
+
+        if total == 0 then
+            if onComplete then onComplete(items) end
+            return
+        end
+
+        local idx = 1
+        local function ProcessNextChunk()
+            local chunkEnd = math.min(idx + chunkSize - 1, total)
+            for blockIdx = idx, chunkEnd do
+                items[#items + 1] = ProcessFPWebsiteBlock(allLines, allTypes, itemBlocks, blockIdx)
+            end
+            idx = chunkEnd + 1
+            if onProgress then onProgress(math.min(idx - 1, total), total) end
+            if idx > total then
+                if onComplete then onComplete(items) end
+            else
+                C_Timer.After(0, ProcessNextChunk)
+            end
+        end
+        ProcessNextChunk()
+    end)
+end
+
+--------------------------
+-- FlippingPal Semicolon CSV (from extractor addon)
+--------------------------
+-- Format: itemID;itemName;quality;ilvl;bonusIDs;modifiers;quantity
+
+-- Internal: parse one FP-extractor semicolon line into an item. Header
+-- lines and empty lines return nil so callers can skip them.
+local function ProcessFPSemicolonRow(line)
+    line = strtrim(line)
+    if line == "" or line:find("^itemID") then return nil end
+
+    local parts = {strsplit(";", line)}
+    if #parts < 2 then return nil end
+
+    local itemID = strtrim(parts[1])
+    if not itemID or itemID == "" then return nil end
+
+    local itemName  = strtrim(parts[2] or "")
+    local quality   = strtrim(parts[3] or "")
+    local ilvl      = tonumber(strtrim(parts[4] or ""))
+    local bonusIDs  = strtrim(parts[5] or "")
+    local modifiers = strtrim(parts[6] or "")
+    local quantity  = tonumber(strtrim(parts[7] or "")) or 1
+
+    local key = ns:MakeItemKey(itemID, bonusIDs, modifiers)
+    return {
+        itemKey   = key,
+        itemID    = itemID,
+        name      = itemName,
+        quality   = quality,
+        ilvl      = ilvl or 0,
+        bonusIDs  = bonusIDs,
+        modifiers = modifiers,
+        quantity  = quantity,
+    }
+end
+
+function Import:ParseFPFormat(text)
+    local items = {}
+    for line in text:gmatch("([^\n]+)") do
+        local item = ProcessFPSemicolonRow(line)
+        if item then table.insert(items, item) end
+    end
+    return items
+end
+
+-- Async variant of ParseFPFormat. Splits the text into lines synchronously
+-- (fast, O(n) string scan), then runs the per-line parse in chunks so a
+-- multi-thousand-row extractor dump doesn't freeze the client. See FQ-131.
+function Import:ParseFPFormatChunked(text, chunkSize, onProgress, onComplete)
+    chunkSize = chunkSize or Import.CHUNK_SIZE
     local items = {}
 
+    local lines = {}
+    for line in text:gmatch("([^\n]+)") do
+        table.insert(lines, line)
+    end
+
+    local total = #lines
     if total == 0 then
         if onComplete then onComplete(items) end
         return
@@ -368,8 +516,9 @@ function Import:ParseFPWebsiteChunked(text, chunkSize, onProgress, onComplete)
     local idx = 1
     local function ProcessNextChunk()
         local chunkEnd = math.min(idx + chunkSize - 1, total)
-        for blockIdx = idx, chunkEnd do
-            items[#items + 1] = ProcessFPWebsiteBlock(allLines, allTypes, itemBlocks, blockIdx)
+        for li = idx, chunkEnd do
+            local item = ProcessFPSemicolonRow(lines[li])
+            if item then items[#items + 1] = item end
         end
         idx = chunkEnd + 1
         if onProgress then onProgress(math.min(idx - 1, total), total) end
@@ -383,58 +532,11 @@ function Import:ParseFPWebsiteChunked(text, chunkSize, onProgress, onComplete)
 end
 
 --------------------------
--- FlippingPal Semicolon CSV (from extractor addon)
---------------------------
--- Format: itemID;itemName;quality;ilvl;bonusIDs;modifiers;quantity
-
-function Import:ParseFPFormat(text)
-    local items = {}
-    for line in text:gmatch("([^\n]+)") do
-        line = strtrim(line)
-        if line == "" or line:find("^itemID") then
-            -- skip empty lines and header row
-        else
-            local parts = {strsplit(";", line)}
-            if #parts >= 2 then
-                local itemID    = strtrim(parts[1])
-                local itemName  = strtrim(parts[2] or "")
-                local quality   = strtrim(parts[3] or "")
-                local ilvl      = tonumber(strtrim(parts[4] or ""))
-                local bonusIDs  = strtrim(parts[5] or "")
-                local modifiers = strtrim(parts[6] or "")
-                local quantity  = tonumber(strtrim(parts[7] or "")) or 1
-
-                if itemID and itemID ~= "" then
-                    local key = ns:MakeItemKey(itemID, bonusIDs, modifiers)
-                    table.insert(items, {
-                        itemKey   = key,
-                        itemID    = itemID,
-                        name      = itemName,
-                        quality   = quality,
-                        ilvl      = ilvl or 0,
-                        bonusIDs  = bonusIDs,
-                        modifiers = modifiers,
-                        quantity  = quantity,
-                    })
-                end
-            end
-        end
-    end
-
-    return items
-end
-
---------------------------
 -- Tab-Delimited (clean Excel/table export)
 --------------------------
 
-function Import:ParseTabFormat(text)
-    local items = {}
-    local lines = {strsplit("\n", text)}
-    if #lines < 2 then return items end
-
-    local header = strtrim(lines[1])
-    local cols = {strsplit("\t", header)}
+-- Internal helpers shared by the sync and chunked tab-delimited parsers.
+local function BuildTabColMap(cols)
     local colMap = {}
     for i, col in ipairs(cols) do
         col = strtrim(col):lower()
@@ -470,83 +572,124 @@ function Import:ParseTabFormat(text)
             colMap.realm = i
         end
     end
-
     if not colMap.itemID and not colMap.name then
         colMap.name = 1
     end
+    return colMap
+end
 
-    -- Detect cross-realm columns
-    local hasCrossRealm = colMap.buyPrice and colMap.buyRealm
+local function ProcessTabRow(line, colMap, hasCrossRealm)
+    line = strtrim(line)
+    if line == "" then return nil end
 
-    for i = 2, #lines do
-        local line = strtrim(lines[i])
-        if line ~= "" then
-            local parts = {strsplit("\t", line)}
+    local parts = {strsplit("\t", line)}
 
-            local itemID    = colMap.itemID and strtrim(parts[colMap.itemID] or "") or ""
-            local name      = colMap.name and strtrim(parts[colMap.name] or "") or ""
-            local quality   = colMap.quality and strtrim(parts[colMap.quality] or "") or ""
-            local ilvl      = colMap.ilvl and tonumber(strtrim(parts[colMap.ilvl] or "")) or 0
-            local bonusIDs  = colMap.bonusIDs and strtrim(parts[colMap.bonusIDs] or "") or ""
-            local modifiers = colMap.modifiers and strtrim(parts[colMap.modifiers] or "") or ""
-            local quantity  = colMap.quantity and tonumber(strtrim(parts[colMap.quantity] or "")) or 1
+    local itemID    = colMap.itemID and strtrim(parts[colMap.itemID] or "") or ""
+    local name      = colMap.name and strtrim(parts[colMap.name] or "") or ""
+    if itemID == "" and name == "" then return nil end
 
-            -- Resolve sell realm: prefer explicit "Sell Realm" column, fall back to generic "Realm"
-            local sellRealm = colMap.sellRealm and strtrim(parts[colMap.sellRealm] or "")
-                or colMap.realm and strtrim(parts[colMap.realm] or "")
-                or nil
+    local quality   = colMap.quality and strtrim(parts[colMap.quality] or "") or ""
+    local ilvl      = colMap.ilvl and tonumber(strtrim(parts[colMap.ilvl] or "")) or 0
+    local bonusIDs  = colMap.bonusIDs and strtrim(parts[colMap.bonusIDs] or "") or ""
+    local modifiers = colMap.modifiers and strtrim(parts[colMap.modifiers] or "") or ""
+    local quantity  = colMap.quantity and tonumber(strtrim(parts[colMap.quantity] or "")) or 1
 
-            -- Resolve sell price: prefer explicit "Sell Price", fall back to generic "Price"
-            local sellPrice = colMap.sellPrice and strtrim(parts[colMap.sellPrice] or "")
-                or colMap.price and strtrim(parts[colMap.price] or "")
-                or nil
+    local sellRealm = colMap.sellRealm and strtrim(parts[colMap.sellRealm] or "")
+        or colMap.realm and strtrim(parts[colMap.realm] or "")
+        or nil
 
-            -- Cross-realm fields
-            local buyPriceVal = hasCrossRealm and strtrim(parts[colMap.buyPrice] or "") or ""
-            local buyRealmVal = hasCrossRealm and strtrim(parts[colMap.buyRealm] or "") or ""
+    local sellPrice = colMap.sellPrice and strtrim(parts[colMap.sellPrice] or "")
+        or colMap.price and strtrim(parts[colMap.price] or "")
+        or nil
 
-            if itemID ~= "" or name ~= "" then
-                local key = ns:MakeItemKey(itemID ~= "" and itemID or name, bonusIDs, modifiers)
+    local buyPriceVal = hasCrossRealm and strtrim(parts[colMap.buyPrice] or "") or ""
+    local buyRealmVal = hasCrossRealm and strtrim(parts[colMap.buyRealm] or "") or ""
 
-                -- Determine deal type and profit
-                -- Filter out FP source strings (Player Inventory, Auction House, etc.)
-                local isCrossRealm = buyRealmVal ~= "" and buyPriceVal ~= ""
-                    and not IsFPSourceString(buyRealmVal)
-                local dealType = nil
-                local profitAmount = nil
-                local profitPct = nil
-                if isCrossRealm then
-                    dealType = "flip"
-                    local sellGold = ns:ParseGoldValue(sellPrice or "")
-                    local buyGold = ns:ParseGoldValue(buyPriceVal)
-                    if sellGold > 0 and buyGold > 0 then
-                        profitAmount = tostring(sellGold - buyGold) .. "g"
-                        profitPct = math.floor((sellGold - buyGold) / buyGold * 100)
-                    end
-                end
+    local key = ns:MakeItemKey(itemID ~= "" and itemID or name, bonusIDs, modifiers)
 
-                table.insert(items, {
-                    itemKey       = key,
-                    itemID        = itemID,
-                    name          = name,
-                    quality       = quality,
-                    ilvl          = ilvl,
-                    bonusIDs      = bonusIDs,
-                    modifiers     = modifiers,
-                    quantity      = quantity or 1,
-                    expectedPrice = sellPrice,
-                    targetRealm   = sellRealm,
-                    dealType      = dealType,
-                    buyRealm      = isCrossRealm and buyRealmVal or nil,
-                    buyPrice      = isCrossRealm and buyPriceVal or nil,
-                    profitAmount  = profitAmount,
-                    profitPct     = profitPct,
-                })
-            end
+    local isCrossRealm = buyRealmVal ~= "" and buyPriceVal ~= ""
+        and not IsFPSourceString(buyRealmVal)
+    local dealType = nil
+    local profitAmount = nil
+    local profitPct = nil
+    if isCrossRealm then
+        dealType = "flip"
+        local sellGold = ns:ParseGoldValue(sellPrice or "")
+        local buyGold = ns:ParseGoldValue(buyPriceVal)
+        if sellGold > 0 and buyGold > 0 then
+            profitAmount = tostring(sellGold - buyGold) .. "g"
+            profitPct = math.floor((sellGold - buyGold) / buyGold * 100)
         end
     end
 
+    return {
+        itemKey       = key,
+        itemID        = itemID,
+        name          = name,
+        quality       = quality,
+        ilvl          = ilvl,
+        bonusIDs      = bonusIDs,
+        modifiers     = modifiers,
+        quantity      = quantity or 1,
+        expectedPrice = sellPrice,
+        targetRealm   = sellRealm,
+        dealType      = dealType,
+        buyRealm      = isCrossRealm and buyRealmVal or nil,
+        buyPrice      = isCrossRealm and buyPriceVal or nil,
+        profitAmount  = profitAmount,
+        profitPct     = profitPct,
+    }
+end
+
+function Import:ParseTabFormat(text)
+    local items = {}
+    local lines = {strsplit("\n", text)}
+    if #lines < 2 then return items end
+
+    local colMap = BuildTabColMap({strsplit("\t", strtrim(lines[1]))})
+    local hasCrossRealm = colMap.buyPrice and colMap.buyRealm
+
+    for i = 2, #lines do
+        local item = ProcessTabRow(lines[i], colMap, hasCrossRealm)
+        if item then table.insert(items, item) end
+    end
+
     return items
+end
+
+-- Async variant of ParseTabFormat. Header parsing runs sync (cheap); per-row
+-- iteration is chunked so multi-thousand-row tab-delimited exports don't
+-- freeze the client during parse. See FQ-131.
+function Import:ParseTabFormatChunked(text, chunkSize, onProgress, onComplete)
+    chunkSize = chunkSize or Import.CHUNK_SIZE
+    local items = {}
+
+    local lines = {strsplit("\n", text)}
+    if #lines < 2 then
+        if onComplete then onComplete(items) end
+        return
+    end
+
+    local colMap = BuildTabColMap({strsplit("\t", strtrim(lines[1]))})
+    local hasCrossRealm = colMap.buyPrice and colMap.buyRealm
+    local total = #lines - 1
+    local idx = 2
+
+    local function ProcessNextChunk()
+        local chunkEnd = math.min(idx + chunkSize - 1, #lines)
+        for li = idx, chunkEnd do
+            local item = ProcessTabRow(lines[li], colMap, hasCrossRealm)
+            if item then items[#items + 1] = item end
+        end
+        idx = chunkEnd + 1
+        if onProgress then onProgress(math.min(idx - 2, total), total) end
+        if idx > #lines then
+            if onComplete then onComplete(items) end
+        else
+            C_Timer.After(0, ProcessNextChunk)
+        end
+    end
+    ProcessNextChunk()
 end
 
 --------------------------
@@ -615,20 +758,11 @@ end
 --          Sale Avg,Sale Avg vs Buy %,Sale Avg vs Buy,Sell vs Buy %,Sell vs Buy,
 --          Sell Price,Sell Realm,Buy Price,Buy Realm
 
-function Import:ParseFPCommaCSV(text)
-    local items = {}
-    local lines = {}
-    for line in (text .. "\n"):gmatch("(.-)\n") do
-        local trimmed = strtrim(line)
-        if trimmed ~= "" then
-            table.insert(lines, trimmed)
-        end
-    end
-
-    if #lines < 2 then return items end
-
-    -- Parse header to build column map
-    local headerFields = ParseCSVLine(lines[1])
+-- Internal helpers shared by the sync and chunked FP comma CSV parsers.
+-- Phase 1 (BuildFPCommaColMap) runs once per parse and is cheap; phase 2
+-- (ProcessFPCommaCSVRow) is the per-line hot path that the chunked
+-- variant batches across frames.
+local function BuildFPCommaColMap(headerFields)
     local colMap = {}
     for i, col in ipairs(headerFields) do
         col = strtrim(col):lower()
@@ -660,77 +794,140 @@ function Import:ParseFPCommaCSV(text)
             colMap.buyRealm = i
         end
     end
+    return colMap
+end
 
-    if not colMap.name then return items end
+local function ProcessFPCommaCSVRow(line, colMap, hasCrossRealm)
+    local fields = ParseCSVLine(line)
+    if #fields < 2 then return nil end
 
-    -- Detect cross-realm columns
-    local hasCrossRealm = colMap.buyPrice and colMap.buyRealm
+    local name = colMap.name and strtrim(fields[colMap.name] or "") or ""
+    if name == "" then return nil end
 
-    for i = 2, #lines do
-        local fields = ParseCSVLine(lines[i])
-        if #fields >= 2 then
-            local name      = colMap.name and strtrim(fields[colMap.name] or "") or ""
-            local itemID    = colMap.itemID and strtrim(fields[colMap.itemID] or "") or ""
-            local category  = colMap.category and strtrim(fields[colMap.category] or "") or ""
-            local ilvl      = colMap.ilvl and tonumber(strtrim(fields[colMap.ilvl] or "")) or 0
-            local sellRate  = colMap.sellRate and tonumber(strtrim(fields[colMap.sellRate] or "")) or 0
-            local expansion = colMap.expansion and strtrim(fields[colMap.expansion] or "") or ""
-            local quality   = colMap.quality and strtrim(fields[colMap.quality] or "") or ""
-            local sellPrice = colMap.sellPrice and strtrim(fields[colMap.sellPrice] or "") or ""
-            local sellRealm = colMap.sellRealm and strtrim(fields[colMap.sellRealm] or "") or ""
-            local saleAvg   = colMap.saleAvg and strtrim(fields[colMap.saleAvg] or "") or ""
+    local itemID    = colMap.itemID and strtrim(fields[colMap.itemID] or "") or ""
+    local category  = colMap.category and strtrim(fields[colMap.category] or "") or ""
+    local ilvl      = colMap.ilvl and tonumber(strtrim(fields[colMap.ilvl] or "")) or 0
+    local sellRate  = colMap.sellRate and tonumber(strtrim(fields[colMap.sellRate] or "")) or 0
+    local expansion = colMap.expansion and strtrim(fields[colMap.expansion] or "") or ""
+    local quality   = colMap.quality and strtrim(fields[colMap.quality] or "") or ""
+    local sellPrice = colMap.sellPrice and strtrim(fields[colMap.sellPrice] or "") or ""
+    local sellRealm = colMap.sellRealm and strtrim(fields[colMap.sellRealm] or "") or ""
+    local saleAvg   = colMap.saleAvg and strtrim(fields[colMap.saleAvg] or "") or ""
 
-            -- Cross-realm fields
-            local buyPriceVal = hasCrossRealm and strtrim(fields[colMap.buyPrice] or "") or ""
-            local buyRealmVal = hasCrossRealm and strtrim(fields[colMap.buyRealm] or "") or ""
+    local buyPriceVal = hasCrossRealm and strtrim(fields[colMap.buyPrice] or "") or ""
+    local buyRealmVal = hasCrossRealm and strtrim(fields[colMap.buyRealm] or "") or ""
 
-            if name ~= "" then
-                -- Use itemID for key if available, fall back to name
-                local key = itemID ~= "" and ns:MakeItemKey(itemID, "", "") or name
+    local key = itemID ~= "" and ns:MakeItemKey(itemID, "", "") or name
 
-                -- Determine deal type and profit
-                -- Filter out FP source strings (Player Inventory, Auction House, etc.)
-                local isCrossRealm = buyRealmVal ~= "" and buyPriceVal ~= ""
-                    and not IsFPSourceString(buyRealmVal)
-                local dealType = isCrossRealm and "flip" or "sell"
-                local profitAmount = nil
-                local profitPct = nil
-                if isCrossRealm then
-                    local sellGold = ns:ParseGoldValue(sellPrice ~= "" and sellPrice or saleAvg)
-                    local buyGold = ns:ParseGoldValue(buyPriceVal)
-                    if sellGold > 0 and buyGold > 0 then
-                        profitAmount = tostring(sellGold - buyGold) .. "g"
-                        profitPct = math.floor((sellGold - buyGold) / buyGold * 100)
-                    end
-                end
-
-                table.insert(items, {
-                    itemKey       = key,
-                    itemID        = itemID,
-                    name          = name,
-                    quality       = quality,
-                    ilvl          = ilvl or 0,
-                    bonusIDs      = "",
-                    modifiers     = "",
-                    quantity      = 1,
-                    sellRate      = sellRate,
-                    category      = category,
-                    expansion     = expansion,
-                    targetRealm   = sellRealm,
-                    expectedPrice = sellPrice ~= "" and sellPrice or saleAvg,
-                    noCompetition = false,
-                    dealType      = dealType,
-                    buyRealm      = isCrossRealm and buyRealmVal or nil,
-                    buyPrice      = isCrossRealm and buyPriceVal or nil,
-                    profitAmount  = profitAmount,
-                    profitPct     = profitPct,
-                    saleAvg       = saleAvg,
-                })
-            end
+    local isCrossRealm = buyRealmVal ~= "" and buyPriceVal ~= ""
+        and not IsFPSourceString(buyRealmVal)
+    local dealType = isCrossRealm and "flip" or "sell"
+    local profitAmount = nil
+    local profitPct = nil
+    if isCrossRealm then
+        local sellGold = ns:ParseGoldValue(sellPrice ~= "" and sellPrice or saleAvg)
+        local buyGold = ns:ParseGoldValue(buyPriceVal)
+        if sellGold > 0 and buyGold > 0 then
+            profitAmount = tostring(sellGold - buyGold) .. "g"
+            profitPct = math.floor((sellGold - buyGold) / buyGold * 100)
         end
     end
 
+    return {
+        itemKey       = key,
+        itemID        = itemID,
+        name          = name,
+        quality       = quality,
+        ilvl          = ilvl or 0,
+        bonusIDs      = "",
+        modifiers     = "",
+        quantity      = 1,
+        sellRate      = sellRate,
+        category      = category,
+        expansion     = expansion,
+        targetRealm   = sellRealm,
+        expectedPrice = sellPrice ~= "" and sellPrice or saleAvg,
+        noCompetition = false,
+        dealType      = dealType,
+        buyRealm      = isCrossRealm and buyRealmVal or nil,
+        buyPrice      = isCrossRealm and buyPriceVal or nil,
+        profitAmount  = profitAmount,
+        profitPct     = profitPct,
+        saleAvg       = saleAvg,
+    }
+end
+
+function Import:ParseFPCommaCSV(text)
+    local items = {}
+    local lines = {}
+    for line in (text .. "\n"):gmatch("(.-)\n") do
+        local trimmed = strtrim(line)
+        if trimmed ~= "" then
+            table.insert(lines, trimmed)
+        end
+    end
+
+    if #lines < 2 then return items end
+
+    local colMap = BuildFPCommaColMap(ParseCSVLine(lines[1]))
+    if not colMap.name then return items end
+
+    local hasCrossRealm = colMap.buyPrice and colMap.buyRealm
+
+    for i = 2, #lines do
+        local item = ProcessFPCommaCSVRow(lines[i], colMap, hasCrossRealm)
+        if item then table.insert(items, item) end
+    end
+
     return items
+end
+
+-- Async variant of ParseFPCommaCSV — yields between batches so multi-thousand-
+-- row CSV pastes (FP "Download CSV" full-region exports) don't freeze the
+-- client during parse. See FQ-131. Header parsing runs sync (cheap, O(1));
+-- only the per-row loop is chunked.
+function Import:ParseFPCommaCSVChunked(text, chunkSize, onProgress, onComplete)
+    chunkSize = chunkSize or Import.CHUNK_SIZE
+    local items = {}
+
+    local lines = {}
+    for line in (text .. "\n"):gmatch("(.-)\n") do
+        local trimmed = strtrim(line)
+        if trimmed ~= "" then
+            table.insert(lines, trimmed)
+        end
+    end
+
+    if #lines < 2 then
+        if onComplete then onComplete(items) end
+        return
+    end
+
+    local colMap = BuildFPCommaColMap(ParseCSVLine(lines[1]))
+    if not colMap.name then
+        if onComplete then onComplete(items) end
+        return
+    end
+
+    local hasCrossRealm = colMap.buyPrice and colMap.buyRealm
+    local total = #lines - 1
+    local idx = 2
+
+    local function ProcessNextChunk()
+        local chunkEnd = math.min(idx + chunkSize - 1, #lines)
+        for li = idx, chunkEnd do
+            local item = ProcessFPCommaCSVRow(lines[li], colMap, hasCrossRealm)
+            if item then items[#items + 1] = item end
+        end
+        idx = chunkEnd + 1
+        if onProgress then onProgress(math.min(idx - 2, total), total) end
+        if idx > #lines then
+            if onComplete then onComplete(items) end
+        else
+            C_Timer.After(0, ProcessNextChunk)
+        end
+    end
+    ProcessNextChunk()
 end
 
 --------------------------
@@ -1102,15 +1299,20 @@ function Import:Parse(text)
 end
 
 -- Async parse entry point — detects format and dispatches to a chunked
--- parser when one exists for that format. Today only the FP website
--- format has a chunked variant since it's the heaviest parser and the
--- one that hit FQ-131 (4500-item full-region pastes freezing the
--- client). Other formats fall back to the synchronous Parse — they're
--- typically smaller and / or cheaper per-line.
+-- parser. The format-detection logic mirrors Parse() exactly; the only
+-- difference is that the per-row formats (FP website, FP comma CSV, FP
+-- semicolon, tab-delimited) route to chunked variants that yield between
+-- batches via C_Timer.After(0). This avoids client freezes on multi-
+-- thousand-row pastes (FQ-131).
+--
+-- Smaller / less common formats (PBS, Auctionator text/inline, plain
+-- name fallback) still parse synchronously since they're either cheap or
+-- naturally bounded — but we still surface a uniform progress / complete
+-- callback so callers don't need to special-case format.
 --
 -- Calls onComplete(items) once parsing finishes. onProgress(done, total)
--- fires per chunk during the FP-website chunked path; for fallback
--- synchronous formats it's called once with (total, total) at the end.
+-- fires per chunk on the chunked paths; for sync formats it fires once
+-- at the end with (total, total).
 function Import:ParseChunked(text, onProgress, onComplete)
     if not text or text == "" then
         if onComplete then onComplete({}) end
@@ -1119,24 +1321,70 @@ function Import:ParseChunked(text, onProgress, onComplete)
 
     text = text:gsub("\r\n", "\n"):gsub("\r", "\n")
 
-    -- Same FP website detection as Parse() — only the FP website branch
-    -- supports chunking today; other branches dispatch synchronously.
+    local function CompleteSync(items)
+        local total = #items
+        if onProgress then onProgress(total, total) end
+        if onComplete then onComplete(items) end
+    end
+
+    -- PBS / Auctionator advanced-search list — checked first (PBS entries
+    -- contain semicolons that would otherwise route to ParseFPFormat).
+    if LooksLikePBS(text) then
+        CompleteSync(self:ParsePBS(text))
+        return
+    end
+
+    -- FP website (chunked)
     local hasGoldLine = text:find("\n%d[%d,]*g\n") or text:match("^%d[%d,]*g\n")
     local hasPctLine  = text:find("\n%d[%d,]*%%\n") or text:match("^%d[%d,]*%%\n")
     local hasDecimal  = text:find("%d+%.%d+")
-
     if hasGoldLine and hasPctLine and hasDecimal then
         self:ParseFPWebsiteChunked(text, Import.CHUNK_SIZE, onProgress, onComplete)
         return
     end
 
-    -- Other formats: parse synchronously, then surface as a single
-    -- "100% done" progress tick and complete callback so callers get
-    -- a uniform interface.
-    local items = self:Parse(text)
-    local total = #items
-    if onProgress then onProgress(total, total) end
-    if onComplete then onComplete(items) end
+    local firstLine = text:match("^%s*([^\n]+)")
+
+    -- Auctionator shopping list text export ("--- List Name ---")
+    if firstLine and strtrim(firstLine):match("^%-%-%-.*%-%-%-$") then
+        CompleteSync(self:ParseAuctionatorText(text))
+        return
+    end
+
+    -- FP comma CSV (chunked)
+    if firstLine and (firstLine:find("^Item Name,") or firstLine:find("^Item ID,")) then
+        self:ParseFPCommaCSVChunked(text, Import.CHUNK_SIZE, onProgress, onComplete)
+        return
+    end
+
+    -- Auctionator inline (FP Buy - Realm^...)
+    if firstLine and firstLine:find("^FP Buy %-") and firstLine:find("%^") then
+        CompleteSync(self:ParseAuctionatorInline(text))
+        return
+    end
+
+    -- FP semicolon CSV (chunked)
+    if firstLine and firstLine:find(";") then
+        self:ParseFPFormatChunked(text, Import.CHUNK_SIZE, onProgress, onComplete)
+        return
+    end
+
+    -- Tab-delimited (chunked)
+    if firstLine and firstLine:find("\t") then
+        self:ParseTabFormatChunked(text, Import.CHUNK_SIZE, onProgress, onComplete)
+        return
+    end
+
+    -- Generic comma CSV with known column names (chunked via FP comma CSV path)
+    if firstLine and firstLine:find(",") and
+       (firstLine:lower():find("sell rate") or firstLine:lower():find("sell realm")
+        or firstLine:lower():find("sell price")) then
+        self:ParseFPCommaCSVChunked(text, Import.CHUNK_SIZE, onProgress, onComplete)
+        return
+    end
+
+    -- Plain name fallback — typically small, parses sync.
+    CompleteSync(self:Parse(text))
 end
 
 --------------------------

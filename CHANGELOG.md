@@ -1,5 +1,63 @@
 # Changelog
 
+## v0.12.0-alpha12
+
+Twelfth alpha of v0.12. Two encapsulated changes share this release window: the **#150 / COG-26 Cogworks bump** (preventive game-menu-taint hotfix that also covers the niduin pet-battle vector that alpha11's own BankQueue gates couldn't reach), and the **#131 import-pipeline chunking finish** that closes zpectre's 4509-deal CSV freeze.
+
+### #150 — Cogworks v0.13.1 bump (preventive, COG-26)
+
+Niduin's 2026-05-03 fresh `v0.12.0-alpha11` log on #144 reproduced the pet-battle bag-click error with FlipQueue idle (only background Syndicator refreshes — no `BankQueue` activity in the visible 5-minute window). Conclusion: alpha11's `IsLockdownActive` gates closed the FlipQueue-originated taint path, but a separate vector remained — Cogworks v0.13.0's `ThemedMainFrame` / `Drawer` primitives installed an `OnKeyDown` handler that called `SetPropagateKeyboardInput(false)` on ESCAPE, tainting Blizzard's secure `ToggleGameMenu` path. Symptom: `ADDON_ACTION_FORBIDDEN AddOn 'cogworks' tried to call the protected function 'ClearTarget'`, plus silent breakage of game menu / logout / quit until `/reload`.
+
+Upstream fix shipped as Cogworks v0.13.1 — drops the OnKeyDown handler in favor of `UISpecialFrames` registration, which Blizzard's secure code handles as a first-class consumer. Tracked at `gezmodean-wow/cogworks#26`.
+
+`.pkgmeta` external bumped from `tag: v0.13.0` → `tag: v0.13.1`. Local `Libs/Cogworks-1.0/` synced from cogworks HEAD (which equals the v0.13.1 tag) so source installs (`vdev`) pick up the fix without waiting on a rebuild. New library files: `Debug.lua`, `Drawer.lua`, `Scaling.lua`, `SegmentedControl.lua`, `Slash.lua`, `ThemedMainFrame.lua`, `Toast.lua` — XML manifest at `Libs/Cogworks-1.0/Cogworks-1.0.xml` updated to reference all of them.
+
+FlipQueue is not yet calling `cw:CreateThemedMainFrame` / `cw:CreateDrawer` (its own `UI/MainFrame.lua` still hand-rolls chrome), so the bump is preventive in the strict sense — but every install ships the buggy primitives via the bundled library, and a sibling cog (Tally) shipping v0.13.1 first would supersede the broken methods at LibStub load time only if it loaded first. Bundling v0.13.1 directly removes that ordering dependency.
+
+### #131 — Import-pipeline chunking for all parse formats
+
+zpectre's 2026-05-01 retest with a 4509-deal FlippingPal CSV froze the client past the watchdog window. Root cause: `Import:ParseChunked` (the async parse entry point used by `OnTextChanged` for inputs over 50KB at `UI/ImportPage.lua:177`) only routed FP-website pastes to a chunked variant. Every other format — FP comma CSV, FP-extractor semicolon CSV, tab-delimited — fell through to synchronous `Import:Parse`. zpectre's CSV path hit `ParseFPCommaCSV`'s synchronous loop over 4509 rows × `ParseCSVLine` (per-character regex) × `MakeItemKey` × `ParseGoldValue`. Single-frame execution → freeze.
+
+#### Parse-stage chunking
+
+Three new format-specific chunked variants in `Import.lua`, all yielding via `C_Timer.After(0)` between batches of `Import.CHUNK_SIZE` (100) rows:
+
+- **`Import:ParseFPCommaCSVChunked`** — FP "Download CSV" route. Refactored `ParseFPCommaCSV` to use new file-locals `BuildFPCommaColMap` (header → column index map) and `ProcessFPCommaCSVRow` (per-line parse). Both sync and chunked variants share the row processor. Header / colMap parsing runs sync (cheap, O(1)).
+- **`Import:ParseFPFormatChunked`** — FP-extractor semicolon CSV route. Refactored `ParseFPFormat` around new file-local `ProcessFPSemicolonRow`. The extractor format has no header to pre-parse, so the chunked version splits text into lines synchronously then loops in chunks.
+- **`Import:ParseTabFormatChunked`** — Excel / table export route. Refactored `ParseTabFormat` around new file-locals `BuildTabColMap` and `ProcessTabRow`.
+
+`Import:ParseChunked` dispatcher updated to mirror `Parse`'s full format-detection chain — PBS check, FP-website check, Auctionator-text check, FP-comma-CSV check, Auctionator-inline check, FP-semicolon check, tab-delimited check, generic-comma-CSV-with-known-headers check, plain-name fallback. Each check routes either to a chunked variant (yields per chunk) or, for naturally-bounded formats (PBS, Auctionator text/inline, plain names), to the sync parser wrapped in a uniform `CompleteSync(items)` helper that still fires `onProgress(total, total)` + `onComplete(items)` so the UI gets a consistent progress contract.
+
+#### FPWebsiteScan stage 1 chunking (defense-in-depth)
+
+The FP-website chunked path was already fixing the per-block `ProcessFPWebsiteBlock` loop (stage 3), but stage 1 of the scan — `FPWebsiteScan`'s line-classification loop — ran sync before chunking started. For a 45k-line / 4500-item full-region paste, ~6 regex matches per line × 45k lines = ~270k regex calls in one frame: tens to hundreds of ms of pre-roll before the first progress tick fires.
+
+Refactored `FPWebsiteScan` into:
+
+- File-local `FPWebsiteFindBlocks(allLines, allTypes)` — stages 2 + 4 (block finding + header-word filter), pure-Lua O(n) cheap loops, no regex. Stays sync.
+- File-local `FPWebsiteScanChunked(text, onComplete)` — stage 1a (gmatch line split, sync — C-implemented and fast) + stage 1b (per-line classify in chunks of `SCAN_CHUNK_SIZE = 500`, yielding via `C_Timer.After(0)`), then chains into `FPWebsiteFindBlocks` sync at the end.
+- `Import:ParseFPWebsiteChunked` updated to call `FPWebsiteScanChunked` first, then chunk per-block stage 3 inside the scan's `onComplete` callback.
+
+Net: FP-website chunked parse now yields across both regex-heavy stages. Sync `Import:ParseFPWebsite` continues to use the sync `FPWebsiteScan` path for small inputs (`Parse` direct entry).
+
+#### Audit: `TodoList:GenerateTodoList` (deferred)
+
+`TodoGenerator.lua:729` `GenerateTodoList` runs synchronously after auto-import when "Auto-generate To-Do" is checked. Audit findings on a 4500-deal input:
+
+- Pre-loop: `BuildItemPool()` iterates inventory; `CountInventoryForDeal` per-deal pre-compute when `lowInventory` / `highInventory` allocation key is in play.
+- Main loop (~478 lines, runs N times for N deals): `FindPoolMatch(pool, deal, poolRemaining)` is O(pool); `FindBestAssignment` iterates characters; 2–3 separate `for charKey, charData in pairs(ns.db.characters)` lookups per deal in cross-realm branches; per-deal TSM API calls (`GetItemAuctioningOp`, `IsBelowThreshold`).
+
+For 4500 deals × ~500 pool × ~15 chars × multiple per-deal lookups + TSM internals, estimated tens of seconds of synchronous CPU work. **Not in zpectre's reproducer's path** (he hits the parse-side freeze first; auto-generate is opt-in), so deferred to follow-up #151 — slated for v0.13.x scope alongside the cogworks primitives migration umbrella (#143).
+
+### Files
+
+- `.pkgmeta` — Cogworks external `tag: v0.12.0` → `tag: v0.13.1`.
+- `Libs/Cogworks-1.0/*` — synced from cogworks v0.13.1 (MINOR 18). New files: `Debug.lua`, `Drawer.lua`, `Scaling.lua`, `SegmentedControl.lua`, `Slash.lua`, `ThemedMainFrame.lua`, `Toast.lua`. Updated: `Cogworks-1.0.lua`, `Cogworks-1.0.xml`, plus minor refreshes to `API.lua`, `Forms.lua`, `MiniView.lua`, `ReorderableList.lua`, `Tree.lua`.
+- `Import.lua` — `ParseFPCommaCSVChunked`, `ParseFPFormatChunked`, `ParseTabFormatChunked` added. `FPWebsiteScanChunked` + `FPWebsiteFindBlocks` added (split out from `FPWebsiteScan`). `ParseFPCommaCSV`, `ParseFPFormat`, `ParseTabFormat` refactored around new row helpers (`ProcessFPCommaCSVRow`, `ProcessFPSemicolonRow`, `ProcessTabRow`). `Import:ParseChunked` dispatcher rewritten to mirror full `Parse` format detection.
+- `CHANGELOG.md` / `RELEASES.md` — alpha12 entries.
+
+No schema migration. No save-data shape change.
+
 ## v0.12.0-alpha11
 
 Eleventh alpha of v0.12. Three encapsulated features bundled into one alpha — they share a release window. The big one is **#148** (settings architecture rebuild with the scope-vs-trigger split), which closes FQ-110's toeknee branch as a side effect by unifying the planner and executor on a single `Tracker:InScope` predicate. **#147** adds combat / pet-battle lockdown gates to BankQueue to address niduin's #144 taint report. **#146** ships the About page + version-surfacing pass for tester triage.
