@@ -40,17 +40,25 @@ function ns:InitDB()
     db.accounts.linked   = db.accounts.linked or {}
     db.settings     = db.settings or {
         -- Authority masters (#148): the two scope axes — "is FlipQueue
-        -- allowed to manage items/gold for this character?" Independent of
-        -- the per-action `auto*` triggers below, which control "when does
-        -- FlipQueue act on what it's allowed to manage?"
+        -- allowed to manage items/gold for this character?" When OFF, every
+        -- action class below is forced to behave as "disabled" regardless
+        -- of stored mode (one-click silence).
         manageItems      = true,
         manageGold       = true,
         autoScan         = true,
-        autoPullBank     = false,
-        autoDepositWarbank = false,
-        autoDepositAll = false,
+        -- Action-class tri-state modes (#155). Each is "auto", "manual",
+        -- or "disabled". "auto" = auto-fire on bank open + manual button
+        -- works. "manual" = no auto-fire, manual button works. "disabled"
+        -- = action does not exist (popup section hidden, drawer button
+        -- hidden). Default "manual" is a conservative posture that
+        -- preserves the action's availability without surprising the
+        -- player with auto-fire.
+        todoMode         = "manual",  -- pull + deposit-to-do paired
+        extrasMode       = "manual",
+        reagentsMode     = "manual",
+        goldWithdrawMode = "manual",
+        goldDepositMode  = "manual",
         showLoginMessage = true,
-        autoWithdrawGold = true,
         maxWithdrawGold = 500,
     }
     db.settings.collapsed = db.settings.collapsed or {}
@@ -107,6 +115,8 @@ function ns:InitDB()
     -- Default true (when reagents are tracked, the player generally
     -- wants Pull Saleable to grab them; flip off to keep mats in
     -- warbank while still seeing them in inventory).
+    -- (#155: also gated by reagentsMode — when reagentsMode == "disabled"
+    -- Pull Saleable skips reagents regardless of this sub-toggle.)
     if db.settings.pullSaleableIncludeReagents == nil then
         db.settings.pullSaleableIncludeReagents = true
     end
@@ -125,14 +135,21 @@ function ns:InitDB()
     if db.settings.tsmSkipOnGenerate == nil then db.settings.tsmSkipOnGenerate = true end
     -- Debug messages (off by default)
     if db.settings.debugMessages == nil then db.settings.debugMessages = false end
-    -- Auto-deposit earnings to warbank (off by default — players may want to keep earnings)
-    if db.settings.autoDepositGold == nil then db.settings.autoDepositGold = false end
     -- Master scope flags (#148). Re-applied here so existing installs that
     -- skip the constructor block above pick up sensible defaults. The actual
     -- migration that derives the right initial value from existing per-action
     -- flags lives in Migration.lua schema #10.
     if db.settings.manageItems == nil then db.settings.manageItems = true end
     if db.settings.manageGold == nil then db.settings.manageGold = true end
+    -- Action-class tri-state modes (#155). Re-applied for installs that
+    -- skip the constructor block above. The migration #11 derives values
+    -- from legacy bool flags; this just guarantees a sane "manual" default
+    -- when a fresh field appears post-upgrade.
+    if db.settings.todoMode         == nil then db.settings.todoMode         = "manual" end
+    if db.settings.extrasMode       == nil then db.settings.extrasMode       = "manual" end
+    if db.settings.reagentsMode     == nil then db.settings.reagentsMode     = "manual" end
+    if db.settings.goldWithdrawMode == nil then db.settings.goldWithdrawMode = "manual" end
+    if db.settings.goldDepositMode  == nil then db.settings.goldDepositMode  = "manual" end
     db.settings.goldBuffer = db.settings.goldBuffer or 50  -- absolute min gold to keep on character (floor vs AH fees)
     -- Warband Miser override: when true, FlipQueue manages gold even if
     -- Warband Miser is loaded. Default off — WM owns gold by default when
@@ -159,19 +176,21 @@ function ns:InitDB()
             char = {},
         }
     end
-    -- Reagents/materials in extras: tradegoods aren't tracked for sales or
-    -- to-dos (they're not cross-region), so by default we leave them on the
-    -- character instead of sweeping them into the warbank as "extras". Users
-    -- who DO want them deposited can opt in.
-    if db.settings.depositIncludeReagents == nil then
-        db.settings.depositIncludeReagents = false
-    end
+    -- (#155: depositIncludeReagents is removed; reagentsMode is the new
+    -- single source of truth for whether reagents move at all and whether
+    -- they auto-fire. Migration #11 carries forward the prior intent —
+    -- false → "disabled", true+autoAll → "auto", true+!autoAll → "manual".)
     -- Bank popup section collapse state — persisted so the user's choices
     -- carry across popups. All sections expanded by default.
     if not db.settings.bankPopupCollapsed then
         db.settings.bankPopupCollapsed = {
-            pulls = false, deposits = false, gold = false, extras = false,
+            pulls = false, deposits = false, gold = false, extras = false, reagents = false,
         }
+    end
+    -- Backfill the reagents key for existing installs whose collapsed
+    -- table predates the section split (#155).
+    if db.settings.bankPopupCollapsed.reagents == nil then
+        db.settings.bankPopupCollapsed.reagents = false
     end
     -- Click-to-copy mode for the Next-steps queue. Controls which value
     -- the copy blip exposes when a row is clicked. Default "realm"

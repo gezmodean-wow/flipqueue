@@ -7,7 +7,7 @@ local addonName, ns = ...
 --------------------------
 
 -- Current schema version
-local CURRENT_SCHEMA = 10
+local CURRENT_SCHEMA = 11
 
 -- Schema history:
 -- nil/0  = v0.5.0 (stable release): queue array, separate inventory/characters/hiddenCharacters
@@ -30,6 +30,14 @@ local CURRENT_SCHEMA = 10
 --          trigger split. Derives initial values from the existing per-
 --          action `auto*` flags so behavior is preserved across the upgrade.
 --          One-shot; player can flip the masters from Settings afterward.
+-- 11     = #155: action-class tri-state modes ("auto" / "manual" / "disabled").
+--          Replaces per-action boolean trigger flags with mode strings so
+--          scope and automation can be expressed independently. The bool
+--          model conflated "is FlipQueue allowed?" with "should it auto-fire?",
+--          which left off-trigger settings unable to run manually and
+--          Pause Automation cutting manual access entirely. Migrates per-
+--          char overrides too. Old keys are dropped post-derive so legacy
+--          reads return nil rather than stale conflicting state.
 
 local function RunMigrations(db)
     db.schemaVersion = db.schemaVersion or 0
@@ -382,6 +390,134 @@ local function RunMigrations(db)
             "See /fq settings or /fq about for details — your existing behavior is unchanged."
         db.schemaVersion = 10
     end  -- migration 10
+
+    -- Migration 11: #155 action-class tri-state modes.
+    --
+    -- Replaces per-action booleans with mode strings ("auto" / "manual" /
+    -- "disabled") so the action's *availability* and its *auto-fire*
+    -- behavior are stored together as a single tri-state. Closes the
+    -- architectural seam #148 partially fixed: planner / executor /
+    -- pause-automation logic can now read one source of truth per action.
+    --
+    -- Pairings + mapping:
+    --   autoPullBank, autoDepositWarbank        → todoMode (paired)
+    --   autoDepositAll                          → extrasMode
+    --   depositIncludeReagents, autoDepositAll  → reagentsMode
+    --   autoWithdrawGold                        → goldWithdrawMode
+    --   autoDepositGold                         → goldDepositMode
+    --
+    -- Migration policy:
+    --   bool true  → "auto"
+    --   bool false → "manual"   (preserves the action's manual availability;
+    --                            players who explicitly want the action to
+    --                            disappear flip to "disabled" post-upgrade)
+    --   reagents=false → "disabled"  (explicit exclusion was the prior
+    --                                  intent; preserve it directly)
+    --
+    -- Old keys are dropped so any legacy code reading them gets nil rather
+    -- than a stale value that disagrees with the new mode.
+    if db.schemaVersion < 11 then
+        db.settings = db.settings or {}
+
+        local function deriveTodo(pull, dep)
+            return (pull or dep) and "auto" or "manual"
+        end
+        local function deriveExtras(autoAll)
+            return autoAll and "auto" or "manual"
+        end
+        local function deriveReagents(reag, autoAll)
+            if reag == false then return "disabled" end
+            return autoAll and "auto" or "manual"
+        end
+        local function deriveBoolMode(b)
+            return b and "auto" or "manual"
+        end
+
+        -- Globals
+        do
+            local s = db.settings
+            s.todoMode         = s.todoMode         or deriveTodo(s.autoPullBank, s.autoDepositWarbank)
+            s.extrasMode       = s.extrasMode       or deriveExtras(s.autoDepositAll)
+            s.reagentsMode     = s.reagentsMode     or deriveReagents(s.depositIncludeReagents, s.autoDepositAll)
+            s.goldWithdrawMode = s.goldWithdrawMode or deriveBoolMode(s.autoWithdrawGold)
+            s.goldDepositMode  = s.goldDepositMode  or deriveBoolMode(s.autoDepositGold)
+            -- Drop the old keys.
+            s.autoPullBank          = nil
+            s.autoDepositWarbank    = nil
+            s.autoDepositAll        = nil
+            s.depositIncludeReagents = nil
+            s.autoWithdrawGold      = nil
+            s.autoDepositGold       = nil
+        end
+
+        -- Per-character overrides. Only carry forward to the new keys when
+        -- the player had an explicit per-char override on one of the old
+        -- keys; chars that purely inherited global continue to inherit on
+        -- the new keys (no per-char value set).
+        if db.characters then
+            for _, charData in pairs(db.characters) do
+                if charData.settings then
+                    local cs = charData.settings
+
+                    -- todoMode (paired pull + deposit)
+                    if cs.autoPullBank ~= nil or cs.autoDepositWarbank ~= nil then
+                        local pull = (cs.autoPullBank ~= nil)       and cs.autoPullBank       or false
+                        local dep  = (cs.autoDepositWarbank ~= nil) and cs.autoDepositWarbank or false
+                        if cs.todoMode == nil then
+                            cs.todoMode = deriveTodo(pull, dep)
+                        end
+                    end
+
+                    -- extrasMode
+                    if cs.autoDepositAll ~= nil then
+                        if cs.extrasMode == nil then
+                            cs.extrasMode = deriveExtras(cs.autoDepositAll)
+                        end
+                    end
+
+                    -- reagentsMode (reads both depositIncludeReagents
+                    -- override AND autoDepositAll override since the new
+                    -- mode is derived from both)
+                    if cs.depositIncludeReagents ~= nil or cs.autoDepositAll ~= nil then
+                        local reag    = cs.depositIncludeReagents
+                        local autoAll = (cs.autoDepositAll ~= nil) and cs.autoDepositAll or false
+                        if cs.reagentsMode == nil then
+                            cs.reagentsMode = deriveReagents(reag, autoAll)
+                        end
+                    end
+
+                    -- goldWithdrawMode / goldDepositMode
+                    if cs.autoWithdrawGold ~= nil then
+                        if cs.goldWithdrawMode == nil then
+                            cs.goldWithdrawMode = deriveBoolMode(cs.autoWithdrawGold)
+                        end
+                    end
+                    if cs.autoDepositGold ~= nil then
+                        if cs.goldDepositMode == nil then
+                            cs.goldDepositMode = deriveBoolMode(cs.autoDepositGold)
+                        end
+                    end
+
+                    -- Drop legacy per-char keys.
+                    cs.autoPullBank          = nil
+                    cs.autoDepositWarbank    = nil
+                    cs.autoDepositAll        = nil
+                    cs.depositIncludeReagents = nil
+                    cs.autoWithdrawGold      = nil
+                    cs.autoDepositGold       = nil
+                end
+            end
+        end
+
+        db._modesMigrationMessage =
+            "FlipQueue: settings updated to a clearer model. Each managed action " ..
+            "(Tasks / Extras / Reagents / Gold withdraw / Gold deposit) now has " ..
+            "Auto / Manual / Disabled options. Your existing behavior is preserved — " ..
+            "anything that was auto-firing stays auto, anything that was off becomes " ..
+            "Manual (button still works, just no auto-fire on bank open). " ..
+            "See /fq settings or /fq about for details."
+        db.schemaVersion = 11
+    end  -- migration 11
 end  -- RunMigrations
 
 -- Expose for DB.lua

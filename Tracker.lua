@@ -153,37 +153,113 @@ local function CheckForPosts()
 end
 
 --------------------------
--- Authority Scope (#148)
+-- Authority Scope (#148, refined #155)
 --------------------------
 -- The scope-vs-trigger split. `InScope` answers "does FlipQueue have
--- authority to manage X for this character right now?" — the per-action
--- `auto*` flags answer "should it auto-fire?" These two questions used to
--- collapse into a single boolean, which produced the recurring class of
--- bugs FQ-117 / FQ-110 / FQ-110-toeknee all stem from.
+-- authority to manage X for this character at all?" — the per-action
+-- mode strings (todoMode / extrasMode / reagentsMode / goldWithdrawMode
+-- / goldDepositMode) answer "for this specific action, what should
+-- happen?" via `GetActionMode` below. Master-off forces every sub-action
+-- to "disabled"; master-on lets each action sit independently in
+-- "auto" / "manual" / "disabled".
 --
--- Both the planners and the executors call into `InScope` first. They can
--- never disagree about what's in scope because they share this predicate.
+-- (#155: dropped the `_automationPaused` check from InScope. Pause is no
+-- longer a master-scope override — it forces every action's effective
+-- mode to "manual", which keeps drawer buttons visible and manual
+-- Execute working while just blocking auto-fire on bank open.)
 function Tracker:InScope(charKey, kind)
     if not ns.db then return false end
-    if ns._automationPaused then return false end
     local master = (kind == "gold") and "manageGold" or "manageItems"
     -- Per-character override takes precedence; falls back to global.
     return ns:GetCharSetting(charKey, master) == true
 end
 
--- Single source of truth for "which bags should we walk for an extras-class
--- deposit op?" Both `BuildExtraDepositOps` (planner) and
--- `AutoDepositExtraItems` (executor) used to walk different bag sets — the
--- planner included the reagent bag, the executor skipped it — which produced
--- the FQ-110 toeknee silent-skip when a player had `depositIncludeReagents`
--- on with items in bag 5. Funneling both through this helper guarantees they
--- can never disagree.
+-- (#155) Returns the effective tri-state for an action class:
+-- "auto" / "manual" / "disabled".
+--
+-- Resolution chain:
+--   1. Master off → "disabled" (one-click silence overrides everything)
+--   2. Per-char mode override → global mode default
+--   3. Pause Automation runtime override → "auto" → "manual"; "disabled"
+--      and "manual" pass through unchanged
+--
+-- Action classes:
+--   "todo"          — pull + deposit-to-do (paired)
+--   "extras"        — non-task, non-reagent items
+--   "reagents"      — Tradegoods (Item Class 7)
+--   "goldWithdraw"  — withdraw from warbank
+--   "goldDeposit"   — deposit to warbank
+--
+-- Callers should NEVER read raw mode keys directly — go through this
+-- helper so the master + pause overrides apply uniformly.
+local ACTION_MASTER = {
+    todo         = "manageItems",
+    extras       = "manageItems",
+    reagents     = "manageItems",
+    goldWithdraw = "manageGold",
+    goldDeposit  = "manageGold",
+}
+local ACTION_MODE_KEY = {
+    todo         = "todoMode",
+    extras       = "extrasMode",
+    reagents     = "reagentsMode",
+    goldWithdraw = "goldWithdrawMode",
+    goldDeposit  = "goldDepositMode",
+}
+
+function Tracker:GetActionMode(charKey, actionClass)
+    if not ns.db then return "disabled" end
+    local masterKey = ACTION_MASTER[actionClass]
+    local modeKey   = ACTION_MODE_KEY[actionClass]
+    if not masterKey or not modeKey then return "disabled" end
+
+    -- Master off → forced disabled regardless of stored mode.
+    if ns:GetCharSetting(charKey, masterKey) ~= true then
+        return "disabled"
+    end
+
+    local mode = ns:GetCharSetting(charKey, modeKey) or "manual"
+    if mode ~= "auto" and mode ~= "manual" and mode ~= "disabled" then
+        -- Defensive: a corrupted SV could leave a non-tri-state value;
+        -- treat unknowns as "manual" rather than failing closed.
+        mode = "manual"
+    end
+
+    -- Pause Automation: "auto" → "manual" runtime-only. Stored value
+    -- unchanged. Drawer buttons + manual Execute remain functional.
+    if ns._automationPaused and mode == "auto" then
+        return "manual"
+    end
+    return mode
+end
+
+-- Single source of truth for "which bags should we walk?" — both
+-- planners (BuildExtraDepositOps / BuildReagentDepositOps) and executors
+-- (AutoDepositExtraItems / AutoDepositReagents) call into this so they
+-- can never disagree about the bag set or the filter.
+--
+-- opKind:
+--   "extras"   — skip reagents (Tradegoods + bag 5). Non-reagent items
+--                in player bags eligible for deposit-extras flow.
+--   "reagents" — ONLY reagents. Tradegoods classID + the dedicated
+--                reagent bag (bag 5).
+--
+-- (#155: previously a single opKind="extras" with `depositIncludeReagents`
+-- toggling reagent inclusion. Reagents are now their own action class
+-- with their own tri-state mode, so the inclusion test moves from a
+-- bool to a separate walk.)
 --
 -- Callback signature:
 --   cb(bagIndex, slot, info, itemID, bonusIDs, modifiers, isSoulbound)
 function Tracker:WalkBagsInScope(opKind, cb)
     if not ns.db then return end
-    local includeReagents = ns.db.settings.depositIncludeReagents
+
+    local function IsReagent(bagIndex, hyperlink)
+        if bagIndex == ns.REAGENT_BAG then return true end
+        local _, _, _, _, _, _, _, _, _, _, _, classID =
+            GetItemInfo(hyperlink)
+        return classID == Enum.ItemClass.Tradegoods
+    end
 
     for _, bagIndex in ipairs(ns.ALL_PLAYER_BAGS) do
         local ok, numSlots = pcall(C_Container.GetContainerNumSlots, bagIndex)
@@ -191,37 +267,31 @@ function Tracker:WalkBagsInScope(opKind, cb)
             for slot = 1, numSlots do
                 local ok2, info = pcall(C_Container.GetContainerItemInfo, bagIndex, slot)
                 if ok2 and info and info.hyperlink then
-                    -- Reagent / tradegoods filter — same rule the planner used:
-                    -- bag 5 is unconditionally reagents; other bags are checked
-                    -- by item classID. Skipped entirely unless the user opted
-                    -- in via depositIncludeReagents.
-                    local skipReagent = false
-                    if not includeReagents then
-                        if bagIndex == ns.REAGENT_BAG then
-                            skipReagent = true
-                        else
-                            local _, _, _, _, _, _, _, _, _, _, _, classID =
-                                GetItemInfo(info.hyperlink)
-                            if classID == Enum.ItemClass.Tradegoods then
-                                skipReagent = true
+                    -- Per-opKind reagent filter
+                    local isReagent = IsReagent(bagIndex, info.hyperlink)
+                    local include
+                    if opKind == "reagents" then
+                        include = isReagent
+                    else
+                        -- "extras" (default) — non-reagents only
+                        include = not isReagent
+                    end
+
+                    if include then
+                        -- BoP/Quest detection: warbound (7) and BoA (8)
+                        -- can move to warbank; everything else with
+                        -- isBound stays bank-only.
+                        local isSoulbound = false
+                        if info.isBound then
+                            local okBind, _, _, _, _, _, _, _, _, _, _, _, _, _, bt =
+                                pcall(C_Item.GetItemInfo, info.hyperlink)
+                            if not okBind or not bt then
+                                isSoulbound = true
+                            elseif bt ~= 7 and bt ~= 8 then
+                                isSoulbound = true
                             end
                         end
-                    end
 
-                    -- BoP/Quest detection: warbound (7) and BoA (8) can move
-                    -- to warbank; everything else with isBound stays bank-only.
-                    local isSoulbound = false
-                    if info.isBound then
-                        local okBind, _, _, _, _, _, _, _, _, _, _, _, _, _, bt =
-                            pcall(C_Item.GetItemInfo, info.hyperlink)
-                        if not okBind or not bt then
-                            isSoulbound = true
-                        elseif bt ~= 7 and bt ~= 8 then
-                            isSoulbound = true
-                        end
-                    end
-
-                    if not skipReagent then
                         local itemID, bonusIDs, modifiers = ns:ParseItemLink(info.hyperlink)
                         if itemID then
                             cb(bagIndex, slot, info, itemID, bonusIDs, modifiers, isSoulbound)
@@ -257,55 +327,64 @@ function Tracker:ShowBankOpsPopup()
     -- Collect pull operations (reuse AutoPullFromBank's logic but don't execute)
     local pullOps = Tracker:BuildPullOps()
     local depositOps = Tracker:BuildDepositOps()
-    -- Build exclude set from deposit ops so extras don't duplicate them
+    -- Build exclude set from deposit ops so extras / reagents don't duplicate
     local depositSlots = {}
     for _, op in ipairs(depositOps) do
         depositSlots[op.srcBag .. ":" .. op.srcSlot] = true
     end
-    -- #148: extras require BOTH the items master AND the autoDepositAll
-    -- trigger flag. The InScope check covers manageItems + automationPaused;
-    -- BuildExtraDepositOps internally also gates on InScope (defense in depth)
-    -- so an out-of-scope character returns [] regardless.
-    local autoDepositAll = Tracker:InScope(charKey, "items")
-        and ns:GetCharSetting(charKey, "autoDepositAll")
-    local extraOps = autoDepositAll and Tracker:BuildExtraDepositOps(depositSlots) or {}
+    -- (#155) Plan extras and reagents whenever their action mode allows it
+    -- (i.e. is not "disabled"). The build functions self-gate on
+    -- GetActionMode so an explicit "disabled" returns []. Whether the
+    -- planned ops auto-fire on bank open or wait for an Execute click is
+    -- decided downstream via per-section auto-fire flags.
+    local extraOps = Tracker:BuildExtraDepositOps(depositSlots)
+    -- Reagents share the deposit-slot exclusion with extras and to-do
+    -- deposits so a single bag slot can't be claimed by two actions.
+    local reagentExcludeSlots = {}
+    for k, v in pairs(depositSlots) do reagentExcludeSlots[k] = v end
+    for _, op in ipairs(extraOps) do
+        reagentExcludeSlots[op.srcBag .. ":" .. op.srcSlot] = true
+    end
+    local reagentOps = Tracker:BuildReagentDepositOps(reagentExcludeSlots)
 
     -- Calculate gold operations
     local currentRealm = charKey:match("%-(.+)$") or GetRealmName()
     local goldWithdraw, goldDeposit = 0, 0
     local hasBuyCosts = false
 
-    -- Estimate withdrawal / deposit need. Mirror the gating that
-    -- AutoWithdrawGold / AutoDepositGold apply, so a setting that's
-    -- intentionally disabled or a hand-off to Warband Miser doesn't
-    -- show up as a queued op in the popup (and therefore doesn't get
-    -- recorded as a "failure" when the no-op actually runs).
-    -- #148: gate on the gold master first, then the per-action triggers.
-    -- Out-of-scope characters skip gold planning entirely.
-    if ns.db and Tracker:InScope(charKey, "gold") then
+    -- Estimate withdrawal / deposit need. (#155) Plan whenever the action
+    -- mode isn't "disabled"; the popup's per-section auto-fire flag
+    -- decides whether the op runs on bank open or needs an Execute click.
+    -- Warband Miser still hard-blocks gold planning regardless of mode —
+    -- WM owns gold management when active and we don't fight it.
+    do
         local wmActive = ns.IsWarbandMiserActive and ns:IsWarbandMiserActive()
-        local autoWithdraw = ns:GetCharSetting(charKey, "autoWithdrawGold") and not wmActive
-        local autoDeposit  = ns:GetCharSetting(charKey, "autoDepositGold")  and not wmActive
+        local withdrawMode = Tracker:GetActionMode(charKey, "goldWithdraw")
+        local depositMode  = Tracker:GetActionMode(charKey, "goldDeposit")
+        local planWithdraw = withdrawMode ~= "disabled" and not wmActive
+        local planDeposit  = depositMode  ~= "disabled" and not wmActive
 
-        local totalFees, _, details = Tracker:CalculateRequiredGold(charKey, currentRealm)
-        for _, d in ipairs(details) do
-            if d.duration == "buy" then hasBuyCosts = true; break end
-        end
-        local playerCopper = GetMoney()
-        local bufferCopper = (ns.db.settings.goldBuffer or 0) * 10000
-        local needed = math.max(bufferCopper, math.ceil(totalFees * 1.1))
-        -- Round target up to whole gold so the resulting balance is even
-        needed = math.ceil(needed / 10000) * 10000
-        if autoWithdraw and playerCopper < needed then
-            goldWithdraw = needed - playerCopper
-        end
+        if ns.db and (planWithdraw or planDeposit) then
+            local totalFees, _, details = Tracker:CalculateRequiredGold(charKey, currentRealm)
+            for _, d in ipairs(details) do
+                if d.duration == "buy" then hasBuyCosts = true; break end
+            end
+            local playerCopper = GetMoney()
+            local bufferCopper = (ns.db.settings.goldBuffer or 0) * 10000
+            local needed = math.max(bufferCopper, math.ceil(totalFees * 1.1))
+            -- Round target up to whole gold so the resulting balance is even
+            needed = math.ceil(needed / 10000) * 10000
+            if planWithdraw and playerCopper < needed then
+                goldWithdraw = needed - playerCopper
+            end
 
-        -- Estimate deposit excess
-        if autoDeposit then
-            local keepCopper = needed
-            if playerCopper > keepCopper then
-                local excess = playerCopper - keepCopper
-                if excess > 0 then goldDeposit = excess end
+            -- Estimate deposit excess
+            if planDeposit then
+                local keepCopper = needed
+                if playerCopper > keepCopper then
+                    local excess = playerCopper - keepCopper
+                    if excess > 0 then goldDeposit = excess end
+                end
             end
         end
     end
@@ -313,30 +392,34 @@ function Tracker:ShowBankOpsPopup()
     local hasPulls = pullOps and #pullOps > 0
     local hasDeposits = depositOps and #depositOps > 0
     local hasExtras = extraOps and #extraOps > 0
+    local hasReagents = reagentOps and #reagentOps > 0
     local hasGold = goldWithdraw > 0 or goldDeposit > 0
 
     -- FQ-132: if the previous bank session ended with pull failures, suppress
     -- auto-deposit on this open so items the player is reopening to retry
     -- aren't shoveled back to the warbank before they can be pulled again.
     -- One-shot: clear the flag here regardless of whether suppression fires.
+    -- (#155) Suppress reagent deposits too — same reasoning as extras.
     if ns.db and ns.db._lastBankFailures and ns.db._lastBankFailures[charKey] then
         local prev = ns.db._lastBankFailures[charKey]
         ns.db._lastBankFailures[charKey] = nil
-        if hasDeposits or hasExtras then
+        if hasDeposits or hasExtras or hasReagents then
             local n = (prev.failedNames and #prev.failedNames) or prev.errorCount or 1
             ns:Print(ns.COLORS.YELLOW .. n ..
                 " pull(s) failed last session — auto-deposit suppressed for this open so retries can finish first.|r")
             depositOps = {}
             extraOps = {}
+            reagentOps = {}
             hasDeposits = false
             hasExtras = false
+            hasReagents = false
         end
     end
 
     ns:PrintDebug("Bank popup: " .. #pullOps .. " pulls, " .. #depositOps .. " deposits, " ..
-        #extraOps .. " extras, withdraw=" .. goldWithdraw .. " deposit=" .. goldDeposit)
+        #extraOps .. " extras, " .. #reagentOps .. " reagents, withdraw=" .. goldWithdraw .. " deposit=" .. goldDeposit)
 
-    if not hasPulls and not hasDeposits and not hasExtras and not hasGold then
+    if not hasPulls and not hasDeposits and not hasExtras and not hasReagents and not hasGold then
         ns:PrintDebug("Bank popup: nothing to do")
         return
     end
@@ -418,17 +501,13 @@ function Tracker:ShowBankOpsPopup()
             callback()
         end
 
-        -- Phase 3: Deposits to warbank, then extras. The two sub-phases must
-        -- run sequentially (not in parallel or fire-and-forget) so the
-        -- progress reports reflect ACTUAL move counts from each
-        -- BankQueue:Process callback rather than the optimistic
-        -- #depositOps / #extraOps the popup pre-built. Previously we were
-        -- reporting requested counts and firing AutoDepositExtraItems
-        -- without awaiting it, which caused the popup's running tally to
-        -- drift away from reality and the bar to land on partial states
-        -- when ShowCompletionSummary ran.
+        -- Phase 3: Deposits to warbank, then extras, then reagents. The
+        -- sub-phases must run sequentially (not in parallel or fire-and-
+        -- forget) so the progress reports reflect ACTUAL move counts from
+        -- each BankQueue:Process callback rather than the optimistic
+        -- popup-prebuilt counts. (#155: reagent sub-phase added.)
         local function DoDeposits(callback)
-            if not hasDeposits and not hasExtras then callback() return end
+            if not hasDeposits and not hasExtras and not hasReagents then callback() return end
             if ns.UI then ns.UI:BankOpProgress(0, 0, "Depositing") end
 
             -- Wire heartbeat hooks for deposit-only flows (no pulls).
@@ -466,12 +545,23 @@ function Tracker:ShowBankOpsPopup()
                 end
             end
 
-            -- Sub-phase A: warbank deposits driven by depositFrom tasks.
-            -- AutoDepositToWarbank reports actual successNames and errorCount
-            -- via callback. Successes already counted via the delta tracker;
-            -- callback only contributes the error count.
+            -- Sub-phase C: reagents (final sub-phase before callback).
+            local function DoReagents()
+                if not hasReagents then callback() return end
+                if ns.BankQueue then
+                    ns.BankQueue.onProgress = MakeDepositDeltaTracker()
+                end
+                Tracker:AutoDepositReagents(function(_reagentSuccessNames, reagentErrorCount)
+                    if ns.UI and reagentErrorCount and reagentErrorCount > 0 then
+                        ns.UI:BankOpProgress(0, reagentErrorCount, "Depositing")
+                    end
+                    callback()
+                end)
+            end
+
+            -- Sub-phase B: extras (chains into reagents).
             local function DoExtras()
-                if not hasExtras then callback() return end
+                if not hasExtras then DoReagents() return end
                 if ns.BankQueue then
                     ns.BankQueue.onProgress = MakeDepositDeltaTracker()
                 end
@@ -479,7 +569,7 @@ function Tracker:ShowBankOpsPopup()
                     if ns.UI and extraErrorCount and extraErrorCount > 0 then
                         ns.UI:BankOpProgress(0, extraErrorCount, "Depositing")
                     end
-                    callback()
+                    DoReagents()
                 end)
             end
 
@@ -522,29 +612,34 @@ function Tracker:ShowBankOpsPopup()
         end)
     end
 
-    -- Initialize unified progress tracking (total = pulls + deposits + extras + gold ops)
-    local totalOps = #pullOps + #depositOps + #extraOps
+    -- Initialize unified progress tracking (total = pulls + deposits + extras + reagents + gold ops)
+    local totalOps = #pullOps + #depositOps + #extraOps + #reagentOps
     if goldWithdraw > 0 then totalOps = totalOps + 1 end
     if goldDeposit > 0 then totalOps = totalOps + 1 end
     if not ns.UI:IsBankExecuting() then
         ns.UI:BeginBankExecution(totalOps)
     end
 
-    -- #148: per-section auto flags. The popup only auto-fires sections
-    -- where the master is on AND every action in that section has its
-    -- trigger on. Mixed cases (one section auto, the other manual)
-    -- currently fall back to a single Execute button — separate per-
-    -- section Execute buttons are alpha12 polish work.
-    local itemsInScope = Tracker:InScope(charKey, "items")
-    local goldInScope  = Tracker:InScope(charKey, "gold")
-    local itemsAuto = itemsInScope
-        and (not hasPulls    or ns:GetCharSetting(charKey, "autoPullBank"))
-        and (not hasDeposits or ns:GetCharSetting(charKey, "autoDepositWarbank"))
-        and (not hasExtras   or ns:GetCharSetting(charKey, "autoDepositAll"))
-    local goldAutoWithdraw = goldInScope and ns:GetCharSetting(charKey, "autoWithdrawGold")
-    local goldAutoDeposit  = goldInScope and ns:GetCharSetting(charKey, "autoDepositGold")
-    local goldAuto = (goldWithdraw == 0 or goldAutoWithdraw)
-        and (goldDeposit  == 0 or goldAutoDeposit)
+    -- (#155) Per-section auto-fire flags from the action mode model.
+    -- A section auto-fires only if every action in it is in "auto" mode
+    -- (and has ops to run). Pause Automation collapses "auto" → "manual"
+    -- runtime-only via GetActionMode, so a paused player sees the popup
+    -- with manual Execute buttons instead of surprise auto-fires.
+    local todoMode      = Tracker:GetActionMode(charKey, "todo")
+    local extrasMode    = Tracker:GetActionMode(charKey, "extras")
+    local reagentsMode  = Tracker:GetActionMode(charKey, "reagents")
+    local goldWMode     = Tracker:GetActionMode(charKey, "goldWithdraw")
+    local goldDMode     = Tracker:GetActionMode(charKey, "goldDeposit")
+
+    -- Items section auto-fires when every active sub-action is in auto.
+    -- An empty sub-action (e.g. no extras pending) does not block auto.
+    local itemsAuto =
+            (not (hasPulls or hasDeposits) or todoMode == "auto")
+        and (not hasExtras                  or extrasMode == "auto")
+        and (not hasReagents                or reagentsMode == "auto")
+    local goldAuto =
+            (goldWithdraw == 0 or goldWMode == "auto")
+        and (goldDeposit  == 0 or goldDMode == "auto")
     -- Combined isAuto: every active section is in auto-fire. Otherwise the
     -- popup waits for explicit Execute click. Preserves the all-auto and
     -- all-manual common cases without surprise auto-fires in mixed setups.
@@ -553,6 +648,7 @@ function Tracker:ShowBankOpsPopup()
     ns.UI:ShowBankPopup({
         pulls = pullOps,
         deposits = depositOps,
+        reagents = reagentOps,
         extras = extraOps,
         goldWithdraw = goldWithdraw,
         goldDeposit = goldDeposit,
@@ -571,9 +667,11 @@ function Tracker:BuildPullOps()
     if not ns.db then return {} end
 
     local charKey = ns:GetCharKey()
-    -- #148: gate the planner on the items master. Out-of-scope characters
-    -- never have pull ops planned, so they can't drift the popup tally.
-    if not Tracker:InScope(charKey, "items") then return {} end
+    -- (#155) Gate on the to-do action mode. "disabled" → no pull ops
+    -- planned. "manual" / "auto" → planner runs as normal; the popup
+    -- decides whether ops auto-fire on bank open or wait for an Execute
+    -- click. Master-off resolves to "disabled" through GetActionMode.
+    if Tracker:GetActionMode(charKey, "todo") == "disabled" then return {} end
     local currentRealm = charKey:match("%-(.+)$") or GetRealmName()
     local needed = {}
 
@@ -668,8 +766,9 @@ function Tracker:BuildDepositOps()
     if not ns.db then return {} end
 
     local charKey = ns:GetCharKey()
-    -- #148: items master gate.
-    if not Tracker:InScope(charKey, "items") then return {} end
+    -- (#155) Gate on the to-do action mode (pull and deposit-to-do are
+    -- paired under one mode). "disabled" → no deposit ops planned.
+    if Tracker:GetActionMode(charKey, "todo") == "disabled" then return {} end
     local todoList = ns.TodoList and ns.TodoList:GetCurrentList()
     if not todoList or not todoList.tasks then return {} end
 
@@ -761,8 +860,11 @@ function Tracker:BuildExtraDepositOps(excludeSlots)
     if not ns.db then return {} end
 
     local charKey = ns:GetCharKey()
-    -- #148: items master gate.
-    if not Tracker:InScope(charKey, "items") then return {} end
+    -- (#155) Gate on the extras action mode. "disabled" → no extras
+    -- planned. The planner builds whether mode is "auto" or "manual";
+    -- the popup payload's auto-fire flag decides whether they run on
+    -- bank open or wait for an Execute click.
+    if Tracker:GetActionMode(charKey, "extras") == "disabled" then return {} end
 
     local keepKeys = {}
     local keepNames = {}
@@ -796,6 +898,82 @@ function Tracker:BuildExtraDepositOps(excludeSlots)
 
         local numID = tonumber(itemID) or tonumber((itemID:gsub(";.*", "")))
         if KEEP_ITEM_IDS[numID] then return end
+
+        local key = ns:MakeItemKey(itemID, bonusIDs, modifiers)
+        local stackCount = info.stackCount or 1
+        local shouldKeep = false
+
+        local neededByKey = keepKeys[key] or 0
+        local usedByKey = consumedKeys[key] or 0
+        if neededByKey > usedByKey then
+            consumedKeys[key] = usedByKey + stackCount
+            shouldKeep = true
+        else
+            local itemName = Tracker._GetNameFromLink(info.hyperlink)
+            if itemName then
+                local ln = itemName:lower()
+                local neededByName = keepNames[ln] or 0
+                local usedByName = consumedNames[ln] or 0
+                if neededByName > usedByName then
+                    consumedNames[ln] = usedByName + stackCount
+                    shouldKeep = true
+                end
+            end
+        end
+
+        if not shouldKeep then
+            local itemName = Tracker._GetNameFromLink(info.hyperlink)
+            table.insert(ops, {
+                op = "deposit",
+                srcBag = bagIndex,
+                srcSlot = slot,
+                name = itemName or ("Item " .. key),
+                icon = info.iconFileID,
+                quantity = stackCount,
+                destType = "warbank",
+            })
+        end
+    end)
+
+    return ops
+end
+
+-- (#155) Build reagent-class deposit operation list. Mirror of
+-- `BuildExtraDepositOps` for the reagents action class — walks only the
+-- Tradegoods + reagent-bag slots and proposes deposits to warbank.
+-- Same task-protection rule: anything keyed to a current to-do task
+-- (by itemKey or by name) stays on the character.
+function Tracker:BuildReagentDepositOps(excludeSlots)
+    if not ns.db then return {} end
+
+    local charKey = ns:GetCharKey()
+    if Tracker:GetActionMode(charKey, "reagents") == "disabled" then return {} end
+
+    local keepKeys = {}
+    local keepNames = {}
+    if ns.TodoList then
+        local myTasks = ns.TodoList:GetCharacterTasks(charKey)
+        for _, task in ipairs(myTasks) do
+            local item = task.item
+            if item.itemKey then
+                keepKeys[item.itemKey] = (keepKeys[item.itemKey] or 0) + (item.quantity or 1)
+            end
+            if item.name and item.name ~= "" then
+                local ln = item.name:lower()
+                keepNames[ln] = (keepNames[ln] or 0) + (item.quantity or 1)
+            end
+        end
+    end
+
+    local ops = {}
+    local consumedKeys = {}
+    local consumedNames = {}
+    excludeSlots = excludeSlots or {}
+
+    Tracker:WalkBagsInScope("reagents", function(bagIndex, slot, info, itemID, bonusIDs, modifiers, isSoulbound)
+        local slotKey = bagIndex .. ":" .. slot
+        if excludeSlots[slotKey] then return end
+        if isSoulbound then return end
 
         local key = ns:MakeItemKey(itemID, bonusIDs, modifiers)
         local stackCount = info.stackCount or 1

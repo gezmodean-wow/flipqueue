@@ -92,14 +92,18 @@ SlashCmdList["FLIPQUEUE"] = function(msg)
 
     elseif msg == "autopull" then
         if ns.db then
-            ns.db.settings.autoPullBank = not ns.db.settings.autoPullBank
-            ns:Print("Auto-pull from bank: " .. (ns.db.settings.autoPullBank and "ON" or "OFF"))
+            -- (#155) Toggle to-do mode auto ↔ manual. The third state
+            -- (disabled) is reachable via the Characters page drilldown.
+            local cur = ns.db.settings.todoMode or "manual"
+            ns.db.settings.todoMode = (cur == "auto") and "manual" or "auto"
+            ns:Print("Pull/deposit tasks: " .. (ns.db.settings.todoMode == "auto" and "AUTO" or "MANUAL"))
         end
 
     elseif msg == "gold" then
         if ns.db then
-            ns.db.settings.autoWithdrawGold = not ns.db.settings.autoWithdrawGold
-            ns:Print("Auto-withdraw gold for AH fees + purchases: " .. (ns.db.settings.autoWithdrawGold and "ON" or "OFF"))
+            local cur = ns.db.settings.goldWithdrawMode or "manual"
+            ns.db.settings.goldWithdrawMode = (cur == "auto") and "manual" or "auto"
+            ns:Print("Withdraw gold: " .. (ns.db.settings.goldWithdrawMode == "auto" and "AUTO" or "MANUAL"))
         end
 
     elseif msg == "dnt" or msg == "donottrack" then
@@ -207,8 +211,8 @@ SlashCmdList["FLIPQUEUE"] = function(msg)
 
             -- Settings (all relevant)
             local s = ns.db.settings or {}
-            L("S|scan=" .. V(s.autoScan) .. "|pull=" .. V(s.autoPullBank) .. "|dep=" .. V(s.autoDepositWarbank)
-                .. "|depAll=" .. V(s.autoDepositAll) .. "|gold=" .. V(s.autoWithdrawGold) .. "|maxG=" .. V(s.maxWithdrawGold)
+            L("S|scan=" .. V(s.autoScan) .. "|todo=" .. V(s.todoMode) .. "|extras=" .. V(s.extrasMode)
+                .. "|reag=" .. V(s.reagentsMode) .. "|goldW=" .. V(s.goldWithdrawMode) .. "|goldD=" .. V(s.goldDepositMode) .. "|maxG=" .. V(s.maxWithdrawGold)
                 .. "|batch=" .. V(s.pullBatchSize) .. "|sellQty=" .. V(s.sellQtyMode) .. "/" .. V(s.defaultSellQty)
                 .. "|tsm=" .. V(s.tsmEnabled) .. "|prof=" .. V(s.tsmProfile)
                 .. "|tsmSkip=" .. V(s.tsmAutoSkipRejected) .. "|tsmGenSkip=" .. V(s.tsmSkipOnGenerate) .. "|tsmPrice=" .. V(s.tsmPriceSource)
@@ -790,8 +794,8 @@ SlashCmdList["FLIPQUEUE"] = function(msg)
 
         local s = ns.db and ns.db.settings or {}
         print("--- Settings ---")
-        print(string.format("  autoWithdrawGold = %s", tostring(s.autoWithdrawGold)))
-        print(string.format("  autoDepositGold  = %s", tostring(s.autoDepositGold)))
+        print(string.format("  goldWithdrawMode = %s", tostring(s.goldWithdrawMode)))
+        print(string.format("  goldDepositMode  = %s", tostring(s.goldDepositMode)))
         print(string.format("  goldBuffer       = %sg",  tostring(s.goldBuffer or 0)))
         print(string.format("  maxWithdrawGold  = %sg",  tostring(s.maxWithdrawGold or 0)))
         print(string.format("  sellQtyMode      = %s",  tostring(s.sellQtyMode)))

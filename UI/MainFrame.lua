@@ -415,10 +415,11 @@ mainFrame.actionBtns.clearLog = CreateActionBtn("Clear Log", "Remove all entries
 end)
 
 mainFrame.actionBtns.pullBank = CreateActionBtn("Pull Bank", "Pull queued items from bank to bags", function()
-    local saved = ns.db.settings.autoPullBank
-    ns.db.settings.autoPullBank = true
+    -- (#155) AutoPullFromBank now gates on todoMode != "disabled" only,
+    -- so a manual button click runs whenever the action is in scope.
+    -- The previous save-restore-toggle hack to bypass the autoPullBank
+    -- gate isn't needed anymore.
     ns.Tracker:AutoPullFromBank(nil, true) -- fromClick = true for hardware event context
-    ns.db.settings.autoPullBank = saved
 end)
 
 mainFrame.actionBtns.clearQueue = CreateActionBtn("Clear Queue", "Remove all items from queue", function()

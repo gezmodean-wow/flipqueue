@@ -56,6 +56,32 @@ local function FormatSettingColumn(rawValue, globalDefault)
     end
 end
 
+-- (#155) Format an action-class mode value for column display:
+--   nil    = inherited from global (shown in dim color matching the global)
+--   "auto"     = green
+--   "manual"   = yellow
+--   "disabled" = red dash
+local function FormatModeColumn(rawValue, globalMode)
+    local function color(mode, dim)
+        local c, label
+        if mode == "auto"     then c, label = "00ff00", "Auto"
+        elseif mode == "manual"   then c, label = "ffcc00", "Manual"
+        elseif mode == "disabled" then c, label = "ff3333", "Off"
+        else                            c, label = "888888", "?"
+        end
+        if dim then
+            -- Halve brightness for inherited-from-global rendering
+            c = c:gsub("%w%w", function(hh) return string.format("%02x", math.floor(tonumber(hh, 16) / 2)) end)
+        end
+        return "|cff" .. c .. label .. "|r"
+    end
+    if rawValue == "auto" or rawValue == "manual" or rawValue == "disabled" then
+        return color(rawValue, false)
+    else
+        return color(globalMode or "manual", true)
+    end
+end
+
 -- Format a 3-state setting for the config panel button label:
 --   nil = "Default (On)" or "Default (Off)" in gray
 --   true = "On" in green
@@ -304,10 +330,12 @@ local function BuildCharactersData()
             if oKey == charKey then orderPos = oi; break end
         end
 
-        -- Per-character setting raw values for Pull/Dep/All columns
-        local pullRaw = ns:GetCharSettingRaw(charKey, "autoPullBank")
-        local depRaw = ns:GetCharSettingRaw(charKey, "autoDepositWarbank")
-        local depAllRaw = ns:GetCharSettingRaw(charKey, "autoDepositAll")
+        -- (#155) Per-character setting raw values for the action-mode columns.
+        -- Each tri-state mode displays as Auto / Manual / Off (or — when no
+        -- per-char override is set, defaulting to global).
+        local todoRaw     = ns:GetCharSettingRaw(charKey, "todoMode")
+        local extrasRaw   = ns:GetCharSettingRaw(charKey, "extrasMode")
+        local reagentsRaw = ns:GetCharSettingRaw(charKey, "reagentsMode")
 
         table.insert(charData, {
             name      = coloredName,
@@ -315,9 +343,9 @@ local function BuildCharactersData()
             gold      = goldStr,
             tasks     = isHidden and "-" or tostring(#tasks),
             auctions  = auctionStr ~= "" and auctionStr or "",
-            pull      = FormatSettingColumn(pullRaw, ns.db.settings.autoPullBank),
-            dep       = FormatSettingColumn(depRaw, ns.db.settings.autoDepositWarbank),
-            depAll    = FormatSettingColumn(depAllRaw, ns.db.settings.autoDepositAll),
+            pull      = FormatModeColumn(todoRaw,     ns.db.settings.todoMode),
+            dep       = FormatModeColumn(extrasRaw,   ns.db.settings.extrasMode),
+            depAll    = FormatModeColumn(reagentsRaw, ns.db.settings.reagentsMode),
             status    = statusStr,
             _sortName = name:lower(),
             _sortGold = goldCopper,
@@ -603,28 +631,27 @@ local function EnsureConfigPanel(tableContainer)
     autoLabel:SetTextColor(0.9, 0.8, 0.3)
     autoLabel:SetText("Automation Overrides")
 
-    -- Auto-Pull
-    local pullRow, pullBtn = Create3StateRow(autoLabel, "Pull:", "autoPullBank")
-    configWidgets.pullRow = pullRow
-    configWidgets.pullBtn = pullBtn
+    -- (#155) Action-mode rows. Each cycles through nil (inherit global)
+    -- → "auto" → "manual" → "disabled" → nil. The row labels reflect the
+    -- new action-class structure (Tasks / Extras / Reagents for items;
+    -- Withdraw / Deposit for gold).
+    local todoRow, todoBtn = Create3StateRow(autoLabel, "Tasks:", "todoMode")
+    configWidgets.pullRow = todoRow
+    configWidgets.pullBtn = todoBtn
 
-    -- Auto-Deposit
-    local depRow, depBtn = Create3StateRow(pullRow, "Deposit:", "autoDepositWarbank")
-    configWidgets.depRow = depRow
-    configWidgets.depBtn = depBtn
+    local extrasRow, extrasBtn = Create3StateRow(todoRow, "Extras:", "extrasMode")
+    configWidgets.depRow = extrasRow
+    configWidgets.depBtn = extrasBtn
 
-    -- Auto-Deposit All
-    local depAllRow, depAllBtn = Create3StateRow(depRow, "Dep. All:", "autoDepositAll")
-    configWidgets.depAllRow = depAllRow
-    configWidgets.depAllBtn = depAllBtn
+    local reagentsRow, reagentsBtn = Create3StateRow(extrasRow, "Reagents:", "reagentsMode")
+    configWidgets.depAllRow = reagentsRow
+    configWidgets.depAllBtn = reagentsBtn
 
-    -- Auto-Withdraw Gold
-    local wdGoldRow, wdGoldBtn = Create3StateRow(depAllRow, "Withdraw Gold:", "autoWithdrawGold")
+    local wdGoldRow, wdGoldBtn = Create3StateRow(reagentsRow, "Withdraw Gold:", "goldWithdrawMode")
     configWidgets.wdGoldRow = wdGoldRow
     configWidgets.wdGoldBtn = wdGoldBtn
 
-    -- Auto-Deposit Gold
-    local depGoldRow, depGoldBtn = Create3StateRow(wdGoldRow, "Deposit Gold:", "autoDepositGold")
+    local depGoldRow, depGoldBtn = Create3StateRow(wdGoldRow, "Deposit Gold:", "goldDepositMode")
     configWidgets.depGoldRow = depGoldRow
     configWidgets.depGoldBtn = depGoldBtn
 
@@ -894,7 +921,7 @@ local function ShowConfigPanel(charKey)
     end)
     configWidgets.roleBtn:SetScript("OnLeave", function() GameTooltip:Hide() end)
 
-    -- 3-state buttons
+    -- 3-state buttons (master switches: nil/true/false)
     local function SetupTriStateBtn(btn, settingKey)
         local rawVal = ns:GetCharSettingRaw(charKey, settingKey)
         local globalDefault = ns.db.settings[settingKey]
@@ -928,13 +955,67 @@ local function ShowConfigPanel(charKey)
         btn:SetScript("OnLeave", function() GameTooltip:Hide() end)
     end
 
+    -- (#155) 4-state action-mode button: nil (inherit) / auto / manual / disabled.
+    local MODE_CYCLE = { [false] = "auto", auto = "manual", manual = "disabled", disabled = nil }
+    local function FormatModeLabel(rawVal, globalMode)
+        if rawVal == nil then
+            local def = globalMode or "manual"
+            return "|cff888888Default (" .. def .. ")|r"
+        elseif rawVal == "auto" then
+            return "|cff00ff00Auto|r"
+        elseif rawVal == "manual" then
+            return "|cffffcc00Manual|r"
+        elseif rawVal == "disabled" then
+            return "|cffff3333Off|r"
+        end
+        return tostring(rawVal)
+    end
+    local function CycleMode(current)
+        if current == nil then return "auto"
+        elseif current == "auto" then return "manual"
+        elseif current == "manual" then return "disabled"
+        else return nil end
+    end
+    local function SetupModeBtn(btn, settingKey)
+        local raw = ns:GetCharSettingRaw(charKey, settingKey)
+        btn.text:SetText(FormatModeLabel(raw, ns.db.settings[settingKey]))
+
+        btn:SetScript("OnClick", function()
+            local cur = ns:GetCharSettingRaw(charKey, settingKey)
+            ns:SetCharSetting(charKey, settingKey, CycleMode(cur))
+            local updated = ns:GetCharSettingRaw(charKey, settingKey)
+            btn.text:SetText(FormatModeLabel(updated, ns.db.settings[settingKey]))
+            RefreshCharactersTable()
+        end)
+
+        btn:SetScript("OnEnter", function(self)
+            GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+            local cur = ns:GetCharSettingRaw(charKey, settingKey)
+            if cur == nil then
+                GameTooltip:SetText("Inheriting global: " .. (ns.db.settings[settingKey] or "manual"), 0.7, 0.7, 0.7)
+                GameTooltip:AddLine("Click to override to Auto", 0.5, 0.5, 0.5)
+            elseif cur == "auto" then
+                GameTooltip:SetText("Override: Auto", 0, 1, 0)
+                GameTooltip:AddLine("Click to override to Manual", 0.5, 0.5, 0.5)
+            elseif cur == "manual" then
+                GameTooltip:SetText("Override: Manual", 1, 0.8, 0)
+                GameTooltip:AddLine("Click to override to Off", 0.5, 0.5, 0.5)
+            else
+                GameTooltip:SetText("Override: Off", 1, 0.2, 0.2)
+                GameTooltip:AddLine("Click to clear override (use global)", 0.5, 0.5, 0.5)
+            end
+            GameTooltip:Show()
+        end)
+        btn:SetScript("OnLeave", function() GameTooltip:Hide() end)
+    end
+
     SetupTriStateBtn(configWidgets.manageItemsBtn, "manageItems")
     SetupTriStateBtn(configWidgets.manageGoldBtn, "manageGold")
-    SetupTriStateBtn(configWidgets.pullBtn, "autoPullBank")
-    SetupTriStateBtn(configWidgets.depBtn, "autoDepositWarbank")
-    SetupTriStateBtn(configWidgets.depAllBtn, "autoDepositAll")
-    SetupTriStateBtn(configWidgets.wdGoldBtn, "autoWithdrawGold")
-    SetupTriStateBtn(configWidgets.depGoldBtn, "autoDepositGold")
+    SetupModeBtn(configWidgets.pullBtn,    "todoMode")
+    SetupModeBtn(configWidgets.depBtn,     "extrasMode")
+    SetupModeBtn(configWidgets.depAllBtn,  "reagentsMode")
+    SetupModeBtn(configWidgets.wdGoldBtn,  "goldWithdrawMode")
+    SetupModeBtn(configWidgets.depGoldBtn, "goldDepositMode")
 
     -- Bank tab buttons (per-character)
     local pt = ns.db.settings.pullTabs or {}
@@ -1219,7 +1300,15 @@ local function EnsureGlobalDefaultsBar(tableContainer)
 
         cb:SetScript("OnClick", function(self)
             if ns.db then
-                ns.db.settings[settingKey] = self:GetChecked()
+                -- (#155) Mode keys ("xxxMode") store strings auto/manual/disabled.
+                -- The defaults-bar checkbox toggles auto ↔ manual; the
+                -- third state (disabled) is reachable from the per-char
+                -- drilldown only.
+                if settingKey:sub(-4) == "Mode" then
+                    ns.db.settings[settingKey] = self:GetChecked() and "auto" or "manual"
+                else
+                    ns.db.settings[settingKey] = self:GetChecked()
+                end
                 RefreshCharactersTable()
                 if UI.RefreshContextDrawer then UI:RefreshContextDrawer() end
                 if UI.RefreshSettings then UI:RefreshSettings() end
@@ -1275,14 +1364,17 @@ local function EnsureGlobalDefaultsBar(tableContainer)
         "Per-character overrides on the table to the right take precedence.",
         true)
 
-    globalDefaultsWidgets.pullCB = MakeGlobalCB(globalDefaultsWidgets.itemsCB.text, "Pull",
-        "autoPullBank", "Auto-pull queued items from bank when opening bank")
+    -- (#155) The defaults-bar checkboxes are now mode shortcuts: checked = "auto",
+    -- unchecked = "manual". The third state (disabled) is reachable via the
+    -- per-character config drilldown (click a row).
+    globalDefaultsWidgets.pullCB = MakeGlobalCB(globalDefaultsWidgets.itemsCB.text, "Tasks",
+        "todoMode", "Auto-pull / auto-deposit task items on bank open. Manual: button works, no auto-fire. Click a character row for full Off control.")
 
-    globalDefaultsWidgets.depCB = MakeGlobalCB(globalDefaultsWidgets.pullCB.text, "Deposit",
-        "autoDepositWarbank", "Auto-deposit items to warbank for other characters")
+    globalDefaultsWidgets.depCB = MakeGlobalCB(globalDefaultsWidgets.pullCB.text, "Extras",
+        "extrasMode", "Auto-deposit extra items not needed by current character. Manual: button works, no auto-fire.")
 
-    globalDefaultsWidgets.depAllCB = MakeGlobalCB(globalDefaultsWidgets.depCB.text, "Dep. All",
-        "autoDepositAll", "Auto-deposit ALL extra items to bank/warbank")
+    globalDefaultsWidgets.depAllCB = MakeGlobalCB(globalDefaultsWidgets.depCB.text, "Reagents",
+        "reagentsMode", "Auto-deposit reagents (Tradegoods). Manual: button works, no auto-fire.")
 
     -- Anchor the items backdrop now that all four item-group widgets exist.
     -- Anchors resolve dynamically so the backdrop tracks layout shifts.
@@ -1312,10 +1404,10 @@ local function EnsureGlobalDefaultsBar(tableContainer)
     globalDefaultsWidgets.goldCB:SetPoint("LEFT", globalDefaultsWidgets.depAllCB.text, "RIGHT", 22, 0)
 
     globalDefaultsWidgets.wdGoldCB = MakeGlobalCB(globalDefaultsWidgets.goldCB.text, "Withdraw",
-        "autoWithdrawGold", "Auto-withdraw gold from warbank for fees + purchases")
+        "goldWithdrawMode", "Auto-withdraw gold from warbank for fees + purchases. Manual: button works, no auto-fire.")
 
     globalDefaultsWidgets.depGoldCB = MakeGlobalCB(globalDefaultsWidgets.wdGoldCB.text, "Deposit",
-        "autoDepositGold", "Auto-deposit excess gold back to warbank")
+        "goldDepositMode", "Auto-deposit excess gold back to warbank. Manual: button works, no auto-fire.")
 
     goldBg:SetPoint("TOPLEFT",     globalDefaultsWidgets.goldCB,           "TOPLEFT",     -6, 3)
     goldBg:SetPoint("BOTTOMRIGHT", globalDefaultsWidgets.depGoldCB.text,   "BOTTOMRIGHT", 6, -3)
@@ -1395,17 +1487,18 @@ local function RefreshGlobalDefaultsBar()
         globalDefaultsWidgets.goldCB:SetChecked(goldOn)
     end
 
-    -- Sub-checkboxes: keep checked state in sync with settings, then hide /
-    -- show based on master state. Hidden-when-off matches the maintainer's
-    -- spec — sub-checkboxes are meaningless when their master is OFF.
-    globalDefaultsWidgets.pullCB:SetChecked(ns.db.settings.autoPullBank)
-    globalDefaultsWidgets.depCB:SetChecked(ns.db.settings.autoDepositWarbank)
-    globalDefaultsWidgets.depAllCB:SetChecked(ns.db.settings.autoDepositAll)
+    -- (#155) Sub-checkboxes track whether the action mode is "auto".
+    -- "manual" and "disabled" both render as unchecked since this UI
+    -- doesn't have a third state — players who want disabled use the
+    -- per-char drilldown.
+    globalDefaultsWidgets.pullCB:SetChecked(ns.db.settings.todoMode == "auto")
+    globalDefaultsWidgets.depCB:SetChecked(ns.db.settings.extrasMode == "auto")
+    globalDefaultsWidgets.depAllCB:SetChecked(ns.db.settings.reagentsMode == "auto")
     if globalDefaultsWidgets.wdGoldCB then
-        globalDefaultsWidgets.wdGoldCB:SetChecked(ns.db.settings.autoWithdrawGold and true or false)
+        globalDefaultsWidgets.wdGoldCB:SetChecked(ns.db.settings.goldWithdrawMode == "auto")
     end
     if globalDefaultsWidgets.depGoldCB then
-        globalDefaultsWidgets.depGoldCB:SetChecked(ns.db.settings.autoDepositGold and true or false)
+        globalDefaultsWidgets.depGoldCB:SetChecked(ns.db.settings.goldDepositMode == "auto")
     end
 
     if itemsOn then

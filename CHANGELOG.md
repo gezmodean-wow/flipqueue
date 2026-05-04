@@ -1,5 +1,97 @@
 # Changelog
 
+## v0.12.0-alpha14
+
+Architectural rebuild of the manage / automate model (#155). Closes the recurring class of bugs that #148 partially fixed (FQ-110 toeknee silent-skip, the alpha13 player-debug "Execute does nothing when triggers are off"), drops the bool/trigger conflation entirely, and adds a third action class for reagents that was previously folded into extras via a separate `depositIncludeReagents` bool.
+
+### The new model
+
+```
+manageItems  (per-char tri-state override of global, existing — unchanged)
+    │
+    ├── todoMode      [auto / manual / disabled]   ← pull + deposit-to-do paired
+    ├── extrasMode    [auto / manual / disabled]
+    └── reagentsMode  [auto / manual / disabled]   ← split out from extras
+
+manageGold   (same shape)
+    │
+    ├── goldWithdrawMode  [auto / manual / disabled]
+    └── goldDepositMode   [auto / manual / disabled]
+```
+
+Action-mode semantics:
+
+| Mode      | Drawer button | Popup section | Auto-fires on bank open |
+|-----------|---------------|---------------|-------------------------|
+| `auto`    | shown, works  | shown         | ✓                       |
+| `manual`  | shown, works  | shown         | ✗                       |
+| `disabled`| hidden        | hidden        | ✗                       |
+
+Master `manageItems = false` forces all three sub-modes to behave as `disabled` regardless of stored value.
+
+### Pause-vs-master split
+
+`ns._automationPaused` no longer collapses `Tracker:InScope` to false. Pause is now a runtime override that forces every action's effective mode `auto → manual` without changing stored values; drawer buttons stay visible, popup sections still appear, manual Execute still works. The previous behavior (Pause hides every drawer item / gold button) was the un-numbered "Pause Automation disables manual access" bug.
+
+### Schema #11 migration
+
+`Migration.lua:RunMigrations` derives the new mode strings from the legacy bool flags so existing installs preserve their behavior:
+
+| Old bool                                    | New mode key            | Mapping policy                                         |
+|---------------------------------------------|-------------------------|--------------------------------------------------------|
+| `autoPullBank` ∨ `autoDepositWarbank`       | `todoMode`              | either true → `"auto"`; both false → `"manual"`        |
+| `autoDepositAll`                            | `extrasMode`            | true → `"auto"`; false → `"manual"`                    |
+| `depositIncludeReagents`, `autoDepositAll`  | `reagentsMode`          | reagents=false → `"disabled"`; reagents=true ∧ autoAll=true → `"auto"`; reagents=true ∧ autoAll=false → `"manual"` |
+| `autoWithdrawGold`                          | `goldWithdrawMode`      | true → `"auto"`; false → `"manual"`                    |
+| `autoDepositGold`                           | `goldDepositMode`       | true → `"auto"`; false → `"manual"`                    |
+
+Per-char overrides migrate the same way. Old keys are dropped post-derive so legacy code reads return nil rather than stale conflicting state. One chat line on first post-upgrade load explaining where to find the new controls.
+
+### Code changes
+
+- **`Tracker.lua`** — new `Tracker:GetActionMode(charKey, actionClass)` resolves master + per-char + global + pause-override into a single tri-state. `Tracker:InScope` reverted to master-only (no pause check). Planner gates (`BuildPullOps` / `BuildDepositOps` / `BuildExtraDepositOps` / new `BuildReagentDepositOps`) gate on `GetActionMode != "disabled"` instead of trigger bools. `WalkBagsInScope` now takes opKind = "extras" or "reagents" with proper Tradegoods filtering on each side. `ShowBankOpsPopup` payload includes per-section auto flags computed from action modes; reagents section added to the popup. The "FQ-132 suppress-after-pull-failures" guard now also clears reagent ops.
+- **`TrackerBank.lua`** — executor trigger-gate drops. `AutoPullFromBank` / `AutoDepositToWarbank` / `AutoDepositExtraItems` / `AutoWithdrawGold` / `AutoDepositGold` all gate on `GetActionMode != "disabled"` only. Manual paths (popup Execute, drawer button) work without the save-restore bool-toggle hacks. New `Tracker:AutoDepositReagents` mirrors `AutoDepositExtraItems` for the reagents action class; same warbank-free-slot interrupt + scan refresh shape.
+- **`UI/BankPopup.lua`** — new "Deposit reagents (N)" section. "Deposit to warbank" header renamed to "Deposit tasks" (matches the new "Tasks" terminology). Manual-Execute button label "Execute All (N)" — primary path runs everything; per-section Execute buttons deferred to a polish follow-up.
+- **`UI/ContextDrawer.lua`** — drawer button visibility now keyed off `GetActionMode != "disabled"` per action class instead of master-only `InScope`. New `bankButtons.reagents` ("Deposit Reagents") drawer button next to "Deposit Extras"; row-1 layout grew from 4 to 5 columns. "Pull Items" → "Pull Tasks" / "Deposit Items" → "Deposit Tasks" rename. The DoPullGold / DoDepositGold save-restore-toggle hacks against the autoWithdrawGold / autoDepositGold gates removed (executor no longer needs the override). New `DoReagents` handler for the new button.
+- **`UI/SettingsFrame.lua`** — new `CreateSettingsTriMode(parent, y, title, desc, key)` widget renders a 3-button segmented control (Auto / Manual / Off) for mode keys. Replaces the bool checkboxes for `goldWithdrawMode`, `goldDepositMode`, `reagentsMode`. The dim-when-master-off ApplyRowState wiring updates to use `:SetAlpha` directly on the tri-mode rows.
+- **`UI/CharactersPage.lua`** — `FormatModeColumn` renders Auto / Manual / Off badges in the table. Per-char config drilldown's 5 action-mode rows now use a new `SetupModeBtn` 4-state cycler (nil / auto / manual / disabled) — Tasks / Extras / Reagents / Withdraw Gold / Deposit Gold. The Character Defaults bar's sub-checkboxes track `mode == "auto"` (auto ↔ manual toggle); reaching the disabled state from this bar isn't supported — players use the per-char drilldown.
+- **`UI/SetupWizard.lua`** — RECOMMENDED defaults now use mode strings (`todoMode = "auto"`, etc.). New `BuildTriMode` setting type renders as a checkbox during setup (checked = auto, unchecked = manual); disabled is reachable post-install.
+- **`UI/SlashCommands.lua`** — `/fq autopull` / `/fq gold` toggle the mode keys auto ↔ manual instead of the dropped bool keys. `/fq debug perf` and `/fq debug gold` print the new mode field names.
+- **`UI/MainFrame.lua`** — Pull Bank action button drops the save-restore-`autoPullBank` hack now that AutoPullFromBank no longer gates on the trigger.
+- **`DB.lua`** — defaults updated for the new mode keys; `depositIncludeReagents` / `autoWithdrawGold` / `autoDepositGold` constructor blocks removed (replaced by per-mode keys); `bankPopupCollapsed.reagents` backfill for installs predating the new section.
+- **`Migration.lua`** — schema #11 migration as described above.
+
+### Closes
+
+- **FQ-110** — executor gate alignment closes the toeknee deposit-extras silent-skip and the alpha13 player-debug "Execute does nothing when triggers are off" symptom.
+- **FQ-129** — settings architecture for gold management parity collapses into this rebuild's gold action classes.
+- The un-numbered "Pause Automation hides drawer buttons" bug from the same player-debug session.
+- **#155** is the implementation reference for this work.
+
+### Files
+
+```
+M  CHANGELOG.md
+M  DB.lua
+M  Migration.lua
+M  RELEASES.md
+M  Tracker.lua
+M  TrackerBank.lua
+M  UI/BankPopup.lua
+M  UI/CharactersPage.lua
+M  UI/ContextDrawer.lua
+M  UI/MainFrame.lua
+M  UI/SettingsFrame.lua
+M  UI/SetupWizard.lua
+M  UI/SlashCommands.lua
+```
+
+### Known follow-ups (deferred to alpha15+)
+
+- Per-section Execute buttons on the bank popup (each section gets its own Execute control beside the section header). The architectural wiring is in place — `Tracker:ShowBankOpsPopup` builds the per-section ops cleanly — the UI just needs the buttons added.
+- True 4-state widget on the Characters page Defaults bar so the disabled state is reachable from there too (today the per-char drilldown is the only way to hit "disabled").
+- Mixed-mode auto-fire in the popup (auto sections fire automatically on bank open, manual sections wait for click). Today the popup auto-fires only when ALL sections are auto.
+
 ## v0.12.0-alpha13
 
 Republish of alpha12. The alpha12 tag (`ad5553f`) was correct in code but never reached CurseForge / Wago — the cogworks reusable verify-package workflow that gates our `release` job choked on Windows-style backslashes in `flipqueue.toc` path lines (`Libs\LibStub\LibStub.lua` etc.) when running on the Linux runner. WoW accepts both separators in TOC paths on every platform, so this never affected in-game testing — it's purely a CI script gap. Alpha13 ships the same content as alpha12 plus a `flipqueue.toc` forward-slash conversion that side-steps the gap defensively even now that cogworks-side `COG-29` (`d305d02 fix(COG-29): normalize backslash separators in TOC/XML path checks`) has landed on cogworks main and the `@main`-pinned verify workflow auto-picks it up.

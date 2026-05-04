@@ -9,7 +9,11 @@ local Tracker = ns.Tracker
 --------------------------
 
 function Tracker:AutoPullFromBank(onComplete, fromClick)
-    if not ns.db or not ns:GetCharSetting(ns:GetCharKey(), "autoPullBank") then
+    -- (#155) Gate on the to-do action mode. "disabled" → never run; "manual"
+    -- and "auto" both run when invoked. Whether to invoke this in the auto-
+    -- fire-on-bank-open flow is the caller's decision (popup checks
+    -- isAuto / per-section flags before dispatching).
+    if not ns.db or Tracker:GetActionMode(ns:GetCharKey(), "todo") == "disabled" then
         if onComplete then onComplete({}, 0) end
         return
     end
@@ -388,13 +392,10 @@ end
 function Tracker:AutoWithdrawGold()
     if not ns.db then return end
     local charKey = ns:GetCharKey()
-    -- #148: gold master gate.
-    if not Tracker:InScope(charKey, "gold") then
-        ns:PrintDebug("AutoWithdrawGold: skipped — manageGold off for char")
-        return
-    end
-    if not ns:GetCharSetting(charKey, "autoWithdrawGold") then
-        ns:PrintDebug("AutoWithdrawGold: skipped — setting disabled")
+    -- (#155) Gate on the gold-withdraw action mode. "disabled" → never run;
+    -- "manual" / "auto" → run when invoked.
+    if Tracker:GetActionMode(charKey, "goldWithdraw") == "disabled" then
+        ns:PrintDebug("AutoWithdrawGold: skipped — mode disabled")
         return
     end
     if not C_Bank or not C_Bank.WithdrawMoney then
@@ -539,13 +540,9 @@ end
 function Tracker:AutoDepositGold()
     if not ns.db then return end
     local charKey = ns:GetCharKey()
-    -- #148: gold master gate.
-    if not Tracker:InScope(charKey, "gold") then
-        ns:PrintDebug("AutoDepositGold: skipped — manageGold off for char")
-        return
-    end
-    if not ns:GetCharSetting(charKey, "autoDepositGold") then
-        ns:PrintDebug("AutoDepositGold: skipped — setting disabled")
+    -- (#155) Gate on the gold-deposit action mode.
+    if Tracker:GetActionMode(charKey, "goldDeposit") == "disabled" then
+        ns:PrintDebug("AutoDepositGold: skipped — mode disabled")
         return
     end
     if not C_Bank or not C_Bank.DepositMoney then
@@ -623,13 +620,9 @@ function Tracker:AutoDepositToWarbank(onComplete)
         return
     end
     local charKey = ns:GetCharKey()
-    -- #148: items master gate. Returns the same shape as a no-op success
-    -- so the popup chain advances cleanly without firing a phantom failure.
-    if not Tracker:InScope(charKey, "items") then
-        if onComplete then onComplete({}, 0) end
-        return
-    end
-    if not ns:GetCharSetting(charKey, "autoDepositWarbank") then
+    -- (#155) Gate on the to-do action mode (paired pull + deposit-to-do).
+    -- "disabled" → never run; "manual" / "auto" → run when invoked.
+    if Tracker:GetActionMode(charKey, "todo") == "disabled" then
         if onComplete then onComplete({}, 0) end
         return
     end
@@ -793,13 +786,9 @@ function Tracker:AutoDepositExtraItems(onComplete)
         return
     end
     local charKey = ns:GetCharKey()
-    -- #148: items master gate. If FQ doesn't have authority to manage items
-    -- for this character, no extras execute regardless of trigger flags.
-    if not Tracker:InScope(charKey, "items") then
-        if onComplete then onComplete({}, 0) end
-        return
-    end
-    if not ns:GetCharSetting(charKey, "autoDepositAll") then
+    -- (#155) Gate on the extras action mode. "disabled" → never run;
+    -- "manual" / "auto" → run when invoked.
+    if Tracker:GetActionMode(charKey, "extras") == "disabled" then
         if onComplete then onComplete({}, 0) end
         return
     end
@@ -949,6 +938,159 @@ function Tracker:AutoDepositExtraItems(onComplete)
         if deferredCount > 0 then
             ns:Print(ns.COLORS.YELLOW .. deferredCount ..
                 " item(s) deferred — no accepting slot.|r")
+        end
+        C_Timer.After(1, function()
+            if ns.Scanner then
+                ns.Scanner:ScanCurrentCharacter()
+                ns.Scanner:ScanBank()
+                ns.Scanner:ScanWarbank()
+            end
+            if ns.UI and ns.UI.Refresh then ns.UI:Refresh() end
+            if ns.UI and ns.UI.RefreshMini then ns.UI:RefreshMini() end
+            if onComplete then onComplete(successNames, errorCount) end
+        end)
+    end)
+end
+
+-- (#155) Deposit reagent-class items not needed by the current character's
+-- to-do tasks. Mirror of AutoDepositExtraItems for the reagents action
+-- class — same flow, walks "reagents" opKind via WalkBagsInScope, gates
+-- on reagentsMode. Hearthstone exclusion is irrelevant here (Hearthstone
+-- isn't a reagent), so the KEEP_ITEM_IDS filter is dropped.
+function Tracker:AutoDepositReagents(onComplete)
+    if not ns.db then
+        if onComplete then onComplete({}, 0) end
+        return
+    end
+    local charKey = ns:GetCharKey()
+    if Tracker:GetActionMode(charKey, "reagents") == "disabled" then
+        if onComplete then onComplete({}, 0) end
+        return
+    end
+
+    local keepKeys = {}
+    local keepNames = {}
+    if ns.TodoList then
+        local myTasks = ns.TodoList:GetCharacterTasks(charKey)
+        for _, task in ipairs(myTasks) do
+            local item = task.item
+            if item.itemKey then
+                keepKeys[item.itemKey] = (keepKeys[item.itemKey] or 0) + (item.quantity or 1)
+            end
+            if item.name and item.name ~= "" then
+                local ln = item.name:lower()
+                keepNames[ln] = (keepNames[ln] or 0) + (item.quantity or 1)
+            end
+        end
+    end
+
+    local warbankMoves = {}
+    local bankOnlyMoves = {}
+    local consumedKeys = {}
+    local consumedNames = {}
+
+    Tracker:WalkBagsInScope("reagents", function(bagIndex, slot, info, itemID, bonusIDs, modifiers, isSoulbound)
+        local key = ns:MakeItemKey(itemID, bonusIDs, modifiers)
+        local stackCount = info.stackCount or 1
+        local shouldKeep = false
+
+        local neededByKey = keepKeys[key] or 0
+        local usedByKey = consumedKeys[key] or 0
+        if neededByKey > usedByKey then
+            consumedKeys[key] = usedByKey + stackCount
+            shouldKeep = true
+        else
+            local itemName = Tracker._GetNameFromLink(info.hyperlink)
+            if itemName then
+                local ln = itemName:lower()
+                local neededByName = keepNames[ln] or 0
+                local usedByName = consumedNames[ln] or 0
+                if neededByName > usedByName then
+                    consumedNames[ln] = usedByName + stackCount
+                    shouldKeep = true
+                end
+            end
+        end
+
+        if not shouldKeep then
+            local itemName = Tracker._GetNameFromLink(info.hyperlink)
+            local moveEntry = {
+                bag = bagIndex,
+                slot = slot,
+                name = itemName or ("Item " .. key),
+            }
+            if isSoulbound then
+                table.insert(bankOnlyMoves, moveEntry)
+            else
+                table.insert(warbankMoves, moveEntry)
+            end
+        end
+    end)
+
+    if #warbankMoves == 0 and #bankOnlyMoves == 0 then
+        if onComplete then onComplete({}, 0) end
+        return
+    end
+
+    -- Same warbank free-slot interrupt as AutoDepositExtraItems. Reagents
+    -- and extras share warbank space; if either runs short of slots the
+    -- player gets the same warning.
+    if ns.db.warbank and type(ns.db.warbank.freeSlots) == "number"
+        and #warbankMoves > 0 then
+        local freeSlots = ns.db.warbank.freeSlots
+        if freeSlots <= 0 then
+            ns:Print(ns.COLORS.ORANGE .. "Warbank is full|r — reagent deposits skipped for warbank items.")
+            warbankMoves = {}
+        elseif #warbankMoves > freeSlots then
+            local skipped = #warbankMoves - freeSlots
+            ns:Print(ns.COLORS.ORANGE .. "Warbank nearly full|r — depositing " ..
+                freeSlots .. " of " .. (#warbankMoves + skipped) ..
+                " reagents. " .. skipped .. " held back.")
+            local trimmed = {}
+            for i = 1, freeSlots do trimmed[i] = warbankMoves[i] end
+            warbankMoves = trimmed
+        end
+    end
+
+    if #warbankMoves == 0 and #bankOnlyMoves == 0 then
+        if onComplete then onComplete({}, 0) end
+        return
+    end
+
+    local ops = {}
+    for _, m in ipairs(warbankMoves) do
+        table.insert(ops, {
+            op = "deposit",
+            srcBag = m.bag,
+            srcSlot = m.slot,
+            name = m.name,
+            destType = "any",
+        })
+    end
+    for _, m in ipairs(bankOnlyMoves) do
+        table.insert(ops, {
+            op = "deposit",
+            srcBag = m.bag,
+            srcSlot = m.slot,
+            name = m.name,
+            destType = "bank",
+        })
+    end
+
+    ns.BankQueue:Process(ops, "Depositing reagents...", function(successNames, errorCount, deferredNames)
+        local deferredCount = deferredNames and #deferredNames or 0
+        if #successNames > 0 then
+            ns:Print(ns.COLORS.CYAN .. "Deposited " .. #successNames ..
+                " reagent(s) to warbank/bank:|r " ..
+                table.concat(successNames, ", "))
+        end
+        if errorCount > 0 then
+            ns:Print(ns.COLORS.YELLOW .. errorCount ..
+                " reagent(s) failed to deposit.|r")
+        end
+        if deferredCount > 0 then
+            ns:Print(ns.COLORS.YELLOW .. deferredCount ..
+                " reagent(s) deferred — no accepting slot.|r")
         end
         C_Timer.After(1, function()
             if ns.Scanner then

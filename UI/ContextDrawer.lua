@@ -447,15 +447,11 @@ end
 local function DoPullGold()
     if not Tracker then Tracker = ns.Tracker end
     if not Tracker or not Tracker.AutoWithdrawGold then return end
-    local saved = ns.db and ns.db.settings.autoWithdrawGold
-    if ns.db then ns.db.settings.autoWithdrawGold = true end
+    -- (#155) AutoWithdrawGold gates on goldWithdrawMode != "disabled",
+    -- so a manual button click runs whenever the action is enabled.
+    -- The previous save-restore-toggle hack to bypass the autoWithdrawGold
+    -- bool gate isn't needed anymore.
     local withdrawn = Tracker:AutoWithdrawGold()
-    if ns.db then ns.db.settings.autoWithdrawGold = saved end
-    -- AutoWithdrawGold prints its own success line on actual withdrawal; on
-    -- a no-op (already at-or-above target) it returns nil and only emits a
-    -- debug-only line. Surface a player-visible chat print so the manual
-    -- button never feels dead, then refresh the drawer so the button label
-    -- (which displays the calculated shortfall) reflects the new balance.
     if not withdrawn or withdrawn == 0 then
         ns:Print("Already at or above target balance — nothing to withdraw.")
     end
@@ -465,14 +461,37 @@ end
 local function DoDepositGold()
     if not Tracker then Tracker = ns.Tracker end
     if not Tracker or not Tracker.AutoDepositGold then return end
-    local saved = ns.db and ns.db.settings.autoDepositGold
-    if ns.db then ns.db.settings.autoDepositGold = true end
     local deposited = Tracker:AutoDepositGold()
-    if ns.db then ns.db.settings.autoDepositGold = saved end
     if not deposited or deposited == 0 then
         ns:Print("At or below target balance — nothing to deposit.")
     end
     PostOp()
+end
+
+-- (#155) Drawer button: deposit reagent-class items not needed by current
+-- to-do tasks. Mirrors DoExtras (DoExtras for non-reagent items).
+local function DoReagents()
+    if not Tracker then Tracker = ns.Tracker end
+    if not Tracker then return end
+    local depositSlots = {}
+    local depositOps = Tracker:BuildDepositOps()
+    for _, op in ipairs(depositOps) do
+        depositSlots[op.srcBag .. ":" .. op.srcSlot] = true
+    end
+    local extraOps = Tracker:BuildExtraDepositOps(depositSlots)
+    for _, op in ipairs(extraOps) do
+        depositSlots[op.srcBag .. ":" .. op.srcSlot] = true
+    end
+    local ops = Tracker:BuildReagentDepositOps(depositSlots)
+    if #ops == 0 then ns:Print("No reagents to deposit.") return end
+    RunManualBankOp({
+        ops          = ops,
+        payloadKey   = "reagents",
+        processLabel = "Reagents...",
+        phase        = "Depositing",
+        successWord  = "Reagents",
+        errorNoun    = "reagent",
+    })
 end
 
 --------------------------
@@ -803,25 +822,29 @@ local function BuildBankContent(parent)
         return -(HEADER_HEIGHT + (row - 1) * (BTN_HEIGHT + BTN_SPACING))
     end
 
-    -- We need to defer width calculation — use OnShow to resize
+    -- We need to defer width calculation — use OnShow to resize.
+    -- (#155) Row 1 grew from 4 buttons to 5 (added Deposit Reagents).
     local function LayoutButtons()
         local contentW = bankFrame:GetWidth()
         if contentW <= 0 then contentW = 300 end
-        local col4W = math.floor((contentW - BTN_SPACING * 3) / 4)
+        local col5W = math.floor((contentW - BTN_SPACING * 4) / 5)
         local col2W = math.floor((contentW - BTN_SPACING) / 2)
 
-        -- Row 1: 4 equal buttons
+        -- Row 1: 5 equal buttons (Pause + 4 action buttons)
         if bankButtons.pause then
-            bankButtons.pause:SetWidth(col4W)
+            bankButtons.pause:SetWidth(col5W)
         end
         if bankButtons.pull then
-            bankButtons.pull:SetWidth(col4W)
+            bankButtons.pull:SetWidth(col5W)
         end
         if bankButtons.deposit then
-            bankButtons.deposit:SetWidth(col4W)
+            bankButtons.deposit:SetWidth(col5W)
         end
         if bankButtons.extras then
-            bankButtons.extras:SetWidth(col4W)
+            bankButtons.extras:SetWidth(col5W)
+        end
+        if bankButtons.reagents then
+            bankButtons.reagents:SetWidth(col5W)
         end
 
         -- Row 2: 2 half buttons
@@ -836,22 +859,29 @@ local function BuildBankContent(parent)
         -- pullAll is anchored left+right so no explicit width needed
     end
 
-    -- Row 1: [Pause] [Pull Items] [Deposit Items] [Deposit Extras]
+    -- Row 1: [Pause] [Pull Tasks] [Deposit Tasks] [Deposit Extras] [Deposit Reagents]
     bankButtons.pause = CreateActionButton(bankFrame, "Pause Automation",
-        "Temporarily pause all bank automation", DoPause)
+        "Pause auto-fire on bank open. Manual buttons stay available — pause only blocks auto-fire, not manual access.", DoPause)
     bankButtons.pause:SetPoint("TOPLEFT", bankFrame, "TOPLEFT", 0, RowY(1))
 
-    bankButtons.pull = CreateActionButton(bankFrame, "Pull Items",
+    bankButtons.pull = CreateActionButton(bankFrame, "Pull Tasks",
         "Pull items from bank for current character's tasks", DoPull)
     bankButtons.pull:SetPoint("LEFT", bankButtons.pause, "RIGHT", BTN_SPACING, 0)
 
-    bankButtons.deposit = CreateActionButton(bankFrame, "Deposit Items",
-        "Deposit items to warbank for other characters", DoDeposit)
+    -- (#155) Renamed from "Deposit Items" — these are deposits driven by
+    -- to-do tasks (cross-character routing), not "all items in bag."
+    bankButtons.deposit = CreateActionButton(bankFrame, "Deposit Tasks",
+        "Deposit task items to warbank for other characters", DoDeposit)
     bankButtons.deposit:SetPoint("LEFT", bankButtons.pull, "RIGHT", BTN_SPACING, 0)
 
     bankButtons.extras = CreateActionButton(bankFrame, "Deposit Extras",
-        "Deposit extra items not needed by current character", DoExtras)
+        "Deposit non-task, non-reagent items not needed by current character", DoExtras)
     bankButtons.extras:SetPoint("LEFT", bankButtons.deposit, "RIGHT", BTN_SPACING, 0)
+
+    -- (#155) New action class: reagents have their own button + tri-state.
+    bankButtons.reagents = CreateActionButton(bankFrame, "Deposit Reagents",
+        "Deposit Tradegoods (reagents) not needed by current character", DoReagents)
+    bankButtons.reagents:SetPoint("LEFT", bankButtons.extras, "RIGHT", BTN_SPACING, 0)
 
     -- Row 2: [Withdraw Gold: Xg] [Deposit Earnings: Xg]
     bankButtons.pullGold = CreateActionButton(bankFrame, GetWithdrawLabel(),
@@ -876,27 +906,38 @@ local function BuildBankContent(parent)
     return bankFrame
 end
 
--- #148: hide drawer item / gold buttons when their master is OFF.
--- The Pause button stays visible regardless because pausing is meta-control,
--- not a managed action.
+-- (#155) Drawer button visibility: each button is hidden only when its
+-- action class is in "disabled" mode. "auto" and "manual" both keep the
+-- button visible (manual access stays available; pause doesn't hide
+-- buttons either, it just blocks auto-fire). The Pause button itself
+-- stays visible regardless — pausing is a meta-control.
 local function ApplyMasterVisibility()
     local Tracker = ns.Tracker
-    if not Tracker or not Tracker.InScope then return end
+    if not Tracker or not Tracker.GetActionMode then return end
     local charKey = ns.GetCharKey and ns:GetCharKey()
     if not charKey then return end
 
-    local items = Tracker:InScope(charKey, "items")
-    local gold  = Tracker:InScope(charKey, "gold")
+    local function visible(class)
+        return Tracker:GetActionMode(charKey, class) ~= "disabled"
+    end
 
-    -- Item buttons
-    if bankButtons.pull     then if items then bankButtons.pull:Show()     else bankButtons.pull:Hide()     end end
-    if bankButtons.deposit  then if items then bankButtons.deposit:Show()  else bankButtons.deposit:Hide()  end end
-    if bankButtons.extras   then if items then bankButtons.extras:Show()   else bankButtons.extras:Hide()   end end
-    if bankButtons.pullAll  then if items then bankButtons.pullAll:Show()  else bankButtons.pullAll:Hide()  end end
+    local todoVis     = visible("todo")
+    local extrasVis   = visible("extras")
+    local reagentsVis = visible("reagents")
+    local goldWVis    = visible("goldWithdraw")
+    local goldDVis    = visible("goldDeposit")
+    -- Pull Saleable lives outside the tri-state model (always-manual,
+    -- per architecture). Hide only when manageItems master is off.
+    local itemsMaster = Tracker:InScope(charKey, "items")
 
-    -- Gold buttons
-    if bankButtons.pullGold then if gold  then bankButtons.pullGold:Show() else bankButtons.pullGold:Hide() end end
-    if bankButtons.depGold  then if gold  then bankButtons.depGold:Show()  else bankButtons.depGold:Hide()  end end
+    if bankButtons.pull     then if todoVis     then bankButtons.pull:Show()     else bankButtons.pull:Hide()     end end
+    if bankButtons.deposit  then if todoVis     then bankButtons.deposit:Show()  else bankButtons.deposit:Hide()  end end
+    if bankButtons.extras   then if extrasVis   then bankButtons.extras:Show()   else bankButtons.extras:Hide()   end end
+    if bankButtons.reagents then if reagentsVis then bankButtons.reagents:Show() else bankButtons.reagents:Hide() end end
+    if bankButtons.pullAll  then if itemsMaster then bankButtons.pullAll:Show()  else bankButtons.pullAll:Hide()  end end
+
+    if bankButtons.pullGold then if goldWVis then bankButtons.pullGold:Show() else bankButtons.pullGold:Hide() end end
+    if bankButtons.depGold  then if goldDVis then bankButtons.depGold:Show()  else bankButtons.depGold:Hide()  end end
 end
 
 local function RefreshBankLabels()

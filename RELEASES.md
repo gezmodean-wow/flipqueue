@@ -10,6 +10,24 @@ The engineering-detail companion lives in `CHANGELOG.md` (commit-readerese — f
 
 The v0.12.0 line is currently in alpha. The notes below describe what will land in the public release once the alpha series stabilizes.
 
+### New: Auto / Manual / Disabled for every managed action
+
+The settings model has been rebuilt around three states per action instead of the prior on/off + master-switch combination:
+
+- **Auto** — runs on bank open, button still works manually
+- **Manual** — button works, doesn't auto-fire (so opening the bank doesn't surprise you)
+- **Disabled** — action is hidden everywhere (no drawer button, no popup section, no auto-fire)
+
+Items have three independent action classes: **Tasks** (pull + deposit-to-do paired), **Extras**, and **Reagents** (split out from extras into its own group so you can auto-deposit your gear/glyph leftovers without sending crafting mats too). Gold has two: **Withdraw** and **Deposit**.
+
+Practical consequence: the behavior the alpha13 testers hit where "the per-character toggles were off but I still wanted to click the buttons manually" works correctly now. Manual access stays available unless you explicitly pick **Disabled**, regardless of whether auto-fire is on.
+
+The **Pause Automation** drawer button does what its name says now — it pauses auto-fire on bank open. Drawer buttons stay visible and clickable while paused, so you can still pull or deposit on demand. Previously, pausing also disabled all the manual access, which was the wrong thing.
+
+The **Deposit Tasks** drawer button (renamed from "Deposit Items" so it's clear it deposits the items routed to your other characters via the to-do list) sits next to a new **Deposit Reagents** button.
+
+Existing setups migrate silently: anything that was auto-firing keeps firing; anything that was off becomes Manual (button still works, just no auto-fire on bank open). One chat line on first load explains where to find the new controls. If you actually wanted an action to disappear entirely, set it to Disabled from Settings or click a character row on the Characters page for the per-character override.
+
 ### New: Manage my items / Manage my gold master switches
 
 The Settings page now opens with two big switches: **Manage my items** and **Manage my gold**. Each one decides whether FlipQueue is allowed to move that resource for a given character. Per-character overrides on the Characters page take precedence — useful for letting FlipQueue handle items globally but turning it off for a specific alt without touching anything else. When a master is off, the corresponding drawer buttons hide, the bank popup skips that section entirely, and the related sub-settings dim to make it clear they're inactive.

@@ -156,6 +156,92 @@ local function CreateSettingsCheckbox(parent, yOffset, title, desc, settingKey)
     return cb, 42 -- return widget + estimated height consumed
 end
 
+-- (#155) Tri-state action mode (auto / manual / disabled). Returns a
+-- compound widget table with the three buttons; clicking each sets the
+-- mode. Reads/writes ns.db.settings[settingKey].
+local function CreateSettingsTriMode(parent, yOffset, title, desc, settingKey)
+    local row = CreateFrame("Frame", nil, parent)
+    row:SetPoint("TOPLEFT", parent, "TOPLEFT", LEFT_MARGIN, yOffset)
+    row:SetPoint("RIGHT", parent, "RIGHT", RIGHT_MARGIN, 0)
+    row:SetHeight(46)
+
+    local titleText = row:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    titleText:SetPoint("TOPLEFT", row, "TOPLEFT", 0, 0)
+    titleText:SetText(title)
+
+    local descText = row:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+    descText:SetPoint("TOPLEFT", titleText, "BOTTOMLEFT", 0, -2)
+    descText:SetPoint("RIGHT", row, "RIGHT", -200, 0)
+    descText:SetJustifyH("LEFT")
+    descText:SetWordWrap(true)
+    descText:SetTextColor(DESC_COLOR[1], DESC_COLOR[2], DESC_COLOR[3])
+    descText:SetText(desc)
+
+    local CHOICES = { "auto", "manual", "disabled" }
+    local LABELS  = { auto = "Auto", manual = "Manual", disabled = "Off" }
+    local buttons = {}
+
+    local function refresh()
+        local current = ns.db and ns.db.settings[settingKey] or "manual"
+        for _, mode in ipairs(CHOICES) do
+            local btn = buttons[mode]
+            if btn then
+                if mode == current then
+                    btn:SetBackdropColor(0.2, 0.4, 0.2, 1)
+                    btn.text:SetTextColor(1, 1, 1)
+                else
+                    btn:SetBackdropColor(0.15, 0.15, 0.15, 0.8)
+                    btn.text:SetTextColor(0.7, 0.7, 0.7)
+                end
+            end
+        end
+    end
+
+    local btnW = 56
+    local x = 0
+    for i = #CHOICES, 1, -1 do
+        local mode = CHOICES[i]
+        local btn = CreateFrame("Button", nil, row, "BackdropTemplate")
+        btn:SetSize(btnW, 22)
+        btn:SetPoint("TOPRIGHT", row, "TOPRIGHT", -x, -2)
+        btn:SetBackdrop({
+            bgFile = "Interface\\Tooltips\\UI-Tooltip-Background",
+            edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
+            edgeSize = 10,
+            insets = { left = 2, right = 2, top = 2, bottom = 2 },
+        })
+        btn:SetBackdropBorderColor(0.4, 0.4, 0.4, 0.8)
+        btn.text = btn:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+        btn.text:SetPoint("CENTER")
+        btn.text:SetText(LABELS[mode])
+        btn:SetScript("OnClick", function()
+            if ns.db then
+                ns.db.settings[settingKey] = mode
+                refresh()
+                if ns.UI and ns.UI.Refresh then ns.UI:Refresh() end
+                if ns.UI and ns.UI.RefreshMini then ns.UI:RefreshMini() end
+            end
+        end)
+        buttons[mode] = btn
+        x = x + btnW + 2
+    end
+
+    refresh()
+
+    row.settingKey = settingKey
+    row.descText = descText
+    row.refresh = refresh
+    row.buttons = buttons
+
+    row:SetScript("OnShow", function(self)
+        local descH = descText:GetStringHeight() or 12
+        self:SetHeight(math.max(46, 16 + descH + 12))
+        refresh()
+    end)
+
+    return row, 50
+end
+
 --------------------------
 -- Button with inline description
 --------------------------
@@ -758,10 +844,13 @@ function UI:CreateSettingsPanel(parent)
     end)
     sy = sy - h - SECTION_SPACING
 
-    settingsWidgets.depositIncludeReagents, h = CreateSettingsCheckbox(sc, sy,
-        "Move reagents to warbank when depositing all",
-        "Include reagents when auto-depositing extra items in your bags to the warbank. This is off by default, as reagents are not tracked for sale.",
-        "depositIncludeReagents")
+    -- (#155) Reagents are now their own action class with a tri-state mode.
+    -- Replaces the old depositIncludeReagents bool which conflated "include
+    -- in extras" with "should auto-fire."
+    settingsWidgets.reagentsModeRow, h = CreateSettingsTriMode(sc, sy,
+        "Reagent deposits",
+        "Auto: deposit non-task reagents (Tradegoods) to warbank on bank open. Manual: button works, no auto-fire. Off: hidden everywhere.",
+        "reagentsMode")
     sy = sy - h - ITEM_SPACING
 
     -- Deposit overflow (nested setting — built by hand instead of via
@@ -959,11 +1048,11 @@ function UI:CreateSettingsPanel(parent)
         sy = sy - 48 - ITEM_SPACING
     end
 
-    -- Withdraw gold for AH fees + purchases
-    settingsWidgets.autoGold, h = CreateSettingsCheckbox(sc, sy,
-        "Withdraw gold from the warbank for fees and purchases",
-        "When you open the bank, take just enough gold from the warbank to pay estimated AH listing fees and any 'buy item' tasks for this character.",
-        "autoWithdrawGold")
+    -- (#155) Withdraw gold tri-state.
+    settingsWidgets.goldWithdrawModeRow, h = CreateSettingsTriMode(sc, sy,
+        "Withdraw gold for AH fees and purchases",
+        "Auto: withdraw enough on bank open to cover estimated fees + buy tasks. Manual: drawer button works, no auto-fire. Off: hidden everywhere.",
+        "goldWithdrawMode")
     sy = sy - h - ITEM_SPACING
 
     -- Max withdrawal gold input
@@ -1007,11 +1096,11 @@ function UI:CreateSettingsPanel(parent)
     end
     sy = sy - 52 - ITEM_SPACING
 
-    -- Deposit extra gold back to warbank
-    settingsWidgets.autoDepositGold, h = CreateSettingsCheckbox(sc, sy,
+    -- (#155) Deposit gold tri-state.
+    settingsWidgets.goldDepositModeRow, h = CreateSettingsTriMode(sc, sy,
         "Deposit extra gold back to the warbank",
-        "When you open the bank, deposit gold beyond what's needed for fees plus your buffer.",
-        "autoDepositGold")
+        "Auto: deposit excess gold on bank open. Manual: drawer button works, no auto-fire. Off: hidden everywhere.",
+        "goldDepositMode")
     sy = sy - h - ITEM_SPACING
 
     -- Default gold per character (gold buffer)
@@ -1803,19 +1892,20 @@ function UI:RefreshSettings()
         if widget and widget.SetEnabled then widget:SetEnabled(enabled) end
     end
 
-    -- Gold-related rows (Withdraw / Max withdraw / Deposit excess / Buffer)
-    if settingsWidgets.autoGold then
-        ApplyRowState(settingsWidgets.autoGold:GetParent(), settingsWidgets.autoGold, manageGoldOn)
+    -- Gold-related rows (Withdraw / Max withdraw / Deposit excess / Buffer).
+    -- (#155) Tri-mode rows are themselves the row frame, not a child widget.
+    if settingsWidgets.goldWithdrawModeRow then
+        settingsWidgets.goldWithdrawModeRow:SetAlpha(manageGoldOn and 1.0 or 0.4)
     end
     ApplyRowState(settingsWidgets.maxWithdrawRow, settingsWidgets.maxWithdrawBox, manageGoldOn)
-    if settingsWidgets.autoDepositGold then
-        ApplyRowState(settingsWidgets.autoDepositGold:GetParent(), settingsWidgets.autoDepositGold, manageGoldOn)
+    if settingsWidgets.goldDepositModeRow then
+        settingsWidgets.goldDepositModeRow:SetAlpha(manageGoldOn and 1.0 or 0.4)
     end
     ApplyRowState(settingsWidgets.goldBufferRow, settingsWidgets.goldBufferBox, manageGoldOn)
 
-    -- Items-related rows (Move reagents / Deposit to bank overflow / per-batch slider)
-    if settingsWidgets.depositIncludeReagents then
-        ApplyRowState(settingsWidgets.depositIncludeReagents:GetParent(), settingsWidgets.depositIncludeReagents, manageItemsOn)
+    -- Items-related rows
+    if settingsWidgets.reagentsModeRow then
+        settingsWidgets.reagentsModeRow:SetAlpha(manageItemsOn and 1.0 or 0.4)
     end
     ApplyRowState(settingsWidgets.depositOverflowRow, settingsWidgets.depositOverflow, manageItemsOn)
     ApplyRowState(settingsWidgets.depositOverflowCrossStackRow, settingsWidgets.depositOverflowCrossStack, manageItemsOn)
@@ -1823,9 +1913,6 @@ function UI:RefreshSettings()
     if settingsWidgets.maxWithdrawBox then
         local val = ns.db.settings.maxWithdrawGold or 0
         settingsWidgets.maxWithdrawBox:SetText(tostring(val))
-    end
-    if settingsWidgets.autoDepositGold then
-        settingsWidgets.autoDepositGold:SetChecked(ns.db.settings.autoDepositGold)
     end
     if settingsWidgets.ahAutoScan then
         settingsWidgets.ahAutoScan:SetChecked(ns.db.settings.ahAutoScanOnOpen)
@@ -1837,8 +1924,17 @@ function UI:RefreshSettings()
         local val = ns.db.settings.goldBuffer or 0
         settingsWidgets.goldBufferBox:SetText(tostring(val))
     end
-    if settingsWidgets.depositIncludeReagents then
-        settingsWidgets.depositIncludeReagents:SetChecked(ns.db.settings.depositIncludeReagents)
+    -- (#155) Tri-mode widgets self-refresh via their internal `refresh`
+    -- closure when the player clicks. Re-apply on settings refresh too
+    -- so external changes (slash command toggle, migration) propagate.
+    if settingsWidgets.goldWithdrawModeRow and settingsWidgets.goldWithdrawModeRow.refresh then
+        settingsWidgets.goldWithdrawModeRow.refresh()
+    end
+    if settingsWidgets.goldDepositModeRow and settingsWidgets.goldDepositModeRow.refresh then
+        settingsWidgets.goldDepositModeRow.refresh()
+    end
+    if settingsWidgets.reagentsModeRow and settingsWidgets.reagentsModeRow.refresh then
+        settingsWidgets.reagentsModeRow.refresh()
     end
     if settingsWidgets.depositOverflow then
         local ov = ns.db.settings.depositOverflow or {}

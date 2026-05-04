@@ -10,13 +10,18 @@ local UI = ns.UI
 
 local RECOMMENDED = {
     autoScan            = true,
-    autoWithdrawGold    = true,
-    autoDepositGold     = false,
+    -- (#155) Action-class tri-state defaults. Recommended posture for a
+    -- new install: gold withdraw and to-do tasks auto-fire on bank open
+    -- (the common-case workflow); gold deposit, extras, and reagents
+    -- start as "manual" so the player opts in to auto-deposit explicitly
+    -- rather than getting surprise behavior.
+    goldWithdrawMode    = "auto",
+    goldDepositMode     = "manual",
+    todoMode            = "auto",
+    extrasMode          = "manual",
+    reagentsMode        = "manual",
     maxWithdrawGold     = 500,
     goldBuffer          = 50,
-    autoPullBank        = true,
-    autoDepositWarbank  = true,
-    autoDepositAll      = false,
     showLoginMessage    = true,
     showMini            = true,
     hideMiniInCombat    = true,
@@ -164,14 +169,18 @@ local function BuildSteps()
                 "have to do it manually.",
         settings = {
             {
-                type = "checkbox", key = "autoWithdrawGold",
+                -- (#155) Tri-state: auto / manual / disabled. Wizard
+                -- exposes a checkbox-equivalent (auto when checked,
+                -- manual when unchecked); "disabled" reachable from
+                -- Settings or Characters page after install.
+                type = "trimode", key = "goldWithdrawMode",
                 label = "Auto-withdraw gold for AH fees",
                 desc  = "When you open the bank, FlipQueue calculates the estimated AH deposit fees " ..
                         "for all your pending tasks and withdraws enough gold from the warband bank " ..
                         "to cover them. Includes costs for buy tasks too.",
             },
             {
-                type = "checkbox", key = "autoDepositGold",
+                type = "trimode", key = "goldDepositMode",
                 label = "Auto-deposit earnings back to warbank",
                 desc  = "After posting, deposits any excess gold back to the warband bank " ..
                         "so it's available for your other characters. Keeps enough for fees " ..
@@ -207,25 +216,26 @@ local function BuildSteps()
                 "roles and bank tab preferences.",
         settings = {
             {
-                type = "checkbox", key = "autoPullBank",
-                label = "Auto-pull queued items from bank",
-                desc  = "When you open the bank, automatically pull items that are on your " ..
-                        "to-do list from your personal bank and warbank into your bags. " ..
-                        "This is how items get from storage to your inventory for posting.",
+                type = "trimode", key = "todoMode",
+                label = "Auto-pull / auto-deposit task items",
+                desc  = "When you open the bank, FlipQueue can automatically move task items " ..
+                        "into your bags (pulls) or out to the warbank for other characters " ..
+                        "(deposits). The two directions are paired so they stay consistent " ..
+                        "with each other. Manual: button works, no auto-fire. Disabled: hidden.",
             },
             {
-                type = "checkbox", key = "autoDepositWarbank",
-                label = "Auto-deposit items to warbank for other characters",
-                desc  = "When items in your bags are assigned to a different character, " ..
-                        "automatically deposit them to the warbank so that character " ..
-                        "can pick them up later.",
+                type = "trimode", key = "extrasMode",
+                label = "Auto-deposit extra items",
+                desc  = "Deposit non-task, non-reagent items that aren't actively in use. " ..
+                        "Keeps your bags clean. Manual: button works, no auto-fire. " ..
+                        "Disabled: section hidden.",
             },
             {
-                type = "checkbox", key = "autoDepositAll",
-                label = "Auto-deposit ALL extra items to bank/warbank",
-                desc  = "Deposit everything you're not actively using into storage. " ..
-                        "Keeps your bags clean but may deposit items you want to keep. " ..
-                        "Off by default — enable per-character on the Characters page if you want it.",
+                type = "trimode", key = "reagentsMode",
+                label = "Auto-deposit reagents",
+                desc  = "Deposit Tradegoods (herbs, ore, leather, cloth, gems, elemental). " ..
+                        "Reagents have their own auto/manual/disabled tri-state since players " ..
+                        "often want different policies for crafting materials vs other items.",
             },
             {
                 type = "info",
@@ -593,6 +603,45 @@ local function BuildCheckbox(parent, yOffset, setting)
 
     cb:SetScript("OnClick", function(self)
         ns.db.settings[setting.key] = self:GetChecked() and true or false
+    end)
+
+    local descH = desc:GetStringHeight() or 12
+    local totalH = 22 + descH + 6
+    row:SetHeight(totalH)
+    return totalH
+end
+
+-- (#155) Tri-state action mode (auto / manual / disabled). Wizard-time
+-- the player only sees auto vs manual via a checkbox; "disabled" is
+-- reachable post-install from Settings or the Characters page. Checked
+-- → "auto", unchecked → "manual".
+local function BuildTriMode(parent, yOffset, setting)
+    local row = CreateFrame("Frame", nil, parent)
+    row:SetPoint("TOPLEFT", parent, "TOPLEFT", 0, yOffset)
+    row:SetPoint("RIGHT", parent, "RIGHT", 0, 0)
+    row:SetHeight(40)
+
+    local cb = CreateFrame("CheckButton", nil, row, "UICheckButtonTemplate")
+    cb:SetSize(22, 22)
+    cb:SetPoint("TOPLEFT", row, "TOPLEFT", 0, 0)
+
+    cb.text:SetText(setting.label)
+    cb.text:SetFontObject("GameFontHighlight")
+
+    local desc = row:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+    desc:SetPoint("TOPLEFT", cb.text, "BOTTOMLEFT", 0, -1)
+    desc:SetPoint("RIGHT", row, "RIGHT", 0, 0)
+    desc:SetJustifyH("LEFT")
+    desc:SetWordWrap(true)
+    desc:SetTextColor(0.55, 0.55, 0.55)
+    desc:SetText(setting.desc)
+
+    local mode = ns.db.settings[setting.key]
+    if mode == nil then mode = RECOMMENDED[setting.key] or "manual" end
+    cb:SetChecked(mode == "auto")
+
+    cb:SetScript("OnClick", function(self)
+        ns.db.settings[setting.key] = self:GetChecked() and "auto" or "manual"
     end)
 
     local descH = desc:GetStringHeight() or 12
@@ -1088,6 +1137,8 @@ local function RenderStep(f, stepIdx)
             local h = 0
             if setting.type == "checkbox" then
                 h = BuildCheckbox(area, y, setting)
+            elseif setting.type == "trimode" then
+                h = BuildTriMode(area, y, setting)
             elseif setting.type == "input" then
                 h = BuildInput(area, y, setting)
             elseif setting.type == "slider" then

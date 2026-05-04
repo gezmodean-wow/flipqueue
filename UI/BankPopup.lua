@@ -718,13 +718,14 @@ function UI:ShowBankPopup(ops, onExecute)
     local pullCount = ops.pulls and #ops.pulls or 0
     local depositCount = ops.deposits and #ops.deposits or 0
     local extraCount = ops.extras and #ops.extras or 0
+    local reagentCount = ops.reagents and #ops.reagents or 0
     local goldCount = 0
     if ops.goldWithdraw and ops.goldWithdraw > 0 then goldCount = goldCount + 1 end
     if ops.goldDeposit and ops.goldDeposit > 0 then goldCount = goldCount + 1 end
 
     -- Pull section
     if pullCount > 0 then
-        idx = AddSectionHeader(f, idx, "Pull from bank (" .. pullCount .. ")", "pulls")
+        idx = AddSectionHeader(f, idx, "Pull tasks (" .. pullCount .. ")", "pulls")
         if not IsCollapsed("pulls") then
             for _, op in ipairs(ops.pulls) do
                 idx = AddItemRow(f, idx, op.icon, op.name, "x" .. (op.quantity or 1))
@@ -733,9 +734,10 @@ function UI:ShowBankPopup(ops, onExecute)
         totalOps = totalOps + pullCount
     end
 
-    -- Deposit section
+    -- Deposit-tasks section (#155: renamed from "Deposit to warbank" — these
+    -- are to-do task items being moved for cross-character routing).
     if depositCount > 0 then
-        idx = AddSectionHeader(f, idx, "Deposit to warbank (" .. depositCount .. ")", "deposits")
+        idx = AddSectionHeader(f, idx, "Deposit tasks (" .. depositCount .. ")", "deposits")
         if not IsCollapsed("deposits") then
             for _, op in ipairs(ops.deposits) do
                 idx = AddItemRow(f, idx, op.icon, op.name, "x" .. (op.quantity or 1))
@@ -775,6 +777,17 @@ function UI:ShowBankPopup(ops, onExecute)
         totalOps = totalOps + extraCount
     end
 
+    -- Deposit reagents section (#155: own action class, separate from extras)
+    if reagentCount > 0 then
+        idx = AddSectionHeader(f, idx, "Deposit reagents (" .. reagentCount .. ")", "reagents")
+        if not IsCollapsed("reagents") then
+            for _, op in ipairs(ops.reagents) do
+                idx = AddItemRow(f, idx, op.icon, op.name)
+            end
+        end
+        totalOps = totalOps + reagentCount
+    end
+
     if totalOps == 0 and not isExecuting then
         idx = AddSectionHeader(f, idx, "No pending operations")
     end
@@ -797,9 +810,10 @@ function UI:ShowBankPopup(ops, onExecute)
         f:Show()
         if onExecute then onExecute() end
     elseif totalOps > 0 then
-        -- Manual mode: show button
+        -- Manual mode: show button. (#155: label as "Execute All" so it's
+        -- clear it runs every queued operation across sections.)
         f.execBtn:Show()
-        f.execBtn.text:SetText("Execute " .. totalOps .. " Operation(s)")
+        f.execBtn.text:SetText("Execute All (" .. totalOps .. ")")
         f.execBtn:SetScript("OnClick", function()
             f.execBtn:Hide()
             if not execState then UI:BeginBankExecution(totalOps) end
