@@ -6,17 +6,17 @@
 ## SavedVariables: FlipQueueDB, CogworksSharedDB
 ## Dependencies: Syndicator
 ## OptionalDeps: Auctionator, TradeSkillMaster
-## IconTexture: Interface\AddOns\flipqueue\Art\flipqueue-icon
+## IconTexture: Interface/AddOns/flipqueue/Art/flipqueue-icon
 ## X-Category: Auction & Economy
 ## X-Website: https://github.com/gezmodean-wow/flipqueue
 ## X-Curse-Project-ID: 1483814
 ## X-Wago-ID: b6XeZ0Kp
 
-Libs\LibStub\LibStub.lua
-Libs\CallbackHandler-1.0\CallbackHandler-1.0.lua
-Libs\Cogworks-1.0\Cogworks-1.0.xml
-Libs\LibDataBroker-1.1\LibDataBroker-1.1.lua
-Libs\LibDBIcon-1.0\LibDBIcon-1.0.lua
+Libs/LibStub/LibStub.lua
+Libs/CallbackHandler-1.0/CallbackHandler-1.0.lua
+Libs/Cogworks-1.0/Cogworks-1.0.xml
+Libs/LibDataBroker-1.1/LibDataBroker-1.1.lua
+Libs/LibDBIcon-1.0/LibDBIcon-1.0.lua
 
 Core.lua
 RealmData.lua
@@ -44,35 +44,35 @@ Sync.lua
 ItemResearch.lua
 SalesIndex.lua
 DealFinder.lua
-UI\ScrollTable.lua
-UI\Shared.lua
-UI\ExportPopup.lua
-UI\UntrackedSection.lua
-UI\BankPopup.lua
-UI\ToolDrawer.lua
-UI\ContextDrawer.lua
-UI\MiniView.lua
-UI\SettingsFrame.lua
-UI\TSMFrame.lua
-UI\TSMGroupTree.lua
-UI\AuctionatorFrame.lua
-UI\MinimapButton.lua
-UI\MainFrame.lua
-UI\TodoPage.lua
-UI\InventoryPage.lua
-UI\CharactersPage.lua
-UI\GuildsPage.lua
-UI\LogPage.lua
-UI\ExportPage.lua
-UI\TransformPage.lua
-UI\AllocWidget.lua
-UI\DealFinderPage.lua
-UI\DealFinderDetail.lua
-UI\ResearchPage.lua
-UI\GeneratorPage.lua
-UI\DebugPage.lua
-UI\DebugConsole.lua
-UI\TutorialPage.lua
-UI\AboutPage.lua
-UI\SetupWizard.lua
-UI\SlashCommands.lua
+UI/ScrollTable.lua
+UI/Shared.lua
+UI/ExportPopup.lua
+UI/UntrackedSection.lua
+UI/BankPopup.lua
+UI/ToolDrawer.lua
+UI/ContextDrawer.lua
+UI/MiniView.lua
+UI/SettingsFrame.lua
+UI/TSMFrame.lua
+UI/TSMGroupTree.lua
+UI/AuctionatorFrame.lua
+UI/MinimapButton.lua
+UI/MainFrame.lua
+UI/TodoPage.lua
+UI/InventoryPage.lua
+UI/CharactersPage.lua
+UI/GuildsPage.lua
+UI/LogPage.lua
+UI/ExportPage.lua
+UI/TransformPage.lua
+UI/AllocWidget.lua
+UI/DealFinderPage.lua
+UI/DealFinderDetail.lua
+UI/ResearchPage.lua
+UI/GeneratorPage.lua
+UI/DebugPage.lua
+UI/DebugConsole.lua
+UI/TutorialPage.lua
+UI/AboutPage.lua
+UI/SetupWizard.lua
+UI/SlashCommands.lua

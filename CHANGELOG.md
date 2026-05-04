@@ -1,5 +1,28 @@
 # Changelog
 
+## v0.12.0-alpha13
+
+Republish of alpha12. The alpha12 tag (`ad5553f`) was correct in code but never reached CurseForge / Wago — the cogworks reusable verify-package workflow that gates our `release` job choked on Windows-style backslashes in `flipqueue.toc` path lines (`Libs\LibStub\LibStub.lua` etc.) when running on the Linux runner. WoW accepts both separators in TOC paths on every platform, so this never affected in-game testing — it's purely a CI script gap. Alpha13 ships the same content as alpha12 plus a `flipqueue.toc` forward-slash conversion that side-steps the gap defensively even now that cogworks-side `COG-29` (`d305d02 fix(COG-29): normalize backslash separators in TOC/XML path checks`) has landed on cogworks main and the `@main`-pinned verify workflow auto-picks it up.
+
+### `flipqueue.toc` separator hygiene
+
+All `Libs\X\X.lua`, `UI\X.lua`, and `IconTexture` `Interface\AddOns\…` references converted to forward slashes. Pure mechanical change — verified via `diff <(git show HEAD:flipqueue.toc | tr '\\' '/') flipqueue.toc`, no content or load-order drift. WoW's TOC parser handles both, so no behavior change in-game.
+
+### Content carried forward from alpha12
+
+(See alpha12 section below for the full breakdown — that tag's content is what alpha13 actually ships.)
+
+- **#150 / COG-26** — Cogworks v0.13.1 bump (preventive game-menu-taint hotfix; closes the niduin pet-battle vector that alpha11's BankQueue gates couldn't reach).
+- **#131** — Import-pipeline chunking finish (FP comma CSV / FP semicolon / tab-delimited chunked variants, plus `FPWebsiteScan` stage 1 chunking; closes zpectre's 4509-deal CSV freeze).
+- Audit-only: `TodoList:GenerateTodoList` synchronous freeze on multi-thousand-deal auto-generate (tracked at #151 for v0.13.x).
+
+### Files
+
+- `flipqueue.toc` — `\` → `/` everywhere.
+- `CHANGELOG.md` — alpha13 entry.
+
+No other code changes from alpha12. The alpha12 tag remains on origin as a historical reference but has no published artifact.
+
 ## v0.12.0-alpha12
 
 Twelfth alpha of v0.12. Two encapsulated changes share this release window: the **#150 / COG-26 Cogworks bump** (preventive game-menu-taint hotfix that also covers the niduin pet-battle vector that alpha11's own BankQueue gates couldn't reach), and the **#131 import-pipeline chunking finish** that closes zpectre's 4509-deal CSV freeze.
