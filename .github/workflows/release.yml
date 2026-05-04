@@ -9,7 +9,16 @@ permissions:
   contents: write
 
 jobs:
+  verify:
+    # Reusable build-only verify defined in the cogworks repo. Asserts the
+    # produced zip has its externals populated (catches the alpha6 incident
+    # in tally where Libs/Cogworks-1.0/Cogworks-1.0.xml shipped missing) plus
+    # TOC/XML reference integrity and zip non-triviality. See cogworks COG-27.
+    uses: gezmodean-wow/cogworks/.github/workflows/verify-package.yml@main
+    secrets: inherit
+
   release:
+    needs: verify
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
