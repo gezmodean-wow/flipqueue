@@ -591,9 +591,29 @@ end
 --   k/m suffix: dot or comma is decimal ("1.5k" or "1,5k" → 1500)
 --   g suffix:   dot and comma are thousands separators
 --               ("1,500g" or "1.500g" → 1500); FP shows whole-gold values
+--
+-- Defensively strips invisible whitespace (ASCII space/tab, UTF-8 NBSP,
+-- zero-width chars, BOM) before matching. Copy-paste from FlippingPal's web
+-- pages occasionally introduces non-breaking spaces between the digits and
+-- the unit suffix on EU locales — without this strip, the regex below would
+-- silently fail on those inputs and the buy task would skip with "no price"
+-- (FQ-135 Zong investigation: alpha4's locale fix worked for "2.000g"
+-- literal but not for "2.000\u{00A0}g" with a non-breaking space slipping in
+-- from the source page).
 function ns:ParseGoldValue(str)
     if not str or str == "" then return 0 end
-    local clean = str:gsub("|c%x%x%x%x%x%x%x%x", ""):gsub("|r", "")
+    local clean = str
+        :gsub("|c%x%x%x%x%x%x%x%x", "")  -- WoW color codes
+        :gsub("|r", "")                  -- WoW color reset
+        -- ASCII whitespace + UTF-8 NBSP (0xC2 0xA0) + narrow NBSP (0xE2 0x80 0xAF)
+        -- + zero-width space / joiner / non-joiner / LRM / RLM (0xE2 0x80 0x8B-0x8F)
+        -- + BOM (0xEF 0xBB 0xBF). Whitespace-class %s covers ASCII; literal
+        -- byte sequences cover the multi-byte UTF-8 invisibles.
+        :gsub("%s", "")
+        :gsub("\194\160", "")            -- NBSP U+00A0
+        :gsub("\226\128\175", "")        -- NARROW NO-BREAK SPACE U+202F
+        :gsub("\226\128[\139\140\141\142\143]", "")  -- ZWSP / ZWNJ / ZWJ / LRM / RLM
+        :gsub("\239\187\191", "")        -- BOM U+FEFF
     local m = clean:match("^([%d,.]+)m")
     if m then return (tonumber((m:gsub(",", "."))) or 0) * 1000000 end
     local k = clean:match("^([%d,.]+)k")

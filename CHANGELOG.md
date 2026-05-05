@@ -1,5 +1,48 @@
 # Changelog
 
+## v0.12.0-alpha18
+
+Two surgical fixes from alpha17 review: a logic bug I just shipped in the new MiniView instance-hide path, and a long-tail hardening on `ParseGoldValue` to address Zong's persistent FQ-135 buy-skip after alpha4's locale fix didn't fully close his case.
+
+### MiniView instance-hide: don't restore mini that user hid manually
+
+Alpha17's new `hideMiniInInstance` setting tracks `hiddenForInstance` so `PLAYER_ENTERING_WORLD` knows when to restore on instance exit. The `else` branch on `:1356-1360` set `hiddenForInstance = true` whenever the mini was already hidden, regardless of *why*. If a player closed the mini manually (close button) before entering an instance, my restore branch then force-shows it on instance exit because the flag claims instance was responsible.
+
+Concrete trigger: user hides mini → enters raid → leaves raid → mini reappears unbidden. Only fires when `hideMiniInInstance = true` (default off), so the blast radius is narrow — but anyone who turns the new toggle on hits it the first time they manually close the mini and zone.
+
+Fix: in the else branch, only set `hiddenForInstance = true` when `hiddenForCombat == true` (combat hid it; instance just piggybacks so combat-end inside the instance won't restore prematurely). When the mini is hidden for some other reason — user click, `showMini = false`, login-time decision — leave `hiddenForInstance` untouched. We shouldn't restore something we didn't hide.
+
+`UI/MiniView.lua:1351-1372`.
+
+### `ParseGoldValue`: strip invisible whitespace + UTF-8 zero-width characters (FQ-135)
+
+FQ-121 (alpha4) added locale-aware thousands-separator parsing so `"2.000g"` (German EU dot-thousands) resolves to 2000g. Olli's reproducer confirmed it landed correctly. Zong's reproducer kept failing on alpha4 / 5 / 6+ even after `/reload`, which narrowed the suspect set to: hidden bytes in the source string from FlippingPal's web copy-paste path.
+
+Hardened the parser at `DB.lua:594` to strip — *before* matching:
+
+- ASCII whitespace (`%s`) — leading / trailing / internal spaces and tabs.
+- UTF-8 NBSP (`\194\160`, U+00A0) — the most likely culprit; FP's HTML output occasionally renders ` ` between the digits and the `g` suffix on EU locales, and copy-paste preserves the byte.
+- Narrow NBSP (`\226\128\175`, U+202F) — used by some browsers in localized number formatting.
+- Zero-width space / joiner / non-joiner / LRM / RLM (`\226\128[\139\140\141\142\143]`) — invisible bidi / joining marks that sometimes leak from copy-paste of right-to-left or mixed-direction text.
+- BOM (`\239\187\191`, U+FEFF) — UTF-8 byte-order-mark prefix some clipboards add.
+
+Lua's `%s` whitespace class doesn't match the multi-byte UTF-8 invisibles, so the literal byte-sequence gsubs are required. After stripping, the existing matchers (`^([%d,.]+)m`, `^([%d,.]+)k`, `([%d,.]+)g`) work unchanged.
+
+This is a defensive fix; we still don't have Zong's `/fq debug parsegold` output to confirm which exact byte was breaking him, but covering the realistic candidates closes the case without blocking on him for a second diagnostic round-trip.
+
+`DB.lua:589-619`.
+
+### Files
+
+```
+M  CHANGELOG.md
+M  DB.lua
+M  RELEASES.md
+M  UI/MiniView.lua
+```
+
+No schema change. No new settings. Pure fix.
+
 ## v0.12.0-alpha17
 
 Five-part hardening pass on FQ-147's bag-taint mitigation, prompted by TLY-47 (a Tally bug report whose symptoms — "can't click bags in raids", "after some spells used" — match the same vector that bit niduin in #144). Tally only appears in the symptom because the player has FQ + Tally + Cogworks loaded; once the bag UI is tainted, every addon's bag interactions break and the player blames whichever UI is most visible. Cogworks library is clean (zero `C_Container.*` references); FQ's `BankQueue` is the origin.

@@ -1353,11 +1353,16 @@ combatFrame:SetScript("OnEvent", function(_, event)
             if mini:IsShown() then
                 hiddenForInstance = true
                 mini:Hide()
-            else
-                -- Already hidden by combat or user; remember instance is
-                -- responsible too so we don't restore prematurely.
+            elseif hiddenForCombat then
+                -- Combat already hid it; instance gate piggybacks so combat-end
+                -- inside the instance won't restore the mini before instance
+                -- exit clears the instance reason. Track responsibility.
                 hiddenForInstance = true
             end
+            -- If mini was hidden for some other reason (user clicked the close
+            -- button, showMini=false, login-time decision), don't track
+            -- instance ownership — we shouldn't restore something we didn't
+            -- hide. Leave hiddenForInstance untouched.
         elseif hiddenForInstance then
             hiddenForInstance = false
             -- Don't restore if combat is still keeping it hidden.

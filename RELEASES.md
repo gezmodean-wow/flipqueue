@@ -48,6 +48,18 @@ A standalone **About** page in the main FlipQueue window (between Settings and T
 
 `/fq version` is a new chat command that prints `FlipQueue v0.12.0-alpha11 (Cogworks-1.0 MINOR …)` in one line, useful for confirming your installed version when reporting bugs. Every `/fq debug *` output now starts with that same version line, and the in-game debug console window's title bar shows it too — so screenshots / pastes self-identify which build they came from.
 
+### German EU buy tasks with prices like `2.000g`: parser handles hidden characters
+
+A long-tail follow-up to the earlier fix that taught FlipQueue to read German-locale prices (`2.000g` → 2000g, dot as thousands separator). The fix worked for most players, but at least one tester kept seeing buy tasks skipped with `(no price)` even after updating. Cause was a non-breaking space character that some web pages — including FlippingPal's — invisibly insert between the digits and the `g` suffix on EU locales. Copy-paste preserves the byte, but it doesn't render, so it looked like a bare `2.000g` to anyone reading the log.
+
+The parser now strips invisible whitespace and zero-width characters before matching the number, covering the realistic candidates (non-breaking space, narrow non-breaking space, zero-width space / joiner / LRM / RLM, byte-order mark). German EU buy tasks should resolve cleanly across all tested input sources.
+
+### Mini-view restore after instance: doesn't override your manual hide
+
+Alpha17's new "Hide mini view in raids and dungeons" setting had a small logic bug: if you'd manually closed the mini (close button) before zoning into an instance, the mini would reappear after you zoned out — even though you hadn't asked for it back. The hide-tracker was claiming responsibility for hides it hadn't actually performed. Now it only restores the mini if it was actually the one that hid it.
+
+Only triggered if you'd turned the new instance-hide toggle on (default is off), so most players didn't see it.
+
 ### Bag clicks broken in raids / after pet battles: hardened
 
 If you've ever seen the bag UI go dead after a raid pull or a pet battle — items refusing to right-click, pet bandages or knowledge tomes silently failing, the game menu or logout broken until `/reload` — multiple paths were contributing, and this build closes the rest of them.
