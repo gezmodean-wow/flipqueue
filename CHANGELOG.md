@@ -1,8 +1,25 @@
 # Changelog
 
-## v0.12.0-alpha18
+## v0.12.0-beta1
 
-Two surgical fixes from alpha17 review: a logic bug I just shipped in the new MiniView instance-hide path, and a long-tail hardening on `ParseGoldValue` to address Zong's persistent FQ-135 buy-skip after alpha4's locale fix didn't fully close his case.
+**Release candidate for v0.12.0.** Bundles two surgical fixes from alpha17 review (MiniView restore-bug + FQ-135 parser hardening) and stamps the cumulative line as ready for stable pending tester verification.
+
+If beta1 soaks cleanly across the test crew — TLY-47 retest from lucasdalsgaard, niduin retest on #144, Zong/toeknee retest on #110, no new bag-taint reports — the same commit tags as `v0.12.0` stable and `docs/storefront/description.md` gets refreshed and hand-pasted to the CurseForge + Wago dashboards. Per `feedback_release_artifacts` storefront updates only happen on public releases.
+
+Cumulative shape of v0.12.0 (delta from v0.11.x):
+
+- **Architecture rebuild** (alpha14, #155): Auto / Manual / Disabled tri-state per action class (Tasks / Extras / Reagents for items; Withdraw / Deposit for gold). Schema #11. Closes the bool/trigger conflation that produced silent skips (#110), the "Pause hides drawer buttons" bug, and the executor/planner divergence that #148 only partially fixed.
+- **Bag-taint mitigation arc** (alpha11 → alpha13 → alpha17): combat / pet-battle gates on `BankQueue:ProcessSync` (alpha11, FQ-147 / #144 niduin), Cogworks v0.13.1 ESC-key taint fix (alpha13, COG-26 / #150), call-site + batched-Process gates + instance-aware auto-pause + ADDON_ACTION_BLOCKED diagnostic listener (alpha17, FQ-147 follow-up / TLY-47).
+- **Cogworks library** to v0.13.2 (alpha16, COG-30 / #156 — knowledge-tome right-click taint).
+- **TSM postCap clamp** (alpha16, FQ-117 reopen — gold-pull inflation when TSM `postCap` was being read as per-task quantity).
+- **Import-pipeline chunking** for FP CSV / FP semicolon / tab-delimited routes (alpha13, #131 — zpectre 4509-deal freeze).
+- **AH-with-TSM coexistence**: opt-in auto-scan, FQ-initiated post-flag separation (alpha10, FQ-138).
+- **DealFinder ilvl-variant pricing** + tooltip / log variant preservation (multiple alphas).
+- **About page** + version surfacing (alpha13, #146).
+- **MiniView instance-hide setting + restore-bug fix** (alpha17 + beta1).
+- **`ParseGoldValue` invisible-character hardening** (beta1, FQ-135).
+
+### MiniView instance-hide: don't restore mini that user hid manually
 
 ### MiniView instance-hide: don't restore mini that user hid manually
 

@@ -6,9 +6,9 @@ The engineering-detail companion lives in `CHANGELOG.md` (commit-readerese — f
 
 ---
 
-## v0.12.0 (in development)
+## v0.12.0 (release candidate)
 
-The v0.12.0 line is currently in alpha. The notes below describe what will land in the public release once the alpha series stabilizes.
+This is the release candidate for v0.12.0. The notes below describe what's landing in the public release. Final tester verification is in flight on a small group; if no critical issues surface, the same build ships as v0.12.0 stable.
 
 ### New: Auto / Manual / Disabled for every managed action
 
