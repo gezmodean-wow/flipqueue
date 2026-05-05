@@ -1297,17 +1297,43 @@ function UI:HideItemDetail()
 end
 
 --------------------------
--- Hide in combat (optional)
+-- Hide in combat / instances (optional)
 --------------------------
+-- Two independent settings drive auto-hide:
+--   hideMiniInCombat   — hide on PLAYER_REGEN_DISABLED, restore on _ENABLED
+--   hideMiniInInstance — hide on PLAYER_ENTERING_WORLD when in raid/dungeon/
+--                        arena/battleground/scenario; restore on exit
+-- Both can be on at once. We track which condition originally triggered the
+-- hide so that, e.g., entering combat inside a raid (with both settings on)
+-- doesn't double-hide and then prematurely restore when combat ends but the
+-- raid is still active.
+
+local INSTANCE_HIDE_TYPES = {
+    raid     = true,
+    party    = true,
+    arena    = true,
+    pvp      = true,
+    scenario = true,
+}
 
 local combatFrame = CreateFrame("Frame")
 combatFrame:RegisterEvent("PLAYER_REGEN_DISABLED") -- entering combat
 combatFrame:RegisterEvent("PLAYER_REGEN_ENABLED")  -- leaving combat
+combatFrame:RegisterEvent("PLAYER_ENTERING_WORLD") -- instance transitions
 local hiddenForCombat = false
+local hiddenForInstance = false
+
+local function ShouldHideForInstance()
+    if not ns.db or not ns.db.settings.hideMiniInInstance then return false end
+    local inInstance, instanceType = IsInInstance()
+    return inInstance and INSTANCE_HIDE_TYPES[instanceType] or false
+end
 
 combatFrame:SetScript("OnEvent", function(_, event)
-    if not ns.db or not ns.db.settings.hideMiniInCombat then return end
+    if not ns.db then return end
+    local s = ns.db.settings
     if event == "PLAYER_REGEN_DISABLED" then
+        if not s.hideMiniInCombat then return end
         if mini:IsShown() then
             hiddenForCombat = true
             mini:Hide()
@@ -1315,8 +1341,30 @@ combatFrame:SetScript("OnEvent", function(_, event)
     elseif event == "PLAYER_REGEN_ENABLED" then
         if hiddenForCombat then
             hiddenForCombat = false
-            mini:Show()
-            UI:RefreshMini()
+            -- Don't restore if the instance gate still wants the mini hidden
+            -- (combat ended inside a raid, raid still active).
+            if not (hiddenForInstance or ShouldHideForInstance()) then
+                mini:Show()
+                UI:RefreshMini()
+            end
+        end
+    elseif event == "PLAYER_ENTERING_WORLD" then
+        if ShouldHideForInstance() then
+            if mini:IsShown() then
+                hiddenForInstance = true
+                mini:Hide()
+            else
+                -- Already hidden by combat or user; remember instance is
+                -- responsible too so we don't restore prematurely.
+                hiddenForInstance = true
+            end
+        elseif hiddenForInstance then
+            hiddenForInstance = false
+            -- Don't restore if combat is still keeping it hidden.
+            if not hiddenForCombat then
+                mini:Show()
+                UI:RefreshMini()
+            end
         end
     end
 end)

@@ -981,6 +981,15 @@ function UI:CreateSettingsPanel(parent)
     end
     sy = sy - 68 - SECTION_SPACING
 
+    settingsWidgets.pauseAutoOpsInInstance, h = CreateSettingsCheckbox(sc, sy,
+        "Pause bank ops in raids and dungeons",
+        "Defer auto-deposit and auto-pull while you're inside a raid, dungeon, " ..
+        "battleground, arena, or scenario. Resumes automatically when you leave. " ..
+        "Recommended on — protects against rare taint that can break bag clicks " ..
+        "if a queue runs while you're under combat lockdown.",
+        "pauseAutoOpsInInstance")
+    sy = sy - h - ITEM_SPACING
+
     secItems.contentHeight = math.abs(sy)
 
     ------------------------------------------------
@@ -1220,6 +1229,14 @@ function UI:CreateSettingsPanel(parent)
         "Hide mini view in combat",
         "Automatically hide the mini overlay when you enter combat and restore it when combat ends.",
         "hideMiniInCombat")
+    sy = sy - h - ITEM_SPACING
+
+    settingsWidgets.hideMiniInstance, h = CreateSettingsCheckbox(sc, sy,
+        "Hide mini view in raids and dungeons",
+        "Hide the mini overlay while you're inside a raid, dungeon, battleground, " ..
+        "arena, or scenario. Restores when you leave. Independent of the combat " ..
+        "toggle above — turn either or both on.",
+        "hideMiniInInstance")
     sy = sy - h - ITEM_SPACING
 
     settingsWidgets.showMinimap, h = CreateSettingsCheckbox(sc, sy,
@@ -1962,6 +1979,12 @@ function UI:RefreshSettings()
     end
     if settingsWidgets.hideMiniCombat then
         settingsWidgets.hideMiniCombat:SetChecked(ns.db.settings.hideMiniInCombat)
+    end
+    if settingsWidgets.hideMiniInstance then
+        settingsWidgets.hideMiniInstance:SetChecked(ns.db.settings.hideMiniInInstance)
+    end
+    if settingsWidgets.pauseAutoOpsInInstance then
+        settingsWidgets.pauseAutoOpsInInstance:SetChecked(ns.db.settings.pauseAutoOpsInInstance)
     end
     if settingsWidgets.showMinimap then
         settingsWidgets.showMinimap:SetChecked(UI:IsMinimapButtonShown())

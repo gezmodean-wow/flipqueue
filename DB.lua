@@ -77,6 +77,16 @@ function ns:InitDB()
     db.settings.expiryAlertMinutes = db.settings.expiryAlertMinutes or 15
     if db.settings.showMini == nil then db.settings.showMini = true end
     if db.settings.hideMiniInCombat == nil then db.settings.hideMiniInCombat = true end
+    -- #147 follow-up: extra defense layer that pauses BankQueue auto-ops while
+    -- the player is in any instance (raid / dungeon / arena / battleground /
+    -- scenario). Banks aren't reachable inside one anyway, but a leftover
+    -- queued op or a sibling cog's API call could still fire UseContainerItem
+    -- from an unsafe context. Default on.
+    if db.settings.pauseAutoOpsInInstance == nil then db.settings.pauseAutoOpsInInstance = true end
+    -- Hide mini view while inside an instance, independent of combat. Some
+    -- players want a clean raid frame; this lets them hide FlipQueue's mini
+    -- without losing it during open-world combat.
+    if db.settings.hideMiniInInstance == nil then db.settings.hideMiniInInstance = false end
     db.settings.pullBatchSize = db.settings.pullBatchSize or 5
     -- TSM integration defaults
     if db.settings.tsmEnabled == nil then db.settings.tsmEnabled = false end

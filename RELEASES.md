@@ -48,15 +48,25 @@ A standalone **About** page in the main FlipQueue window (between Settings and T
 
 `/fq version` is a new chat command that prints `FlipQueue v0.12.0-alpha11 (Cogworks-1.0 MINOR …)` in one line, useful for confirming your installed version when reporting bugs. Every `/fq debug *` output now starts with that same version line, and the in-game debug console window's title bar shows it too — so screenshots / pastes self-identify which build they came from.
 
-### Pet bandage / bag-click error after pet battle: fixed
+### Bag clicks broken in raids / after pet battles: hardened
 
-If you saw a red `ADDON_ACTION_FORBIDDEN` error after a pet battle — pet bandages refusing to work, the bag UI partly locked, the game menu / logout silently broken until `/reload` — there were two separate causes contributing, and both are now closed.
+If you've ever seen the bag UI go dead after a raid pull or a pet battle — items refusing to right-click, pet bandages or knowledge tomes silently failing, the game menu or logout broken until `/reload` — multiple paths were contributing, and this build closes the rest of them.
 
-The first surfaced when FlipQueue was mid-bank-operation as a pet battle started: protected container calls running through timer continuations left a taint trail that pet-battle UI lockdown surfaced on the next click. FlipQueue's bank queue now pauses cleanly when combat or a pet battle starts and resumes when both clear, with a chat banner so you know what's happening. Cursor state is defensively cleared between every move to keep taint from chaining forward.
+Each previous alpha closed one path:
 
-The second was upstream — Cogworks (the shared library FlipQueue, Tempo, and the rest of the suite use) had a key handler that intercepted ESCAPE in a way that interfered with Blizzard's secure game-menu path. This one fired even when FlipQueue itself was idle, because the library is loaded with the addon. Players who hit the issue while FlipQueue was doing nothing in particular (the niduin case in our tracker) were on this path. Fixed by bumping the embedded Cogworks library to v0.13.1.
+- Earlier in the v0.12 line: FlipQueue's bank queue learned to pause when combat or a pet battle starts, and resume when it clears. Cursor state is defensively cleared between every move so nothing carries forward.
+- A Cogworks library bump (the shared core FlipQueue ships with) closed an ESCAPE-key handler that interfered with Blizzard's secure game-menu path.
+- A second Cogworks bump closed a related issue specific to right-click on items that prompt a confirmation popup (knowledge tomes were the most visible victim).
 
-If you've been seeing the error in any flavor, this build should close it.
+This alpha adds another layer:
+
+- The bank queue's batched flow — the path used by auto-deposit of extras, reagents, and to-do tasks — now pauses on combat the same way the simpler paths already did. A queue that started cleanly and then ran into a raid pull no longer leaks the issue through to your bag UI.
+- The protected container calls themselves now refuse to fire if combat starts at the wrong moment, regardless of which code path led to them. Belt-and-suspenders.
+- A new **Pause bank ops in raids and dungeons** setting (default on) holds auto-deposit and auto-pull while you're inside a raid, dungeon, battleground, arena, or scenario. Resumes automatically when you leave. Banks aren't reachable inside an instance anyway, so this is purely defensive.
+- A new **Hide mini view in raids and dungeons** setting (default off) lets you keep the mini overlay during open-world play but hide it for cleaner raid frames. Works alongside the existing combat-hide toggle — turn either or both on.
+- A new internal listener catches any future taint event blamed on FlipQueue and writes a short snapshot for diagnosis. If you ever see this issue again on a future build, your bug report lands with hard evidence already attached.
+
+If you've been seeing this in any flavor, this build should close it.
 
 ### Auction house scanning and posting works smoothly with TSM
 

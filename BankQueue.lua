@@ -23,6 +23,17 @@ local INTER_MOVE_DELAY = 0.1  -- minimum spacing between successive container op
                               -- spacing Baganator uses.
 
 --------------------------
+-- Forward declarations
+--------------------------
+
+-- Defined in the "Lockdown gate" section below. Forward-declared here so the
+-- move primitives (CursorMove, ShiftMove) can call it without depending on
+-- file ordering — they're the protected-call sites and must bail before they
+-- ever invoke C_Container.UseContainerItem / PickupContainerItem from a
+-- non-secure context.
+local IsLockdownActive
+
+--------------------------
 -- Helpers
 --------------------------
 
@@ -462,6 +473,10 @@ end
 -- instead of executing a swap that would silently displace the occupant.
 -- Stacking onto a partial stack of the same item is still allowed.
 local function CursorMove(srcBag, srcSlot, dstBag, dstSlot, expectedItemID)
+    -- #147 belt-and-suspenders: PickupContainerItem is protected; calling it
+    -- from non-secure context (timer continuation) taints ContainerFrame.
+    -- Even if upstream gates miss a path, this bails before touching the API.
+    if IsLockdownActive and IsLockdownActive() then return false end
     pcall(ClearCursor)
     pcall(C_Container.PickupContainerItem, srcBag, srcSlot)
     if CursorHasItem() then
@@ -495,6 +510,8 @@ end
 -- UseContainerItem falls back to "use the item" semantics (eats food, drinks
 -- a potion, etc.). Caller must verify BankFrame:IsShown() first.
 local function ShiftMove(srcBag, srcSlot)
+    -- #147 belt-and-suspenders: same rationale as CursorMove.
+    if IsLockdownActive and IsLockdownActive() then return false end
     pcall(ClearCursor)
     local ok = pcall(C_Container.UseContainerItem, srcBag, srcSlot)
     return ok
@@ -522,10 +539,31 @@ end
 -- from the FQ-147 design — keeps the auto-bank-open chain intact, unlike
 -- a SecureActionButtonTemplate refactor which would require a hardware-event
 -- click per move.
-local function IsLockdownActive()
+-- Instance types that count as locked-down for auto-deposit / auto-pull when
+-- pauseAutoOpsInInstance is enabled. Any instance is a "we shouldn't be doing
+-- container ops" zone — banks aren't reachable inside one anyway, but a
+-- pre-queued op or a sibling cog's API call could still try, and that's the
+-- defense-in-depth this set provides.
+local LOCKED_INSTANCE_TYPES = {
+    raid     = true,
+    party    = true,
+    arena    = true,
+    pvp      = true,
+    scenario = true,
+}
+
+-- Assigned to the forward-declared local at top-of-file. CursorMove / ShiftMove
+-- reference this via upvalue and bail before any protected-call attempt.
+IsLockdownActive = function()
     if InCombatLockdown() then return true, "combat" end
     if C_PetBattles and C_PetBattles.IsInBattle and C_PetBattles.IsInBattle() then
         return true, "pet battle"
+    end
+    if ns.db and ns.db.settings and ns.db.settings.pauseAutoOpsInInstance then
+        local inInstance, instanceType = IsInInstance()
+        if inInstance and LOCKED_INSTANCE_TYPES[instanceType] then
+            return true, "in " .. instanceType
+        end
     end
     return false
 end
@@ -551,6 +589,11 @@ local function GetLockdownFrame()
     _lockdownFrame = CreateFrame("Frame")
     _lockdownFrame:RegisterEvent("PLAYER_REGEN_ENABLED")
     _lockdownFrame:RegisterEvent("PET_BATTLE_CLOSE")
+    -- PLAYER_ENTERING_WORLD fires on instance transitions (entering and
+    -- leaving), so DrainDeferred re-checks IsLockdownActive when the player
+    -- exits a raid / dungeon / arena / battleground and resumes any deferred
+    -- bank ops automatically.
+    _lockdownFrame:RegisterEvent("PLAYER_ENTERING_WORLD")
     _lockdownFrame:SetScript("OnEvent", DrainDeferred)
     return _lockdownFrame
 end
@@ -565,6 +608,45 @@ local function DeferUntilLockdownClear(fn, why)
 end
 
 BankQueue._IsLockdownActive = IsLockdownActive  -- exposed for tests/diagnostics
+
+--------------------------
+-- Taint diagnostic listener (#147 follow-up)
+--------------------------
+-- ADDON_ACTION_BLOCKED / ADDON_ACTION_FORBIDDEN fire when a protected call
+-- is attempted from non-secure context. When the offending addon is us, dump
+-- a one-line snapshot of relevant state (queue running? what was the player
+-- doing?) so the next "is it FlipQueue?" report has hard evidence instead of
+-- a player guess. Rate-limited to once per 2s — taint cascades can fire
+-- dozens of these per second otherwise.
+do
+    local diagFrame = CreateFrame("Frame")
+    diagFrame:RegisterEvent("ADDON_ACTION_BLOCKED")
+    diagFrame:RegisterEvent("ADDON_ACTION_FORBIDDEN")
+    local _lastEmitTime = 0
+    diagFrame:SetScript("OnEvent", function(_, event, blamedAddon, funcName)
+        if blamedAddon ~= "flipqueue" then return end
+        local now = GetTime()
+        if now - _lastEmitTime < 2.0 then return end
+        _lastEmitTime = now
+        local locked, why = IsLockdownActive()
+        local inInstance, instanceType = IsInInstance()
+        local snapshot = string.format(
+            "[%s] %s | bankProcessing=%s lockdown=%s(%s) instance=%s/%s",
+            event, tostring(funcName),
+            tostring(BankQueue.processing or false),
+            tostring(locked), tostring(why or "-"),
+            tostring(inInstance), tostring(instanceType))
+        if ns.PrintDebug then ns:PrintDebug(snapshot) end
+        -- Always keep a copy in the saved snapshot ring so a report can
+        -- include the most recent few even if the player wasn't running
+        -- with /fq debug on at the time.
+        BankQueue._lastTaintEvents = BankQueue._lastTaintEvents or {}
+        table.insert(BankQueue._lastTaintEvents, 1, snapshot)
+        while #BankQueue._lastTaintEvents > 10 do
+            table.remove(BankQueue._lastTaintEvents)
+        end
+    end)
+end
 
 -- Wait between successive container moves. Two conditions must both be
 -- satisfied before `callback` runs:
@@ -759,6 +841,20 @@ ProcessNextBatch = function()
         return
     end
 
+    -- #147: re-check lockdown at every batch boundary. The queue may have
+    -- started outside combat / instance and entered one mid-execution; defer
+    -- the rest of the batches via DeferUntilLockdownClear so taint never
+    -- escapes from a C_Timer continuation. Successes already written to
+    -- stats are preserved — DrainDeferred will resume from the remaining
+    -- queue contents.
+    do
+        local locked, why = IsLockdownActive()
+        if locked then
+            DeferUntilLockdownClear(ProcessNextBatch, why)
+            return
+        end
+    end
+
     local batchSize = ns.db and ns.db.settings.pullBatchSize or 5
     local batchCount = math.min(batchSize, #queue)
 
@@ -792,6 +888,14 @@ ProcessNextBatch = function()
     -- being picked, both for slot-cache freshness and Blizzard's per-frame
     -- container-op rate limit).
     local function HandleOp(op)
+        -- #147: per-op gate. Catches lockdown that began between batches.
+        -- Re-queue the op for the next pass; ProcessNextBatch's batch-level
+        -- gate will defer until lockdown clears. Mirrors IssueOne's gate in
+        -- ProcessSync (:1287-1289).
+        if IsLockdownActive() then
+            table.insert(queue, op)
+            return false
+        end
         local trace = BankQueue._tracePulls
         local ok, info = pcall(C_Container.GetContainerItemInfo, op.srcBag, op.srcSlot)
         if not ok or not info then
@@ -1084,6 +1188,22 @@ function BankQueue:Process(ops, label, callback)
     if #ops == 0 then
         if callback then callback({}, 0) end
         return
+    end
+
+    -- #147: same lockdown gate as ProcessSync. The batched path is what
+    -- TrackerBank's auto-deposit flows (extras, reagents, warbank tasks)
+    -- call into, and a queue running mid-combat fires UseContainerItem
+    -- from a C_Timer continuation — exactly the taint vector that broke
+    -- niduin's bag clicks. Defer the entire call until the lockdown clears
+    -- (combat ends, pet battle closes, or the player exits the instance).
+    do
+        local locked, why = IsLockdownActive()
+        if locked then
+            DeferUntilLockdownClear(function()
+                BankQueue:Process(ops, label, callback)
+            end, why)
+            return
+        end
     end
 
     queue = ops

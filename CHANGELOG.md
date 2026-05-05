@@ -1,5 +1,59 @@
 # Changelog
 
+## v0.12.0-alpha17
+
+Five-part hardening pass on FQ-147's bag-taint mitigation, prompted by TLY-47 (a Tally bug report whose symptoms — "can't click bags in raids", "after some spells used" — match the same vector that bit niduin in #144). Tally only appears in the symptom because the player has FQ + Tally + Cogworks loaded; once the bag UI is tainted, every addon's bag interactions break and the player blames whichever UI is most visible. Cogworks library is clean (zero `C_Container.*` references); FQ's `BankQueue` is the origin.
+
+The original FQ-147 mitigation gated `BankQueue:ProcessSync` and the per-op `IssueOne` inside it. Two paths weren't covered, plus three adjacent items wanted closing.
+
+### Call-site gate on the move primitives
+
+`CursorMove` (`BankQueue.lua:464`) and `ShiftMove` (`:497`) now bail with `IsLockdownActive()` at function entry. Belt-and-suspenders against any future caller path that doesn't gate at the dispatcher level — the protected call (`C_Container.PickupContainerItem` / `UseContainerItem`) cannot fire from non-secure context regardless of how it got reached. Required a forward-declaration of `IsLockdownActive` at the top of the file since the move primitives sit above the lockdown-gate section.
+
+### `BankQueue:Process` entry gate + per-batch + per-op gates
+
+The batched async path is what `TrackerBank.lua`'s auto-deposit flows (extras, reagents, warbank tasks) and the auto-pull batched dispatch call into. It had no gates of its own — a queue started from a clean state could continue firing `UseContainerItem` from `C_Timer.After` continuations after the player aggroed mid-deposit. Three layers now mirror what `ProcessSync` already had:
+
+- **Entry gate** at `BankQueue:Process(:1083)` — defers via `DeferUntilLockdownClear` if locked at call time. Same shape as the `ProcessSync` gate (`:1180-1192`).
+- **Per-batch gate** at `ProcessNextBatch` — re-checks lockdown at every batch boundary; if locked mid-execution, stuffs `ProcessNextBatch` itself into the deferred queue so the remaining batches resume cleanly when lockdown clears (combat ends, pet battle closes, instance exits).
+- **Per-op gate** at `HandleOp` — mirrors `IssueOne`'s `:1287-1289` gate. Re-queues the op for the next pass if lockdown started between batches; the per-batch gate then defers correctly.
+
+### Instance-aware auto-pause (new `pauseAutoOpsInInstance` setting)
+
+`IsLockdownActive()` consults a new defaulted-on setting that treats raid / dungeon / arena / battleground / scenario as locked, alongside the existing combat + pet-battle checks. Banks aren't reachable inside an instance, so legitimate FQ ops would never start there — the gate exists as defense-in-depth against any pre-queued op or sibling-cog API entry that fires `Process` while the player is in one. `_lockdownFrame` now also subscribes to `PLAYER_ENTERING_WORLD` so `DrainDeferred` runs on instance exit and resumes any queued work automatically.
+
+`LOCKED_INSTANCE_TYPES` set (raid / party / arena / pvp / scenario) is module-local; `IsInInstance()` returns the type string this matches against.
+
+Settings UI: new checkbox "Pause bank ops in raids and dungeons" in the Item Management section, alongside the batch-size slider.
+
+### Hide MiniView in instances (new `hideMiniInInstance` setting)
+
+`MiniView.lua`'s combat-hide frame now also handles `PLAYER_ENTERING_WORLD` and tracks two independent hide reasons (`hiddenForCombat`, `hiddenForInstance`). Both can fire concurrently — combat starting inside a raid keeps the mini hidden after combat ends but the raid still runs; the explicit reason flags prevent the restore handler from racing the wrong condition. Default off (independent of `hideMiniInCombat`, which stays default on).
+
+`INSTANCE_HIDE_TYPES` mirrors the bank-ops set.
+
+Settings UI: new checkbox "Hide mini view in raids and dungeons" alongside the existing "Hide mini view in combat" toggle.
+
+### `ADDON_ACTION_BLOCKED` / `_FORBIDDEN` diagnostic listener
+
+New module-scoped frame in `BankQueue.lua` that listens for protected-call violations blamed on `flipqueue` and emits a one-line state snapshot (event name + function name + `BankQueue.processing` + lockdown reason + instance type). Rate-limited to one emit per 2s — taint cascades fire dozens of these per second otherwise. Every event also goes into a 10-entry ring buffer at `BankQueue._lastTaintEvents` for `/dump` extraction during triage.
+
+`AuctionPost.lua:119-122` had a similar logger for `ADDON_ACTION_BLOCKED` only; the new one covers `_FORBIDDEN` too and snapshots more state.
+
+### Files
+
+```
+M  BankQueue.lua
+M  CHANGELOG.md
+M  DB.lua
+M  RELEASES.md
+M  UI/MiniView.lua
+M  UI/SettingsFrame.lua
+M  UI/SetupWizard.lua
+```
+
+No schema change. The two new defaulted settings (`pauseAutoOpsInInstance = true`, `hideMiniInInstance = false`) backfill on first load post-upgrade.
+
 ## v0.12.0-alpha15
 
 UX follow-ups to alpha14's architectural rebuild from in-game testing.
