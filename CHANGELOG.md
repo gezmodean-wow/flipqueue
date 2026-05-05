@@ -43,6 +43,16 @@ The Execute button visually crowded — and at certain row counts overlapped —
 - Execute button reparented from the popup root into the footer, anchored `CENTER` (no longer relies on `BOTTOM, f, BOTTOM, 0, 10` which left only an 8px implicit gap).
 - `ResizePopup` updated: `bottomHeight` now uses `FOOTER_HEIGHT` instead of the hardcoded 36; the footer is shown only when a button is being shown so auto-mode popups don't carry an empty footer band.
 
+### Batched-deposit heartbeat covers the verify-await window + skip empty inter-batch wait
+
+Two adjacent fixes from the same in-game session, both about idle time the player perceives between batches and at end-of-deposit.
+
+**Verify-await heartbeat.** `BankQueue:Process` (batched path) issues a batch then waits for `ITEM_LOCK_CHANGED` events to settle, debounced by `VERIFY_DELAY = 0.5s` quiet (capped at `BATCH_TIMEOUT = 5s` if no events arrive). During this window no heartbeat fired, so the popup went silent — testers reported "big gap after the batch, nothing happens, then the animation plays super fast" (the "super-fast animation" being the subsequent `INTER_BATCH_DELAY` 0.3s "Next batch" heartbeat firing AFTER the silent verify gap). Now `onWait("Verifying moves", BATCH_TIMEOUT, "variable")` fires when the verify-await begins; either the debounced timer or the BATCH_TIMEOUT fallback calls `onWaitEnd` before invoking VerifyBatch. Variable kind because events typically resolve us well under the ceiling — the `≤` countdown prefix makes that explicit.
+
+**Empty-queue inter-batch skip.** When the verify completes a batch and the queue is empty, the previous flow still played the 0.3s "Next batch" heartbeat + 0.1s wait inside `ProcessNextBatch` before reaching `Finish`. That stacked with the post-action settle for a multi-second perceived idle after the popup ticked `N/N`. Now `VerifyBatch` checks `#queue > 0` and bypasses the inter-batch heartbeat / delay when no more work remains, calling `Finish` on the next frame.
+
+`BankQueue.lua` only.
+
 ### Bank-ops post-completion idle reduced from ~3s to ~0.3s
 
 Each Auto* deposit / pull subphase ended with a hardcoded `C_Timer.After(1, ...)` before its `onComplete` callback fired. The 1-second wait predates the `BankQueue:VerifyBatch` flow that already settles bag state via container-state diff with a `SYNC_VERIFY_DELAY = 0.4s` gate; by the time we hit the 1s timer the moves are already verified and bag state is stable, so the additional second was redundant defense from an earlier era of the queue.
@@ -59,6 +69,7 @@ With the alpha14 split into to-do / extras / reagents subphases, the cumulative 
 ### Files
 
 ```
+M  BankQueue.lua
 M  CHANGELOG.md
 M  TrackerBank.lua
 M  UI/BankPopup.lua

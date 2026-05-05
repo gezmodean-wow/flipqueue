@@ -729,17 +729,28 @@ local function VerifyBatch(issuedOps, snapshot)
     if BankQueue.onProgress then
         BankQueue.onProgress(#stats.successes, totalQueued)
     end
-    -- Heartbeat for the inter-batch delay so the popup shows what we're
-    -- waiting for between batches (FQ-127 follow-up). Inlined rather than
-    -- via NotifyWait — that helper is declared later in the file (after
-    -- BankQueue:Process) so it's not in scope here.
-    if BankQueue.onWait and INTER_BATCH_DELAY and INTER_BATCH_DELAY > 0 then
-        BankQueue.onWait(INTER_BATCH_DELAY, "Next batch", "fixed")
+
+    -- Branch based on whether more work remains. When the queue is
+    -- empty (or only retries that didn't make it back into the queue),
+    -- skip the INTER_BATCH_DELAY heartbeat and fire Finish directly —
+    -- the player has already seen the popup tick to N/N and any further
+    -- "Next batch" countdown reads as dead time. Previously this delay
+    -- + the 0.1s Finish padding stacked with the 1s post-action settle
+    -- in the AutoDeposit* callbacks for a multi-second perceived idle.
+    if #queue > 0 then
+        if BankQueue.onWait and INTER_BATCH_DELAY and INTER_BATCH_DELAY > 0 then
+            BankQueue.onWait(INTER_BATCH_DELAY, "Next batch", "fixed")
+        end
+        C_Timer.After(INTER_BATCH_DELAY, function()
+            if BankQueue.onWaitEnd then BankQueue.onWaitEnd() end
+            ProcessNextBatch()
+        end)
+    else
+        -- No more batches — finish immediately. Scheduling on the next
+        -- frame instead of a longer C_Timer wait keeps the popup
+        -- transition snappy without re-entrant call risk.
+        C_Timer.After(0, Finish)
     end
-    C_Timer.After(INTER_BATCH_DELAY, function()
-        if BankQueue.onWaitEnd then BankQueue.onWaitEnd() end
-        ProcessNextBatch()
-    end)
 end
 
 ProcessNextBatch = function()
@@ -952,11 +963,28 @@ ProcessNextBatch = function()
         local verifyTimer = nil
         local l = GetListener()
 
+        -- Heartbeat the verify-await period so the popup shows what the
+        -- player is waiting for instead of going silent (player report:
+        -- "big gap after the batch, nothing happens, then the animation
+        -- plays super fast" — that "super-fast animation" was the
+        -- INTER_BATCH_DELAY heartbeat firing AFTER the silent verify
+        -- wait). Variable kind: events typically resolve us in well
+        -- under BATCH_TIMEOUT, but we declare the upper bound so the ≤
+        -- prefix tells the player the countdown is a max.
+        if BankQueue.onWait then
+            BankQueue.onWait(BATCH_TIMEOUT, "Verifying moves", "variable")
+        end
+
+        local function FinishVerifyWait()
+            if BankQueue.onWaitEnd then BankQueue.onWaitEnd() end
+        end
+
         local function ScheduleVerify()
             if verifyTimer then verifyTimer:Cancel() end
             verifyTimer = C_Timer.NewTimer(VERIFY_DELAY, function()
                 if awaitingConfirm then
                     awaitingConfirm = false
+                    FinishVerifyWait()
                     VerifyBatch(issuedOps, snapshot)
                 end
             end)
@@ -983,6 +1011,7 @@ ProcessNextBatch = function()
             if awaitingConfirm then
                 awaitingConfirm = false
                 if verifyTimer then verifyTimer:Cancel() end
+                FinishVerifyWait()
                 VerifyBatch(issuedOps, snapshot)
             end
         end)
