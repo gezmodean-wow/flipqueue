@@ -8,6 +8,10 @@ local UI = ns.UI
 local popup = nil
 
 local ROW_HEIGHT = 20
+-- (#153) Dedicated footer band height: 26px button + 7px padding on each
+-- side so the separator line at the top of the footer has clear breathing
+-- room from both the row above and the button below.
+local FOOTER_HEIGHT = 40
 local ICON_SIZE = 16
 local MAX_VISIBLE_ROWS = 12
 
@@ -226,11 +230,34 @@ local function GetPopup()
     -- Row pool
     f.rows = {}
 
-    -- Execute button
-    local execBtn = CreateFrame("Button", nil, f, "BackdropTemplate")
+    -- (#153) Footer band — gives the Execute button a dedicated visual
+    -- region instead of floating against the scroll area. Top edge is
+    -- a thin separator line; backdrop matches the popup so any row
+    -- overflow is occluded, not visible-through-the-button-region.
+    local footer = CreateFrame("Frame", nil, f)
+    footer:SetHeight(FOOTER_HEIGHT)
+    footer:SetPoint("BOTTOMLEFT",  f, "BOTTOMLEFT",  4, 4)
+    footer:SetPoint("BOTTOMRIGHT", f, "BOTTOMRIGHT", -4, 4)
+    -- Higher frame level so the footer (and its backdrop) renders above
+    -- any scrollFrame content that might bleed into this region.
+    footer:SetFrameLevel(f:GetFrameLevel() + 5)
+    f.footer = footer
+
+    local footerBg = footer:CreateTexture(nil, "BACKGROUND")
+    footerBg:SetAllPoints(footer)
+    footerBg:SetColorTexture(0.08, 0.08, 0.12, 0.95)
+
+    local footerSep = footer:CreateTexture(nil, "OVERLAY")
+    footerSep:SetHeight(1)
+    footerSep:SetPoint("TOPLEFT",  footer, "TOPLEFT",  0, 0)
+    footerSep:SetPoint("TOPRIGHT", footer, "TOPRIGHT", 0, 0)
+    footerSep:SetColorTexture(0.35, 0.35, 0.45, 0.8)
+
+    -- Execute button — lives inside the footer, centered.
+    local execBtn = CreateFrame("Button", nil, footer, "BackdropTemplate")
     execBtn:SetHeight(26)
     execBtn:SetWidth(200)
-    execBtn:SetPoint("BOTTOM", f, "BOTTOM", 0, 10)
+    execBtn:SetPoint("CENTER", footer, "CENTER", 0, 0)
     execBtn:SetBackdrop({
         bgFile = "Interface\\Tooltips\\UI-Tooltip-Background",
         edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
@@ -365,9 +392,18 @@ local function ResizePopup(f, rowCount, hasButton, hasProgress)
     -- first section after a refresh.
     f.scrollFrame:SetVerticalScroll(0)
 
+    -- (#153) Footer band stays anchored to the popup's bottom; it visually
+    -- separates the Execute button from the row list and occludes any row
+    -- overflow that would otherwise paint into the button's space. Show
+    -- it when the button is shown; hide otherwise so a read-only / auto-
+    -- mode popup doesn't waste vertical space on an empty footer.
+    if f.footer then
+        if hasButton then f.footer:Show() else f.footer:Hide() end
+    end
+
     local bottomHeight = 8
     if hasProgress then bottomHeight = bottomHeight + 20 end
-    if hasButton then bottomHeight = bottomHeight + 36 end
+    if hasButton   then bottomHeight = bottomHeight + FOOTER_HEIGHT end
     f:SetHeight(24 + 8 + visibleHeight + bottomHeight)
 end
 

@@ -32,10 +32,22 @@ The new mode-button widget is structurally a label fontstring + clickable button
 - `widget.labelStart` exposes the **label** fontstring — the (disabled) overlay anchors `LEFT` here so it spans the label too, not just the button.
 - `widget:Hide()` / `widget:Show()` are overridden to chain visibility into `labelStart` so callers toggling visibility on the widget hide both pieces together.
 
+### Bank-ops popup: Execute button gets a dedicated footer band (closes #153)
+
+The Execute button visually crowded — and at certain row counts overlapped — the last row in the bank-ops list. Pulled forward from #153 (originally slated for v0.13 polish) since it's adjacent to the alpha14 popup work and bothered testers in-game on alpha14.
+
+- New footer frame anchored to the popup's bottom edge, height `FOOTER_HEIGHT = 40` (room for the 26px button plus 7px padding above and below).
+- Footer has its own backdrop (matching the popup's dark color) so any row content scrolled past the visible area is occluded — the button area never paints over content even at frame-level edge cases.
+- Top edge of the footer is a 1px separator line, visually severing the row list from the action band.
+- Footer's frame level is `popup_level + 5` so it always renders above the scroll content.
+- Execute button reparented from the popup root into the footer, anchored `CENTER` (no longer relies on `BOTTOM, f, BOTTOM, 0, 10` which left only an 8px implicit gap).
+- `ResizePopup` updated: `bottomHeight` now uses `FOOTER_HEIGHT` instead of the hardcoded 36; the footer is shown only when a button is being shown so auto-mode popups don't carry an empty footer band.
+
 ### Files
 
 ```
 M  CHANGELOG.md
+M  UI/BankPopup.lua
 M  UI/CharactersPage.lua
 M  UI/MainFrame.lua
 ```
