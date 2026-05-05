@@ -81,6 +81,14 @@ The bank operations popup that drives Pull, Deposit, and Pull Saleable used to l
 - Failed items show by name in the completion summary instead of just an error count.
 - The bank operations popup no longer plans "Deposit Extras" ops when that setting is turned off. Previously these ghost ops left the popup's progress bar showing wrong-looking "complete" states with items still in the bag.
 
+### Gold withdraw no longer pulls wildly inflated amounts
+
+Players using TradeSkillMaster Auctioning groups with high posting caps (the typical setup for high-volume trade goods like ore, ink, and enchanting scrolls) saw FlipQueue try to withdraw enormous amounts from the warbank — 150k or more for a handful of items, in extreme cases 300k+ for two items. The estimate was reading TSM's "post cap" (a *ceiling* on total quantity ever posted) as if it were the per-task quantity to charge listing fees against, so a 50,000-cap on enchanting scrolls produced a 75,000g fee estimate per scroll instead of a couple of gold.
+
+The fix: the cap is now used as a cap (the actual quantity is clamped against it) instead of replacing the actual quantity. Posting fee estimates now match what TSM would actually charge.
+
+If you have a maximum-withdraw safety cap configured, this fix matters less — the cap was clipping the bogus number to whatever you'd set. If you don't have a cap, this is the difference between FlipQueue pulling a few gold for fees vs. emptying a meaningful chunk of your warbank.
+
 ### Per-character gold management overrides
 
 Each character now has independent **Withdraw Gold** and **Deposit Gold** toggles on the Characters page, mirroring the existing Pull / Deposit / Deposit All toggles. Defaults to "use global" — no behavior change unless explicitly overridden. Useful for letting FlipQueue manage gold globally but turning it off for one alt without touching account-wide settings.
@@ -123,6 +131,7 @@ The minimap button now uses the brass gear-border styling shared across the Cogw
 When a player reports something off, several `/fq debug` commands help capture what's happening:
 
 - `/fq debug perf` — bundles per-addon CPU/memory, FlipQueue's internal cache stats, and current settings into one copy-pasteable text dump. Use after `/console scriptProfile 1` + `/reload` to capture an actual CPU profile.
+- `/fq debug gold` — prints the gold-withdraw calculation for the current character. Per-task breakdown shows vendor sell price, posting quantity, auction duration, and the resulting deposit fee for every task on the to-do list, then the aggregate target balance and what would be withdrawn. The right command to run when a withdraw amount looks wrong.
 - `/fq debug pulls` — toggles per-operation tracing during bank queue activity. Useful for diagnosing item-specific bank op failures.
 - `/fq debug parsegold` — interactive gold-string parse trace plus a self-test covering EN/DE locale variants, k/m abbreviations, and color-coded strings. Lets US-locale testers verify EU client behavior without an EU account.
 - `/fq debug log <name or itemID>` — dumps every entry the addon's log holds for a given item, with full sale / fee / status metadata. Useful when Item Research shows a sales count that doesn't match what the player remembers.

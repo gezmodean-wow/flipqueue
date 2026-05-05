@@ -66,15 +66,57 @@ With the alpha14 split into to-do / extras / reagents subphases, the cumulative 
 
 `BankQueue.SYNC_VERIFY_DELAY` (0.4s, the verify gate) and `Tracker.lua:476`'s 0.3s inter-phase chain delay are unchanged — both are functional, not redundant.
 
+### Bank-ops gold-pull inflated by TSM postCap (closes #117 reopen)
+
+Mort and Zong reported the addon trying to pull "wildly high" amounts from the warbank — Mort's worst case was 344.7k for a darkmoon deck and a recipe; a separate test hit 150k for two enchant scrolls and two recipes; Zong saw 1.5M+ on enchant-heavy queues. All three traces back to the same line in the posting-fee estimator.
+
+`Tracker:CalculatePostingFees` looked up the player's TSM Auctioning op for each task and lifted `op.postCap` directly into the per-task quantity:
+
+```lua
+if op.postCap then
+    local tsmQty = tonumber(op.postCap)
+    if tsmQty and tsmQty > 0 then
+        postQty = tsmQty   -- ← wrong: replaces the queue/default qty
+    end
+end
+```
+
+`postCap` is a *ceiling* on total posted quantity (TSM's "never have more than N posted across all listings"), not a per-task target. Players using `postCap=50000` for high-volume trade goods saw the deposit estimate explode by a factor of 50,000 — `vendor=5g × 50000 × 30% = 75,000g` per such item. Replaced with a clamp:
+
+```lua
+postQty = math.min(postQty, tsmQty)
+```
+
+Now the existing `postQty = max(queueItem.quantity, defaultSellQty)` baseline is kept and only narrowed by `postCap`, which matches `postCap`'s actual semantic. The fee estimate also drives the actual `AutoWithdrawGold` withdraw amount — not just the popup display — so this is a real-money fix not just a UX one. (Mort's `maxWithdrawGold` was unset, so his bogus pulls went through; the maintainer's repro had `maxWithdrawGold=1000g` which capped the bogus 85.2k withdraw target at 1k, masking how bad it would have been on a less-defensive setup.)
+
+`TrackerBank.lua:260-272`.
+
+### `/fq debug gold` per-task breakdown
+
+The previous `/fq debug gold` printed only aggregates: total posting fees, total need, target balance. To see the per-task `vendor / qty / duration / mult` math (the actual signal needed to localise an inflated total) testers had to flip `/fq debug toggle`, open the bank, let the popup compute, and pull lines from the debug log — a multi-step round trip that gated triage of every "gold pull is wrong" report on getting the player to reproduce live.
+
+`Tracker:CalculatePostingFees` and `Tracker:CalculatePurchaseCosts` already returned `details[]` as their third value; `/fq debug gold` was discarding both. The command now receives them and prints a `--- Per-task fee breakdown ---` block above the aggregate, mirroring the format `AutoWithdrawGold` writes to the debug log when the popup runs:
+
+```
+[POST] Refulgent Copper Ore: vendor=0g x65 @ 24h (30%) = 2g
+[POST] Sienna Ink:           vendor=5g x138 @ 24h (30%) = 207g
+```
+
+This is the line that would have made the FQ-117 reopen a one-message diagnostic instead of a multi-day back-and-forth. `/fq debug gold` is now self-contained — no bank visit, no toggle dance, no log file required.
+
+`UI/SlashCommands.lua:838` (the existing aggregate block, unwrapped to also render `postDetails` and `buyDetails`).
+
 ### Files
 
 ```
 M  BankQueue.lua
 M  CHANGELOG.md
+M  RELEASES.md
 M  TrackerBank.lua
 M  UI/BankPopup.lua
 M  UI/CharactersPage.lua
 M  UI/MainFrame.lua
+M  UI/SlashCommands.lua
 ```
 
 No schema change. No behavior change beyond the polish surface — alpha14's underlying tri-state model is unchanged.

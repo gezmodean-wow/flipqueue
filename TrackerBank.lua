@@ -257,10 +257,16 @@ function Tracker:CalculatePostingFees(charKey, currentRealm)
             if tsmEnabled then
                 local op = ns.TSM:GetItemAuctioningOp(queueItem.itemKey)
                 if op then
+                    -- postCap is a *ceiling* on total posted quantity ("never
+                    -- have more than N posted across all listings"), not a
+                    -- target. Clamp postQty against it instead of replacing,
+                    -- otherwise a high postCap (e.g. 50000 for trade goods)
+                    -- inflates the fee estimate by orders of magnitude even
+                    -- when the player only has 1-2 of the item to post.
                     if op.postCap then
                         local tsmQty = tonumber(op.postCap)
                         if tsmQty and tsmQty > 0 then
-                            postQty = tsmQty
+                            postQty = math.min(postQty, tsmQty)
                         end
                     end
                     if op.duration then

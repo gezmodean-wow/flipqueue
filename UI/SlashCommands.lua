@@ -835,9 +835,32 @@ SlashCmdList["FLIPQUEUE"] = function(msg)
 
         -- Aggregate via the same helpers AutoWithdrawGold uses, so the
         -- numbers we print match what the actual flow sees.
-        local postCopper, postCount = ns.Tracker:CalculatePostingFees(charKey, currentRealm)
-        local buyCopper, buyCount = ns.Tracker:CalculatePurchaseCosts(charKey, currentRealm)
+        local postCopper, postCount, postDetails = ns.Tracker:CalculatePostingFees(charKey, currentRealm)
+        local buyCopper, buyCount, buyDetails = ns.Tracker:CalculatePurchaseCosts(charKey, currentRealm)
         local totalCopper = postCopper + buyCopper
+
+        -- Per-task breakdown — mirrors the format AutoWithdrawGold prints
+        -- when the bank popup runs, but available without needing to
+        -- actually open the bank or toggle debug. Surfaces vendor / qty /
+        -- duration / mult per task so we can see exactly which field is
+        -- inflating a "wildly off" total.
+        if (postDetails and #postDetails > 0) or (buyDetails and #buyDetails > 0) then
+            print("--- Per-task fee breakdown ---")
+            if postDetails then
+                for _, d in ipairs(postDetails) do
+                    print(string.format("  [POST] %s: vendor=%s x%d @ %s (%.0f%%) = %s",
+                        tostring(d.name), ns:FormatGold(d.vendorCopper or 0),
+                        d.qty or 1, tostring(d.duration), (d.mult or 0) * 100,
+                        ns:FormatGold(d.deposit or 0)))
+                end
+            end
+            if buyDetails then
+                for _, d in ipairs(buyDetails) do
+                    print(string.format("  [BUY ] %s: x%d = %s",
+                        tostring(d.name), d.qty or 1, ns:FormatGold(d.deposit or 0)))
+                end
+            end
+        end
 
         print("--- Aggregate ---")
         print(string.format("  Posting fees: %s over %d task(s)", ns:FormatGold(postCopper), postCount))
