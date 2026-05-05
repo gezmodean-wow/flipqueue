@@ -81,6 +81,10 @@ The bank operations popup that drives Pull, Deposit, and Pull Saleable used to l
 - Failed items show by name in the completion summary instead of just an error count.
 - The bank operations popup no longer plans "Deposit Extras" ops when that setting is turned off. Previously these ghost ops left the popup's progress bar showing wrong-looking "complete" states with items still in the bag.
 
+### Right-click on profession knowledge tomes works again
+
+A taint bug in the shared Cogworks library blocked right-click "use" on items that prompt a Blizzard confirmation popup — the most visible victims being TWW Midnight profession knowledge tomes (Glimmer / Flicker of Midnight Jewelcrafting / Blacksmithing / etc. Knowledge). Equipment, tradegoods, and most other items were unaffected. If you saw `AddOn 'cogworks' tried to call the protected function 'UNKNOWN()'` after right-clicking one of these consumables, this was the cause. Fix landed in Cogworks v0.13.2 and is bundled into this build.
+
 ### Gold withdraw no longer pulls wildly inflated amounts
 
 Players using TradeSkillMaster Auctioning groups with high posting caps (the typical setup for high-volume trade goods like ore, ink, and enchanting scrolls) saw FlipQueue try to withdraw enormous amounts from the warbank — 150k or more for a handful of items, in extreme cases 300k+ for two items. The estimate was reading TSM's "post cap" (a *ceiling* on total quantity ever posted) as if it were the per-task quantity to charge listing fees against, so a 50,000-cap on enchanting scrolls produced a 75,000g fee estimate per scroll instead of a couple of gold.

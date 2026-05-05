@@ -106,11 +106,23 @@ This is the line that would have made the FQ-117 reopen a one-message diagnostic
 
 `UI/SlashCommands.lua:838` (the existing aggregate block, unwrapped to also render `postDetails` and `buyDetails`).
 
+### Cogworks-1.0 bump to v0.13.2 (closes #156)
+
+A reporter (and a maintainer repro on the same character class) hit `ADDON_ACTION_FORBIDDEN` on right-click of profession knowledge tomes — `Glimmer of Midnight Jewelcrafting Knowledge`, `Flicker of Midnight ...`, etc. Equipment, tradegoods, and other right-clickable items were unaffected. The error blamed `cogworks` calling protected `UseContainerItem` from non-secure context.
+
+Upstream root cause (Cogworks COG-30, [d46a07e](https://github.com/gezmodean-wow/cogworks/commit/d46a07e)): a defensive `StaticPopupDialogs = StaticPopupDialogs or {}` line at the top of `Cogworks-1.0/Scaling.lua`'s profile-popup block tainted the global. Any protected Blizzard call that later consulted `StaticPopupDialogs` (notably `UseContainerItem` on consumables, which checks for a "use this?" StaticPopup confirmation) inherited the taint. Items with no confirmation popup didn't traverse that path — explaining the asymmetry.
+
+Cogworks dropped the global rebind; the per-key assignments below it (`StaticPopupDialogs["COGWORKS_NEW_PROFILE"] = …`) stay — that's the supported pattern. Bumped Cogworks library MINOR 18 → 19, `lib.version` 0.13.1 → 0.13.2.
+
+FlipQueue picks up the fix by syncing the embedded `Libs/Cogworks-1.0/` directory. Two files changed: `Cogworks-1.0.lua` (version bumps) and `Scaling.lua` (the rebind removal + comment).
+
 ### Files
 
 ```
 M  BankQueue.lua
 M  CHANGELOG.md
+M  Libs/Cogworks-1.0/Cogworks-1.0.lua
+M  Libs/Cogworks-1.0/Scaling.lua
 M  RELEASES.md
 M  TrackerBank.lua
 M  UI/BankPopup.lua
