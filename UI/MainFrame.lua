@@ -737,9 +737,14 @@ UI.charsTable = UI:CreateScrollTable(tableContainer, {
     {key = "gold",      label = "Gold",         width = 70,  align = "RIGHT", sortable = true},
     {key = "tasks",     label = "Tasks",        width = 36,  align = "CENTER", sortable = true},
     {key = "auctions",  label = "Auctions",     width = 90, align = "CENTER", sortable = true},
-    {key = "pull",      label = "Pull",         width = 30,  align = "CENTER", sortable = false},
-    {key = "dep",       label = "Dep",          width = 30,  align = "CENTER", sortable = false},
-    {key = "depAll",    label = "All",           width = 30,  align = "CENTER", sortable = false},
+    -- (#155) Mode columns: Auto / Manual / Off tri-state per action class.
+    -- Wider than the prior bool On/Off pair to fit the "Manual" label
+    -- without truncation; column headers updated to match the new
+    -- action-class names ("Tasks" replaces "Pull" since pull and deposit
+    -- share one tri-state, "Extras" / "Reag." for the others).
+    {key = "pull",      label = "Tasks",        width = 50,  align = "CENTER", sortable = false},
+    {key = "dep",       label = "Extras",       width = 50,  align = "CENTER", sortable = false},
+    {key = "depAll",    label = "Reag.",        width = 50,  align = "CENTER", sortable = false},
     {key = "status",    label = "Status",       width = 62,  sortable = true},
 })
 UI.charsTable:SetSort("name", true)

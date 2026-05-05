@@ -60,12 +60,13 @@ end
 --   nil    = inherited from global (shown in dim color matching the global)
 --   "auto"     = green
 --   "manual"   = yellow
---   "disabled" = red dash
+--   "disabled" = red
+-- Cell labels are abbreviated so they fit 50px columns ("Manual" → "Man").
 local function FormatModeColumn(rawValue, globalMode)
     local function color(mode, dim)
         local c, label
         if mode == "auto"     then c, label = "00ff00", "Auto"
-        elseif mode == "manual"   then c, label = "ffcc00", "Manual"
+        elseif mode == "manual"   then c, label = "ffcc00", "Man"
         elseif mode == "disabled" then c, label = "ff3333", "Off"
         else                            c, label = "888888", "?"
         end
@@ -1326,6 +1327,106 @@ local function EnsureGlobalDefaultsBar(tableContainer)
         return cb
     end
 
+    -- (#155) Tri-state action-mode button for the Defaults bar. The
+    -- master checkboxes (Items / Gold) stay as checkboxes — they are
+    -- bool. Action-class sub-rows are tri-state, so a checkbox is
+    -- representationally wrong; this button cycles auto → manual →
+    -- disabled → auto on click. The widget exposes `.text` (the label
+    -- font-string used as anchor target), `.modeText` (the colored
+    -- state indicator), and `.refresh` (call after settings change).
+    local MODE_LABELS = { auto = "Auto", manual = "Man", disabled = "Off" }
+    local MODE_COLORS = { auto = "00ff00", manual = "ffcc00", disabled = "ff3333" }
+    local MODE_NEXT   = { auto = "manual", manual = "disabled", disabled = "auto" }
+
+    local function MakeGlobalModeBtn(anchorTo, label, settingKey, tooltipDesc)
+        -- Label fontstring (acts as the leftmost anchor for this row;
+        -- subsequent widgets anchor to .text:RIGHT just like checkboxes).
+        local lbl = globalDefaultsBar:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+        lbl:SetPoint("LEFT", anchorTo, "RIGHT", 8, 0)
+        lbl:SetText(label)
+
+        -- Clickable backdrop button that displays the current mode.
+        local btn = CreateFrame("Button", nil, globalDefaultsBar, "BackdropTemplate")
+        btn:SetSize(38, 16)
+        btn:SetPoint("LEFT", lbl, "RIGHT", 4, 0)
+        btn:SetBackdrop({
+            bgFile   = "Interface\\Tooltips\\UI-Tooltip-Background",
+            edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
+            edgeSize = 8,
+            insets   = { left = 1, right = 1, top = 1, bottom = 1 },
+        })
+        btn:SetBackdropColor(0.10, 0.10, 0.13, 1)
+        btn:SetBackdropBorderColor(0.35, 0.35, 0.45, 0.8)
+
+        local modeText = btn:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+        modeText:SetPoint("CENTER")
+
+        -- Anchor contract: surrounding code chains widgets via
+        -- `widget.text:RIGHT`. For checkboxes that's the label which
+        -- sits at the right edge of the widget. For our tri-state
+        -- button widget the right edge is the BUTTON itself (label is
+        -- on the LEFT of the button), so .text aliases to the button
+        -- frame so chained anchoring still puts the next widget past
+        -- this widget's right edge.
+        --
+        -- The overlay-disabled-text spans need a separate "leftmost
+        -- edge of this widget" anchor since they have to cover the
+        -- label too. Expose `.labelStart` for that.
+        btn.text = btn
+        btn.labelStart = lbl
+        btn.modeText = modeText
+
+        local function refresh()
+            local mode = ns.db and ns.db.settings[settingKey] or "manual"
+            modeText:SetText(MODE_LABELS[mode] or "?")
+            local hex = MODE_COLORS[mode] or "888888"
+            local r = tonumber(hex:sub(1,2), 16) / 255
+            local g = tonumber(hex:sub(3,4), 16) / 255
+            local b = tonumber(hex:sub(5,6), 16) / 255
+            modeText:SetTextColor(r, g, b)
+        end
+        btn.refresh = refresh
+
+        btn:SetScript("OnClick", function()
+            if not ns.db then return end
+            local cur = ns.db.settings[settingKey] or "manual"
+            ns.db.settings[settingKey] = MODE_NEXT[cur] or "auto"
+            refresh()
+            RefreshCharactersTable()
+            if UI.RefreshContextDrawer then UI:RefreshContextDrawer() end
+            if UI.RefreshSettings then UI:RefreshSettings() end
+        end)
+
+        btn:SetScript("OnEnter", function(self)
+            GameTooltip:SetOwner(self, "ANCHOR_BOTTOM")
+            GameTooltip:SetText(label, 1, 1, 1)
+            GameTooltip:AddLine(tooltipDesc, 0.7, 0.7, 0.7, true)
+            GameTooltip:AddLine(" ")
+            GameTooltip:AddLine("Click to cycle: Auto → Manual → Off", 0.5, 0.7, 1.0, true)
+            GameTooltip:Show()
+        end)
+        btn:SetScript("OnLeave", function() GameTooltip:Hide() end)
+
+        -- Couple the label fontstring with the button's visibility so
+        -- callers that toggle Show/Hide on the widget hide both pieces
+        -- together (the label is a sibling, not a child, since it
+        -- needs to anchor outside the button's bounds — but UX-wise
+        -- they're a single widget).
+        local origHide = btn.Hide
+        btn.Hide = function(self)
+            origHide(self)
+            if self.labelStart then self.labelStart:Hide() end
+        end
+        local origShow = btn.Show
+        btn.Show = function(self)
+            origShow(self)
+            if self.labelStart then self.labelStart:Show() end
+        end
+
+        refresh()
+        return btn
+    end
+
     -- Group backdrops — built up-front so they paint underneath the
     -- checkboxes that anchor to them. Items group uses a soft blue tint;
     -- gold group uses a soft gold tint. Both span from the master checkbox
@@ -1364,17 +1465,18 @@ local function EnsureGlobalDefaultsBar(tableContainer)
         "Per-character overrides on the table to the right take precedence.",
         true)
 
-    -- (#155) The defaults-bar checkboxes are now mode shortcuts: checked = "auto",
-    -- unchecked = "manual". The third state (disabled) is reachable via the
-    -- per-character config drilldown (click a row).
-    globalDefaultsWidgets.pullCB = MakeGlobalCB(globalDefaultsWidgets.itemsCB.text, "Tasks",
-        "todoMode", "Auto-pull / auto-deposit task items on bank open. Manual: button works, no auto-fire. Click a character row for full Off control.")
+    -- (#155) Action-class sub-rows are tri-state buttons (Auto / Man /
+    -- Off) that cycle on click. Checkboxes don't fit a tri-state model.
+    -- Master toggles (Items / Gold) above remain as checkboxes since
+    -- they are still bool.
+    globalDefaultsWidgets.pullCB = MakeGlobalModeBtn(globalDefaultsWidgets.itemsCB.text, "Tasks",
+        "todoMode", "Auto-pull / auto-deposit task items on bank open.")
 
-    globalDefaultsWidgets.depCB = MakeGlobalCB(globalDefaultsWidgets.pullCB.text, "Extras",
-        "extrasMode", "Auto-deposit extra items not needed by current character. Manual: button works, no auto-fire.")
+    globalDefaultsWidgets.depCB = MakeGlobalModeBtn(globalDefaultsWidgets.pullCB.text, "Extras",
+        "extrasMode", "Auto-deposit extra items not needed by current character.")
 
-    globalDefaultsWidgets.depAllCB = MakeGlobalCB(globalDefaultsWidgets.depCB.text, "Reagents",
-        "reagentsMode", "Auto-deposit reagents (Tradegoods). Manual: button works, no auto-fire.")
+    globalDefaultsWidgets.depAllCB = MakeGlobalModeBtn(globalDefaultsWidgets.depCB.text, "Reagents",
+        "reagentsMode", "Auto-deposit reagents (Tradegoods).")
 
     -- Anchor the items backdrop now that all four item-group widgets exist.
     -- Anchors resolve dynamically so the backdrop tracks layout shifts.
@@ -1383,10 +1485,12 @@ local function EnsureGlobalDefaultsBar(tableContainer)
     itemsBorder:SetPoint("TOPLEFT",     itemsBg, "TOPLEFT",  0, 0)
     itemsBorder:SetPoint("TOPRIGHT",    itemsBg, "TOPRIGHT", 0, 0)
 
-    -- "disabled" overlay shown when the master is off (sub-checkboxes hide,
-    -- the colored space remains as a visible group affordance).
+    -- "disabled" overlay shown when the master is off (sub-buttons hide,
+    -- the colored space remains as a visible group affordance). LEFT
+    -- anchors to the leftmost label of the items group so the overlay
+    -- spans the labels too, not just the mode buttons.
     local itemsOff = globalDefaultsBar:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
-    itemsOff:SetPoint("LEFT",  globalDefaultsWidgets.pullCB,       "LEFT",  -2, 0)
+    itemsOff:SetPoint("LEFT",  globalDefaultsWidgets.pullCB.labelStart or globalDefaultsWidgets.pullCB, "LEFT",  -2, 0)
     itemsOff:SetPoint("RIGHT", globalDefaultsWidgets.depAllCB.text, "RIGHT", 2, 0)
     itemsOff:SetJustifyH("CENTER")
     itemsOff:SetText("(disabled)")
@@ -1403,11 +1507,11 @@ local function EnsureGlobalDefaultsBar(tableContainer)
     globalDefaultsWidgets.goldCB:ClearAllPoints()
     globalDefaultsWidgets.goldCB:SetPoint("LEFT", globalDefaultsWidgets.depAllCB.text, "RIGHT", 22, 0)
 
-    globalDefaultsWidgets.wdGoldCB = MakeGlobalCB(globalDefaultsWidgets.goldCB.text, "Withdraw",
-        "goldWithdrawMode", "Auto-withdraw gold from warbank for fees + purchases. Manual: button works, no auto-fire.")
+    globalDefaultsWidgets.wdGoldCB = MakeGlobalModeBtn(globalDefaultsWidgets.goldCB.text, "Withdraw",
+        "goldWithdrawMode", "Auto-withdraw gold from warbank for fees + purchases.")
 
-    globalDefaultsWidgets.depGoldCB = MakeGlobalCB(globalDefaultsWidgets.wdGoldCB.text, "Deposit",
-        "goldDepositMode", "Auto-deposit excess gold back to warbank. Manual: button works, no auto-fire.")
+    globalDefaultsWidgets.depGoldCB = MakeGlobalModeBtn(globalDefaultsWidgets.wdGoldCB.text, "Deposit",
+        "goldDepositMode", "Auto-deposit excess gold back to warbank.")
 
     goldBg:SetPoint("TOPLEFT",     globalDefaultsWidgets.goldCB,           "TOPLEFT",     -6, 3)
     goldBg:SetPoint("BOTTOMRIGHT", globalDefaultsWidgets.depGoldCB.text,   "BOTTOMRIGHT", 6, -3)
@@ -1419,7 +1523,7 @@ local function EnsureGlobalDefaultsBar(tableContainer)
     groupSep:SetPoint("BOTTOM", itemsBg, "BOTTOMRIGHT", 3, 0)
 
     local goldOff = globalDefaultsBar:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
-    goldOff:SetPoint("LEFT",  globalDefaultsWidgets.wdGoldCB,        "LEFT",  -2, 0)
+    goldOff:SetPoint("LEFT",  globalDefaultsWidgets.wdGoldCB.labelStart or globalDefaultsWidgets.wdGoldCB, "LEFT",  -2, 0)
     goldOff:SetPoint("RIGHT", globalDefaultsWidgets.depGoldCB.text,  "RIGHT", 2, 0)
     goldOff:SetJustifyH("CENTER")
     goldOff:SetText("(disabled)")
@@ -1487,18 +1591,23 @@ local function RefreshGlobalDefaultsBar()
         globalDefaultsWidgets.goldCB:SetChecked(goldOn)
     end
 
-    -- (#155) Sub-checkboxes track whether the action mode is "auto".
-    -- "manual" and "disabled" both render as unchecked since this UI
-    -- doesn't have a third state — players who want disabled use the
-    -- per-char drilldown.
-    globalDefaultsWidgets.pullCB:SetChecked(ns.db.settings.todoMode == "auto")
-    globalDefaultsWidgets.depCB:SetChecked(ns.db.settings.extrasMode == "auto")
-    globalDefaultsWidgets.depAllCB:SetChecked(ns.db.settings.reagentsMode == "auto")
-    if globalDefaultsWidgets.wdGoldCB then
-        globalDefaultsWidgets.wdGoldCB:SetChecked(ns.db.settings.goldWithdrawMode == "auto")
+    -- (#155) Action-mode tri-state buttons. Each refreshes its own
+    -- mode-text label + color from ns.db.settings[modeKey]. Click cycles
+    -- auto → manual → disabled → auto.
+    if globalDefaultsWidgets.pullCB and globalDefaultsWidgets.pullCB.refresh then
+        globalDefaultsWidgets.pullCB.refresh()
     end
-    if globalDefaultsWidgets.depGoldCB then
-        globalDefaultsWidgets.depGoldCB:SetChecked(ns.db.settings.goldDepositMode == "auto")
+    if globalDefaultsWidgets.depCB and globalDefaultsWidgets.depCB.refresh then
+        globalDefaultsWidgets.depCB.refresh()
+    end
+    if globalDefaultsWidgets.depAllCB and globalDefaultsWidgets.depAllCB.refresh then
+        globalDefaultsWidgets.depAllCB.refresh()
+    end
+    if globalDefaultsWidgets.wdGoldCB and globalDefaultsWidgets.wdGoldCB.refresh then
+        globalDefaultsWidgets.wdGoldCB.refresh()
+    end
+    if globalDefaultsWidgets.depGoldCB and globalDefaultsWidgets.depGoldCB.refresh then
+        globalDefaultsWidgets.depGoldCB.refresh()
     end
 
     if itemsOn then

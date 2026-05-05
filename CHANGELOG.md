@@ -1,5 +1,47 @@
 # Changelog
 
+## v0.12.0-alpha15
+
+UX follow-ups to alpha14's architectural rebuild from in-game testing.
+
+### Characters table column readability
+
+The action-mode columns (Tasks / Extras / Reagents) were 30px wide with full-word labels (`Auto` / `Manual` / `Off`); `Manual` overflowed and rendered cramped or truncated.
+
+- Bumped column widths 30 → 50px to leave room for the longest label.
+- Renamed column headers from the legacy `Pull` / `Dep` / `All` to the new action-class names: `Tasks` / `Extras` / `Reag.` — matches the model the underlying data now stores.
+- Cell label `Manual` shortened to `Man` so the cell renders cleanly inside 50px without clipping. `Auto` and `Off` unchanged.
+
+`UI/MainFrame.lua` (column defs) and `UI/CharactersPage.lua` (`FormatModeColumn`).
+
+### Defaults bar: tri-state buttons replace mode-key checkboxes
+
+The Character Defaults bar at the top of the Characters page had checkboxes for every action class — but checkboxes only have two states, so the defaults bar couldn't represent the third tri-state value (`disabled`). The bar's checkbox-shaped widgets toggled auto ↔ manual; players who wanted "off" had to drill into the per-character config panel.
+
+New `MakeGlobalModeBtn(anchor, label, settingKey, tooltip)` helper builds a clickable backdrop button that displays the current mode (`Auto` green / `Man` yellow / `Off` red) and cycles `auto → manual → disabled → auto` on click. Tooltip surfaces the cycle order so players don't have to discover it by trial.
+
+Replaced for the five action-class settings: `todoMode`, `extrasMode`, `reagentsMode`, `goldWithdrawMode`, `goldDepositMode`. The two master toggles (`manageItems`, `manageGold`) stay as checkboxes — they're bool, not tri-state.
+
+`MakeGlobalCB`'s mode-key special case (the `if settingKey:sub(-4) == "Mode"` branch from alpha14) is now dead code for the defaults bar but stays in the helper for any future bool-keyed callers; harmless.
+
+### Anchor + Show/Hide plumbing
+
+The new mode-button widget is structurally a label fontstring + clickable button (sibling, not child, so the label can extend left of the button bounds). The surrounding code chains widgets via `widget.text:RIGHT` and the (disabled)-overlay code spans `widget:LEFT` / `lastWidget.text:RIGHT`. To keep both patterns working without breaking callers:
+
+- `widget.text` aliases to the **button** (rightmost edge of the widget) — chained-anchor pattern places the next widget past the button, not overlapping it.
+- `widget.labelStart` exposes the **label** fontstring — the (disabled) overlay anchors `LEFT` here so it spans the label too, not just the button.
+- `widget:Hide()` / `widget:Show()` are overridden to chain visibility into `labelStart` so callers toggling visibility on the widget hide both pieces together.
+
+### Files
+
+```
+M  CHANGELOG.md
+M  UI/CharactersPage.lua
+M  UI/MainFrame.lua
+```
+
+No schema change. No behavior change beyond the polish surface — alpha14's underlying tri-state model is unchanged.
+
 ## v0.12.0-alpha14
 
 Architectural rebuild of the manage / automate model (#155). Closes the recurring class of bugs that #148 partially fixed (FQ-110 toeknee silent-skip, the alpha13 player-debug "Execute does nothing when triggers are off"), drops the bool/trigger conflation entirely, and adds a third action class for reagents that was previously folded into extras via a separate `depositIncludeReagents` bool.
