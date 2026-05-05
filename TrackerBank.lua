@@ -171,7 +171,14 @@ function Tracker:AutoPullFromBank(onComplete, fromClick)
         if errorCount > 0 then
             ns:Print(ns.COLORS.YELLOW .. errorCount .. " item(s) failed to move. Try opening your bank again.|r")
         end
-        C_Timer.After(1, function()
+        -- Settle delay before the post-action scan + UI refresh. Was 1s
+        -- as belt-and-suspenders for BAG_UPDATE_DELAYED draining; the
+        -- BankQueue already waits SYNC_VERIFY_DELAY=0.4s and confirms
+        -- moves via container-state diff before firing this callback,
+        -- so a one-frame settle is enough. Multi-second perceived idle
+        -- after "10/10 complete" came from this stack of 1s waits across
+        -- pull / deposit / extras / reagents subphases — see #155 cycle.
+        C_Timer.After(0.1, function()
             if ns.Scanner then
                 ns.Scanner:ScanCurrentCharacter()
                 ns.Scanner:ScanBank()
@@ -750,7 +757,9 @@ function Tracker:AutoDepositToWarbank(onComplete)
                 " item(s) deferred — warbank has no accepting slot.|r " ..
                 "Free up space and try again: " .. table.concat(deferredNames, ", "))
         end
-        C_Timer.After(1, function()
+        -- Settle delay before the post-action scan + UI refresh. See
+        -- AutoPullFromBank for the rationale — was 1s, now 0.1s.
+        C_Timer.After(0.1, function()
             if ns.Scanner then
                 ns.Scanner:ScanCurrentCharacter()
                 ns.Scanner:ScanBank()
@@ -939,7 +948,9 @@ function Tracker:AutoDepositExtraItems(onComplete)
             ns:Print(ns.COLORS.YELLOW .. deferredCount ..
                 " item(s) deferred — no accepting slot.|r")
         end
-        C_Timer.After(1, function()
+        -- Settle delay before the post-action scan + UI refresh. See
+        -- AutoPullFromBank for the rationale — was 1s, now 0.1s.
+        C_Timer.After(0.1, function()
             if ns.Scanner then
                 ns.Scanner:ScanCurrentCharacter()
                 ns.Scanner:ScanBank()
@@ -1092,7 +1103,9 @@ function Tracker:AutoDepositReagents(onComplete)
             ns:Print(ns.COLORS.YELLOW .. deferredCount ..
                 " reagent(s) deferred — no accepting slot.|r")
         end
-        C_Timer.After(1, function()
+        -- Settle delay before the post-action scan + UI refresh. See
+        -- AutoPullFromBank for the rationale — was 1s, now 0.1s.
+        C_Timer.After(0.1, function()
             if ns.Scanner then
                 ns.Scanner:ScanCurrentCharacter()
                 ns.Scanner:ScanBank()
