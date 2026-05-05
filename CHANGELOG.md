@@ -66,6 +66,23 @@ With the alpha14 split into to-do / extras / reagents subphases, the cumulative 
 
 `BankQueue.SYNC_VERIFY_DELAY` (0.4s, the verify gate) and `Tracker.lua:476`'s 0.3s inter-phase chain delay are unchanged — both are functional, not redundant.
 
+### Files
+
+```
+M  BankQueue.lua
+M  CHANGELOG.md
+M  TrackerBank.lua
+M  UI/BankPopup.lua
+M  UI/CharactersPage.lua
+M  UI/MainFrame.lua
+```
+
+No schema change. No behavior change beyond the polish surface — alpha14's underlying tri-state model is unchanged.
+
+## v0.12.0-alpha16
+
+Two bug fixes from in-game testing on alpha15: TSM postCap inflating gold-pull estimates by orders of magnitude (#117 reopen), and the Cogworks library taint blocking right-click on knowledge consumables (#156). Plus the `/fq debug gold` diagnostic gets per-task math so future "gold pull is wrong" reports become a one-command triage.
+
 ### Bank-ops gold-pull inflated by TSM postCap (closes #117 reopen)
 
 Mort and Zong reported the addon trying to pull "wildly high" amounts from the warbank — Mort's worst case was 344.7k for a darkmoon deck and a recipe; a separate test hit 150k for two enchant scrolls and two recipes; Zong saw 1.5M+ on enchant-heavy queues. All three traces back to the same line in the posting-fee estimator.
@@ -114,24 +131,19 @@ Upstream root cause (Cogworks COG-30, [d46a07e](https://github.com/gezmodean-wow
 
 Cogworks dropped the global rebind; the per-key assignments below it (`StaticPopupDialogs["COGWORKS_NEW_PROFILE"] = …`) stay — that's the supported pattern. Bumped Cogworks library MINOR 18 → 19, `lib.version` 0.13.1 → 0.13.2.
 
-FlipQueue picks up the fix by syncing the embedded `Libs/Cogworks-1.0/` directory. Two files changed: `Cogworks-1.0.lua` (version bumps) and `Scaling.lua` (the rebind removal + comment).
+FlipQueue picks up the fix via the `.pkgmeta` external pin bumped from `tag: v0.13.1` to `tag: v0.13.2`. The packager fetches the upstream library at build time, so no `Libs/Cogworks-1.0/` is committed to the FlipQueue repo. Two files differ between the pinned tags: `Cogworks-1.0.lua` (version bumps) and `Scaling.lua` (the rebind removal + comment).
 
 ### Files
 
 ```
-M  BankQueue.lua
+M  .pkgmeta
 M  CHANGELOG.md
-M  Libs/Cogworks-1.0/Cogworks-1.0.lua
-M  Libs/Cogworks-1.0/Scaling.lua
 M  RELEASES.md
 M  TrackerBank.lua
-M  UI/BankPopup.lua
-M  UI/CharactersPage.lua
-M  UI/MainFrame.lua
 M  UI/SlashCommands.lua
 ```
 
-No schema change. No behavior change beyond the polish surface — alpha14's underlying tri-state model is unchanged.
+No schema change. No FQ-side behavior change beyond the postCap clamp + diagnostic improvement — Cogworks change is library-internal taint surface only.
 
 ## v0.12.0-alpha14
 
