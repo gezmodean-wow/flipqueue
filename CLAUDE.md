@@ -28,6 +28,19 @@ This addon is part of the **Cogworks** WoW addon suite alongside Tempo, Maxcraft
 
 **Upcoming change (Phase 6a):** The Cogworks integration plan makes Syndicator a hard dependency for FlipQueue, collapses ~600 LOC of `Scanner.lua` onto Syndicator's API, adds a small `ItemLookup.lua` lazy lookup cache, keeps `Sync.lua` (BNet multi-account) but rewires its source of truth, and preserves `TrackerMail.lua` / `TrackerAuctions.lua` / `SalesIndex.lua` untouched. See `SYNDICATOR_INTEGRATION.md` for the preservation list and implementation patterns. Don't start that work without coordinating with the user.
 
+## Standards acknowledgments
+
+Each session, check the top entry of each source against the codes below. If newer, prefix the first response with `Standards updated:` plus a one-line summary per new entry, then update the code below as part of the session's commit.
+
+| Source | Last acknowledged |
+|---|---|
+| [comms conventions](https://github.com/gezmodean-wow/cogworks/blob/main/runbooks/comms-conventions.md) | 2026-05-05a |
+| [branch & release flow](https://github.com/gezmodean-wow/cogworks/blob/main/runbooks/branch-and-release-flow.md) | 2026-05-05a |
+| [doc conventions](https://github.com/gezmodean-wow/cogworks/blob/main/runbooks/doc-conventions.md) | 2026-05-05a |
+| [technical standards](https://github.com/gezmodean-wow/cogworks/blob/main/runbooks/technical-standards.md) | 2026-05-05a |
+| [shared/ file pool](https://github.com/gezmodean-wow/cogworks/blob/main/shared/VERSION) | 2026-05-05a — `bash scripts/sync-standards.sh check` |
+| [standards-sync (this mechanism)](https://github.com/gezmodean-wow/cogworks/blob/main/runbooks/standards-sync.md) | 2026-05-05a |
+
 ## Coding Conventions
 - All Lua files use `local addonName, ns = ...` for namespace
 - Colors defined in Core.lua ns.COLORS table
