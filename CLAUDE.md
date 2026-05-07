@@ -35,7 +35,7 @@ Each session, check the top entry of each source against the codes below. If new
 | Source | Last acknowledged |
 |---|---|
 | [comms conventions](https://github.com/gezmodean-wow/cogworks/blob/main/runbooks/comms-conventions.md) | 2026-05-05a |
-| [branch & release flow](https://github.com/gezmodean-wow/cogworks/blob/main/runbooks/branch-and-release-flow.md) | 2026-05-05a |
+| [branch & release flow](https://github.com/gezmodean-wow/cogworks/blob/main/runbooks/branch-and-release-flow.md) | 2026-05-06a |
 | [doc conventions](https://github.com/gezmodean-wow/cogworks/blob/main/runbooks/doc-conventions.md) | 2026-05-05a |
 | [technical standards](https://github.com/gezmodean-wow/cogworks/blob/main/runbooks/technical-standards.md) | 2026-05-05a |
 | [shared/ file pool](https://github.com/gezmodean-wow/cogworks/blob/main/shared/VERSION) | 2026-05-05a — `bash scripts/sync-standards.sh check` |
