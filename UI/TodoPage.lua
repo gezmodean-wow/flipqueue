@@ -139,14 +139,21 @@ local function BuildTodoData()
 
             local sourceStr = item.source or ""
             if isBuyTask then
-                -- Buy task: show step-based status
+                -- Buy task: show step-based status. Mirrors the MiniView
+                -- prefix mapping so the two surfaces agree on what action
+                -- the player needs to take next:
+                --   browse / buy → AH         "browse AH" / "buy item"
+                --   collect      → mailbox    "check mail"
+                --   deposit      → warbank    "deposit to wb"
                 local stepType = ns.TodoList:GetCurrentStepType(item) or "browse"
                 if stepType == "browse" then
                     sourceStr = ns.COLORS.CYAN .. "browse AH" .. "|r"
                 elseif stepType == "buy" then
                     sourceStr = ns.COLORS.CYAN .. "buy item" .. "|r"
+                elseif stepType == "collect" then
+                    sourceStr = ns.COLORS.YELLOW .. "check mail" .. "|r"
                 elseif stepType == "deposit" then
-                    sourceStr = ns.COLORS.YELLOW .. "deposit to wb" .. "|r"
+                    sourceStr = ns.COLORS.ORANGE .. "deposit to wb" .. "|r"
                 end
             elseif sourceStr == "warbank" then
                 sourceStr = ns.COLORS.YELLOW .. "warbank" .. "|r"
@@ -180,8 +187,23 @@ local function BuildTodoData()
                     and ("Sell on: " .. item.targetRealm .. "  @  " .. (item.expectedPrice or "?")) or nil)
             end
 
+            -- Buy-task name prefix tracks the lifecycle step so the row
+            -- tells the player what to do next (AH / mailbox / warbank).
+            -- Mirrors UI/MiniView.lua's prefix mapping.
+            local namePrefix = ""
+            if isBuyTask then
+                local s = ns.TodoList:GetCurrentStepType(item)
+                if s == "collect" then
+                    namePrefix = ns.COLORS.YELLOW .. "[CHECK MAIL] " .. "|r"
+                elseif s == "deposit" then
+                    namePrefix = ns.COLORS.ORANGE .. "[DEPOSIT] " .. "|r"
+                else
+                    namePrefix = ns.COLORS.CYAN .. "[BUY] " .. "|r"
+                end
+            end
+
             local row = {
-                name     = isBuyTask and (ns.COLORS.CYAN .. "[BUY] " .. "|r" .. displayName) or displayName,
+                name     = namePrefix .. displayName,
                 qty      = item.quantity or 1,
                 price    = priceDisplay,
                 realm    = isBuyTask and (item.buyRealm or "") or (item.targetRealm or ""),
@@ -913,9 +935,18 @@ function UI:RefreshTodoPage()
                     elseif item.quality and item.quality ~= "" then
                         displayName = QualityColorName(displayName, item.quality)
                     end
-                    -- Prefix buy tasks with [BUY] tag
+                    -- Prefix buy tasks with the lifecycle-aware tag — [BUY]
+                    -- before purchase, [CHECK MAIL] after AH confirmation,
+                    -- [DEPOSIT] once the item is in bags awaiting warbank.
                     if isBuyItem then
-                        displayName = ns.COLORS.CYAN .. "[BUY] " .. "|r" .. displayName
+                        local s = ns.TodoList:GetCurrentStepType(item)
+                        if s == "collect" then
+                            displayName = ns.COLORS.YELLOW .. "[CHECK MAIL] " .. "|r" .. displayName
+                        elseif s == "deposit" then
+                            displayName = ns.COLORS.ORANGE .. "[DEPOSIT] " .. "|r" .. displayName
+                        else
+                            displayName = ns.COLORS.CYAN .. "[BUY] " .. "|r" .. displayName
+                        end
                     end
                     -- Warbank overfill warning: soft indicator only. Running
                     -- balance simulation flags this task because its deposit

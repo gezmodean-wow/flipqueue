@@ -1,5 +1,5 @@
 -- UI/AuctionatorFrame.lua
--- Auctionator integration page: shopping list export from queue/inventory
+-- Auctionator integration page: live buy-list sync settings + manual refresh.
 local addonName, ns = ...
 
 local UI = ns.UI
@@ -7,16 +7,10 @@ local UI = ns.UI
 local auctPanel
 local auctWidgets = {}
 
--- Layout constants (match SettingsFrame / TSMFrame)
 local LEFT_MARGIN = 12
 local RIGHT_MARGIN = -12
 local SECTION_SPACING = 14
-local ITEM_SPACING = 6
 local DESC_COLOR = {0.6, 0.6, 0.6}
-
---------------------------
--- Helpers
---------------------------
 
 local function IsAuctionatorAvailable()
     return type(Auctionator) == "table"
@@ -58,68 +52,81 @@ local function CreateActionBtn(label, parent)
     return btn
 end
 
---------------------------
--- Build Shopping List Items
---------------------------
+-- Lightweight checkbox bound to ns.db.settings[key].
+local function CreateCheckRow(parent, label, tooltip, settingKey, onChanged)
+    local row = CreateFrame("Frame", nil, parent)
+    row:SetHeight(20)
 
-local function GetQueueItemNames()
-    if not ns.db or not ns.db.imports then return {} end
-    local names = {}
-    local seen = {}
-    for _, item in pairs(ns.db.imports.fpScanner or {}) do
-        if item.name and item.name ~= "" then
-            local lower = item.name:lower()
-            if not seen[lower] then
-                seen[lower] = true
-                table.insert(names, item.name)
-            end
+    local cb = CreateFrame("CheckButton", nil, row, "UICheckButtonTemplate")
+    cb:SetSize(20, 20)
+    cb:SetPoint("LEFT", row, "LEFT", 0, 0)
+    cb:SetScript("OnClick", function(self)
+        if ns.db and ns.db.settings then
+            ns.db.settings[settingKey] = self:GetChecked()
+            if onChanged then onChanged() end
         end
+    end)
+
+    local txt = row:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    txt:SetPoint("LEFT", cb, "RIGHT", 2, 0)
+    txt:SetText(label)
+    txt:SetWordWrap(false)
+
+    if tooltip then
+        cb:SetScript("OnEnter", function()
+            GameTooltip:SetOwner(cb, "ANCHOR_RIGHT")
+            GameTooltip:AddLine(label, 1, 1, 1)
+            GameTooltip:AddLine(tooltip, 0.8, 0.8, 0.8, true)
+            GameTooltip:Show()
+        end)
+        cb:SetScript("OnLeave", function() GameTooltip:Hide() end)
     end
-    return names
+
+    row.cb = cb
+    row.settingKey = settingKey
+    return row
 end
 
-local BOUND_TYPES = {
-    [1] = true, [4] = true, [7] = true, [8] = true, [9] = true,
-}
+local function CreateModeRadioPair(parent, onChanged)
+    local row = CreateFrame("Frame", nil, parent)
+    row:SetHeight(22)
 
-local function GetInventoryItemNames()
-    if not ns.db then return {} end
-    local names = {}
-    local seen = {}
-    for _, charData in pairs(ns.db.characters) do
-        if charData.inventory and charData.inventory.items then
-            for _, itemData in pairs(charData.inventory.items) do
-                if itemData.name and itemData.name ~= ""
-                    and not BOUND_TYPES[itemData.bindType or 0]
-                    and not itemData.isBound then
-                    local lower = itemData.name:lower()
-                    if not seen[lower] then
-                        seen[lower] = true
-                        table.insert(names, itemData.name)
-                    end
-                end
-            end
-        end
+    local function MakeRadio(label, value)
+        local r = CreateFrame("CheckButton", nil, row, "UIRadioButtonTemplate")
+        r:SetSize(16, 16)
+        r.value = value
+        r.text = r:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+        r.text:SetPoint("LEFT", r, "RIGHT", 2, 0)
+        r.text:SetText(label)
+        return r
     end
-    if ns.db.warbank and ns.db.warbank.items then
-        for _, itemData in pairs(ns.db.warbank.items) do
-            if itemData.name and itemData.name ~= ""
-                and not BOUND_TYPES[itemData.bindType or 0]
-                and not itemData.isBound then
-                local lower = itemData.name:lower()
-                if not seen[lower] then
-                    seen[lower] = true
-                    table.insert(names, itemData.name)
-                end
-            end
-        end
+
+    local single = MakeRadio("Single list (FlipQueue - Buy)", "single")
+    single:SetPoint("LEFT", row, "LEFT", 0, 0)
+
+    local perRealm = MakeRadio("One list per realm", "perRealm")
+    perRealm:SetPoint("LEFT", single.text, "RIGHT", 18, 0)
+
+    local function Sync()
+        local mode = ns.db and ns.db.settings and ns.db.settings.auctBuyListMode or "single"
+        single:SetChecked(mode == "single")
+        perRealm:SetChecked(mode == "perRealm")
     end
-    return names
+
+    single:SetScript("OnClick", function()
+        ns.db.settings.auctBuyListMode = "single"
+        Sync()
+        if onChanged then onChanged() end
+    end)
+    perRealm:SetScript("OnClick", function()
+        ns.db.settings.auctBuyListMode = "perRealm"
+        Sync()
+        if onChanged then onChanged() end
+    end)
+
+    row.Sync = Sync
+    return row
 end
-
---------------------------
--- Get Auctionator Shopping Lists
---------------------------
 
 local function GetShoppingLists()
     return ns:GetAuctionatorListNames()
@@ -146,7 +153,6 @@ function UI:CreateAuctionatorPanel(parent)
     end)
 
     local y = -6
-    local h
 
     ------------------------------------------------
     -- Status
@@ -156,10 +162,6 @@ function UI:CreateAuctionatorPanel(parent)
     auctWidgets.status:SetPoint("TOPLEFT", content, "TOPLEFT", LEFT_MARGIN, y)
     y = y - 24
 
-    ------------------------------------------------
-    -- Not Installed Message
-    ------------------------------------------------
-
     auctWidgets.notInstalled = content:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
     auctWidgets.notInstalled:SetPoint("TOPLEFT", content, "TOPLEFT", LEFT_MARGIN, y)
     auctWidgets.notInstalled:SetPoint("RIGHT", content, "RIGHT", RIGHT_MARGIN, 0)
@@ -167,88 +169,95 @@ function UI:CreateAuctionatorPanel(parent)
     auctWidgets.notInstalled:SetWordWrap(true)
     auctWidgets.notInstalled:SetTextColor(DESC_COLOR[1], DESC_COLOR[2], DESC_COLOR[3])
     auctWidgets.notInstalled:SetText(
-        "Auctionator provides an in-game shopping list feature. When installed, FlipQueue can:\n\n" ..
-        "  - Create Auctionator shopping lists from your queue items\n" ..
-        "  - Create shopping lists from your full tradeable inventory\n" ..
-        "  - Use Auctionator lists as export filters\n\n" ..
-        "Install Auctionator from CurseForge to enable these features.")
-    y = y - 100
+        "FlipQueue keeps a live Auctionator shopping list synced to the buy tasks " ..
+        "you currently need to fulfill. The list refreshes when you open the AH " ..
+        "and as you make purchases, so each item drops off as soon as you've bought enough.\n\n" ..
+        "Install Auctionator from CurseForge to enable this feature.")
+    auctWidgets.notInstalled:SetHeight(80)
+    y = y - 90
 
     ------------------------------------------------
-    -- Shopping List Export
+    -- Buy List Sync settings
     ------------------------------------------------
 
-    y = y - SectionHeader(content, y, "Create Shopping List")
+    y = y - SectionHeader(content, y, "Buy List Sync")
 
-    -- List name input
-    local nameRow = CreateFrame("Frame", nil, content)
-    nameRow:SetPoint("TOPLEFT", content, "TOPLEFT", LEFT_MARGIN, y)
-    nameRow:SetPoint("RIGHT", content, "RIGHT", RIGHT_MARGIN, 0)
-    nameRow:SetHeight(44)
+    auctWidgets.enabled = CreateCheckRow(content,
+        "Sync buy tasks to an Auctionator shopping list",
+        "When on, the FlipQueue buy list is automatically populated from your current character's outstanding buy tasks. Items drop off as your bags fill — that's how purchase detection works.",
+        "auctBuyListEnabled",
+        function() UI:RefreshAuctionatorPage(); if ns.BuyListSync then ns.BuyListSync:Rebuild(true) end end)
+    auctWidgets.enabled:SetPoint("TOPLEFT", content, "TOPLEFT", LEFT_MARGIN, y)
+    auctWidgets.enabled:SetPoint("RIGHT", content, "RIGHT", RIGHT_MARGIN, 0)
+    y = y - 22
 
-    local nameLabel = nameRow:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-    nameLabel:SetPoint("TOPLEFT", nameRow, "TOPLEFT", 0, 0)
-    nameLabel:SetText("List name:")
+    auctWidgets.autoUpdate = CreateCheckRow(content,
+        "Auto-update when the AH opens or you buy something",
+        "Off = the list only refreshes when you click Refresh below. On is the default and matches Profession Shopping List's behavior.",
+        "auctBuyListAutoUpdate")
+    auctWidgets.autoUpdate:SetPoint("TOPLEFT", content, "TOPLEFT", LEFT_MARGIN + 18, y)
+    auctWidgets.autoUpdate:SetPoint("RIGHT", content, "RIGHT", RIGHT_MARGIN, 0)
+    y = y - 22
 
-    local nameBox = CreateFrame("EditBox", nil, nameRow, "InputBoxTemplate")
-    nameBox:SetSize(220, 20)
-    nameBox:SetPoint("TOPLEFT", nameLabel, "BOTTOMLEFT", 4, -4)
-    nameBox:SetAutoFocus(false)
-    nameBox:SetMaxLetters(100)
-    nameBox:SetText("FlipQueue - " .. date("%Y-%m-%d"))
-    nameBox:SetScript("OnEscapePressed", function(self) self:ClearFocus() end)
-    auctWidgets.nameBox = nameBox
-    y = y - 48
+    auctWidgets.modeRow = CreateModeRadioPair(content,
+        function() if ns.BuyListSync then ns.BuyListSync:Rebuild(true) end end)
+    auctWidgets.modeRow:SetPoint("TOPLEFT", content, "TOPLEFT", LEFT_MARGIN + 18, y)
+    auctWidgets.modeRow:SetPoint("RIGHT", content, "RIGHT", RIGHT_MARGIN, 0)
+    y = y - 26
 
-    -- Source toggle: Queue only / Full Inventory
-    local sourceLabel = content:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-    sourceLabel:SetPoint("TOPLEFT", content, "TOPLEFT", LEFT_MARGIN, y)
-    sourceLabel:SetText("Source:")
-    y = y - 18
+    auctWidgets.includeQuality = CreateCheckRow(content,
+        "Match exact quality (epic/rare/uncommon)",
+        "Off (default) widens the search so listings carrying bonus IDs that bumped quality still appear. On forces an exact-quality match — useful when you only want one specific bracket.",
+        "auctBuyListIncludeQuality",
+        function() if ns.BuyListSync then ns.BuyListSync:Rebuild(true) end end)
+    auctWidgets.includeQuality:SetPoint("TOPLEFT", content, "TOPLEFT", LEFT_MARGIN + 18, y)
+    auctWidgets.includeQuality:SetPoint("RIGHT", content, "RIGHT", RIGHT_MARGIN, 0)
+    y = y - 22
 
-    local sourceFrame = CreateFrame("Frame", nil, content)
-    sourceFrame:SetPoint("TOPLEFT", content, "TOPLEFT", LEFT_MARGIN, y)
-    sourceFrame:SetPoint("RIGHT", content, "RIGHT", RIGHT_MARGIN, 0)
-    sourceFrame:SetHeight(24)
+    auctWidgets.includeTier = CreateCheckRow(content,
+        "Match exact crafting tier",
+        "Off (default) leaves tier unconstrained. On forces an exact-tier match — useful for crafted reagents where tier 1/2/3 carry very different prices.",
+        "auctBuyListIncludeTier",
+        function() if ns.BuyListSync then ns.BuyListSync:Rebuild(true) end end)
+    auctWidgets.includeTier:SetPoint("TOPLEFT", content, "TOPLEFT", LEFT_MARGIN + 18, y)
+    auctWidgets.includeTier:SetPoint("RIGHT", content, "RIGHT", RIGHT_MARGIN, 0)
+    y = y - 22
 
-    local sourceMode = "queue" -- "queue" or "inventory"
+    auctWidgets.autoDelete = CreateCheckRow(content,
+        "Delete empty per-realm lists automatically",
+        "Only applies in per-realm mode. When a realm's buy list goes empty, FlipQueue removes the list from Auctionator's dropdown so old realms don't pile up. The single-mode list is never deleted automatically — it's the persistent target.",
+        "auctBuyListAutoDelete")
+    auctWidgets.autoDelete:SetPoint("TOPLEFT", content, "TOPLEFT", LEFT_MARGIN + 18, y)
+    auctWidgets.autoDelete:SetPoint("RIGHT", content, "RIGHT", RIGHT_MARGIN, 0)
+    y = y - 28
 
-    local queueBtn = CreateActionBtn("Queue Items", sourceFrame)
-    queueBtn:SetPoint("LEFT", sourceFrame, "LEFT", 0, 0)
-
-    local invBtn = CreateActionBtn("Full Inventory", sourceFrame)
-    invBtn:SetPoint("LEFT", queueBtn, "RIGHT", 4, 0)
-
-    local function UpdateSourceButtons()
-        if sourceMode == "queue" then
-            queueBtn:SetBackdropColor(0.2, 0.4, 0.2, 1)
-            invBtn:SetBackdropColor(0.15, 0.15, 0.2, 1)
-        else
-            queueBtn:SetBackdropColor(0.15, 0.15, 0.2, 1)
-            invBtn:SetBackdropColor(0.2, 0.4, 0.2, 1)
+    -- Manual refresh button
+    local refreshBtn = CreateActionBtn("Refresh Buy List Now", content)
+    refreshBtn:SetPoint("TOPLEFT", content, "TOPLEFT", LEFT_MARGIN, y)
+    refreshBtn:SetWidth(180)
+    refreshBtn:SetScript("OnClick", function()
+        if not IsAuctionatorAvailable() then
+            auctWidgets.result:SetText("|cffff4444Auctionator is not installed.|r")
+            return
         end
-    end
-
-    queueBtn:SetScript("OnClick", function()
-        sourceMode = "queue"
-        UpdateSourceButtons()
+        if not ns.BuyListSync then
+            auctWidgets.result:SetText("|cffff4444BuyListSync not loaded.|r")
+            return
+        end
+        local total, created, deleted, err = ns.BuyListSync:Rebuild(true)
+        if err then
+            auctWidgets.result:SetText("|cffff4444" .. err .. "|r")
+        elseif total == 0 then
+            auctWidgets.result:SetText(ns.COLORS.GRAY .. "No outstanding buy tasks for this character.|r")
+        else
+            local msg = "Refreshed " .. (created or 0) .. " list(s), " .. (total or 0) .. " item(s)"
+            if deleted and deleted > 0 then msg = msg .. " (removed " .. deleted .. " empty)" end
+            auctWidgets.result:SetText(ns.COLORS.GREEN .. msg .. ".|r")
+        end
+        UI:RefreshAuctionatorPage()
     end)
-    invBtn:SetScript("OnClick", function()
-        sourceMode = "inventory"
-        UpdateSourceButtons()
-    end)
-    UpdateSourceButtons()
-
-    auctWidgets.sourceMode = function() return sourceMode end
     y = y - 30
 
-    -- Create List button
-    local createBtn = CreateActionBtn("Create Shopping List", content)
-    createBtn:SetPoint("TOPLEFT", content, "TOPLEFT", LEFT_MARGIN, y)
-    createBtn:SetWidth(180)
-    y = y - 30
-
-    -- Result text
     auctWidgets.result = content:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
     auctWidgets.result:SetPoint("TOPLEFT", content, "TOPLEFT", LEFT_MARGIN, y)
     auctWidgets.result:SetPoint("RIGHT", content, "RIGHT", RIGHT_MARGIN, 0)
@@ -257,45 +266,11 @@ function UI:CreateAuctionatorPanel(parent)
     auctWidgets.result:SetText("")
     y = y - 20
 
-    createBtn:SetScript("OnClick", function()
-        if not IsAuctionatorAvailable() then
-            auctWidgets.result:SetText("|cffff4444Auctionator is not installed.|r")
-            return
-        end
-
-        local listName = auctWidgets.nameBox:GetText():match("^%s*(.-)%s*$")
-        if listName == "" then
-            auctWidgets.result:SetText("|cffff4444Please enter a list name.|r")
-            return
-        end
-
-        local items
-        if auctWidgets.sourceMode() == "queue" then
-            items = GetQueueItemNames()
-        else
-            items = GetInventoryItemNames()
-        end
-
-        if #items == 0 then
-            auctWidgets.result:SetText("|cffff8800No items found.|r")
-            return
-        end
-
-        local ok, err = pcall(Auctionator.API.v1.CreateShoppingList, "FlipQueue", listName, items)
-        if ok then
-            auctWidgets.result:SetText(ns.COLORS.GREEN .. "Created list '" .. listName ..
-                "' with " .. #items .. " items.|r")
-            UI:RefreshAuctionatorPage()
-        else
-            auctWidgets.result:SetText("|cffff4444Error: " .. tostring(err) .. "|r")
-        end
-    end)
-
     ------------------------------------------------
     -- Available Shopping Lists
     ------------------------------------------------
     y = y - SECTION_SPACING
-    y = y - SectionHeader(content, y, "Available Shopping Lists")
+    y = y - SectionHeader(content, y, "Auctionator Shopping Lists")
 
     auctWidgets.listInfo = content:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
     auctWidgets.listInfo:SetPoint("TOPLEFT", content, "TOPLEFT", LEFT_MARGIN, y)
@@ -303,7 +278,7 @@ function UI:CreateAuctionatorPanel(parent)
     auctWidgets.listInfo:SetJustifyH("LEFT")
     auctWidgets.listInfo:SetWordWrap(true)
     auctWidgets.listInfo:SetSpacing(2)
-    y = y - 100
+    y = y - 120
 
     content:SetHeight(math.abs(y) + 10)
 
@@ -342,14 +317,39 @@ function UI:RefreshAuctionatorPage()
         auctWidgets.notInstalled:Show()
     end
 
-    -- Update shopping lists display
+    -- Sync checkbox + radio state from settings.
+    if ns.db and ns.db.settings then
+        if auctWidgets.enabled and auctWidgets.enabled.cb then
+            auctWidgets.enabled.cb:SetChecked(ns.db.settings.auctBuyListEnabled)
+        end
+        if auctWidgets.autoUpdate and auctWidgets.autoUpdate.cb then
+            auctWidgets.autoUpdate.cb:SetChecked(ns.db.settings.auctBuyListAutoUpdate)
+        end
+        if auctWidgets.includeQuality and auctWidgets.includeQuality.cb then
+            auctWidgets.includeQuality.cb:SetChecked(ns.db.settings.auctBuyListIncludeQuality)
+        end
+        if auctWidgets.includeTier and auctWidgets.includeTier.cb then
+            auctWidgets.includeTier.cb:SetChecked(ns.db.settings.auctBuyListIncludeTier)
+        end
+        if auctWidgets.autoDelete and auctWidgets.autoDelete.cb then
+            auctWidgets.autoDelete.cb:SetChecked(ns.db.settings.auctBuyListAutoDelete)
+        end
+        if auctWidgets.modeRow and auctWidgets.modeRow.Sync then
+            auctWidgets.modeRow.Sync()
+        end
+    end
+
     if auctWidgets.listInfo then
         if available then
             local lists = GetShoppingLists()
             if #lists > 0 then
                 local lines = {}
                 for _, name in ipairs(lists) do
-                    lines[#lines + 1] = "|cff00ff00>|r " .. name
+                    local marker = "|cff00ff00>|r "
+                    if name:sub(1, #"FlipQueue - Buy") == "FlipQueue - Buy" then
+                        marker = "|cffffd200>|r "  -- highlight FQ-managed lists
+                    end
+                    lines[#lines + 1] = marker .. name
                 end
                 auctWidgets.listInfo:SetText(table.concat(lines, "\n"))
             else

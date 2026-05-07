@@ -44,6 +44,7 @@ Sync.lua
 ItemResearch.lua
 SalesIndex.lua
 DealFinder.lua
+BuyListSync.lua
 UI/ScrollTable.lua
 UI/Shared.lua
 UI/ExportPopup.lua

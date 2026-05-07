@@ -65,19 +65,43 @@ This is where FlipQueue shines. The **Generator Wizard** takes your deals — wh
 
 ## Step 4: Follow the List
 
-Log into each character and FlipQueue tells you exactly what to do. Tasks advance through stages automatically based on game events:
+Log into each character and FlipQueue tells you exactly what to do. Tasks advance through stages automatically based on game events.
 
-**retrieve** → **post** → **collect**
+**Sell-side flow:** retrieve → post → collect
+
+**Buy-side flow:** browse → buy → check mail → deposit
+
+The mini overlay relabels each row as you progress through the workflow — `[BUY]` while you still need to click in the AH, `[CHECK MAIL]` the moment the buyout completes (no waiting for the item to arrive), `[DEPOSIT]` once the item is in your bags and needs to move to the warbank. The header at the top splits the same way: `X to post, Y to buy, Z in mail, W to deposit`, so you always know what's left at a glance.
 
 Your to-do list is reactive — it responds to what actually happens in the game. Decided to keep an item you bought? FlipQueue notices it's gone and reallocates. An item gets sold or moved before you get to it? The task is skipped automatically. You can regenerate or adjust on the fly without starting over.
 
 - **Mini overlay** — a compact floating view shows your current tasks at a glance without opening the main window
+- **Live Auctionator buy list** — when you have buy tasks, FlipQueue keeps a shopping list called *FlipQueue - Buy* synced to what your current character still needs, with the right max-price ceiling on every entry. Items drop off the list automatically the moment you buy them
 - **Auto-pull** — queued items are pulled from bank/warbank automatically when you open it
 - **Auto-deposit** — items that belong to another character are sent to the warbank
 - **Auto-withdraw** — posting fees are withdrawn from the warbank (configurable limit per visit)
 
+### Auto / Manual / Disabled per action
+
+Every automated action — pull, deposit-to-warbank, deposit-extras, deposit-reagents, gold withdraw, gold deposit — has its own three-state setting:
+
+- **Auto** runs on bank open, button still works manually
+- **Manual** doesn't auto-fire (so opening the bank doesn't surprise you), button still works
+- **Disabled** is hidden everywhere
+
+Two master switches at the top of the settings page — **Manage my items** and **Manage my gold** — let you scope FlipQueue to exactly what you want it touching, with per-character overrides on the Characters page.
+
 <!-- SCREENSHOT: To-Do page or Mini overlay with active tasks -->
 <!-- ![To-Do](https://i.imgur.com/PLACEHOLDER_TODO.png) -->
+
+<!-- SCREENSHOT: Settings page showing Auto/Manual/Disabled controls -->
+<!-- ![Settings](https://i.imgur.com/PLACEHOLDER_SETTINGS.png) -->
+
+<!-- SCREENSHOT: Mini overlay showing [BUY] / [CHECK MAIL] / [DEPOSIT] lifecycle labels -->
+<!-- ![Mini lifecycle](https://i.imgur.com/PLACEHOLDER_MINI_LIFECYCLE.png) -->
+
+<!-- SCREENSHOT: Auctionator settings page in FlipQueue showing the buy-list sync controls -->
+<!-- ![Auctionator buy list](https://i.imgur.com/PLACEHOLDER_AUCT_BUYLIST.png) -->
 
 ---
 
@@ -101,11 +125,16 @@ Don't wait for deals — snipe them. Export your deal data from FlipQueue as AAA
 
 ## Other Features
 
+- **Pause Automation** — drawer button that pauses auto-fire on bank open without disabling manual access. Drawer buttons stay clickable while paused
+- **Instance auto-pause** — automatically pauses bank ops while you're inside a raid, dungeon, arena, battleground, or scenario, so a stale queued op can't fire from an unsafe context
+- **About page** with installed version, embedded library version, current WoW build, and a one-click Copy Diagnostics button for bug reports
+- **Reagent tracking** as its own action class, separate from extras — auto-deposit your gear leftovers without sending crafting mats too
 - **Do Not Track list** — permanently exclude items you don't want routed
 - **Accent-insensitive realm matching** — works correctly on EU servers with accented realm names
 - **Battle pet support**
 - **Configurable bank tab** selection for auto-deposit
-- **Minimap button & slash commands** (`/fq`)
+- **Multi-account synchronization** — link a second WoW account via BattleNet and both accounts see each other's characters, bags, banks, and to-do lists in real time
+- **Minimap button & slash commands** (`/fq`, `/fq settings`, `/fq mini`, `/fq import`, `/fq scan`, `/fq bank`, `/fq version`)
 
 ---
 

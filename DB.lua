@@ -106,6 +106,19 @@ function ns:InitDB()
     db.settings.tsmFallbackOp = db.settings.tsmFallbackOp or ""
     if db.settings.tsmAutoUpdatePrice == nil then db.settings.tsmAutoUpdatePrice = false end
     db.settings.tsmPriceMaxAge     = db.settings.tsmPriceMaxAge or 3600
+    -- Auctionator buy-list live sync. The list "FlipQueue - Buy" (single
+    -- mode) or one per realm "FlipQueue - Buy - <Realm>" (perRealm) is
+    -- rebuilt on AUCTION_HOUSE_SHOW and after bag changes; items the
+    -- player has already purchased (bag count >= task quantity) drop out.
+    -- Quality/tier are off by default to widen exact-match — bonus-IDed
+    -- gear often appears at a higher quality than the task records, and
+    -- forcing the constraint silently hides matching listings.
+    if db.settings.auctBuyListEnabled        == nil then db.settings.auctBuyListEnabled = true end
+    if db.settings.auctBuyListAutoUpdate     == nil then db.settings.auctBuyListAutoUpdate = true end
+    db.settings.auctBuyListMode    = db.settings.auctBuyListMode or "single"  -- "single" | "perRealm"
+    if db.settings.auctBuyListIncludeQuality == nil then db.settings.auctBuyListIncludeQuality = false end
+    if db.settings.auctBuyListIncludeTier    == nil then db.settings.auctBuyListIncludeTier = false end
+    if db.settings.auctBuyListAutoDelete     == nil then db.settings.auctBuyListAutoDelete = true end
     -- Transform page defaults
     db.settings.transformPriceSource  = db.settings.transformPriceSource or "45% DBRegionMarketAvg"
     db.settings.transformDiscount     = db.settings.transformDiscount or 100
