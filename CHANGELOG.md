@@ -1,5 +1,27 @@
 # Changelog
 
+## v0.12.0
+
+Stable cut from the beta3 commit (`3547f14`). Beta1 → beta2 → beta3 went through tester soak; the package the public release ships is identical to beta3's content. Storefront `description.md` refreshed and pasted to CurseForge + Wago dashboards as part of the release; first screenshot set captured per `docs/storefront/screenshots/README.md` v0.12.0 capture checklist.
+
+Cumulative shape vs. v0.11.x:
+
+- **Architecture rebuild** (alpha14, #155): Auto / Manual / Disabled tri-state per action class. Schema #11.
+- **Bag-taint mitigation arc** (alpha11 → alpha13 → alpha17 + Cogworks v0.13.1, v0.13.2).
+- **Live Auctionator buy-list sync** + buy-task lifecycle relabel (beta2).
+- **Deposit-planner correctness** (beta2): four bugs around purchase detection, gold-withdraw inflation, sell-task-only deposit ops, and binary myPostingKeys dropping surplus stacks.
+- **Generator-wizard chunked-parse** (beta3, FQ-131 reopen): the alpha13 retrofit missed the wizard paste boxes.
+- **Loosened Auctionator search defaults** (beta2, FQ-135 root cause): quality / tier off by default — bonus-IDed gear was getting filtered by exact-quality match.
+- **`ParseGoldValue` invisible-character hardening** (beta1, FQ-135 long-tail).
+- **TSM postCap clamp** (alpha16, FQ-117 reopen).
+- **Import-pipeline chunking** for FP CSV / FP semicolon / tab-delimited routes (alpha13, #131).
+- **AH-with-TSM coexistence**: opt-in auto-scan, FQ-initiated post-flag separation (alpha10, FQ-138).
+- **DealFinder ilvl-variant pricing** + tooltip / log variant preservation.
+- **About page** + version surfacing (alpha13, #146).
+- **MiniView instance-hide** setting + restore-bug fix.
+
+The detailed engineering notes for each iteration live in the per-tag sections below (v0.12.0-beta3 → v0.12.0-beta1 → alpha17 → ...).
+
 ## v0.12.0-beta3
 
 Beta3 supersedes beta2 (which was tagged 2026-05-06 but never released to the soak crew). Same buy-flow + deposit-planner package as beta2, plus a Generator-wizard chunked-parse fix that closes the FQ-131 reopen zpectre hit on alpha13. Bundles the two work streams since both target the same v0.12.0 stable RC.

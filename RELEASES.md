@@ -6,9 +6,9 @@ The engineering-detail companion lives in `CHANGELOG.md` (commit-readerese — f
 
 ---
 
-## v0.12.0 (release candidate)
+## v0.12.0
 
-This is the **beta3** release candidate for v0.12.0. Beta1 was cut on 2026-05-05 and surfaced a chain of buy-flow issues during the test crew's soak — Auctionator's shopping list missing items below the target price, MiniView buy rows staying labeled `[BUY]` long after the purchase, and bought items getting stranded in bags because nothing ever told the warbank to pick them up. Beta2 (tagged 2026-05-06, never released) fixed those. Beta3 supersedes it with one additional fix — large pastes into the Generator wizard's deal box are now chunked so the client doesn't freeze. If no critical issues land, this build ships as v0.12.0 stable.
+Public release. The big shifts since v0.11.x are the Auto / Manual / Disabled per-action settings model, the **Manage my items** / **Manage my gold** master switches, the live Auctionator buy-list sync, and the buy-task workflow labels in the mini overlay (`[BUY]` → `[CHECK MAIL]` → `[DEPOSIT]`). Plus a long arc of bag-taint hardening, the deposit-planner correctness pass, and the Generator-wizard chunked-parse fix so huge FlippingPal pastes don't freeze the client.
 
 ### Generator wizard handles huge pastes without freezing
 
