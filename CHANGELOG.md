@@ -1,8 +1,27 @@
 # Changelog
 
-## v0.12.0-beta2
+## v0.12.0-beta3
 
-Beta2 cuts during the beta1 soak after a tester report (gezmo) surfaced a chain of buy-flow issues that beta1 didn't address. Cumulative shape vs. beta1: live Auctionator buy-list sync replaces the one-shot export flow, MiniView / TodoPage relabel buy rows through the lifecycle (`[BUY]` → `[CHECK MAIL]` → `[DEPOSIT]`), and three deposit-planner correctness fixes free items that were getting stranded in bags.
+Beta3 supersedes beta2 (which was tagged 2026-05-06 but never released to the soak crew). Same buy-flow + deposit-planner package as beta2, plus a Generator-wizard chunked-parse fix that closes the FQ-131 reopen zpectre hit on alpha13. Bundles the two work streams since both target the same v0.12.0 stable RC.
+
+Cumulative shape vs. beta1: live Auctionator buy-list sync replaces the one-shot export flow, MiniView / TodoPage relabel buy rows through the lifecycle (`[BUY]` → `[CHECK MAIL]` → `[DEPOSIT]`), four deposit-planner correctness fixes free items that were getting stranded in bags, and the Generator-wizard paste handlers now route through the chunked parser like the dedicated Import page already does.
+
+### FQ-131 reopen: Generator-wizard paste handlers were never chunked
+
+Alpha13 added chunked parsers for the FP comma-CSV / FP semicolon / tab-delimited / FP-website routes and wired them into `UI/ImportPage.lua`'s paste handler via the new `Import:ParseChunked` dispatcher. The dedicated Import page got the freeze-free path. The two paste handlers in `UI/GeneratorPage.lua` (wizard step 2 — `s2.editBox`; cross-realm wizard step 1 — `cr1.editBox`) still ran `ns.Import:Parse(text)` synchronously on whatever the player pasted. zpectre's 4509-deal full-region paste re-froze on the wizard route — same symptom alpha13 was meant to close, just on a code path the alpha13 retrofit missed.
+
+Both wizard handlers now mirror `UI/ImportPage.lua`'s pattern:
+
+- Extract the post-parse pipeline into a local `HandleParsedS2(items)` / `HandleParsedCR1(items)` continuation that owns the existing preview-build / auto-import-save / status-update logic.
+- `OnTextChanged` gates by 50KB threshold (same constant as ImportPage). Above that, route through `ns.Import:ParseChunked` with a per-chunk progress callback that updates the wizard status label (`Parsing %d / %d items...`); below that, sync-parse and dispatch immediately so small pastes still preview without latency.
+- Re-entry guard via `s2._busy` / `cr1._busy` — additional `OnTextChanged` events fired during the async parse window are dropped so we don't kick off a second parse mid-flight.
+
+Other sync `Import:Parse` callers found during the audit but **not** fixed in this pass (lower freeze risk because they fire on explicit user click, not paste-detect):
+
+- `UI/ExportPopup.lua:612` — Import button on the export popup.
+- `UI/TransformPage.lua:1034` — Transform page paste source. Async-converting these would cascade through the preview/build pipeline; deferred for a future pass.
+
+Audit-only / known: `TodoList:GenerateTodoList` (`TodoGenerator.lua:729`) is still synchronous. The auto-generate-after-import branch in the wizard still hits this — when the player checks "Auto-import" + the importer fires `AutoGenerate()`, generation is sync. Tracked separately at #151 for v0.13.x.
 
 ### Live Auctionator buy-list sync — single rebuilt list, purchase auto-clear
 
@@ -80,6 +99,7 @@ M  TodoList.lua
 M  Tracker.lua
 M  TrackerBank.lua
 M  UI/AuctionatorFrame.lua
+M  UI/GeneratorPage.lua
 M  UI/MainFrame.lua
 M  UI/MiniView.lua
 M  UI/Shared.lua

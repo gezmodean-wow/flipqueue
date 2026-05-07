@@ -8,7 +8,11 @@ The engineering-detail companion lives in `CHANGELOG.md` (commit-readerese — f
 
 ## v0.12.0 (release candidate)
 
-This is the **beta2** release candidate for v0.12.0. Beta1 was cut on 2026-05-05 and surfaced a chain of buy-flow issues during the test crew's soak — Auctionator's shopping list missing items below the target price, MiniView buy rows staying labeled `[BUY]` long after the purchase, and bought items getting stranded in bags because nothing ever told the warbank to pick them up. Beta2 fixes all of that. Same shape as beta1 otherwise; if no critical issues land, this build ships as v0.12.0 stable.
+This is the **beta3** release candidate for v0.12.0. Beta1 was cut on 2026-05-05 and surfaced a chain of buy-flow issues during the test crew's soak — Auctionator's shopping list missing items below the target price, MiniView buy rows staying labeled `[BUY]` long after the purchase, and bought items getting stranded in bags because nothing ever told the warbank to pick them up. Beta2 (tagged 2026-05-06, never released) fixed those. Beta3 supersedes it with one additional fix — large pastes into the Generator wizard's deal box are now chunked so the client doesn't freeze. If no critical issues land, this build ships as v0.12.0 stable.
+
+### Generator wizard handles huge pastes without freezing
+
+The earlier import-chunking work covered the dedicated Import page, but the Generator wizard's own paste box was still parsing synchronously. Pasting a full-region FlippingPal scan (a few thousand deals) into the wizard would freeze the client for several seconds. The wizard now routes large pastes through the same chunked parser the Import page uses, with a status line that ticks `Parsing 1234 / 4509 items...` so you can see progress instead of staring at a frozen screen.
 
 ### Auctionator buy list now updates itself as you shop
 
