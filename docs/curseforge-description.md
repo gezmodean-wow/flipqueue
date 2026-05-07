@@ -4,8 +4,7 @@
 
 FlipQueue isn't here to replace the great tools you already use — it's built to augment them. TSM handles pricing and posting rules. Auctionator handles shopping and scanning. FlippingPal finds the deals. FlipQueue ties them all together into one workflow, so you spend less time managing alts and more time making gold.
 
-<!-- SCREENSHOT: Main window overview or To-Do page -->
-<!-- ![FlipQueue](https://i.imgur.com/PLACEHOLDER_HERO.png) -->
+![FlipQueue main view: per-character to-do list with [POST], [BUY], and [CHECK MAIL] tasks](https://raw.githubusercontent.com/gezmodean-wow/flipqueue/master/docs/storefront/screenshots/01-todo.png)
 
 ---
 
@@ -19,8 +18,7 @@ The foundation of cross-realm flipping is knowing your inventory. FlipQueue trac
 - **Multi-account support** — share inventory and realm coverage between WoW accounts
 - **Live tracking** — inventory updates automatically as you move items between bags, bank, and warbank
 
-<!-- SCREENSHOT: Inventory page showing items across multiple characters -->
-<!-- ![Inventory](https://i.imgur.com/PLACEHOLDER_INVENTORY.png) -->
+![Characters page showing per-character gold totals, task counts, and per-character action overrides](https://raw.githubusercontent.com/gezmodean-wow/flipqueue/master/docs/storefront/screenshots/07-characters.png)
 
 ---
 
@@ -32,8 +30,7 @@ Once FlipQueue knows your inventory, it's time to find what's worth flipping.
 
 Powered by [TSM](https://www.curseforge.com/wow/addons/tradeskill-master) pricing data, the Deal Finder scans your entire inventory and finds items that are worth more on another realm's auction house. It auto-selects the best destination realm for each item based on profit margin — then lets you generate tasks with one click.
 
-<!-- SCREENSHOT: Deal Finder page with item list and profit columns -->
-<!-- ![Deal Finder](https://i.imgur.com/PLACEHOLDER_DEALFINDER.png) -->
+![Deal Finder showing cross-realm price grid with profit columns and ilvl variant breakdown](https://raw.githubusercontent.com/gezmodean-wow/flipqueue/master/docs/storefront/screenshots/02-deal-finder.png)
 
 ### FlippingPal (External Deals)
 
@@ -58,8 +55,6 @@ This is where FlipQueue shines. The **Generator Wizard** takes your deals — wh
 - **Cross-character handoffs** — items on the wrong character get deposit instructions ("via CharName")
 - **TSM-aware** — reads your Auctioning operations for postCap, duration, and minPrice so items below your threshold are auto-skipped
 
-<!-- SCREENSHOT: Generator wizard showing the two-column filter + preview -->
-<!-- ![Generator](https://i.imgur.com/PLACEHOLDER_GENERATOR.png) -->
 
 ---
 
@@ -91,17 +86,13 @@ Every automated action — pull, deposit-to-warbank, deposit-extras, deposit-rea
 
 Two master switches at the top of the settings page — **Manage my items** and **Manage my gold** — let you scope FlipQueue to exactly what you want it touching, with per-character overrides on the Characters page.
 
-<!-- SCREENSHOT: To-Do page or Mini overlay with active tasks -->
-<!-- ![To-Do](https://i.imgur.com/PLACEHOLDER_TODO.png) -->
+![Bank operations popup mid-execution showing pulls, deposits, extras, and gold sections with progress bars](https://raw.githubusercontent.com/gezmodean-wow/flipqueue/master/docs/storefront/screenshots/05-bank-popup.png)
 
-<!-- SCREENSHOT: Settings page showing Auto/Manual/Disabled controls -->
-<!-- ![Settings](https://i.imgur.com/PLACEHOLDER_SETTINGS.png) -->
+![Settings page showing the Auto / Manual / Disabled tri-state controls and the Manage my items / Manage my gold master switches](https://raw.githubusercontent.com/gezmodean-wow/flipqueue/master/docs/storefront/screenshots/04-settings-tri-state.png)
 
-<!-- SCREENSHOT: Mini overlay showing [BUY] / [CHECK MAIL] / [DEPOSIT] lifecycle labels -->
-<!-- ![Mini lifecycle](https://i.imgur.com/PLACEHOLDER_MINI_LIFECYCLE.png) -->
+![Mini overlay showing the buy-task lifecycle: cyan [BUY], yellow [CHECK MAIL], orange [DEPOSIT], with the four-way title split at the top](https://raw.githubusercontent.com/gezmodean-wow/flipqueue/master/docs/storefront/screenshots/03-mini-view-lifecycle.png)
 
-<!-- SCREENSHOT: Auctionator settings page in FlipQueue showing the buy-list sync controls -->
-<!-- ![Auctionator buy list](https://i.imgur.com/PLACEHOLDER_AUCT_BUYLIST.png) -->
+![Auctionator integration page showing the buy-list sync settings and the live FlipQueue - Buy shopping list](https://raw.githubusercontent.com/gezmodean-wow/flipqueue/master/docs/storefront/screenshots/06-auctionator-buylist.png)
 
 ---
 

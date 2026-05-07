@@ -52,4 +52,4 @@ GitHub: https://github.com/gezmodean-wow/flipqueue/issues
 
 ## Source
 
-https://github.com/gezmodean-wow/flipqueue (private — open-sourcing planned)
+https://github.com/gezmodean-wow/flipqueue
