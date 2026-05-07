@@ -538,12 +538,18 @@ mainFrame.actionBtns.clearTodoList = CreateActionBtn("Clear All Lists", "Clear c
     StaticPopup_Show("FLIPQUEUE_CLEAR_TODOLIST")
 end)
 
-mainFrame.actionBtns.auctBuyList = CreateActionBtn("Buy List", "Create Auctionator shopping lists from buy tasks", function()
-    local count, result = UI.CreateBuyTaskShoppingList()
-    if count then
-        ns:Print(ns.COLORS.GREEN .. "Created " .. result .. " with " .. count .. " items.|r")
-    else
-        ns:Print(ns.COLORS.RED .. (result or "Error creating list") .. "|r")
+mainFrame.actionBtns.auctBuyList = CreateActionBtn("Buy List", "Refresh the Auctionator buy list from current buy tasks", function()
+    if not ns.BuyListSync then
+        ns:Print(ns.COLORS.RED .. "BuyListSync not loaded.|r")
+        return
+    end
+    local total, created, deleted, err = ns.BuyListSync:Rebuild(true)
+    if err then
+        ns:Print(ns.COLORS.RED .. "Buy list error: " .. err .. "|r")
+    elseif total then
+        local msg = "Refreshed " .. (created or 0) .. " list(s) with " .. total .. " item(s)"
+        if deleted and deleted > 0 then msg = msg .. ", removed " .. deleted .. " empty" end
+        ns:Print(ns.COLORS.GREEN .. msg .. ".|r")
     end
 end)
 

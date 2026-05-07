@@ -8,7 +8,56 @@ The engineering-detail companion lives in `CHANGELOG.md` (commit-readerese — f
 
 ## v0.12.0 (release candidate)
 
-This is the release candidate for v0.12.0. The notes below describe what's landing in the public release. Final tester verification is in flight on a small group; if no critical issues surface, the same build ships as v0.12.0 stable.
+This is the **beta2** release candidate for v0.12.0. Beta1 was cut on 2026-05-05 and surfaced a chain of buy-flow issues during the test crew's soak — Auctionator's shopping list missing items below the target price, MiniView buy rows staying labeled `[BUY]` long after the purchase, and bought items getting stranded in bags because nothing ever told the warbank to pick them up. Beta2 fixes all of that. Same shape as beta1 otherwise; if no critical issues land, this build ships as v0.12.0 stable.
+
+### Auctionator buy list now updates itself as you shop
+
+Your FlipQueue buy list in Auctionator is now a living list. Open the auction house and FlipQueue maintains a single shopping list called **FlipQueue - Buy** that mirrors what your current character still needs to buy. As you make purchases and the items land in your bags, those items drop off the list automatically — no more wondering whether you've already bought enough.
+
+How it works:
+
+- **One list per character session** by default. Switch characters and reopen the AH; the list refreshes to show what *that* character needs.
+- **Auto-refresh** on AH open and after every purchase, so the list always matches what's still outstanding.
+- **A manual Refresh button** on the Auctionator page in case you want to force an update — handy if you've just imported new deals.
+
+If you'd rather have the old behavior of one list per buy realm, that's still available — flip the **One list per realm** option on the Auctionator page. In that mode, when a realm's buy list goes empty FlipQueue cleans the empty list out of Auctionator's dropdown so old realms don't pile up.
+
+### Buy task labels follow the lifecycle
+
+Buy tasks in the MiniView and the To-Do page now relabel themselves as you move through the workflow, so each row tells you what to do next instead of staying frozen on "[BUY]" the whole way through:
+
+- **[BUY]** (cyan) — still need to click it in the auction house
+- **[CHECK MAIL]** (yellow) — purchase confirmed, walk to the mailbox to collect
+- **[DEPOSIT]** (orange) — item is in your bags, drop it in the warbank so the sell character can pick it up
+
+The switch from **[BUY]** to **[CHECK MAIL]** happens the instant you click Buy — the same instant you hear the buyout sound — not when the item arrives in your bags. For items won by bid (mail-delivered hours later) this is a big difference: the row would previously stay stuck on "[BUY]" until you actually collected the mail.
+
+The MiniView title at the top splits the same way: you'll see `X to post, Y to buy, Z in mail, W to deposit` so each physical action is countable independently.
+
+The Auctionator shopping list reflects the same change — items drop off the list the moment you click Buy. This is especially useful for items won by bid where the old behavior would leave them on the shopping list indefinitely.
+
+### Wallet and warbank now know when you've already bought
+
+Two follow-on fixes from the lifecycle work above. Previously, once you'd bought items but hadn't yet deposited them to the warbank:
+
+- The auto-withdraw still pulled extra gold "to pay for" the items you'd just paid for — your wallet kept ballooning every time you opened the bank.
+- Auto-deposit to the warbank silently skipped those items because the buy task itself was "claiming" them, so the cross-realm flip stalled at the deposit step indefinitely. You'd see a `[DEPOSIT]` row in the MiniView, open the warbank, and nothing would happen.
+
+Both flows are now lifecycle-aware:
+
+- The withdraw target only counts gold for buys still ahead of you (browse / buy step). Items already in your bags don't double-charge.
+- The deposit planner stops letting the buy task block its own item — once you reach the warbank, the bought item moves over for the sell character to retrieve, and the buy task progresses to completion.
+- The deposit planner now also fires off the buy task itself when a paired sell task is missing or unassigned. Previously the deposit step relied entirely on the sell-side task being present; if there was no sell character configured for the target realm, your bought item would sit in your bags indefinitely with the To-Do list stuck at "deposit". Now the buy task drives its own deposit so the warbank handoff completes either way.
+- When you have a post task for an item AND another character also has a task for the same item that you're meant to source for them, the deposit planner now keeps only the units you actually need to post. Surplus stacks flow to the warbank for the other character on the same trip, instead of all of it staying behind because "this char also needs some" — the partial-stack overlap that left units stranded in bags is gone.
+
+### Auctionator search results: better matches by default
+
+The shopping list FlipQueue creates now searches more loosely on quality and crafting tier. Several testers reported items being on the AH at or below their target price but not appearing in the FlipQueue list — the most common cause was an item carrying bonus IDs that bumped its quality to a higher bracket than the deal record knew about, which caused Auctionator's exact-match filter to skip it.
+
+The new defaults match on item name and price ceiling only, so those listings now show up. If you want strict matching back, two new toggles on the Auctionator settings page let you opt in:
+
+- **Match exact quality** — useful when you only want one specific bracket.
+- **Match exact crafting tier** — useful for crafted reagents where tier 1/2/3 are very different items.
 
 ### New: Auto / Manual / Disabled for every managed action
 

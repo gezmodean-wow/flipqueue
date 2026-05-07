@@ -1,5 +1,92 @@
 # Changelog
 
+## v0.12.0-beta2
+
+Beta2 cuts during the beta1 soak after a tester report (gezmo) surfaced a chain of buy-flow issues that beta1 didn't address. Cumulative shape vs. beta1: live Auctionator buy-list sync replaces the one-shot export flow, MiniView / TodoPage relabel buy rows through the lifecycle (`[BUY]` → `[CHECK MAIL]` → `[DEPOSIT]`), and three deposit-planner correctness fixes free items that were getting stranded in bags.
+
+### Live Auctionator buy-list sync — single rebuilt list, purchase auto-clear
+
+Replaces the prior one-shot "Create Buy List" flow (`UI.CreateBuyTaskShoppingList` in `UI/Shared.lua`, removed) with `BuyListSync.lua` — a self-contained module that owns the lifecycle of the player's FlipQueue-managed Auctionator shopping list(s).
+
+**Default behavior:**
+
+- One list named **`FlipQueue - Buy`**, scoped to the *current character's* outstanding buy tasks (mirrors how the player thinks: "what does this character need to buy right now").
+- Rebuilt destructively (Auctionator's `CreateShoppingList` API replaces same-named lists per `Auctionator/Source/API/v1/ShoppingLists.lua:86-89`) on:
+  - `AUCTION_HOUSE_SHOW` with a 0.5s settle delay (matches Profession Shopping List's pattern at `ProfessionShoppingList/modules-old/AuctionHouse.lua:23`)
+  - `BAG_UPDATE_DELAYED` while the AH is open (debounced 0.5s)
+  - Manual button: `BuyListSync:Rebuild(true)`
+- Tasks where `bagCount >= task.quantity` are excluded from the rebuild — that is the purchase-detection mechanism. Once the player has bought enough, the item drops off Auctionator's panel naturally on the next bag-settle. We never mutate `task.status`; the to-do list still owns task lifecycle (player still mails / transfers / posts).
+
+**Quality and tier are off by default in the search string.** Forcing exact-quality match silently filtered out bonus-IDed gear that appeared on the AH at a higher quality bracket than the FP-imported task carried — the most likely root cause for Zong's #135 "items below my price won't show" report. The settings panel now exposes both as opt-in toggles for players who want strict matching (e.g. crafted reagents where tier 1/2/3 are very different items).
+
+**Per-realm mode** (opt-in setting) restores the pre-existing per-realm split: `FlipQueue - Buy - <Realm>` per buyRealm. In this mode, when a realm's slice goes empty, that realm's list is deleted via `Auctionator.Shopping.ListManager:Delete(name)` (the internal mgr call PSL uses; no v1 public delete exists). The single-mode `FlipQueue - Buy` is the persistent contract and is never auto-deleted — empty list means "no buys right now".
+
+**New settings (`ns.db.settings`):**
+
+- `auctBuyListEnabled` (bool, default true)
+- `auctBuyListAutoUpdate` (bool, default true)
+- `auctBuyListMode` ("single"|"perRealm", default "single")
+- `auctBuyListIncludeQuality` (bool, default false)
+- `auctBuyListIncludeTier` (bool, default false)
+- `auctBuyListAutoDelete` (bool, default true; only applies in perRealm mode)
+
+**UI changes:**
+
+- `UI/AuctionatorFrame.lua` rewritten — the prior queue/inventory export form is gone (that flow was the misconfigured "send raw item names to `CreateShoppingList`" path that triggered FQ-135). Page now shows: detection status, settings panel, manual refresh button, list of all Auctionator shopping lists with FQ-managed lists highlighted.
+- `UI/MiniView.lua` and `UI/MainFrame.lua` "Buy List" button text changed from "Create" to "Refresh"; both now call `BuyListSync:Rebuild(true)`.
+- `BuildAuctionatorSearchString` (formerly local in `UI/Shared.lua`) reimplemented in `BuyListSync.lua` with options table for quality/tier inclusion. The 0.9999g maxPrice headroom that captured listings priced just under the next whole gold is preserved unchanged.
+
+**MiniView + TodoPage row labels follow the buy lifecycle.**
+
+The `PlaceBid` / `ConfirmCommoditiesPurchase` hooks in `Tracker.lua:1184-1219` already advance buy tasks `browse → buy → collect` at the moment of purchase (matching the buyout sound), and bag detection later advances `collect → deposit` once the item arrives in bags. The MiniView and TodoPage row formatters previously used `task._isBuy` alone to pick the `[BUY]` prefix, so rows stayed labeled "buy" through every step until the task fully completed.
+
+Now the prefix swaps with the current step so each row tells the player what action to take next:
+
+- `[BUY]` (cyan) — `browse` / `buy` step → AH
+- `[CHECK MAIL]` (yellow) — `collect` step → mailbox (item won via bid, or just-purchased commodity in flight)
+- `[DEPOSIT]` (orange) — `deposit` step → warbank (item in bags, needs to move so the sell character can retrieve)
+
+`UI/MiniView.lua` threads the step into row data (`_buyStep`) and splits the per-character title counter four ways: `X to post, Y to buy, Z in mail, W to deposit`. Each is countable and visible independently. Rows are never hidden; the deposit step (which still requires the player to physically open the warbank) needs a UI nudge, not silent automation.
+
+`UI/TodoPage.lua` mirrors the same prefix in both the main row name (line 191) and the grouped/character-row name (line 925), and updates the existing step-aware `sourceStr` location column to include the previously-missing `collect` step.
+
+`BuyListSync.lua` got the same step gate — tasks past the `buy` step are excluded from the Auctionator shopping list even when bags don't yet contain the item. Without this, bid-won purchases (item in mail, not yet collected) would persist in the shopping list until mail arrival because bag-count alone would never satisfy.
+
+`TodoList:OnItemPurchased` now also kicks `BuyListSync:Rebuild(false)` after advancing the step, so the Auctionator list updates within the same frame as the row relabel — no waiting for the next bag-settle.
+
+**Two ordering bugs surfaced by the lifecycle relabel:**
+
+1. **`Tracker:CalculatePurchaseCosts`** (`TrackerBank.lua:352`) walked every pending buy task regardless of step, so the auto-withdraw target kept counting gold for items the player had already paid for. The wallet would withdraw more cash to "buy" stuff already in bags. Now skips tasks past the `buy` step (purchase already happened, gold already spent).
+2. **`Tracker:AutoDepositToWarbank` + `Tracker:BuildDepositOps`** built `myPostingKeys` from every pending task on the current character, including the buy task at the deposit step. The buy task's own itemKey was then used to *exclude* the matching bag item from the deposit set — so the bought item never moved to the warbank, the buy task stayed stuck at deposit, and the cross-realm flip stalled forever. Now buy tasks are excluded from `myPostingKeys`; only post / sell tasks legitimately keep items local.
+
+3. **Deposit planner only walked sell tasks.** `BuildDepositOps` and `AutoDepositToWarbank` only added a task to `depositTasks` when `depositFrom == charKey and assignedChar != charKey` — i.e., a sell task expecting THIS character to drop the item. If the paired sell task was missing (unassigned, no compatible sell char on the target realm), the buy task at the deposit step had no driver: 0 deposit ops planned, item sits in bags forever, buy task stuck. Both planner and executor now also walk buy tasks assigned to this character at the `deposit` step and emit deposit-to-warbank ops directly from them. Real-world reproducer (gezmo log 17:18:41): seven `[gold] buy skip (already purchased)` lines confirm the buy tasks are at deposit step, but the popup reports `0 pulls, 0 deposits, 0 extras, 0 reagents` — no driver tasks existed because no sell-side counterpart was generated.
+
+All three fixes are step-aware via `ns.TodoList:GetCurrentStepType` (already used by the MiniView prefix swap). Same lifecycle, no new state.
+
+**Quantity-aware post reservation in the deposit planner.**
+
+`Tracker:BuildDepositOps` and `Tracker:AutoDepositToWarbank` previously used a binary `myPostingKeys` set: any item the current character had a post task for was excluded from the deposit set entirely, regardless of quantity. With a stack of 5 in bags and a 1-qty post task, all 5 stayed in bags — the surplus 4 only got cleared via the extras-deposit fallback (which can't credit the matching `depositFrom` sell task on another character).
+
+Now both walk an additive `myPostingQty` table (itemKey → qty needed) plus a `myPostingNames` fallback for bonus-ID drift, and reserve units slot-by-slot via `consumedByPost` / `consumedByName` counters. Only the units this char actually needs to post stay reserved; surplus is eligible for matching deposit tasks. Mirrors the established `keepKeys` pattern in `AutoDepositExtraItems` (`TrackerBank.lua:830-843`).
+
+**Files:**
+
+```
+A  BuyListSync.lua
+M  CHANGELOG.md
+M  DB.lua
+M  RELEASES.md
+M  TodoList.lua
+M  Tracker.lua
+M  TrackerBank.lua
+M  UI/AuctionatorFrame.lua
+M  UI/MainFrame.lua
+M  UI/MiniView.lua
+M  UI/Shared.lua
+M  UI/TodoPage.lua
+M  flipqueue.toc
+```
+
 ## v0.12.0-beta1
 
 **Release candidate for v0.12.0.** Bundles two surgical fixes from alpha17 review (MiniView restore-bug + FQ-135 parser hardening) and stamps the cumulative line as ready for stable pending tester verification.

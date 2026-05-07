@@ -357,7 +357,19 @@ function Tracker:CalculatePurchaseCosts(charKey, currentRealm)
 
     for _, task in ipairs(buyTasks) do
         if task.item.action == "buy" then
-            if not ns:RealmMatches(task.item.buyRealm or "", currentRealm) then
+            -- Skip tasks already past the buy step. The AH purchase hooks
+            -- advance browse → buy → collect on click; bag delivery moves
+            -- collect → deposit. Once past "buy", the player has already
+            -- spent the gold — counting it again toward the auto-withdraw
+            -- target makes the wallet pull more cash to "buy" items the
+            -- player already owns.
+            local stepType = ns.TodoList.GetCurrentStepType
+                and ns.TodoList:GetCurrentStepType(task.item) or nil
+            local stillBuying = (not stepType) or stepType == "browse" or stepType == "buy"
+            if not stillBuying then
+                ns:PrintDebug("[gold] buy skip (already purchased): " .. (task.item.name or "?")
+                    .. " step=" .. tostring(stepType))
+            elseif not ns:RealmMatches(task.item.buyRealm or "", currentRealm) then
                 ns:PrintDebug("[gold] buy skip (realm): " .. (task.item.name or "?")
                     .. " buyRealm=" .. tostring(task.item.buyRealm)
                     .. " current=" .. currentRealm)
@@ -645,12 +657,28 @@ function Tracker:AutoDepositToWarbank(onComplete)
         return
     end
 
-    -- Find items this character needs to deposit for other characters
+    -- Find items this character needs to deposit for other characters.
+    -- Two paths add a task to depositTasks:
+    --   (1) Sell tasks blocked on a buy character (depositFrom == this char,
+    --       assignedChar != this char). The original cross-realm flow.
+    --   (2) Buy tasks assigned to this character that have advanced past the
+    --       buy step into "deposit" (item is in bags, needs to move to
+    --       warbank). Without this fallback, when the paired sell task is
+    --       missing / unassigned / item-key mismatched, the bought item
+    --       stays in bags forever and the buy task stalls. Mirror of the
+    --       same fix in Tracker.lua's BuildDepositOps planner.
     local depositTasks = {}
     for _, task in ipairs(todoList.tasks) do
-        if task.status == "pending" and task.depositFrom == charKey
-            and task.assignedChar ~= charKey then
-            table.insert(depositTasks, task)
+        if task.status == "pending" then
+            if task.depositFrom == charKey and task.assignedChar ~= charKey then
+                table.insert(depositTasks, task)
+            elseif task.action == "buy" and task.assignedChar == charKey then
+                local stepType = ns.TodoList.GetCurrentStepType
+                    and ns.TodoList:GetCurrentStepType(task) or nil
+                if stepType == "deposit" then
+                    table.insert(depositTasks, task)
+                end
+            end
         end
     end
 
@@ -659,12 +687,28 @@ function Tracker:AutoDepositToWarbank(onComplete)
         return
     end
 
-    -- Exclude items the current character also needs for posting
-    local myPostingKeys = {}
+    -- Quantity-aware reservation for this character's own post / sell tasks.
+    -- See Tracker.lua:BuildDepositOps for the full rationale — same shape.
+    -- The previous binary set excluded ALL of an itemKey when this char had
+    -- any post task, leaving partial-stack surplus stranded in bags. With
+    -- qty tracking we keep only the units this char actually needs to post;
+    -- anything extra is eligible to satisfy a depositFrom-paired sell task
+    -- on another character. Buy tasks are excluded so a buy task at its
+    -- own deposit step doesn't block the cross-realm hand-off.
+    local myPostingQty = {}     -- itemKey -> qty needed by this char's post tasks
+    local myPostingNames = {}   -- lowercase name -> qty (fallback for bonus-ID drift)
     local myTasks = ns.TodoList:GetCharacterTasks(charKey)
     for _, task in ipairs(myTasks) do
-        if task.item.itemKey then
-            myPostingKeys[task.item.itemKey] = true
+        local item = task.item
+        if item.action ~= "buy" then
+            local q = item.quantity or 1
+            if item.itemKey then
+                myPostingQty[item.itemKey] = (myPostingQty[item.itemKey] or 0) + q
+            end
+            if item.name and item.name ~= "" then
+                local ln = item.name:lower()
+                myPostingNames[ln] = (myPostingNames[ln] or 0) + q
+            end
         end
     end
 
@@ -675,6 +719,8 @@ function Tracker:AutoDepositToWarbank(onComplete)
     -- must scan the same bag set or it will silently skip those moves.
     local moves = {} -- { bag, slot, name }
     local depositMatched = {} -- task -> true
+    local consumedByPost = {}  -- itemKey -> qty already reserved
+    local consumedByName = {}  -- lname -> qty already reserved
 
     for _, bagIndex in ipairs(ns.ALL_PLAYER_BAGS) do
         local ok, numSlots = pcall(C_Container.GetContainerNumSlots, bagIndex)
@@ -700,8 +746,31 @@ function Tracker:AutoDepositToWarbank(onComplete)
                         local itemID, bonusIDs, modifiers = ns:ParseItemLink(info.hyperlink)
                         if itemID then
                             local key = ns:MakeItemKey(itemID, bonusIDs, modifiers)
-                            -- Skip items the current character needs for posting
-                            if not myPostingKeys[key] then
+                            local stackCount = info.stackCount or 1
+
+                            -- Reserve this slot for the current char's post
+                            -- task only if we haven't already covered the
+                            -- need. itemKey first, name fallback.
+                            local reservedHere = false
+                            local needKey = myPostingQty[key] or 0
+                            local usedKey = consumedByPost[key] or 0
+                            if needKey > usedKey then
+                                consumedByPost[key] = usedKey + stackCount
+                                reservedHere = true
+                            else
+                                local slotLname = Tracker._GetNameFromLink(info.hyperlink)
+                                if slotLname then
+                                    local lname = slotLname:lower()
+                                    local needName = myPostingNames[lname] or 0
+                                    local usedName = consumedByName[lname] or 0
+                                    if needName > usedName then
+                                        consumedByName[lname] = usedName + stackCount
+                                        reservedHere = true
+                                    end
+                                end
+                            end
+
+                            if not reservedHere then
                                 local slotName
                                 for _, task in ipairs(depositTasks) do
                                     if not depositMatched[task] then

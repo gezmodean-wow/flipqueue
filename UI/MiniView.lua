@@ -542,6 +542,14 @@ function UI:RefreshMini()
         for _, task in ipairs(todoTasks) do
             local isBuyTask = task.item.action == "buy"
             local realmToMatch = isBuyTask and task.item.buyRealm or task.item.targetRealm
+            -- Buy task lifecycle: browse → buy → collect → deposit. The AH
+            -- purchase hooks (Tracker.lua) advance browse → buy → collect
+            -- the moment the player clicks Buy; bag delivery advances
+            -- collect → deposit. The row prefix swaps via _buyStep below
+            -- so each step shows the player the next action they need
+            -- to take (AH / mailbox / warbank).
+            local stepType = (isBuyTask and ns.TodoList.GetCurrentStepType)
+                and ns.TodoList:GetCurrentStepType(task.item) or nil
             if ns:RealmMatches(realmToMatch or "", myRealm) then
                 -- Skip deferred tasks and tasks where another character needs to deposit first
                 local isDeferred = task.item.deferredAt and true or false
@@ -572,6 +580,7 @@ function UI:RefreshMini()
                     _taskIdx = task.taskIndex,
                     _isTodo  = true,
                     _isBuy   = isBuyTask,
+                    _buyStep = stepType,  -- "browse"|"buy"|"collect" for buy tasks
                     _deferred = task.item.deferredAt and true or false,
                     _depositFrom = task.item.depositFrom,
                     _taskItem = task.item,  -- full task data for detail popup
@@ -584,10 +593,22 @@ function UI:RefreshMini()
     local rowIndex = 0
     local personalRowEnd = 0  -- tracks end of current character's rows (collapse preserves these)
 
-    -- Count buy vs post tasks (used for title and Auctionator button)
-    local buyCount, postCount = 0, 0
+    -- Count by lifecycle stage (used for title and Auctionator button).
+    -- Buy tasks split into to-buy / mail-pickup / deposit-needed so each
+    -- physical action the player has to take is countable independently.
+    local buyCount, postCount, mailCount, depositCount = 0, 0, 0, 0
     for _, t in ipairs(tasks) do
-        if t._isBuy then buyCount = buyCount + 1 else postCount = postCount + 1 end
+        if t._isBuy then
+            if t._buyStep == "collect" then
+                mailCount = mailCount + 1
+            elseif t._buyStep == "deposit" then
+                depositCount = depositCount + 1
+            else
+                buyCount = buyCount + 1
+            end
+        else
+            postCount = postCount + 1
+        end
     end
 
     -- Pre-check for char tasks (Check Mail, Expiring, etc.)
@@ -615,6 +636,8 @@ function UI:RefreshMini()
         local titleParts = {}
         if postCount > 0 then table.insert(titleParts, postCount .. " to post") end
         if buyCount > 0 then table.insert(titleParts, buyCount .. " to buy") end
+        if mailCount > 0 then table.insert(titleParts, mailCount .. " in mail") end
+        if depositCount > 0 then table.insert(titleParts, depositCount .. " to deposit") end
         titleText:SetText(fqTitle ..
             ns.COLORS.GREEN .. " - " .. table.concat(titleParts, ", ") .. ns.COLORS.RESET)
 
@@ -664,7 +687,24 @@ function UI:RefreshMini()
                 statusTag = ns.COLORS.RED .. " [not found]" .. ns.COLORS.RESET
             end
 
-            local namePrefix = task._isBuy and (ns.COLORS.CYAN .. "[BUY] " .. ns.COLORS.RESET) or ""
+            -- Buy task prefix follows the lifecycle. Each step swap matches
+            -- the next physical action the player has to take:
+            --   browse / buy → AH               [BUY]
+            --   collect      → mailbox          [CHECK MAIL]
+            --   deposit      → warbank          [DEPOSIT]
+            -- Step advances are driven by Tracker.lua AH hooks (browse → buy
+            -- → collect on purchase) and bag detection (collect → deposit
+            -- once the item arrives in bags).
+            local namePrefix = ""
+            if task._isBuy then
+                if task._buyStep == "collect" then
+                    namePrefix = ns.COLORS.YELLOW .. "[CHECK MAIL] " .. ns.COLORS.RESET
+                elseif task._buyStep == "deposit" then
+                    namePrefix = ns.COLORS.ORANGE .. "[DEPOSIT] " .. ns.COLORS.RESET
+                else
+                    namePrefix = ns.COLORS.CYAN .. "[BUY] " .. ns.COLORS.RESET
+                end
+            end
             local qtyStr = (task.quantity or 1) > 1 and (" x" .. (task.quantity or 1)) or ""
             row.text:SetText(statusIcon .. namePrefix .. ns.COLORS.WHITE .. task.name .. qtyStr .. ns.COLORS.RESET .. statusTag .. priceStr)
 
@@ -740,16 +780,21 @@ function UI:RefreshMini()
         rowIndex = rowIndex + 1
         local auctRow = GetOrCreateMiniRow(rowIndex)
         auctRow.icon:SetTexture("Interface\\Icons\\INV_Misc_Spyglass_03")
-        auctRow.text:SetText(ns.COLORS.YELLOW .. "Create Auctionator Buy List" .. ns.COLORS.RESET)
+        auctRow.text:SetText(ns.COLORS.YELLOW .. "Refresh Auctionator Buy List" .. ns.COLORS.RESET)
         auctRow.tooltipItemID = nil; auctRow.tooltipItemKey = nil
-        auctRow.tooltipItemName = "Create Shopping List"
-        auctRow.tooltipExtra = "Create Auctionator shopping lists grouped by realm (" .. buyCount .. " buy items)"
+        auctRow.tooltipItemName = "Refresh Shopping List"
+        auctRow.tooltipExtra = "Rebuild the FlipQueue buy list now (" .. buyCount .. " buy items). Lists also refresh automatically when you open the AH or buy something."
         auctRow:SetScript("OnMouseDown", function()
-            local count, result = UI.CreateBuyTaskShoppingList()
-            if count then
-                ns:Print(ns.COLORS.GREEN .. "Created " .. result .. " with " .. count .. " items.|r")
-            else
-                ns:Print(ns.COLORS.RED .. "Error: " .. (result or "unknown") .. "|r")
+            if not ns.BuyListSync then
+                ns:Print(ns.COLORS.RED .. "BuyListSync not loaded.|r")
+                return
+            end
+            local total, created, _, err = ns.BuyListSync:Rebuild(true)
+            if err then
+                ns:Print(ns.COLORS.RED .. "Buy list error: " .. err .. "|r")
+            elseif total then
+                ns:Print(ns.COLORS.GREEN .. "Refreshed " .. (created or 0) ..
+                    " list(s) with " .. total .. " item(s).|r")
             end
             UI:RefreshMini()
         end)

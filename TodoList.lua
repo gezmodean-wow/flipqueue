@@ -1497,6 +1497,7 @@ function TodoList:OnItemPurchased(itemID, itemName)
                         if ns.UI.Refresh then ns.UI:Refresh() end
                         if ns.UI.RefreshMini then ns.UI:RefreshMini() end
                     end
+                    if ns.BuyListSync then ns.BuyListSync:Rebuild(false) end
                     return
                 end
             end
