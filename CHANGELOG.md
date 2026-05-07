@@ -1,5 +1,30 @@
 # Changelog
 
+## Unreleased
+
+### FQ-131 reopen: Generator-wizard paste handlers were never chunked
+
+Alpha13 added chunked parsers for the FP comma-CSV / FP semicolon / tab-delimited / FP-website routes and wired them into `UI/ImportPage.lua`'s paste handler via the new `Import:ParseChunked` dispatcher. The dedicated Import page got the freeze-free path. The two paste handlers in `UI/GeneratorPage.lua` (wizard step 2 — `s2.editBox` at line 938; cross-realm wizard step 1 — `cr1.editBox` at line 1356, both pre-fix) still ran `ns.Import:Parse(text)` synchronously on whatever the player pasted. zpectre's 4509-deal full-region paste re-froze on the wizard route — same symptom alpha13 was meant to close, just on a code path the alpha13 retrofit missed.
+
+Both wizard handlers now mirror `UI/ImportPage.lua`'s pattern:
+
+- Extract the post-parse pipeline into a local `HandleParsedS2(items)` / `HandleParsedCR1(items)` continuation that owns the existing preview-build / auto-import-save / status-update logic.
+- `OnTextChanged` gates by 50KB threshold (same constant as ImportPage). Above that, route through `ns.Import:ParseChunked` with a per-chunk progress callback that updates the wizard status label (`Parsing %d / %d items...`); below that, sync-parse and dispatch immediately so small pastes still preview without latency.
+- Re-entry guard via `s2._busy` / `cr1._busy` — additional `OnTextChanged` events fired during the async parse window are dropped so we don't kick off a second parse mid-flight.
+
+Other sync `Import:Parse` callers found during the audit but **not** fixed in this pass (lower freeze risk because they fire on explicit user click, not paste-detect):
+- `UI/ExportPopup.lua:612` — Import button on the export popup.
+- `UI/TransformPage.lua:1034` — Transform page paste source. Async-converting these would cascade through the preview/build pipeline; deferred for a future pass.
+
+Audit-only / known: `TodoList:GenerateTodoList` (`TodoGenerator.lua:729`) is still synchronous. The auto-generate-after-import branch in the wizard still hits this — when the player checks "Auto-import" + the importer fires `AutoGenerate()`, generation is sync. Tracked separately at #151 for v0.13.x.
+
+**Files:**
+
+```
+M  CHANGELOG.md
+M  UI/GeneratorPage.lua
+```
+
 ## v0.12.0-beta1
 
 **Release candidate for v0.12.0.** Bundles two surgical fixes from alpha17 review (MiniView restore-bug + FQ-135 parser hardening) and stamps the cumulative line as ready for stable pending tester verification.

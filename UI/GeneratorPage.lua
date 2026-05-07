@@ -929,14 +929,20 @@ function UI:RefreshGeneratorPage(pending)
             Artifact = "e6cc80", Heirloom = "00ccff",
         }
 
-        -- Auto-detect paste and build preview
-        s2.editBox:SetScript("OnTextChanged", function(self, userInput)
-            if not userInput then return end
-            local text = self:GetText()
-            local newLen = #text
-            if s2._lastLen < 10 and newLen > 50 and text:find("\n") then
-                local items = ns.Import:Parse(text)
-                if #items > 0 then
+        -- Inputs above this many bytes route through the async chunked parser
+        -- to avoid client freezes during the parse stage. Mirrors the gate in
+        -- UI/ImportPage.lua — the dedicated Import page got the chunked-parse
+        -- retrofit in alpha13, but this wizard step still ran sync Parse() on
+        -- whatever the player pasted, which was the freeze zpectre hit on
+        -- 4500-deal full-region pastes (FQ-131 reopen on alpha13).
+        local PARSE_CHUNK_THRESHOLD = 50000
+
+        -- Continuation that runs after parsing finishes. Holds the entire
+        -- post-parse pipeline (preview build, auto-import save, status
+        -- updates) so the sync and chunked paths can share it.
+        local function HandleParsedS2(items)
+            s2._busy = false
+            if #items > 0 then
                     if s2.autoImportCheck:GetChecked() then
                         local total = #items
                         s2.editBox:SetText("")
@@ -1148,8 +1154,30 @@ function UI:RefreshGeneratorPage(pending)
                         -- Refresh to show the Next button now that preview data exists
                         UI:Refresh()
                     end
+            else
+                s2.statusLabel:SetText(ns.COLORS.RED .. "No items found in pasted data.|r")
+            end
+        end
+
+        -- Auto-detect paste and route through chunked parse for large inputs.
+        s2.editBox:SetScript("OnTextChanged", function(self, userInput)
+            if not userInput then return end
+            if s2._busy then return end
+            local text = self:GetText()
+            local newLen = #text
+            if s2._lastLen < 10 and newLen > 50 and text:find("\n") then
+                if newLen > PARSE_CHUNK_THRESHOLD then
+                    s2._busy = true
+                    s2.statusLabel:SetText(ns.COLORS.YELLOW
+                        .. "Parsing large paste... please wait.|r")
+                    ns.Import:ParseChunked(text,
+                        function(processed, total)
+                            s2.statusLabel:SetText(ns.COLORS.YELLOW
+                                .. ("Parsing %d / %d items...|r"):format(processed, total))
+                        end,
+                        HandleParsedS2)
                 else
-                    s2.statusLabel:SetText(ns.COLORS.RED .. "No items found in pasted data.|r")
+                    HandleParsedS2(ns.Import:Parse(text))
                 end
             end
             s2._lastLen = newLen
@@ -1320,13 +1348,13 @@ function UI:RefreshGeneratorPage(pending)
             Artifact = "e6cc80", Heirloom = "00ccff",
         }
 
-        cr1.editBox:SetScript("OnTextChanged", function(self, userInput)
-            if not userInput then return end
-            local text = self:GetText()
-            local newLen = #text
-            if cr1._lastLen < 10 and newLen > 50 and text:find("\n") then
-                local items = ns.Import:Parse(text)
-                if #items > 0 then
+        -- Same chunked-parse threshold as the s2 step. See HandleParsedS2
+        -- comment for FQ-131 background.
+        local CR_PARSE_CHUNK_THRESHOLD = 50000
+
+        local function HandleParsedCR1(items)
+            cr1._busy = false
+            if #items > 0 then
                     -- Filter to cross-realm deals only
                     local crossItems = {}
                     for _, item in ipairs(items) do
@@ -1419,8 +1447,29 @@ function UI:RefreshGeneratorPage(pending)
                     if updateCount > 0 then table.insert(parts, ns.COLORS.YELLOW .. updateCount .. " updates|r") end
                     if dupCount > 0 then table.insert(parts, ns.COLORS.GRAY .. dupCount .. " dupes|r") end
                     cr1.statusLabel:SetText(table.concat(parts, "  ") .. "  -- review results, then click Next to filter")
+            else
+                cr1.statusLabel:SetText(ns.COLORS.RED .. "No items found in pasted data.|r")
+            end
+        end
+
+        cr1.editBox:SetScript("OnTextChanged", function(self, userInput)
+            if not userInput then return end
+            if cr1._busy then return end
+            local text = self:GetText()
+            local newLen = #text
+            if cr1._lastLen < 10 and newLen > 50 and text:find("\n") then
+                if newLen > CR_PARSE_CHUNK_THRESHOLD then
+                    cr1._busy = true
+                    cr1.statusLabel:SetText(ns.COLORS.YELLOW
+                        .. "Parsing large paste... please wait.|r")
+                    ns.Import:ParseChunked(text,
+                        function(processed, total)
+                            cr1.statusLabel:SetText(ns.COLORS.YELLOW
+                                .. ("Parsing %d / %d items...|r"):format(processed, total))
+                        end,
+                        HandleParsedCR1)
                 else
-                    cr1.statusLabel:SetText(ns.COLORS.RED .. "No items found in pasted data.|r")
+                    HandleParsedCR1(ns.Import:Parse(text))
                 end
             end
             cr1._lastLen = newLen
