@@ -125,54 +125,16 @@ end
 -- Item Key Generation
 --------------------------
 
--- Matches FlippingPal's GetItemKey format: "itemID;bonusIDs;modifiers"
+-- Item-key construction + WoW-itemString conversion delegate to Cogworks-1.0
+-- (Items.lua) so all suite cogs share one canonical implementation. Format
+-- matches FlippingPal's "itemID;bonusIDs;modifiers" shape; Cogworks owns the
+-- modifier-9 (item level) handling.
 function ns:MakeItemKey(itemID, bonusIDs, modifiers)
-    return string.format("%s;%s;%s", tostring(itemID), bonusIDs or "", modifiers or "")
+    return ns.cw:MakeItemKey(itemID, bonusIDs, modifiers)
 end
 
--- Convert an itemKey ("itemID;bonusIDs;modifiers") to a WoW item string
--- suitable for GameTooltip:SetHyperlink(). Returns nil for pets or invalid keys.
 function ns:ItemKeyToItemString(itemKey)
-    if not itemKey or itemKey == "" then return nil end
-    if itemKey:find("^pet:") then return nil end -- pets use battlepet: links
-
-    local idStr, bonusStr, modStr = strsplit(";", itemKey)
-    local numID = tonumber(idStr)
-    if not numID or numID <= 0 then return nil end
-
-    -- WoW item string positions:
-    --   item:itemID:enchantID:gemID1:gemID2:gemID3:gemID4:suffixID:uniqueID:
-    --     linkLevel:specID:modifiersMask:itemContext:numBonusIDs:b1:b2:...:
-    --     numModifiers:modType1:modValue1:...
-    -- That's 11 empty fields between itemID and numBonusIDs (positions 3-13).
-    -- Older versions of this builder used only 10 empties, which made the
-    -- bonus count land in the itemContext slot and the bonus IDs themselves
-    -- shift left — SetHyperlink would silently render the base item (or
-    -- nothing at all), masking ilvl variants in tooltips.
-    local parts = {"item", idStr, "", "", "", "", "", "", "", "", "", "", ""}
-    -- Bonus IDs
-    if bonusStr and bonusStr ~= "" then
-        local bonuses = {strsplit(":", bonusStr)}
-        table.insert(parts, tostring(#bonuses))
-        for _, b in ipairs(bonuses) do
-            table.insert(parts, b)
-        end
-    else
-        table.insert(parts, "0")
-    end
-    -- Modifiers (e.g., "9=85" → modifier type 9, value 85)
-    if modStr and modStr ~= "" then
-        local mods = {strsplit(":", modStr)}
-        table.insert(parts, tostring(#mods))
-        for _, m in ipairs(mods) do
-            local k, v = m:match("^(%d+)=(%d+)$")
-            if k and v then
-                table.insert(parts, k)
-                table.insert(parts, v)
-            end
-        end
-    end
-    return table.concat(parts, ":")
+    return ns.cw:ItemKeyToItemString(itemKey)
 end
 
 -- Set up GameTooltip for an item, preferring the bonus-ID-decorated
@@ -240,56 +202,10 @@ function ns:MakeImportKey(itemKey, itemName, targetRealm, ilvl)
     return base:lower() .. ilvlSuffix .. "|" .. realm
 end
 
--- Parse item link to extract itemID, bonusIDs, modifiers
--- Replicates FlippingPal's ParseItemLink logic for compatibility
+-- Parse a WoW item link into (itemID, bonusIDs, modifiers) — battle-pet links
+-- return ("pet:<speciesID>", "q<quality>", ""). Delegates to Cogworks-1.0.
 function ns:ParseItemLink(itemLink)
-    if not itemLink then return nil end
-
-    -- Handle battle pets: |Hbattlepet:speciesID:level:quality:...|h[Name]|h
-    local speciesID = itemLink:match("|Hbattlepet:(%d+)")
-    if speciesID then
-        local petQuality = itemLink:match("|Hbattlepet:%d+:%d+:(%d+)")
-        return "pet:" .. speciesID, "q" .. (petQuality or "0"), ""
-    end
-
-    -- Standard items
-    local itemString = itemLink:match("item[%-?%d:]+")
-    if not itemString then return nil end
-
-    local parts = {strsplit(":", itemString)}
-    local itemID = parts[2]
-    if not itemID or itemID == "" then return nil end
-
-    local bonusIDs = ""
-    local modifiers = ""
-
-    if #parts >= 14 then
-        local numBonusIDs = tonumber(parts[14]) or 0
-        local bonusList = {}
-        for i = 1, numBonusIDs do
-            local bid = parts[14 + i]
-            if bid and bid ~= "" then
-                table.insert(bonusList, bid)
-            end
-        end
-        bonusIDs = table.concat(bonusList, ":")
-
-        local modStart = 14 + numBonusIDs + 1
-        if #parts >= modStart then
-            local numMods = tonumber(parts[modStart]) or 0
-            local modList = {}
-            for i = 1, numMods do
-                local mType = parts[modStart + (i * 2) - 1]
-                local mVal  = parts[modStart + (i * 2)]
-                if mType and mVal and mType ~= "" and mVal ~= "" and mType == "9" then
-                    table.insert(modList, mType .. "=" .. mVal)
-                end
-            end
-            modifiers = table.concat(modList, ":")
-        end
-    end
-
-    return itemID, bonusIDs, modifiers
+    return ns.cw:ParseItemLink(itemLink)
 end
 
 --------------------------
