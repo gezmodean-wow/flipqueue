@@ -25,6 +25,7 @@ DB.lua
 TSM.lua
 TSMRealms.lua
 ItemLookup.lua
+ItemBindings.lua
 Scanner.lua
 Import.lua
 Export.lua

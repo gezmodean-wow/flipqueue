@@ -87,7 +87,8 @@ end
 -- Shared helper: take a Syndicator container-slot list and fold each slot
 -- into the caller's items table, tagging quantities against `location`.
 -- The `items` table has the pre-6a shape: `items[key] = { itemID, bonusIDs,
--- modifiers, quantity, icon, ilvl, bindType, isBound, locations = {...} }`.
+-- modifiers, quantity, icon, ilvl, bindType, isBound, isWarbound,
+-- locations = {...} }`.
 -- Battle pets are handled via link parsing (Syndicator includes the full
 -- caged-pet hyperlink).
 local function FoldContainerSlots(slots, items, location)
@@ -131,18 +132,25 @@ local function FoldContainerSlots(slots, items, location)
                         end
                     end
                     entry = {
-                        itemID    = itemID,
-                        name      = itemName or "Unknown",
-                        bonusIDs  = bonusIDs or "",
-                        modifiers = modifiers or "",
-                        quantity  = 0,
-                        icon      = slot.iconTexture,
-                        ilvl      = ilvl,
-                        locations = {},
-                        bindType  = bindType,
-                        isBound   = slot.isBound and true or false,
+                        itemID     = itemID,
+                        name       = itemName or "Unknown",
+                        bonusIDs   = bonusIDs or "",
+                        modifiers  = modifiers or "",
+                        quantity   = 0,
+                        icon       = slot.iconTexture,
+                        ilvl       = ilvl,
+                        locations  = {},
+                        bindType   = bindType,
+                        isBound    = slot.isBound and true or false,
+                        isWarbound = false,
                     }
                     items[key] = entry
+                end
+                -- Refresh isWarbound on every fold so a tooltip scan that
+                -- was deferred (item data not yet loaded) gets resolved on
+                -- a later pass once GET_ITEM_INFO_RECEIVED fires.
+                if not entry.isWarbound and ns.ItemBindings then
+                    entry.isWarbound = ns.ItemBindings:IsWarbound(key, link)
                 end
                 local count = slot.itemCount or 1
                 entry.quantity = entry.quantity + count
