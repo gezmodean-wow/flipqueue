@@ -626,8 +626,8 @@ function Tracker:AutoDepositGold()
     local ok2, err = pcall(C_Bank.DepositMoney, Enum.BankType.Account, excessCopper)
     if ok2 then
         local keptGold = math.floor(keepCopper / 10000)
-        ns:Print(ns.COLORS.GREEN .. "Deposited " .. ns:FormatGold(excessCopper) .. "|r to warbank" ..
-            " (kept " .. keptGold .. "g for fees + buffer)")
+        ns.cw:Toast({ severity = "success", text = "Deposited " .. ns:FormatGold(excessCopper)
+            .. " to warbank (kept " .. keptGold .. "g for fees + buffer)" })
         return excessCopper
     else
         ns:PrintDebug("Failed to deposit gold: " .. tostring(err))
@@ -817,11 +817,11 @@ function Tracker:AutoDepositToWarbank(onComplete)
         local deferredCount = deferredNames and #deferredNames or 0
         if #successNames > 0 then
             if errorCount == 0 and deferredCount == 0 then
-                ns:Print(ns.COLORS.CYAN .. "Deposited " .. #successNames ..
-                    " item(s) to warbank:|r " .. table.concat(successNames, ", "))
+                ns.cw:Toast({ severity = "success", text = "Deposited " .. #successNames
+                    .. " item(s) to warbank: " .. table.concat(successNames, ", ") })
             else
-                ns:Print(ns.COLORS.CYAN .. "Deposited " .. #successNames ..
-                    " of " .. #ops .. " item(s) to warbank:|r " .. table.concat(successNames, ", "))
+                ns.cw:Toast({ severity = "success", text = "Deposited " .. #successNames
+                    .. " of " .. #ops .. " item(s) to warbank: " .. table.concat(successNames, ", ") })
             end
         end
         if errorCount > 0 then
@@ -1011,9 +1011,8 @@ function Tracker:AutoDepositExtraItems(onComplete)
     ns.BankQueue:Process(ops, "Depositing extras...", function(successNames, errorCount, deferredNames)
         local deferredCount = deferredNames and #deferredNames or 0
         if #successNames > 0 then
-            ns:Print(ns.COLORS.CYAN .. "Deposited " .. #successNames ..
-                " extra item(s) to warbank/bank:|r " ..
-                table.concat(successNames, ", "))
+            ns.cw:Toast({ severity = "success", text = "Deposited " .. #successNames
+                .. " extra item(s) to warbank/bank: " .. table.concat(successNames, ", ") })
         end
         if errorCount > 0 then
             ns:Print(ns.COLORS.YELLOW .. errorCount ..
@@ -1166,9 +1165,8 @@ function Tracker:AutoDepositReagents(onComplete)
     ns.BankQueue:Process(ops, "Depositing reagents...", function(successNames, errorCount, deferredNames)
         local deferredCount = deferredNames and #deferredNames or 0
         if #successNames > 0 then
-            ns:Print(ns.COLORS.CYAN .. "Deposited " .. #successNames ..
-                " reagent(s) to warbank/bank:|r " ..
-                table.concat(successNames, ", "))
+            ns.cw:Toast({ severity = "success", text = "Deposited " .. #successNames
+                .. " reagent(s) to warbank/bank: " .. table.concat(successNames, ", ") })
         end
         if errorCount > 0 then
             ns:Print(ns.COLORS.YELLOW .. errorCount ..

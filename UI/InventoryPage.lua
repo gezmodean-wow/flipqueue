@@ -287,9 +287,9 @@ function UI:RefreshInventoryPage()
                         quantity = rowData._quantity or 1,
                     }})
                     if added > 0 then
-                        ns:Print(ns.COLORS.GREEN .. "Added to queue:|r " .. (rowData._itemName or rowData.name))
+                        ns.cw:Toast({ severity = "success", text = "Added to queue: " .. (rowData._itemName or rowData.name) })
                     else
-                        ns:Print(ns.COLORS.GRAY .. "Already in queue:|r " .. (rowData._itemName or rowData.name))
+                        ns.cw:Toast({ severity = "info", text = "Already in queue: " .. (rowData._itemName or rowData.name) })
                     end
                 else
                     ns:AddDoNotTrack(rowData._itemID, rowData._itemName)
@@ -303,7 +303,7 @@ function UI:RefreshInventoryPage()
                     for importKey, qItem in pairs(ns.db.imports.fpScanner or {}) do
                         if ns:ItemsMatch(qItem.itemKey, qItem.name, {itemKey = rowData._itemKey, itemID = tostring(rowData._itemID), name = rowData._itemName}) then
                             ns:ImportRemove("fpScanner", importKey)
-                            ns:Print(ns.COLORS.RED .. "Removed from queue:|r " .. (rowData._itemName or rowData.name))
+                            ns.cw:Toast({ severity = "info", text = "Removed from queue: " .. (rowData._itemName or rowData.name) })
                             break
                         end
                     end

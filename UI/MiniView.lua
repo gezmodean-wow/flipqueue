@@ -762,7 +762,7 @@ function UI:RefreshMini()
                             ns:Print(ns.COLORS.ORANGE .. "Skipped:|r " .. capturedTask.name)
                         else
                             ns.TodoList:MoveTaskToLog(capturedTask._taskIdx)
-                            ns:Print("Posted: " .. capturedTask.name .. " -> moved to log")
+                            ns.cw:Toast({ severity = "success", text = "Posted: " .. capturedTask.name .. " — moved to log" })
                         end
                     end
                     UI:RefreshMini()
