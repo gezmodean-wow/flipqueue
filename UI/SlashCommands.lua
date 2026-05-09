@@ -478,7 +478,7 @@ end
 
 local function debugToggle()
     if not ns.db then return end
-    ns.db.settings.debugMessages = not ns.db.settings.debugMessages
+    ns:SetDebugEnabled(not ns.db.settings.debugMessages)
     ns:Print("Debug messages: " .. (ns.db.settings.debugMessages and
         ns.COLORS.GREEN .. "ON" or ns.COLORS.RED .. "OFF") .. "|r")
 end
