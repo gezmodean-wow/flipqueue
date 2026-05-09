@@ -86,9 +86,13 @@ function TodoList:BuildItemPool()
                 local numID = tonumber(itemData.itemID)
                 local isDNT = numID and ns:IsDoNotTrack(numID)
                 -- Exclude soulbound/untradeable: isBound BoE/BoU = soulbound,
-                -- BoP (1), Quest (4), BtA (7), BtW (8) can never be sold on AH
+                -- BoP (1), Quest (4), BtA (7), BtW (8) can never be sold on AH.
+                -- isWarbound covers Warbound / Warbound-until-Equipped gear
+                -- (FQ-173) — bindType reports BoE for WuE so a tooltip-scan
+                -- pass at scan time is the only way to flag it.
                 local bt = itemData.bindType
                 local tradeable = not itemData.isBound
+                    and not itemData.isWarbound
                     and (not bt or (bt ~= 1 and bt ~= 4 and bt ~= 7 and bt ~= 8))
 
                 if not isDNT and tradeable then
@@ -111,6 +115,7 @@ function TodoList:BuildItemPool()
             local isDNT = numID and ns:IsDoNotTrack(numID)
             local bt = itemData.bindType
             local tradeable = not itemData.isBound
+                and not itemData.isWarbound
                 and (not bt or (bt ~= 1 and bt ~= 4 and bt ~= 7 and bt ~= 8))
             if not isDNT and tradeable and (itemData.quantity or 0) > 0 then
                 AddToPool(itemKey, itemData, "Warbank", "warbank", itemData.quantity)
