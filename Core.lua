@@ -363,31 +363,33 @@ function ns:NormalizeRealmKey(realm)
 end
 
 --------------------------
--- Item ID Resolution
+-- Item ID Resolution + Matching
 --------------------------
 
--- Resolve a queue item's numeric ID from scanned inventory data
-function ns:ResolveItemID(queueItem)
-    local numID = tonumber(queueItem.itemID)
-    if numID and numID > 0 then return numID end
+-- Resolution + matching delegate to Cogworks-1.0 (Items.lua). Cogworks owns the
+-- tier algorithm (exact key → numeric ID → exact name → fuzzy substring with
+-- recipe-prefix guard) and FQ supplies a name-lookup closure that walks our
+-- scanned inventory tables. Reads ns.db lazily so callers run before SV init
+-- get nil instead of an indexing error.
+local function inventoryLookupByName(searchNameLower)
+    if not ns.db then return nil end
 
-    if not ns.db or not queueItem.name or queueItem.name == "" then return nil end
-    local searchName = queueItem.name:lower()
-
-    for _, charData in pairs(ns.db.characters) do
-        if charData.inventory and charData.inventory.items then
-            for key, itemData in pairs(charData.inventory.items) do
-                if itemData.name and itemData.name:lower() == searchName then
-                    local invID = tonumber(itemData.itemID)
-                    if invID and invID > 0 then return invID end
+    if ns.db.characters then
+        for _, charData in pairs(ns.db.characters) do
+            if charData.inventory and charData.inventory.items then
+                for _, itemData in pairs(charData.inventory.items) do
+                    if itemData.name and itemData.name:lower() == searchNameLower then
+                        local invID = tonumber(itemData.itemID)
+                        if invID and invID > 0 then return invID end
+                    end
                 end
             end
         end
     end
 
     if ns.db.warbank and ns.db.warbank.items then
-        for key, itemData in pairs(ns.db.warbank.items) do
-            if itemData.name and itemData.name:lower() == searchName then
+        for _, itemData in pairs(ns.db.warbank.items) do
+            if itemData.name and itemData.name:lower() == searchNameLower then
                 local invID = tonumber(itemData.itemID)
                 if invID and invID > 0 then return invID end
             end
@@ -397,66 +399,11 @@ function ns:ResolveItemID(queueItem)
     return nil
 end
 
---------------------------
--- Item Matching
---------------------------
+function ns:ResolveItemID(queueItem)
+    return ns.cw:ResolveItemID(queueItem, inventoryLookupByName)
+end
 
--- Unified item matching: compares an inventory/auction item against a queue/log item
--- Returns: (matched: bool, fuzzy: bool)
--- fuzzy=true for any name-based match (exact or substring)
--- resolvedID: pre-computed resolved ID for queue item (avoids re-resolving)
--- allowFuzzy: enable substring name matching (default true, pass false to disable)
 function ns:ItemsMatch(itemKey, itemName, queueItem, resolvedID, allowFuzzy)
-    -- Tier 1: Exact key match
-    if itemKey == queueItem.itemKey then
-        return true, false
-    end
-
-    -- Tier 2: Numeric ID match
-    local scannedID = itemKey and itemKey:match("^(%d+);")
-    local scannedNumID = tonumber(scannedID)
-    if scannedNumID and scannedNumID > 0 then
-        local queueNumID = tonumber(queueItem.itemID)
-        if queueNumID and queueNumID > 0 and scannedNumID == queueNumID then
-            return true, false
-        end
-        -- resolvedID: number=use it, false=already checked (skip), nil=resolve now
-        local rid = resolvedID
-        if rid == nil then rid = ns:ResolveItemID(queueItem) end
-        if rid and scannedNumID == rid then
-            return true, false
-        end
-    end
-
-    -- Tier 3 & 4: Name-based matching
-    if itemName and queueItem.name and queueItem.name ~= "" then
-        local sName = itemName:lower()
-        local qName = queueItem.name:lower()
-        -- Tier 3: Exact name match
-        if sName == qName then
-            return true, true
-        end
-        -- Tier 4: Fuzzy substring match (min 8 chars, opt-in)
-        -- Prevent recipe/pattern/design items from fuzzy-matching their base items
-        if allowFuzzy ~= false and #queueItem.name >= 8 then
-            local sBase = sName:match("^%w+:%s*(.+)$") or sName
-            local qBase = qName:match("^%w+:%s*(.+)$") or qName
-            -- Only match if the base names (after stripping prefix) match,
-            -- or one base is a substring of the other
-            if sBase == qBase then
-                return true, true
-            end
-            if sBase:find(qBase, 1, true) or qBase:find(sBase, 1, true) then
-                -- Reject if one has a prefix and the other doesn't (recipe vs item)
-                local sHasPrefix = sName:find("^%w+:%s") ~= nil
-                local qHasPrefix = qName:find("^%w+:%s") ~= nil
-                if sHasPrefix == qHasPrefix then
-                    return true, true
-                end
-            end
-        end
-    end
-
-    return false, false
+    return ns.cw:ItemsMatch(itemKey, itemName, queueItem, resolvedID, allowFuzzy, inventoryLookupByName)
 end
 
