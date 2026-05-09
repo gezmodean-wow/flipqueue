@@ -135,9 +135,9 @@ local function CheckForPosts()
         end
         local taskQty = p.item.quantity or 1
         if p.count < taskQty then
-            ns:Print(ns.COLORS.GREEN .. "Posted:|r " .. p.item.name .. " (x" .. p.count .. " of " .. taskQty .. ")")
+            ns.cw:Toast({ severity = "success", text = "Posted: " .. p.item.name .. " (x" .. p.count .. " of " .. taskQty .. ")" })
         else
-            ns:Print(ns.COLORS.GREEN .. "Posted:|r " .. p.item.name .. " (x" .. p.count .. ")")
+            ns.cw:Toast({ severity = "success", text = "Posted: " .. p.item.name .. " (x" .. p.count .. ")" })
         end
         -- Pass the snapshotted bag-item key so log entries preserve bonus
         -- IDs / modifiers even for posts done via TSM / Blizz UI (FQ-130).
@@ -454,7 +454,7 @@ function Tracker:ShowBankOpsPopup()
             end
             ns.BankQueue:ProcessSync(pullOps, "Pulling from bank...", function(successNames, errorCount, failedNames)
                 if #successNames > 0 then
-                    ns:Print("Pulled: " .. table.concat(successNames, ", "))
+                    ns.cw:Toast({ severity = "success", text = "Pulled: " .. table.concat(successNames, ", ") })
                 end
                 if errorCount > 0 then
                     local detail = (failedNames and #failedNames > 0)

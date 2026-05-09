@@ -952,7 +952,7 @@ function UI:RefreshGeneratorPage(pending)
                         for _, r in ipairs(s2.previewRows) do r:Hide() end
                         s2._lastLen = 0
                         local function Finish(added)
-                            ns:Print("Imported " .. added .. " new deals (" .. total .. " parsed, duplicates merged).")
+                            ns.cw:Toast({ severity = "success", text = "Imported " .. added .. " new deals (" .. total .. " parsed, duplicates merged)." })
                             s2.statusLabel:SetText(ns.COLORS.GREEN .. added .. " deals imported!|r")
                             -- Auto-advance to step 3 (generate) after auto-import
                             SaveWizardState(UI._wizardTrack, 3)
@@ -2187,12 +2187,12 @@ function UI:RefreshGeneratorPage(pending)
                         if total >= (ns.Import.LARGE_THRESHOLD or 500) then
                             ns:Print(ns.COLORS.YELLOW .. "Importing " .. total .. " deals (large paste, please wait)...|r")
                             ns.Import:SaveChunked(data, nil, ns.Import.CHUNK_SIZE, nil, function(added)
-                                ns:Print("Imported " .. added .. " new deals (" .. total .. " parsed, duplicates merged).")
+                                ns.cw:Toast({ severity = "success", text = "Imported " .. added .. " new deals (" .. total .. " parsed, duplicates merged)." })
                                 if UI.Refresh then UI:Refresh() end
                             end)
                         else
                             local added = ns.Import:Save(data)
-                            ns:Print("Imported " .. added .. " new deals (" .. total .. " parsed, duplicates merged).")
+                            ns.cw:Toast({ severity = "success", text = "Imported " .. added .. " new deals (" .. total .. " parsed, duplicates merged)." })
                         end
                     end
                 end
@@ -3251,10 +3251,10 @@ function UI:RefreshGeneratorPage(pending)
                 local count = UI._generatorPreview.items and #UI._generatorPreview.items or 0
                 if currentList2 then
                     ns.TodoList:CommitList(UI._generatorPreview, "upcoming")
-                    ns:Print(ns.COLORS.GREEN .. "Queued \"" .. listName .. "\" with " .. count .. " tasks.|r")
+                    ns.cw:Toast({ severity = "success", text = "Queued \"" .. listName .. "\" with " .. count .. " tasks." })
                 else
                     ns.TodoList:CommitList(UI._generatorPreview, "replace")
-                    ns:Print(ns.COLORS.GREEN .. "Saved \"" .. listName .. "\" with " .. count .. " tasks.|r")
+                    ns.cw:Toast({ severity = "success", text = "Saved \"" .. listName .. "\" with " .. count .. " tasks." })
                 end
                 UI._generatorPreview = nil
                 gf.nameBox._initialized = false
@@ -4429,8 +4429,8 @@ function UI:RefreshGeneratorPage(pending)
                         ns.TodoList:CommitList(previewSource.sell, "upcoming")
                     end
 
-                    ns:Print(ns.COLORS.GREEN .. "Saved \"" .. buyName .. "\" (" ..
-                        buyCount .. " buy) + \"" .. sellName .. "\" (" .. sellCount .. " sell)|r")
+                    ns.cw:Toast({ severity = "success", text = "Saved \"" .. buyName .. "\" ("
+                        .. buyCount .. " buy) + \"" .. sellName .. "\" (" .. sellCount .. " sell)" })
                 elseif previewSource and previewSource.items then
                     local listName = gf.nameBox:GetText():match("^%s*(.-)%s*$")
                     if not listName or listName == "" then
@@ -4441,10 +4441,10 @@ function UI:RefreshGeneratorPage(pending)
                     local currentList2 = ns.TodoList:GetCurrentList()
                     if currentList2 then
                         ns.TodoList:CommitList(previewSource, "upcoming")
-                        ns:Print(ns.COLORS.GREEN .. "Queued \"" .. listName .. "\" with " .. count .. " tasks.|r")
+                        ns.cw:Toast({ severity = "success", text = "Queued \"" .. listName .. "\" with " .. count .. " tasks." })
                     else
                         ns.TodoList:CommitList(previewSource, "replace")
-                        ns:Print(ns.COLORS.GREEN .. "Saved \"" .. listName .. "\" with " .. count .. " tasks.|r")
+                        ns.cw:Toast({ severity = "success", text = "Saved \"" .. listName .. "\" with " .. count .. " tasks." })
                     end
                 end
 

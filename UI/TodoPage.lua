@@ -1199,7 +1199,7 @@ function UI:RefreshTodoPage()
                         ns:Print(ns.COLORS.ORANGE .. "Skipped:|r " .. rowData.name)
                     else
                         ns.TodoList:MoveTaskToLog(rowData._taskIndex)
-                        ns:Print("Posted: " .. rowData.name .. " -> moved to log")
+                        ns.cw:Toast({ severity = "success", text = "Posted: " .. rowData.name .. " — moved to log" })
                     end
                     actionRefresh()
                 end

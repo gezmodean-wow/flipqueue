@@ -1066,7 +1066,7 @@ function Sync:AcceptPair(senderID)
     local myBNetID = select(2, BNGetInfo())
     self:Enqueue(OP_PACK .. SEP .. myUUID .. SEP .. tostring(myBNetID or 0), replyTarget, PRIORITY[OP_PACK], replyTransport)
 
-    ns:Print(ns.COLORS.GREEN .. "Linked to " .. label .. "|r")
+    ns.cw:Toast({ severity = "success", text = "Linked to " .. label })
     self:StartHeartbeat()
     self:NotifyPartnerStateChanged()
 
@@ -1171,7 +1171,7 @@ function Sync:OnPairAck(payload, senderID)
     missedPings[remoteUUID] = 0
     ns.db.sync.partners[remoteUUID].lastSeen = time()
 
-    ns:Print(ns.COLORS.GREEN .. "Linked to " .. label .. "|r")
+    ns.cw:Toast({ severity = "success", text = "Linked to " .. label })
     self:StartHeartbeat()
     self:NotifyPartnerStateChanged()
 
@@ -1218,7 +1218,7 @@ function Sync:Unlink(accountUUID)
         self:SendRaw(OP_UNLK, target, transport)
     end
 
-    ns:Print("Unlinked from " .. (partner.label or "account"))
+    ns.cw:Toast({ severity = "info", text = "Unlinked from " .. (partner.label or "account") })
 
     -- Remove characters owned by this account
     for charKey, charData in pairs(ns.db.characters) do
