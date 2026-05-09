@@ -774,33 +774,6 @@ function UI:RefreshMini()
         end
     end
 
-    -- Auctionator shopping list button (when buy tasks exist and Auctionator is loaded)
-    if buyCount and buyCount > 0 and type(Auctionator) == "table"
-            and type(Auctionator.API) == "table" and type(Auctionator.API.v1) == "table" then
-        rowIndex = rowIndex + 1
-        local auctRow = GetOrCreateMiniRow(rowIndex)
-        auctRow.icon:SetTexture("Interface\\Icons\\INV_Misc_Spyglass_03")
-        auctRow.text:SetText(ns.COLORS.YELLOW .. "Refresh Auctionator Buy List" .. ns.COLORS.RESET)
-        auctRow.tooltipItemID = nil; auctRow.tooltipItemKey = nil
-        auctRow.tooltipItemName = "Refresh Shopping List"
-        auctRow.tooltipExtra = "Rebuild the FlipQueue buy list now (" .. buyCount .. " buy items). Lists also refresh automatically when you open the AH or buy something."
-        auctRow:SetScript("OnMouseDown", function()
-            if not ns.BuyListSync then
-                ns:Print(ns.COLORS.RED .. "BuyListSync not loaded.|r")
-                return
-            end
-            local total, created, _, err = ns.BuyListSync:Rebuild(true)
-            if err then
-                ns:Print(ns.COLORS.RED .. "Buy list error: " .. err .. "|r")
-            elseif total then
-                ns:Print(ns.COLORS.GREEN .. "Refreshed " .. (created or 0) ..
-                    " list(s) with " .. total .. " item(s).|r")
-            end
-            UI:RefreshMini()
-        end)
-        auctRow:Show()
-    end
-
     -- Current character tasks (Check Mail, Expiring)
     local charTasks = UI.BuildCurrentCharTasks and UI.BuildCurrentCharTasks() or {}
     if #charTasks > 0 then
