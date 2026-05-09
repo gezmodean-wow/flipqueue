@@ -1,15 +1,8 @@
 -- UI/MinimapButton.lua
--- Minimap icon using LibDBIcon-1.0 (standard library used by TSM, WeakAuras, etc.)
--- Supports icon managers, minimap drawers, and all minimap shapes automatically.
---
--- Chrome: when Cogworks-1.0 v0.6.0+ is embedded, the button is registered via
--- Cogworks:RegisterCogMinimapButton, which wraps LibDBIcon:Register and adds
--- the suite-shared brass gear-ring border. Per-cog identity comes from the
--- inner glyph (Art/fq-inner.tga — gold FQ on deep purple).
---
--- Soft-degrade: if an older Cogworks (or none) is loaded, falls back to a
--- direct LibDBIcon:Register so the button keeps working with its default
--- circular border. No regression for users on stale installs.
+-- Minimap icon registered via Cogworks-1.0's RegisterCogMinimapButton, which
+-- wraps LibDBIcon-1.0 and adds the suite-shared brass gear-ring border.
+-- Per-cog identity comes from the inner glyph (Art/fq-inner.tga — gold FQ on
+-- deep purple).
 local addonName, ns = ...
 
 local UI = ns.UI
@@ -99,15 +92,7 @@ local function RegisterIcon()
     local broker = LDB:NewDataObject("FlipQueue", dataObject)
 
     local Cogworks = LibStub:GetLibrary("Cogworks-1.0", true)
-    if Cogworks and Cogworks.RegisterCogMinimapButton then
-        -- Cogworks wraps LibDBIcon:Register and adds the suite-shared gear ring.
-        Cogworks:RegisterCogMinimapButton("FlipQueue", broker, ns.db.settings.minimapIcon)
-    else
-        -- Soft-degrade: older embedded Cogworks (< v0.6.0) or library absent.
-        -- Falls back to LibDBIcon direct registration; user sees the default
-        -- circular border with no gear ring, but no regression.
-        LDBIcon:Register("FlipQueue", broker, ns.db.settings.minimapIcon)
-    end
+    Cogworks:RegisterCogMinimapButton("FlipQueue", broker, ns.db.settings.minimapIcon)
     registered = true
 end
 

@@ -5,31 +5,12 @@ local addonName, ns = ...
 local UI = ns.UI
 
 -- ==========================================
--- ITEM QUALITY COLORS
+-- COLOR HELPERS
 -- ==========================================
-
-local QUALITY_COLORS = {
-    Poor      = "9d9d9d",
-    Common    = "ffffff",
-    Uncommon  = "1eff00",
-    Rare      = "0070dd",
-    Epic      = "a335ee",
-    Legendary = "ff8000",
-    Artifact  = "e6cc80",
-    Heirloom  = "00ccff",
-}
-
--- WoW Enum.ItemQuality numeric -> color
-local QUALITY_NUM_COLORS = {
-    [0] = "9d9d9d", -- Poor
-    [1] = "ffffff", -- Common
-    [2] = "1eff00", -- Uncommon
-    [3] = "0070dd", -- Rare
-    [4] = "a335ee", -- Epic
-    [5] = "ff8000", -- Legendary
-    [6] = "e6cc80", -- Artifact
-    [7] = "00ccff", -- Heirloom
-}
+-- Quality-color and gold-format helpers delegate to Cogworks-1.0 (Text.lua)
+-- so all suite cogs render these the same way. CLASS_COLORS stays local for
+-- now — its consumers do direct table lookups (CLASS_COLORS[class]) and
+-- migrating those call sites belongs with the Phase B page rewrites.
 
 -- WoW class colors for display
 local CLASS_COLORS = {
@@ -44,18 +25,8 @@ local CLASS_COLORS = {
 -- UTILITY FUNCTIONS
 -- ==========================================
 
--- Colorize a name by quality (string name like "Rare" or numeric 3)
 local function QualityColorName(name, quality)
-    local color
-    if type(quality) == "number" then
-        color = QUALITY_NUM_COLORS[quality]
-    elseif type(quality) == "string" and quality ~= "" then
-        color = QUALITY_COLORS[quality]
-    end
-    if color then
-        return "|cff" .. color .. name .. "|r"
-    end
-    return name
+    return ns.cw:QualityColorName(name, quality)
 end
 
 -- Look up icon, quality, and resolved numeric ID for an item
@@ -134,16 +105,8 @@ local function LookupItemInfo(itemID, itemKey, itemName)
     return icon, quality, resolvedID
 end
 
--- Format gold value for display
--- Estimates are truncated to whole numbers (no decimals) by design — the
--- todo-list group headers show approximate gold with a "~" prefix, and
--- fractional gold amounts make that noisier than it needs to be.
 local function FormatGoldValue(totalGold)
-    if not totalGold or totalGold <= 0 then return "" end
-    if totalGold >= 1000 then
-        return math.floor(totalGold / 1000) .. "k gold"
-    end
-    return math.floor(totalGold) .. " gold"
+    return ns.cw:FormatGoldValue(totalGold)
 end
 
 -- ==========================================
