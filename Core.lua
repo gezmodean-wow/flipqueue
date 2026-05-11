@@ -91,33 +91,24 @@ function ns:PrintError(msg)
     end
 end
 
--- Ring buffer of recent debug messages, exposed for the in-game debug
--- console (UI/DebugPopup.lua). Always populated regardless of whether
--- debugMessages is on, so the console can show the last N messages even
--- when the user just enabled debug mode.
-ns._debugLog = ns._debugLog or {}
-ns._debugLogMax = 500
+-- Debug log + chat-echo gate live in Cogworks (cw:DebugPrint, cw:SetDebugEnabled).
+-- ns:PrintDebug forwards through; ns:SetDebugEnabled keeps the persisted
+-- ns.db.settings.debugMessages flag and the cw runtime flag in sync so
+-- chat-echo gating matches the user's saved preference.
 
 function ns:PrintDebug(msg)
-    -- Push to the ring buffer regardless of the debugMessages setting so the
-    -- in-game debug console always has recent context. This side effect is
-    -- FlipQueue-specific and stays local — Cogworks doesn't own debug logs.
-    local ts = date("%H:%M:%S")
-    ns._debugLog[#ns._debugLog + 1] = ts .. "  " .. tostring(msg)
-    if #ns._debugLog > ns._debugLogMax then
-        table.remove(ns._debugLog, 1)
+    if ns.cw and ns.cw.DebugPrint then
+        ns.cw:DebugPrint("FlipQueue", tostring(msg))
     end
-    -- Notify the debug popup if it's open so it can append the new line live.
-    if ns.UI and ns.UI._OnDebugLogAppend then
-        ns.UI:_OnDebugLogAppend()
-    end
+end
 
-    if ns.db and ns.db.settings.debugMessages then
-        -- Debug prints stay on the local print() path even when Cogworks
-        -- is loaded — the "[debug]" suffix and gray coloring are custom
-        -- enough that routing through cw:Print would require a dedicated
-        -- Cogworks API. Not worth the API surface right now.
-        print(ns.COLORS.GRAY .. "FlipQueue [debug]:|r " .. msg)
+function ns:SetDebugEnabled(enabled)
+    enabled = enabled and true or false
+    if ns.db and ns.db.settings then
+        ns.db.settings.debugMessages = enabled
+    end
+    if ns.cw and ns.cw.SetDebugEnabled then
+        ns.cw:SetDebugEnabled("FlipQueue", enabled)
     end
 end
 
