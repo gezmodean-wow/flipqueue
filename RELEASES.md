@@ -6,6 +6,42 @@ The engineering-detail companion lives in `CHANGELOG.md` (commit-readerese — f
 
 ---
 
+## v0.13.0-alpha1
+
+First alpha on the v0.13.0 line. The headline fixes a long-standing leak where Warbound gear was sneaking into your auto-generated to-do list, plus a polish pass on chat noise: posting, pulling, depositing, importing, saving, and linking confirmations now show up as toasts in the top-right of the screen instead of chat lines. Behind the scenes, the addon is in the middle of consolidating onto the shared Cogworks library; this alpha lands the first wave of that consolidation. The bigger UI swaps (main window, settings page, mini overlay, setup wizard, bank popup) are queued behind matching upgrades on the Cogworks side and will land in future v0.13.0 alphas.
+
+### Warbound gear stays out of the auto-generated AH list
+
+If you ran *To-Do Generator → Deal Finder* and saw Warbound or Warbound-until-Equipped gear queued up to post, that should no longer happen. The previous filter caught fully soulbound items but missed warband-bound stacks because they look like regular tradeable gear at the API level. The new filter scans each item's tooltip for the "Warbound" / "Warbound until Equipped" lines (the same way Syndicator does) and excludes them from the pool.
+
+If you have an existing to-do list with warbound items already queued, regenerate the list to clear them — entries from before this update stay in your data and the filter only activates when items are next scanned.
+
+### Confirmations now toast instead of cluttering chat
+
+Posted, pulled, deposited, imported, saved, linked, unlinked — every "yes, that happened" confirmation now appears as a brief toast in the upper-right corner instead of as a chat line. The toasts stack when several fire close together (during a posting run or bank operation) so you can glance at the corner instead of scrolling chat. Errors and warnings still go to chat — those want your full attention.
+
+### Mini overlay: redundant manual button removed
+
+The "Refresh Auctionator Buy List" row in the mini overlay is gone. The buy list already rebuilds automatically when you open the auction house, after every post, after every buy, when you toggle the Auctionator integration on/off, and after deleting a list. The manual row was just an extra trigger for the same path — and on busy realms with lots of buy rows it ended up scrolled off-screen anyway. If you ever need a manual rebuild, `/fq` will gain a slash command for it in a future alpha.
+
+### Slash commands restructured
+
+`/fq` and `/flipqueue` still work for everything they did before. A few small differences you might notice:
+
+- **Garbage subcommands print a usage hint instead of toggling the window.** Typing `/fq clear foo` (or any unknown subcommand) now prints a brief list of what's available instead of opening the FlipQueue window.
+- **Errors inside slash handlers no longer pop the WoW error frame.** They print as a yellow line in chat instead — easier to dismiss, easier to copy for bug reports.
+- **`/fq help` is now auto-generated** from the registered subcommand list, so it stays in sync as new commands get added.
+
+### Debug console refresh
+
+`/fq debug` opens the debug console with a slightly different look — the chrome is the new shared Cogworks debug surface, tabs for Actions / Inspectors / Profile / Log, and the toggle button reads "Toggle debug" instead of the dedicated "Toggle debug mode" action button. All the FlipQueue debug actions (bank popup tests, export FQ state, copy debug log, etc.) still work as before. The chat-echo line for debug messages reads `[FlipQueue debug]` instead of `FlipQueue [debug]:` — closest match the shared library supports without a custom prefix.
+
+### Known issues
+
+- **Some to-do tasks may show wildly inflated expected prices** vs the actual auction-house market. This is being investigated — the suspected cause is German thousands-separator parsing on FlippingPal CSV imports (where `113.190` gets read as `113,190` instead of `113.19`) or a unit mixup in the Deal Finder profit calculation. If you see prices that look 100× to 1000× too high, regenerating the to-do list after the fix lands will clear them; in the meantime you can manually skip the affected rows.
+- **Buy and sell tasks look identical in the mini overlay.** If you have a sell sandwiched between several buy rows on the same character, the sell row can visually disappear into the stack and end up not getting posted. A visual differentiation pass (icon tint, row stripe, or pill marker) is queued for the next alpha.
+- **TSM-skipped sell tasks stay in the active to-do list.** When TSM rejects a post because the AH price is below your minimum, the task is marked skipped but doesn't auto-clear out of the active list the way a manual skip does. They're safe to skip manually for now; a clean-up pass is queued for the next alpha.
+
 ## v0.12.0
 
 Public release. The big shifts since v0.11.x are the Auto / Manual / Disabled per-action settings model, the **Manage my items** / **Manage my gold** master switches, the live Auctionator buy-list sync, and the buy-task workflow labels in the mini overlay (`[BUY]` → `[CHECK MAIL]` → `[DEPOSIT]`). Plus a long arc of bag-taint hardening, the deposit-planner correctness pass, and the Generator-wizard chunked-parse fix so huge FlippingPal pastes don't freeze the client.

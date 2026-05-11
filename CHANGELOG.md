@@ -1,5 +1,75 @@
 # Changelog
 
+## v0.13.0-alpha1
+
+First alpha on the v0.13.0 line. Adopts Cogworks v0.13.x primitives across the addon surface (FQ-143 Phase A complete, Phase B partial), fixes a critical warbound-gear leak into the auto-generated AH list (FQ-173), and removes a redundant manual-refresh button (FQ-140). Phase B remainder (page-by-page swaps for MainFrame / SettingsFrame / MiniView / SetupWizard / BankPopup / TSMFrame / ScrollTable) is gated on Cogworks-side primitive work; tickets filed at COG#37 / #50 / #51 / #52 / #53 / and pending sidebar-sections ticket.
+
+Embedded Cogworks-1.0 stays at `v0.13.2` for this alpha.
+
+### FQ-173: Exclude Warbound / Warbound-until-Equipped gear from auto-generated AH lists (#174)
+
+`C_Item.GetItemInfo`'s `bindType` reports `2` (BoE) for Warbound-until-Equipped gear — indistinguishable from a regular tradeable BoE. Syndicator's `slot.isBound` only flips true once an item is fully soulbound to a character, so warbound stacks sitting in bags or warbank slipped through `TodoGenerator`'s tradeable filter and ended up in auto-generated AH lists.
+
+New `ItemBindings.lua` tooltip-scans for the localized account-bound strings (`ITEM_ACCOUNTBOUND`, `ITEM_ACCOUNTBOUND_UNTIL_EQUIP`, `ITEM_BIND_TO_ACCOUNT`, `ITEM_BIND_TO_BNETACCOUNT`, and the `_UNTIL_EQUIP` variants), mirroring Syndicator's `Search/CheckItem.lua:579-594`. Cache key is the full `itemKey` since bonus-ID variants can flip the binding (crafted reagent quality). `Scanner.lua` stamps an `isWarbound` flag at fold time; `TodoGenerator.lua` tradeable filter rejects on it in both the inventory and warbank passes (lines 88-92, 112-114).
+
+`C_Item.IsBoundToAccountUntilEquip` would have been faster but needs a live `ItemLocation` — Syndicator's cached slot data (`BagCache.lua:370-374`) drops bag/slot indices, so the API can't help with projected alt inventory. Existing entries from before this change have no `isWarbound` field; the filter treats `nil` as not-warbound. Stale entries refresh on the next bag/bank/warbank update — no migration needed; the auto-gen list improves incrementally.
+
+### FQ-143 Phase A1 (#169): Item-key + format helpers delegated to Cogworks
+
+`Core.lua`'s `ns:MakeItemKey`, `ns:ItemKeyToItemString`, and `ns:ParseItemLink` now thin-shim through `ns.cw` (Cogworks `Items.lua`); ~95 LOC of duplicated parsing logic gone. `UI/Shared.lua`'s `QualityColorName` + `FormatGoldValue` shim onto `cw:QualityColorName` + `cw:FormatGoldValue`. `UI/MinimapButton.lua` strips the dead Cogworks-absent fallback (Cogworks is a vendored .pkgmeta external; the soft-degrade branch was unreachable).
+
+### FQ-143 Phase A2 (#170, #171, #172): Resolve helpers + slash + toast
+
+- **#170**: `ns:ResolveItemID` and `ns:ItemsMatch` delegate to `cw:ResolveItemID` / `cw:ItemsMatch` (Cogworks `Items.lua:136`, `:164`) via callback-bridge for FlipQueue's inventory walks. -76 / +23 on `Core.lua`.
+- **#171**: `UI/SlashCommands.lua` wholesale restructured onto `cw:RegisterSlashCommands` (Cogworks `Slash.lua:134`). Old hand-rolled `SlashCmdList.FLIPQUEUE` dispatcher (-1349) replaced with a registry of subcommand handlers (+1444 structurally) plus auto-help rendering. Behavior deltas: garbage args (e.g. `/fq clear foo`) print a usage hint instead of falling through; unknown subcommands print hints; slash-handler errors flow through `cw:PrintError` (yellow chat line) instead of raw Lua errors via the WoW error frame. `SLASH_FLIPQUEUE1` and `SLASH_FLIPQUEUE2` values swap (now 1=`/fq`, 2=`/flipqueue`); nothing in the codebase reads the specific globals so the swap is functionally invisible. Two trailing right-click hint lines from the hand-rolled help text drop out.
+- **#172**: 23 confirmation prints across 7 files (`Sync.lua`, `Tracker.lua`, `TrackerBank.lua`, `UI/MiniView.lua`, `UI/GeneratorPage.lua`, `UI/InventoryPage.lua`, `UI/TodoPage.lua`) swapped from `ns:Print` to `ns.cw:Toast` for Posted / Pulled / Deposited / Imported / Saved / Linked / Unlinked confirmations. Errors / warnings stay on chat.
+
+### FQ-143 Phase B partial (#176): DebugConsole adopts cw:CreateDebugConsole
+
+Replaces the hand-rolled debug console (frame chrome, action grid, log scroll, status row, toggle button) with a thin wrapper around Cogworks' debug toolkit. `UI/DebugConsole.lua` net -207 LOC.
+
+- `UI/DebugConsole.lua` registers FlipQueue's actions via `cw:RegisterDebugAction` and shows `cw:CreateDebugConsole({ cog = "FlipQueue", savedvars = ns.db.debugConsole })` on `/fq debug`. The cw console owns tabs (Actions/Inspectors/Profile/Log), resize, persistence, and the debug-echo toggle.
+- `ns:PrintDebug` forwards to `cw:DebugPrint("FlipQueue", msg)`; local `ns._debugLog` ring buffer dropped (Cogworks owns the ring now).
+- New `ns:SetDebugEnabled(b)` helper keeps `ns.db.settings.debugMessages` and `cw:SetDebugEnabled` in sync across sessions. `/fq debug` toggle and the in-console toggle button both flow through it (the latter via `OnHide` writeback).
+- `UI:RegisterDebugAction` stays as a backward-compatible alias.
+
+Behavior deltas: debug chat-echo line now reads `[FlipQueue debug]` instead of `FlipQueue [debug]:` (closest the cw API permits without a custom prefix hook); console title bar reads `FlipQueue — Debug` instead of `FlipQueue Debug Console — v<ver>` (version still on `/fq state` and Copy Debug Log); the hand-rolled "Toggle debug mode" action drops (cw built-in toggle button covers it).
+
+### FQ-140 (#175): Remove redundant 'Refresh Auctionator Buy List' MiniView button
+
+`BuyListSync:Rebuild` auto-fires on AH open, on post, on buy, when toggling the Auctionator-enable switch (`UI/AuctionatorFrame.lua:189`), and after list deletion (`UI/AuctionatorFrame.lua:257`). The MiniView button was a manual trigger for the same path — and on busy realms with >17 rows the button got pushed below the visible row count, which made it look like auto-refresh was broken (zpectre's report on issue #140). Net -27 LOC; cleaner mini surface.
+
+### Phase B deferrals (tracked in COG repo)
+
+| File | Why deferred | Cogworks ticket |
+|---|---|---|
+| `UI/BankPopup.lua` | `cw:CreatePopup` is modal+centered+dim-overlay; BankPopup is anchored+non-modal floating panel | gezmodean-wow/cogworks#50 (anchored non-modal popup primitive) |
+| `UI/SetupWizard.lua` | Welcome step has dual-CTA (Apply Defaults / Customize) inside a card layout; `cw:CreateWizard` has a fixed Cancel/Prev/Next/Finish footer | gezmodean-wow/cogworks#53 (per-step custom footer buttons) |
+| `UI/MainFrame.lua` | `cw:CreateThemedMainFrame` lacks sidebar sections + sidebar scroll; pushing through would lose the WORK/DATA/TOOLS/INTEGRATIONS sidebar organization | gezmodean-wow/cogworks#37 (sidebar scroll) + sidebar sections ticket pending |
+| `UI/SettingsFrame.lua` | Tri-state action toggles + dynamic row height stay FQ-local; partial fit (-100 net) not worth swap risk while parallel cogworks work in flight | (filed when concrete primitive shape is known) |
+| `UI/MiniView.lua` | `cw:CreateMiniView` covers the shell but partner-row + task-row inner primitives don't exist; shell-only swap is net -10 LOC | gezmodean-wow/cogworks#51 (MiniView inner-row primitives) |
+| `UI/ScrollTable.lua` | 13 consumer pages depend on column-resize, h-scroll, and `EnableRowActions` — none in `cw:CreateScrollTable` | gezmodean-wow/cogworks#52 (column-resize + h-scroll + row-action buttons) |
+| `UI/TSMFrame.lua` | `cw:CreateDropdown` is text-only; FQ's price-source dropdown wants icon + label + sublabel cells | gezmodean-wow/cogworks#54 *(filed alongside #53)* |
+
+Each ticket lands the missing primitive on the cog side; FQ's per-page swap resumes in v0.13.0-alpha2 (or later) once the upstream is mergeable.
+
+### Cogworks-suite tickets filed during this alpha
+
+Concurrent with FQ-side work, a parallel cogworks session is closing the deferred-primitive gaps. Tickets currently open against `gezmodean-wow/cogworks`:
+
+- #37 — ThemedMainFrame sidebar scroll *(pre-existing)*
+- #50 — Anchored non-modal popup primitive (BankPopup-shaped use case)
+- #51 — MiniView inner-row primitives (partner strip + task row + action buttons)
+- #52 — ScrollTable: column-resize + horizontal-scroll + row-action buttons
+- #53 — Wizard: per-step custom footer buttons (welcome-step opt-out for SetupWizard)
+- #54 — Dropdown: support icon + multi-line label cells (TSM-shaped use case)
+
+### Open FlipQueue issues filed during this alpha (deferred to alpha2+)
+
+- #177 — To-do view shows wildly inflated expected prices vs actual market (likely German thousands-separator misparse on FP CSV import OR DealFinder `blendedPrice` unit mixup; engineering hypotheses in issue body)
+- #178 — MiniView should visually differentiate buy vs sell tasks (player missed a sandwiched sell row)
+- #179 — TSM-skipped sell tasks should auto-clear from active to-do (currently stay as `status=skipped` with `>post:pending` in steps)
+
 ## v0.12.0
 
 Stable cut from the beta3 commit (`3547f14`). Beta1 → beta2 → beta3 went through tester soak; the package the public release ships is identical to beta3's content. Storefront `description.md` refreshed and pasted to CurseForge + Wago dashboards as part of the release; first screenshot set captured per `docs/storefront/screenshots/README.md` v0.12.0 capture checklist.
