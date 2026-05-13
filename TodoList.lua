@@ -1667,6 +1667,8 @@ end
 
 -- Check TSM thresholds for all pending tasks on the current character.
 -- Below-threshold items are either reassigned to a realm-mate or skipped.
+-- Skips create a log entry AND remove the task from the active list so
+-- TSM-rejected tasks don't linger as residue after a posting run (FQ-179).
 -- Returns: { reassigned = count, skipped = count }
 function TodoList:HandleTSMRejections()
     if not ns.db or not ns.db.settings.tsmAutoSkipRejected then
@@ -1685,6 +1687,11 @@ function TodoList:HandleTSMRejections()
     local currentRealm = charKey:match("%-(.+)$") or ""
     local results = { reassigned = 0, skipped = 0 }
     local messages = {}
+
+    -- Collect indices to remove. We can't table.remove during ipairs
+    -- because that shifts subsequent indices and skips entries. Reassigns
+    -- mutate in place safely; only skips need post-loop removal.
+    local toRemove = {}
 
     for taskIdx, task in ipairs(current.tasks) do
         -- Only check tasks that are pending, on this character, on this realm,
@@ -1721,15 +1728,14 @@ function TodoList:HandleTSMRejections()
                     table.insert(messages, ns.COLORS.CYAN .. "Reassigned:|r " ..
                         (task.name or "?") .. " -> " .. altName .. " (" .. reason .. ")")
                 else
-                    -- No alternate character — skip with reason
-                    task.status = "skipped"
-                    task.failReason = reason
+                    -- No alternate character — log the skip and queue task
+                    -- for removal. The log entry captures the rejection
+                    -- reason so the player can audit later via /fq log.
                     results.skipped = results.skipped + 1
                     table.insert(messages, ns.COLORS.ORANGE .. "Skipped:|r " ..
                         (task.name or "?") .. " (" .. reason .. ")")
 
-                    -- Log the rejection
-                    table.insert(ns.db.log, {
+                    local logEntry = {
                         itemKey        = task.itemKey,
                         itemID         = task.itemID,
                         name           = task.name,
@@ -1746,6 +1752,38 @@ function TodoList:HandleTSMRejections()
                         soldPrice      = nil,
                         postedQuantity = task.quantity or 1,
                         failReason     = reason,
+                    }
+                    table.insert(ns.db.log, logEntry)
+
+                    table.insert(toRemove, {
+                        taskIdx  = taskIdx,
+                        taskUUID = task.taskUUID,
+                        logEntry = logEntry,
+                        importSource = task.importSource,
+                        importKey    = task.importKey,
+                    })
+                end
+            end
+        end
+    end
+
+    -- Remove skipped tasks in reverse so earlier indices stay valid, then
+    -- propagate to the linked partner via TDLOG (same delta used by
+    -- MoveTaskToLog — partner inserts the log entry and removes the task).
+    if #toRemove > 0 then
+        table.sort(toRemove, function(a, b) return a.taskIdx > b.taskIdx end)
+        for _, entry in ipairs(toRemove) do
+            if entry.importSource and entry.importKey then
+                ns:ImportRemove(entry.importSource, entry.importKey)
+            end
+            table.remove(current.tasks, entry.taskIdx)
+        end
+        if ns.Sync and ns.Sync.IsLinked and ns.Sync:IsLinked() and not ns.Sync._applying then
+            for _, entry in ipairs(toRemove) do
+                if entry.taskUUID then
+                    ns.Sync:EmitDelta("TDLOG", {
+                        taskUUID = entry.taskUUID,
+                        logEntry = entry.logEntry,
                     })
                 end
             end
@@ -1759,6 +1797,11 @@ function TodoList:HandleTSMRejections()
     if results.reassigned + results.skipped > 0 then
         ns:Print(ns.COLORS.YELLOW .. "TSM threshold check:|r " ..
             results.reassigned .. " reassigned, " .. results.skipped .. " skipped")
+    end
+
+    -- If skipping cleared the last pending task on the list, archive it.
+    if results.skipped > 0 then
+        self:CheckAutoComplete()
     end
 
     return results
