@@ -1177,6 +1177,135 @@ local function debugPricing(rawQuery)
     end
 end
 
+local function debugPriceSource(rawQuery)
+    -- /fq debug pricesource <itemName or itemID>
+    -- Diagnose FQ-177 class "wildly inflated expected price" reports by
+    -- dumping the stored expectedPrice + every upstream price field for
+    -- matching active to-do tasks. For each match it prints:
+    --   - the raw expectedPrice string and what ParseGoldValue extracts
+    --     (round-trip check — confirms the parser is not silently mangling
+    --     the locale form the import stored)
+    --   - the importSource bucket (fpScanner / fpCrossRealm / dealFinder /
+    --     auctionator / tsm) and that bucket's own raw price fields, so
+    --     the inflated value can be attributed to the import path that
+    --     produced it rather than the display layer
+    --   - current TSM region/realm prices for direct comparison
+    -- Use against a reproducer task on the affected list before clearing
+    -- it, otherwise the import record is lost and the trail goes cold.
+    rawQuery = strtrim(rawQuery or "")
+    if rawQuery == "" then
+        ns:Print("Usage: /fq debug pricesource <itemName or itemID>")
+        return
+    end
+
+    local query = rawQuery:lower()
+    local queryID = rawQuery:match("^(%d+)$")
+
+    local function NameMatches(name, itemID)
+        local nm = (name or ""):lower()
+        if queryID and tostring(itemID) == queryID then return true end
+        return nm == query or (query ~= "" and nm:find(query, 1, true))
+    end
+
+    local list = ns.TodoList and ns.TodoList:GetCurrentList()
+    if not list or not list.tasks then
+        ns:Print("No active to-do list.")
+        return
+    end
+
+    local matches = {}
+    for taskIdx, task in ipairs(list.tasks) do
+        local it = task.item
+        if it and NameMatches(it.name, it.itemID) then
+            matches[#matches + 1] = { taskIdx = taskIdx, item = it }
+        end
+    end
+
+    print(DumpHeader("/fq debug pricesource"))
+    print("query: " .. rawQuery .. "  ->  " .. #matches .. " match(es) in active to-do")
+    if #matches == 0 then
+        print("(no active task matches — try a partial name, or check /fq state for stored item names)")
+        return
+    end
+
+    local function FormatNum(n)
+        if type(n) ~= "number" then return tostring(n) end
+        if n >= 10000 then
+            return string.format("%s (%dg)", tostring(n), math.floor(n / 10000))
+        end
+        return tostring(n)
+    end
+
+    for _, m in ipairs(matches) do
+        local it = m.item
+        print(string.format("--- task #%d: %s ---", m.taskIdx, it.name or "?"))
+        print("  itemKey:      " .. tostring(it.itemKey))
+        print("  itemID:       " .. tostring(it.itemID))
+        print("  targetRealm:  " .. tostring(it.targetRealm))
+        if it.action == "buy" then
+            print("  action:       buy")
+            print("  buyRealm:     " .. tostring(it.buyRealm))
+            print("  buyPrice:     [" .. tostring(it.buyPrice) .. "]"
+                .. "  parsed=" .. tostring(ns:ParseGoldValue(it.buyPrice or "")) .. "g")
+        end
+        print("  expectedPrice (raw): [" .. tostring(it.expectedPrice) .. "]")
+        local parsed = ns:ParseGoldValue(it.expectedPrice or "")
+        print("    ParseGoldValue -> " .. tostring(parsed) .. "g")
+        if type(it.expectedPrice) == "number" then
+            print("    (stored as NUMBER — non-standard; FormatGold("
+                .. tostring(it.expectedPrice) .. ") = " .. ns:FormatGold(it.expectedPrice) .. ")")
+        end
+        if it.priceSource then
+            print("  priceSource:  " .. tostring(it.priceSource)
+                .. (it.priceUpdatedAt and ("  (updated " .. ns:FormatRelativeTime(it.priceUpdatedAt) .. ")") or ""))
+        else
+            print("  priceSource:  (unset — original import value, never TSM-auto-updated)")
+        end
+
+        -- Import-bucket source
+        local importSource = it.importSource or "(unknown)"
+        local importKey    = it.importKey
+        print("  importSource: " .. tostring(importSource)
+            .. (importKey and ("  key=" .. importKey) or "  key=(none)"))
+        local bucket = ns.db and ns.db.imports and ns.db.imports[importSource]
+        local importRec = bucket and importKey and bucket[importKey]
+        if importRec then
+            print("    importRec.expectedPrice: [" .. tostring(importRec.expectedPrice) .. "]")
+            if importRec.blendedPrice then
+                print("    importRec.blendedPrice (copper): " .. FormatNum(importRec.blendedPrice))
+            end
+            if importRec.buyPrice then
+                print("    importRec.buyPrice:      [" .. tostring(importRec.buyPrice) .. "]")
+            end
+            if importRec.saleAvg then
+                print("    importRec.saleAvg:       [" .. tostring(importRec.saleAvg) .. "]")
+            end
+            if importRec.profitAmount then
+                print("    importRec.profitAmount:  [" .. tostring(importRec.profitAmount) .. "]")
+            end
+        else
+            print("    (no import record found — may have been cleared post-generate)")
+        end
+
+        -- Live TSM comparison
+        if ns.TSM and ns.TSM:IsEnabled() and it.itemKey then
+            local dbMin    = ns.TSM:GetPrice(it.itemKey, "DBMinBuyout")
+            local dbRegion = ns.TSM:GetPrice(it.itemKey, "DBRegionMarketAvg")
+            local dbSale   = ns.TSM:GetPrice(it.itemKey, "DBRegionSaleAvg")
+            print("  TSM live (current realm):")
+            print("    DBMinBuyout:        " .. (dbMin and (ns:FormatGold(dbMin)        .. "  (" .. dbMin    .. "c)") or "nil"))
+            print("    DBRegionMarketAvg:  " .. (dbRegion and (ns:FormatGold(dbRegion)  .. "  (" .. dbRegion .. "c)") or "nil"))
+            print("    DBRegionSaleAvg:    " .. (dbSale and (ns:FormatGold(dbSale)      .. "  (" .. dbSale   .. "c)") or "nil"))
+            if dbRegion and parsed > 0 then
+                local ratio = parsed / (dbRegion / 10000)
+                if ratio >= 10 or ratio <= 0.1 then
+                    print(string.format("    |cffff4444INFLATION RATIO vs DBRegionMarketAvg: %.1fx|r", ratio))
+                end
+            end
+        end
+    end
+end
+
 local function debugRealms()
     -- /fq debug realms
     -- Show whether TSMRealms has captured per-realm AuctionDB data, and
@@ -1562,6 +1691,8 @@ local function cmdDebug(args)
         debugGold()
     elseif sub == "pricing" then
         debugPricing(rest)
+    elseif sub == "pricesource" then
+        debugPriceSource(rest)
     elseif sub == "realms" then
         debugRealms()
     elseif sub == "expired" then
@@ -1618,6 +1749,6 @@ ns.cw:RegisterSlashCommands("FlipQueue", {
         { name = "sync",                                                   help = "Force full re-sync with linked account",                                   run = cmdSync },
         { name = "reconcile",                                      args = "[reset]",     help = "Upgrade expired/cancelled log entries to sold using TSM data", run = cmdReconcile },
         { name = "testpost",                                               help = "Run the AuctionPost self-test",                                            run = cmdTestpost },
-        { name = "debug",                                          args = "[subcommand]", help = "Diagnostics — try /fq debug for the console, or /fq debug <toggle|log|perf|bankpopup|bagprices|parsegold|pulls|gold|pricing|realms|expired|scan|post>", run = cmdDebug },
+        { name = "debug",                                          args = "[subcommand]", help = "Diagnostics — try /fq debug for the console, or /fq debug <toggle|log|perf|bankpopup|bagprices|parsegold|pulls|gold|pricing|pricesource|realms|expired|scan|post>", run = cmdDebug },
     },
 })
