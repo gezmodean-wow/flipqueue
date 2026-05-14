@@ -1270,8 +1270,12 @@ local function debugPriceSource(rawQuery)
         -- Import-bucket source
         local importSource = it.importSource or "(unknown)"
         local importKey    = it.importKey
+        -- Pipe-escape importKey so realm names beginning with T (or any
+        -- character that follows a literal "|" in the key) aren't eaten by
+        -- WoW's |T...|t texture-escape parser when printed to chat.
+        local printableKey = importKey and importKey:gsub("|", "||") or nil
         print("  importSource: " .. tostring(importSource)
-            .. (importKey and ("  key=" .. importKey) or "  key=(none)"))
+            .. (printableKey and ("  key=" .. printableKey) or "  key=(none)"))
         local bucket = ns.db and ns.db.imports and ns.db.imports[importSource]
         local importRec = bucket and importKey and bucket[importKey]
         if importRec then
