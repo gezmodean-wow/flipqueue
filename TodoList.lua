@@ -346,8 +346,19 @@ function TodoList:RegenerateList(sourceList, refreshMode, removedKeys, newName)
                 local bucket = importSource and ns.db
                     and ns.db.imports and ns.db.imports[importSource]
                 local deal = bucket and importKey and bucket[importKey]
-                if deal and ns.ResolveFPPrice then
-                    copy.expectedPrice = ns:ResolveFPPrice(deal)
+                if deal then
+                    if ns.ResolveFPPrice then
+                        copy.expectedPrice = ns:ResolveFPPrice(deal)
+                    end
+                    -- Backfill ilvl from the import record when the source
+                    -- task didn't carry it. Older tasks predate the
+                    -- TodoGenerator.lua change that started copying
+                    -- deal.ilvl onto taskEntry (FQ-195); Regenerate is the
+                    -- only path that can heal them without forcing the
+                    -- player to re-import.
+                    if (not copy.ilvl or copy.ilvl == 0) and deal.ilvl then
+                        copy.ilvl = deal.ilvl
+                    end
                 end
             elseif tsmEnabled and copy.itemKey then
                 -- Prefer the player's Auctioning operation normalPrice so
