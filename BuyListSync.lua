@@ -90,8 +90,15 @@ local function BuildSearchString(item, opts)
         end
     end
 
-    -- Field order: name;cat;minIlvl;maxIlvl;minLvl;maxLvl;minCLvl;maxCLvl;minPrice;maxPrice;quality;tier;exp;qty
-    return name .. ";;" .. ilvlMin .. ";" .. ilvlMax .. ";;;;;" .. priceStr .. ";" .. qualStr .. ";" .. tierStr .. ";;"
+    -- Field order: name(1);cat(2);minIlvl(3);maxIlvl(4);minLvl(5);maxLvl(6);
+    --              minCLvl(7);maxCLvl(8);minPrice(9);maxPrice(10);quality(11);
+    --              tier(12);exp(13);qty(14)
+    -- priceStr is the maxPrice ceiling. There must be 6 separators between
+    -- maxIlvl and priceStr (4 -> 10), one for each empty field minLvl ..
+    -- minPrice. An earlier version dropped one and priceStr landed in
+    -- minPrice's slot -- which made Auctionator filter buy >= price
+    -- instead of <= price, the exact reverse of what we want.
+    return name .. ";;" .. ilvlMin .. ";" .. ilvlMax .. ";;;;;;" .. priceStr .. ";" .. qualStr .. ";" .. tierStr .. ";;"
 end
 
 -- Walk active buy tasks for the current character, filter to "still needed",
