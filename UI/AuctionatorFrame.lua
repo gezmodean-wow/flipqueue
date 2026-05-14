@@ -223,6 +223,15 @@ function UI:CreateAuctionatorPanel(parent)
     auctWidgets.includeTier:SetPoint("RIGHT", content, "RIGHT", RIGHT_MARGIN, 0)
     y = y - 22
 
+    auctWidgets.includeIlvl = CreateCheckRow(content,
+        "Match exact item level",
+        "On (default) constrains the search to the exact ilvl on the buy task so a level-220 Tarnished Dawnlit Band doesn't surface ilvl-200 variants. Off widens the search to any ilvl — useful when an item's ilvl wasn't captured at import.",
+        "auctBuyListIncludeIlvl",
+        function() if ns.BuyListSync then ns.BuyListSync:Rebuild(true) end end)
+    auctWidgets.includeIlvl:SetPoint("TOPLEFT", content, "TOPLEFT", LEFT_MARGIN + 18, y)
+    auctWidgets.includeIlvl:SetPoint("RIGHT", content, "RIGHT", RIGHT_MARGIN, 0)
+    y = y - 22
+
     auctWidgets.autoDelete = CreateCheckRow(content,
         "Delete empty per-realm lists automatically",
         "Only applies in per-realm mode. When a realm's buy list goes empty, FlipQueue removes the list from Auctionator's dropdown so old realms don't pile up. The single-mode list is never deleted automatically — it's the persistent target.",
@@ -330,6 +339,9 @@ function UI:RefreshAuctionatorPage()
         end
         if auctWidgets.includeTier and auctWidgets.includeTier.cb then
             auctWidgets.includeTier.cb:SetChecked(ns.db.settings.auctBuyListIncludeTier)
+        end
+        if auctWidgets.includeIlvl and auctWidgets.includeIlvl.cb then
+            auctWidgets.includeIlvl.cb:SetChecked(ns.db.settings.auctBuyListIncludeIlvl)
         end
         if auctWidgets.autoDelete and auctWidgets.autoDelete.cb then
             auctWidgets.autoDelete.cb:SetChecked(ns.db.settings.auctBuyListAutoDelete)

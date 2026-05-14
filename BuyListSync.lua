@@ -77,8 +77,21 @@ local function BuildSearchString(item, opts)
         if t and t >= 1 then tierStr = tostring(t) end
     end
 
+    -- Ilvl bounds: when the task carries an ilvl and the toggle is on,
+    -- emit it as both min and max so Auctionator filters to the exact
+    -- variant. Empty fields mean "any ilvl" — that's the legacy behavior
+    -- when no ilvl is available (e.g. consumables) or the toggle is off.
+    local ilvlMin, ilvlMax = "", ""
+    if opts.includeIlvl and item.ilvl then
+        local iv = tonumber(item.ilvl)
+        if iv and iv > 0 then
+            ilvlMin = tostring(iv)
+            ilvlMax = tostring(iv)
+        end
+    end
+
     -- Field order: name;cat;minIlvl;maxIlvl;minLvl;maxLvl;minCLvl;maxCLvl;minPrice;maxPrice;quality;tier;exp;qty
-    return name .. ";;;;;;;;;" .. priceStr .. ";" .. qualStr .. ";" .. tierStr .. ";;"
+    return name .. ";;" .. ilvlMin .. ";" .. ilvlMax .. ";;;;;" .. priceStr .. ";" .. qualStr .. ";" .. tierStr .. ";;"
 end
 
 -- Walk active buy tasks for the current character, filter to "still needed",
@@ -129,6 +142,7 @@ local function BuildListPlan()
     local opts = {
         includeQuality = ns.db and ns.db.settings and ns.db.settings.auctBuyListIncludeQuality,
         includeTier    = ns.db and ns.db.settings and ns.db.settings.auctBuyListIncludeTier,
+        includeIlvl    = ns.db and ns.db.settings and ns.db.settings.auctBuyListIncludeIlvl,
     }
 
     local byRealm = CollectOutstandingBuys()
