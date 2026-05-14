@@ -296,14 +296,28 @@ function TodoList:RegenerateList(sourceList, refreshMode, removedKeys, newName)
                     copy.expectedPrice = ns:ResolveFPPrice(deal)
                 end
             elseif tsmEnabled and copy.itemKey then
-                local tsmCopper = ns.TSM:GetPrice(copy.itemKey, "DBRegionMarketAvg")
-                if not tsmCopper or tsmCopper <= 0 then
-                    tsmCopper = ns.TSM:GetPrice(copy.itemKey, "DBMinBuyout")
-                end
-                if tsmCopper and tsmCopper > 0 and ns.FormatGold then
-                    copy.expectedPrice = ns:FormatGold(tsmCopper)
-                    copy.priceSource   = "TSM live"
+                -- Prefer the player's Auctioning operation normalPrice so
+                -- expectedPrice reflects their actual recommended posting
+                -- price (e.g. `max(DBMinBuyout-1c, 250% DBRegionMarketAvg)`)
+                -- rather than a raw single-source lookup. Fall back through
+                -- DBRegionMarketAvg / DBMinBuyout only when the item isn't
+                -- bound to an op so the regen still produces a price.
+                local opCopper, opName = ns.TSM.GetOpNormalPrice
+                    and ns.TSM:GetOpNormalPrice(copy.itemKey)
+                if opCopper and opCopper > 0 and ns.FormatGold then
+                    copy.expectedPrice = ns:FormatGold(opCopper)
+                    copy.priceSource   = "TSM op" .. (opName and (": " .. opName) or "")
                     copy.priceUpdatedAt = time()
+                else
+                    local tsmCopper = ns.TSM:GetPrice(copy.itemKey, "DBRegionMarketAvg")
+                    if not tsmCopper or tsmCopper <= 0 then
+                        tsmCopper = ns.TSM:GetPrice(copy.itemKey, "DBMinBuyout")
+                    end
+                    if tsmCopper and tsmCopper > 0 and ns.FormatGold then
+                        copy.expectedPrice = ns:FormatGold(tsmCopper)
+                        copy.priceSource   = "TSM live (no op)"
+                        copy.priceUpdatedAt = time()
+                    end
                 end
             end
 

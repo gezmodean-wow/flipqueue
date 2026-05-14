@@ -188,8 +188,8 @@ function RegenerateTrack:Init(gf)
     r3.modeFp.desc:SetPoint("TOPLEFT", r3.modeFp.label, "BOTTOMLEFT", 0, -2)
 
     r3.modeTsm = CreateRadio(r3,
-        "Use live TSM prices",
-        "Looks up DBRegionMarketAvg per item right now. Requires TSM.")
+        "Use my TSM op",
+        "Evaluates your Auctioning operation's normalPrice expression per item (e.g. complex DBMinBuyout-based formulas). Falls back to DBRegionMarketAvg for items not bound to an op. Requires TSM.")
     r3.modeTsm:SetPoint("TOPLEFT", r3.modeFp.desc, "BOTTOMLEFT", -24, -6)
     r3.modeTsm.label:SetPoint("LEFT", r3.modeTsm, "RIGHT", 4, 0)
     r3.modeTsm.desc:SetPoint("TOPLEFT", r3.modeTsm.label, "BOTTOMLEFT", 0, -2)
