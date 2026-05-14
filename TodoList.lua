@@ -170,6 +170,131 @@ function TodoList:GetQueuedLists()
     return ns.db.todoLists.upcoming
 end
 
+-- Get favorited templates map (name -> list snapshot).
+function TodoList:GetTemplates()
+    if not ns.db or not ns.db.todoLists then return {} end
+    return ns.db.todoLists.templates or {}
+end
+
+-- Sources for the Regenerate track: a flat array of { kind, label, list }
+-- entries the wizard can present in step 1. Kinds: "active", "queued",
+-- "template". Caller treats list read-only; regeneration produces a NEW
+-- list via CommitList.
+function TodoList:GetRegenSources()
+    local sources = {}
+    if not ns.db or not ns.db.todoLists then return sources end
+
+    if ns.db.todoLists.active then
+        sources[#sources + 1] = {
+            kind  = "active",
+            label = ns.db.todoLists.active.name or "Active list",
+            list  = ns.db.todoLists.active,
+        }
+    end
+    for i, list in ipairs(ns.db.todoLists.upcoming or {}) do
+        sources[#sources + 1] = {
+            kind     = "queued",
+            label    = list.name or ("Queued #" .. i),
+            list     = list,
+            queueIdx = i,
+        }
+    end
+    for name, snapshot in pairs(ns.db.todoLists.templates or {}) do
+        sources[#sources + 1] = {
+            kind  = "template",
+            label = name,
+            list  = snapshot,
+        }
+    end
+    return sources
+end
+
+-- Build a fresh list snapshot from an existing list, optionally dropping
+-- tasks by itemKey, with prices refreshed via the chosen mode.
+--
+--   sourceList   the list to base on (read-only; not mutated)
+--   refreshMode  "fpsaved" - re-resolve expectedPrice via ns:ResolveFPPrice
+--                            against the original import bucket. Picks up
+--                            the user's current fpPriceSource setting.
+--                "tsmlive" - use TSM live DBRegionMarketAvg as expectedPrice
+--                            (falls through to the original stored price
+--                            when TSM is disabled or has no data).
+--   removedKeys  optional set of itemKey -> true for tasks to drop.
+--                Snapshots store one entry per task, so removal is by
+--                exact itemKey+assignedChar match if provided.
+--   newName      optional name for the new list snapshot.
+--
+-- Returns a NEW preview snapshot ready to feed into CommitList.
+function TodoList:RegenerateList(sourceList, refreshMode, removedKeys, newName)
+    if not sourceList or not sourceList.tasks then
+        return { name = newName or "Regenerated", tasks = {}, items = {} }
+    end
+    refreshMode = refreshMode or "fpsaved"
+    removedKeys = removedKeys or {}
+
+    local out = {}
+    local tsmEnabled = refreshMode == "tsmlive"
+        and ns.TSM and ns.TSM.IsEnabled and ns.TSM:IsEnabled()
+        and ns.TSM.GetPrice and true
+
+    for _, task in ipairs(sourceList.tasks) do
+        -- Removal key combines itemKey + assignedChar so the same item on
+        -- different chars can be dropped independently.
+        local removalKey = (task.itemKey or "") .. "|" .. (task.assignedChar or "")
+        if not removedKeys[removalKey] then
+            local copy = {}
+            for k, v in pairs(task) do copy[k] = v end
+            copy.status = "pending"
+            copy.failReason = nil
+            copy.completedAt = nil
+            copy.attempts = 0
+
+            -- Reset step states for the chosen action.
+            if copy.action == "buy" then
+                copy.steps = {
+                    browse = "pending", buy = "pending",
+                    collect = "pending", deposit = "pending",
+                }
+            else
+                copy.steps = {
+                    retrieve = "pending", post = "pending", collect = "pending",
+                }
+            end
+
+            if refreshMode == "fpsaved" then
+                local importSource = task.importSource
+                local importKey    = task.importKey
+                local bucket = importSource and ns.db
+                    and ns.db.imports and ns.db.imports[importSource]
+                local deal = bucket and importKey and bucket[importKey]
+                if deal and ns.ResolveFPPrice then
+                    copy.expectedPrice = ns:ResolveFPPrice(deal)
+                end
+                -- If no import record survives, keep the stored price.
+            elseif tsmEnabled and copy.itemKey then
+                local tsmCopper = ns.TSM:GetPrice(copy.itemKey, "DBRegionMarketAvg")
+                if not tsmCopper or tsmCopper <= 0 then
+                    tsmCopper = ns.TSM:GetPrice(copy.itemKey, "DBMinBuyout")
+                end
+                if tsmCopper and tsmCopper > 0 and ns.FormatGold then
+                    copy.expectedPrice = ns:FormatGold(tsmCopper)
+                    copy.priceSource   = "TSM live"
+                    copy.priceUpdatedAt = time()
+                end
+            end
+
+            out[#out + 1] = copy
+        end
+    end
+
+    return {
+        name       = newName or ("Regenerated " .. date("%Y-%m-%d %H:%M")),
+        tasks      = out,
+        items      = out, -- match CommitList's preview-shape expectation
+        importType = sourceList.importType,
+    }
+end
+
 -- Get pending tasks for a specific character from the active list.
 -- Returns array of { taskIndex, item }.
 function TodoList:GetCharacterTasks(charKey)

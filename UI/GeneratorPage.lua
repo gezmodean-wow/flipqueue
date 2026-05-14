@@ -328,6 +328,7 @@ end
 local STEP_LABELS = {
     inventory  = {"Build Inventory", "Import Deals", "Configure & Generate"},
     crossrealm = {"Import Deals", "Filter Deals", "Configure & Generate"},
+    regenerate = {"Pick List", "Edit Tasks", "Refresh & Save"},
 }
 
 local function CreateStepBar(parent)
@@ -601,24 +602,37 @@ function UI:RefreshGeneratorPage(pending)
             UI:Refresh()
         end)
 
-        -- Responsive card sizing: 3 cards in a row
+        gf.trackSelectPanel.regenerateCard = CreateTrackCard(
+            gf.trackSelectPanel,
+            "Regenerate",
+            "Rebuild a saved list with fresh prices",
+            "Interface\\Icons\\INV_Misc_Note_05")
+        gf.trackSelectPanel.regenerateCard:SetScript("OnClick", function()
+            SaveWizardState("regenerate", 1)
+            UI:Refresh()
+        end)
+
+        -- Responsive card sizing: 4 cards in a row
         gf.trackSelectPanel:SetScript("OnSizeChanged", function(self, w)
             local availW = w - 40
-            local cardW = math.min(CARD_MAX_WIDTH, math.floor((availW - CARD_GAP * 2) / 3))
+            local cardW = math.min(CARD_MAX_WIDTH, math.floor((availW - CARD_GAP * 3) / 4))
             cardW = math.max(140, cardW)
             self.dealFinderCard:SetWidth(cardW)
             self.inventoryCard:SetWidth(cardW)
             self.crossrealmCard:SetWidth(cardW)
+            self.regenerateCard:SetWidth(cardW)
 
             -- Position cards centered
-            local totalW3 = cardW * 3 + CARD_GAP * 2
-            local startX = (w - totalW3) / 2
+            local totalW4 = cardW * 4 + CARD_GAP * 3
+            local startX = (w - totalW4) / 2
             self.dealFinderCard:ClearAllPoints()
             self.dealFinderCard:SetPoint("LEFT", self, "LEFT", startX, 0)
             self.inventoryCard:ClearAllPoints()
             self.inventoryCard:SetPoint("LEFT", self.dealFinderCard, "RIGHT", CARD_GAP, 0)
             self.crossrealmCard:ClearAllPoints()
             self.crossrealmCard:SetPoint("LEFT", self.inventoryCard, "RIGHT", CARD_GAP, 0)
+            self.regenerateCard:ClearAllPoints()
+            self.regenerateCard:SetPoint("LEFT", self.crossrealmCard, "RIGHT", CARD_GAP, 0)
         end)
 
         -- ---- NAV BUTTONS (Back / Next) ----
@@ -1808,6 +1822,11 @@ function UI:RefreshGeneratorPage(pending)
             gf._dragState.dropLine = dropLine
         end
 
+        -- Regenerate track (FQ-NEW) owns its three step containers.
+        if ns.RegenerateTrack and ns.RegenerateTrack.Init then
+            ns.RegenerateTrack:Init(gf)
+        end
+
         self._genFrame = gf
     end
 
@@ -2096,6 +2115,7 @@ function UI:RefreshGeneratorPage(pending)
     for i = 1, 3 do
         gf.stepContainers[i]:Hide()
         gf.crStepContainers[i]:Hide()
+        if gf.regenStepContainers then gf.regenStepContainers[i]:Hide() end
     end
 
     -- Content area starts below topSection
@@ -2221,14 +2241,54 @@ function UI:RefreshGeneratorPage(pending)
         end
     end
 
-    -- Position step container for the current step
-    local stepPool = wizTrack == "crossrealm" and gf.crStepContainers or gf.stepContainers
-    local sc = stepPool[wizStep]
-    if sc then
-        sc:ClearAllPoints()
-        sc:SetPoint("TOPLEFT", gf, "TOPLEFT", 0, stepContentTop)
-        sc:SetPoint("BOTTOMRIGHT", gf, "BOTTOMRIGHT", 0, 36)  -- leave room for nav buttons
-        sc:Show()
+    -- Position step container for the current step. Regenerate manages its
+    -- own positioning via ns.RegenerateTrack:Render below.
+    if wizTrack ~= "regenerate" then
+        local stepPool = wizTrack == "crossrealm" and gf.crStepContainers or gf.stepContainers
+        local sc = stepPool[wizStep]
+        if sc then
+            sc:ClearAllPoints()
+            sc:SetPoint("TOPLEFT", gf, "TOPLEFT", 0, stepContentTop)
+            sc:SetPoint("BOTTOMRIGHT", gf, "BOTTOMRIGHT", 0, 36)  -- leave room for nav buttons
+            sc:Show()
+        end
+    elseif ns.RegenerateTrack and ns.RegenerateTrack.Render then
+        ns.RegenerateTrack:Render(gf, wizStep,
+            function() if UI.Refresh then UI:Refresh() end end,
+            { top = stepContentTop, bottom = 36 })
+
+        -- Nav button wiring for the regenerate track
+        if wizStep < 3 then
+            local ok = ns.RegenerateTrack:IsNextAvailable(gf, wizStep)
+            if ok then
+                gf.nextBtn:Show()
+                gf.nextBtn.text:SetText("Next")
+                gf.nextBtn:SetScript("OnClick", function()
+                    SaveWizardState(wizTrack, wizStep + 1)
+                    UI:Refresh()
+                end)
+            else
+                gf.nextBtn:Hide()
+            end
+        else
+            -- Step 3: Save instead of Next
+            gf.saveBtn:Show()
+            gf.saveBtn:SetScript("OnClick", function()
+                local committed, mode = ns.RegenerateTrack:OnSave(gf)
+                if committed then
+                    local verb = mode == "upcoming" and "Queued" or "Saved"
+                    local count = #(committed.tasks or {})
+                    if ns.cw and ns.cw.Toast then
+                        ns.cw:Toast({
+                            severity = "success",
+                            text = verb .. ' "' .. committed.name .. '" with ' .. count .. " tasks.",
+                        })
+                    end
+                end
+                SaveWizardState(nil, 0)
+                UI:Refresh()
+            end)
+        end
     end
 
     -- ========================================
