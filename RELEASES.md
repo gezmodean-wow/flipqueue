@@ -8,11 +8,57 @@ The engineering-detail companion lives in `CHANGELOG.md` (commit-readerese — f
 
 ## v0.13.0-alpha2
 
-Three follow-ups from the alpha1 known-issues list. Two are full fixes (mini overlay buy/sell visual confusion, and TSM-skipped tasks lingering in the to-do); the third is a diagnostic addition for the price-inflation report that's still under investigation.
+A bigger alpha than originally planned. The three follow-ups from alpha1 are all in (mini overlay buy/sell visual fix, TSM-skipped task cleanup, price-inflation root cause), plus three new features that landed while tracking down the inflation: a price-source dropdown so you can pick which FlippingPal column to trust, a Regenerate track on the To-Do Generator that rebuilds an existing list without a fresh paste, and proper ilvl filtering on Auctionator shopping lists. Old to-do lists also now stick around instead of getting deleted on completion.
+
+### Pick which FlippingPal column to use for expected price
+
+The alpha1 "wildly inflated expected price" reports turned out to come from FlippingPal's *Listing price* column — the aggressive recommendation FP suggests posting at. On thin items, that recommendation can run 50–150× above what the item actually sells for on your realm, and TSM then refuses to post anything because the listing is "below min."
+
+There's a new **FlippingPal price source** dropdown in Settings → Imports:
+
+- **Listing price** (default) — FP's aggressive recommendation. Matches how alpha1 behaved; pick this if your import data is already where you want it.
+- **Sale Avg** — FP's conservative historical median. Lower expected prices, but they actually post.
+- **Auto** — Use Listing price normally, but fall back to Sale Avg when Listing is more than 10× TSM's region market average. Best of both for most setups.
+
+The setting applies on the next generate (or regenerate, see below). Existing to-do lists keep their stored prices until you rebuild.
+
+If you want to see what's actually in your data, `/fq debug pricesource <item name>` (or shift-click an item into the command) dumps the stored price + every upstream price field for matching tasks. The diagnostic was the bridge to the fix, but it stays in for triaging any future price weirdness.
+
+### Regenerate an existing to-do list without re-pasting
+
+To-Do Generator gets a fourth card: **Regenerate**. The flow rebuilds an existing list from saved data instead of forcing you to paste FlippingPal again every time you want to refresh prices.
+
+Three steps:
+
+1. **Pick List** — choose from your active list, any queued lists, or archived lists (see the archive note below)
+2. **Edit Tasks** — every task on the source list is shown with an X button; click to drop items you don't want, click again to bring them back
+3. **Refresh & Save** — pick how prices get refreshed: *Use FP saved data* (re-runs the price column through your current FlippingPal price-source setting) or *Use my TSM op* (evaluates your TSM Auctioning operation's normalPrice expression for each item — supports the complex formulas like `max(DBMinBuyout-1c, 250% DBRegionMarketAvg)`). Save commits the regenerated list as queued (or as the active list if you don't have one).
+
+The preview surfaces three states per task:
+
+- **POST** (green) — sell as planned
+- **BUY** (cyan) — you don't have inventory for this sell anymore, so it converted to a buy task using the cheapest known source
+- **SKIP** (orange) — either no inventory and no buy source, or the regenerated price is below your TSM minimum, so it stays out of your active list. The reason shows next to the row.
+
+Skipped rows still appear in the log so you have a record of what was dropped and why.
+
+### Auctionator shopping lists filter by item level
+
+If you push your buy tasks to Auctionator, the generated shopping-list searches now constrain to the exact item level of the task. Previously the searches left the ilvl fields blank, so an ilvl-220 Tarnished Dawnlit Band buy task would surface every ilvl variant — you had to disambiguate by hand. Now the search is exact-ilvl by default.
+
+There's a new **Match exact item level** checkbox in the Auctionator settings panel if you want any-ilvl matches back. Default is on.
+
+### Old to-do lists archive instead of disappearing
+
+When a list completes, gets manually deleted, or gets replaced by a new generation, it used to vanish entirely. The per-task log preserved task-level history, but the list-level shape (the name, the specific set of tasks, who was assigned where) was gone. Lists now snapshot into an archive instead — up to 50 entries, newest first, with the reason they got archived ("completed", "discarded", "replaced") and how long ago.
+
+The archive surfaces in the Regenerate Step 1 picker so you can rebuild a list from your history. A dedicated history view (browse, restore, delete archived) is still on the roadmap — for now Regenerate is the way to revisit old lists.
+
+Note: only lists created or deleted from this version onward get archived. Anything already gone from previous alphas stays gone.
 
 ### Buy and sell rows look different in the mini overlay now
 
-Every row in the mini overlay now carries a colored verb prefix at the start of the item name:
+Every row in the mini overlay carries a colored verb prefix at the start of the item name:
 
 - **`[POST]`** in green — sell tasks
 - **`[BUY]`** in cyan — buy tasks at the AH step
@@ -23,17 +69,9 @@ Previously only buy rows carried a prefix. A sell row tucked between buys would 
 
 ### TSM-skipped sell tasks now clear from the active list
 
-When TSM rejects a post because the AH price is below your minimum, the skipped task is now recorded in the log and removed from the active to-do — same as a finished post. Previously the task stayed visible (as a `status=skipped` row) and accumulated as cruft across posting sessions. The skip reason is preserved in the log entry so you can still audit which items got rejected and why.
+When TSM rejects a post because the AH price is below your minimum, the skipped task is recorded in the log and removed from the active to-do — same as a finished post. Previously the task stayed visible (as a `skipped` row) and accumulated as cruft across posting sessions. The skip reason is preserved in the log entry so you can still audit which items got rejected and why.
 
 If you have a linked partner account, the skip propagates so your partner's view stays in sync.
-
-### Price-inflation diagnostic command (investigation aid)
-
-The wildly-inflated expected prices reported in alpha1 are still under investigation. A new `/fq debug pricesource <item name>` slash command dumps the stored price + every upstream price field for matching tasks on the active to-do, including the import source and live TSM prices for comparison. If you're seeing inflated prices, running this command and pasting the output into the GitHub issue will help pin down where the inflation enters the pipeline.
-
-### Known issues carried forward
-
-- **Inflated expected prices.** Still under investigation. The diagnostic above is the main step toward a root cause; until that lands, regenerating the to-do list from a fresh Deal Finder pass clears the affected rows.
 
 ## v0.13.0-alpha1
 

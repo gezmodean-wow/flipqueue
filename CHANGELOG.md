@@ -2,7 +2,7 @@
 
 ## v0.13.0-alpha2
 
-Second alpha on the v0.13.0 line. Three small fixes / additions from the alpha1 follow-up list: a MiniView visual-differentiation pass (FQ-178), TSM-skip lifecycle cleanup (FQ-179), and a price-source diagnostic helper for FQ-177 (which remains under investigation pending reproducer data).
+Second alpha on the v0.13.0 line. Three originally-scoped follow-ups (FQ-177 / FQ-178 / FQ-179) plus three substantial features that landed during the FQ-177 investigation: the player-facing FlippingPal price-source preference, a new Regenerate Generator track for rebuilding existing lists, and the start of FQ-157 archive-don't-delete behavior. The Regenerate track wiring also surfaces a per-task ilvl bound through to the Auctionator shopping-list export (FQ-195).
 
 Embedded Cogworks-1.0 stays at `v0.13.2` for this alpha. The Phase B file swaps deferred in alpha1 are still waiting on upstream primitive work; no Phase B progress this cycle.
 
@@ -18,21 +18,79 @@ Fix: collect skip indices during the iteration, then `table.remove` in reverse o
 
 The reassign-to-alt-char branch is untouched (those tasks legitimately stay pending).
 
-### FQ-177: `/fq debug pricesource` diagnostic helper (root cause still under investigation)
+### FQ-177: FlippingPal price-source preference + diagnostic
 
-`UI/SlashCommands.lua` adds `/fq debug pricesource <itemName or itemID>`. For each matching active to-do task, dumps:
+The investigation started as "diagnostic only, defer the fix" but the reproducer evidence (`/fq debug pricesource`) attributed the inflation cleanly: FP's "Listing price" column on thin items can run 50–150× above region market avg. The parser, `FormatGold`, and `FormatGoldPrecise` paths were all verified correct — the column itself is the problem.
 
-- raw `expectedPrice` string + `ParseGoldValue` round-trip
-- `priceSource` field + last-update timestamp (TSM auto-update marks this)
-- the `importSource` bucket the task came from (`dealFinder` / `fpScanner` / `fpCrossRealm` / `tsm` / `auctionator`) and that bucket's raw `expectedPrice` / `blendedPrice` / `saleAvg` / `profitAmount`
-- live TSM `DBMinBuyout` / `DBRegionMarketAvg` / `DBRegionSaleAvg` for direct comparison, with an inflation-ratio flag when the stored price is ≥10× or ≤0.1× the region market
+`UI/SlashCommands.lua` adds `/fq debug pricesource <itemName or itemID or shift-clicked link>`. Per matching active to-do task, dumps: raw `expectedPrice` + `ParseGoldValue` round-trip, `priceSource` + age, the `importSource` bucket the task came from with that bucket's raw price fields, live TSM `DBMinBuyout` / `DBRegionMarketAvg` / `DBRegionSaleAvg`, inflation-ratio flag when stored ≥10× or ≤0.1× region market, and the task's `ilvl` (stored + resolved via `TodoList:ResolveTaskIlvl`).
 
-This lets a reproducer on the affected list pin the inflation source to the import path rather than the display layer. Until reproducer data arrives the root-cause fix stays deferred — the parser, the FormatGold path, and the FormatGoldPrecise path were all verified correct for the German thousands-separator case during the investigation.
+Player-facing fix is a new Settings dropdown — Settings → Imports → "FlippingPal price source":
+
+- **Listing price** (default; preserves prior behavior, no regression for existing installs) — FP's aggressive recommendation
+- **Sale Avg** — FP's conservative historical median; falls through to Listing when Sale Avg is absent
+- **Auto (TSM-clamped)** — Listing unless it's >10× `DBRegionMarketAvg`, then Sale Avg
+
+`Import.lua` adds `ns:ResolveFPPrice(deal)` as the single resolver. `TodoGenerator.lua` replaces all 7 `expectedPrice = deal.expectedPrice` sites with `ns:ResolveFPPrice(deal)` (same site set as the FQ-195 ilvl propagation). Parsers already preserve `saleAvg` on the import record, so the setting applies retroactively on the next `/fq generate` — no re-import needed.
+
+### FQ-187: Regenerate Generator track
+
+New 4th Generator track for rebuilding an existing list from saved data without re-pasting FlippingPal. Pairs with the FQ-177 setting: change the setting, regenerate, see the new prices flow through.
+
+3-step wizard:
+
+1. **Pick List** — sources from `TodoList:GetRegenSources()`: active list, queued lists, favorited templates (data model in place; populate-UI deferred to follow-up #189), and archived lists (FQ-157)
+2. **Edit Tasks** — task grid with remove-only X/+ toggle per row
+3. **Refresh & Save** — radio between two refresh modes: "Use FP saved data" (re-resolve via `ns:ResolveFPPrice` against the original import bucket; picks up the current `fpPriceSource` setting) and "Use my TSM op" (evaluates the player's Auctioning operation `normalPrice` expression via the new `TSM:GetOpNormalPrice`, falls back to `DBRegionMarketAvg` only when ungrouped). Preview shows count summary "X post | Y buy | Z skipped" + per-row visual treatment.
+
+`UI/GeneratorRegenerateTrack.lua` (new file, ~490 LOC) owns the three step containers and per-step render. `UI/GeneratorPage.lua` registers the 4th card, dispatcher delegation, nav-button wiring.
+
+**Inventory awareness.** `RegenerateList` builds an inventory pool via `BuildItemPool` (any char's bags + warbank; indexed by `itemKey` AND numeric `itemID` so a bonus-id variant in bags counts against the base sell task). Sell tasks whose item is no longer in inventory get auto-converted: cross-realm flip → reuse preserved `buyRealm` + `buyPrice`; otherwise scan `fpCrossRealm` for the cheapest realm carrying that itemID; no data → `status=skipped` + `failReason = "No inventory and no known buy source"`. The cross-realm scan is intentionally ad-hoc; a proper `PriceResearch` layer tracks at #192 and will replace this loop.
+
+**Underwater filter.** Sell tasks where the regenerated `expectedPrice` would be below TSM's reject threshold (`TSM:IsBelowThreshold`, which already routes through `op.minPrice`) commit as `status=skipped` with `failReason = "Below TSM min (...)"`. They show in the preview marked "below market" and live in the log post-commit, but don't pop the active list or mini-view.
+
+Step states reset *after* any action flip so converted buy tasks correctly get the `browse/buy/collect/deposit` chain instead of the sell chain.
+
+### FQ-195: Auctionator shopping-list export carries ilvl bounds
+
+`BuyListSync.lua:BuildSearchString` builds the 14-field Auctionator advanced-search string. Pre-fix `minIlvl` / `maxIlvl` were emitted empty so every ilvl variant came back from the AH — a buy task for an ilvl-220 Tarnished Dawnlit Band would surface ilvl-200 base variants right next to it.
+
+Wire-up:
+
+- `TodoGenerator.lua` — `ilvl = deal.ilvl` added to all 7 `taskEntry` constructors (same site set as the FQ-177 price replacements)
+- `BuyListSync.lua:BuildSearchString` — fills fields 3+4 with the task's ilvl when the toggle is on and the task carries a non-zero ilvl; reads the new `opts.includeIlvl`
+- `DB.lua` — new `auctBuyListIncludeIlvl` setting, defaults TRUE
+- `UI/AuctionatorFrame.lua` — third checkbox in the Auctionator settings panel alongside `includeQuality` / `includeTier`, with the standard `BuyListSync:Rebuild(true)` hook
+
+Three follow-up fixes consolidated under this entry:
+
+1. **Field-shift bug**: dropped one semicolon between `maxIlvl` and `maxPrice` shifted `priceStr` from field 10 (`maxPrice`) to field 9 (`minPrice`), reversing Auctionator's filter from `buy <= price` to `buy >= price` and breaking the ilvl emit silently (broken field count threw off the parser entirely). Fix is +1 semicolon. Comment above the return now spells out the field-position expectation.
+
+2. **`TodoList:ResolveTaskIlvl` helper**: lazy ilvl resolution for tasks that predate the TodoGenerator propagation. `BuildSearchString` calls it when `item.ilvl` is missing so existing tasks heal at push-time without re-regenerating. Chain (first hit wins): stored `task.ilvl` → import record `deal.ilvl` → `importKey` `:iNNN` suffix (FP encodes the scanned ilvl there) → `ns:ItemKeyToItemString` + `GetDetailedItemLevelInfo` (bonus-id-aware via the WoW API).
+
+3. **Regenerate eager backfill**: `RegenerateList` runs the same chain so newly regenerated tasks carry `ilvl` on disk. Runs once after price refresh, independent of `refreshMode` (an earlier iteration coupled it to `fpsaved` only). `/fq debug pricesource` shows `(resolved: 220)` next to `(unset)` when the stored value is missing but the resolver finds one.
+
+### FQ-157: Old to-do lists archive instead of disappearing
+
+Lists that complete, get manually discarded, or get replaced by a new preview now snapshot into `db.todoLists.archive`. The per-task log already captured task-level history; the list-level shape (name, the specific set of tasks, who owned what realm) is now preserved too.
+
+- `TodoList:ArchiveList(list, reason)` pushes a snapshot. `reason` is `"completed"` / `"discarded"` / `"replaced"`. Cap 50, FIFO trim on overflow.
+- `ClearCurrent(reason)` archives the active list before nulling it; reason flows from the call site (`CheckAutoComplete` → `"completed"`, manual x-button → `"discarded"`).
+- `DeleteQueuedList(index)` archives before removing.
+- `CommitList(preview, "replace")` archives the displaced active list before replacement.
+- `GetRegenSources` appends archive entries with `kind = "archive"` and a label suffix `"(reason age)"` so they surface in Regenerate Step 1 sorted newest-first.
+
+Dedicated history view (browse / restore / delete archived) deferred to follow-up #157 itself.
+
+### Settings cleanup
+
+`db.settings.fpPriceSource` (FQ-177) and `db.settings.auctBuyListIncludeIlvl` (FQ-195) are new defaults. A new collapsible "Imports" section in `UI/SettingsFrame.lua` houses the FP price-source dropdown between General and Item Management; `sectionOrder` updated to include `"imports"`.
 
 ### Open follow-ups
 
-- #177 — Root cause of price inflation. Awaiting `/fq debug pricesource` output or a sample of the affected FlippingPal CSV row.
-- COG #37 / #50 / #51 / #52 / #53 / #54 — Cogworks-side primitives needed to resume Phase B page-by-page swaps.
+- #189 — Regenerate Phase 2: save-as-template UI (data model already shipped; surface affordance deferred)
+- #192 — Proper price-research layer to replace the ad-hoc fpCrossRealm cheapest-loop in Regenerate
+- #157 — Dedicated archive-browser view (archive data model ships now; UI to browse / restore / delete deferred)
+- COG #37 / #50 / #51 / #52 / #53 / #54 — Cogworks-side primitives needed to resume Phase B page-by-page swaps
 
 ## v0.13.0-alpha1
 
