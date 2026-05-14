@@ -1221,9 +1221,8 @@ local function debugPriceSource(rawQuery)
 
     local matches = {}
     for taskIdx, task in ipairs(list.tasks) do
-        local it = task.item
-        if it and NameMatches(it.name, it.itemID) then
-            matches[#matches + 1] = { taskIdx = taskIdx, item = it }
+        if task and NameMatches(task.name, task.itemID) then
+            matches[#matches + 1] = { taskIdx = taskIdx, item = task }
         end
     end
 
