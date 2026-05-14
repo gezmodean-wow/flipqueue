@@ -6,6 +6,35 @@ The engineering-detail companion lives in `CHANGELOG.md` (commit-readerese — f
 
 ---
 
+## v0.13.0-alpha2
+
+Three follow-ups from the alpha1 known-issues list. Two are full fixes (mini overlay buy/sell visual confusion, and TSM-skipped tasks lingering in the to-do); the third is a diagnostic addition for the price-inflation report that's still under investigation.
+
+### Buy and sell rows look different in the mini overlay now
+
+Every row in the mini overlay now carries a colored verb prefix at the start of the item name:
+
+- **`[POST]`** in green — sell tasks
+- **`[BUY]`** in cyan — buy tasks at the AH step
+- **`[CHECK MAIL]`** in yellow — buy tasks waiting for mail delivery
+- **`[DEPOSIT]`** in orange — buy tasks ready to drop into the warbank
+
+Previously only buy rows carried a prefix. A sell row tucked between buys would visually disappear into the buy stack and end up not getting posted. The new sell-row prefix solves that at-a-glance read.
+
+### TSM-skipped sell tasks now clear from the active list
+
+When TSM rejects a post because the AH price is below your minimum, the skipped task is now recorded in the log and removed from the active to-do — same as a finished post. Previously the task stayed visible (as a `status=skipped` row) and accumulated as cruft across posting sessions. The skip reason is preserved in the log entry so you can still audit which items got rejected and why.
+
+If you have a linked partner account, the skip propagates so your partner's view stays in sync.
+
+### Price-inflation diagnostic command (investigation aid)
+
+The wildly-inflated expected prices reported in alpha1 are still under investigation. A new `/fq debug pricesource <item name>` slash command dumps the stored price + every upstream price field for matching tasks on the active to-do, including the import source and live TSM prices for comparison. If you're seeing inflated prices, running this command and pasting the output into the GitHub issue will help pin down where the inflation enters the pipeline.
+
+### Known issues carried forward
+
+- **Inflated expected prices.** Still under investigation. The diagnostic above is the main step toward a root cause; until that lands, regenerating the to-do list from a fresh Deal Finder pass clears the affected rows.
+
 ## v0.13.0-alpha1
 
 First alpha on the v0.13.0 line. The headline fixes a long-standing leak where Warbound gear was sneaking into your auto-generated to-do list, plus a polish pass on chat noise: posting, pulling, depositing, importing, saving, and linking confirmations now show up as toasts in the top-right of the screen instead of chat lines. Behind the scenes, the addon is in the middle of consolidating onto the shared Cogworks library; this alpha lands the first wave of that consolidation. The bigger UI swaps (main window, settings page, mini overlay, setup wizard, bank popup) are queued behind matching upgrades on the Cogworks side and will land in future v0.13.0 alphas.

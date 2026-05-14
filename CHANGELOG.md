@@ -1,5 +1,39 @@
 # Changelog
 
+## v0.13.0-alpha2
+
+Second alpha on the v0.13.0 line. Three small fixes / additions from the alpha1 follow-up list: a MiniView visual-differentiation pass (FQ-178), TSM-skip lifecycle cleanup (FQ-179), and a price-source diagnostic helper for FQ-177 (which remains under investigation pending reproducer data).
+
+Embedded Cogworks-1.0 stays at `v0.13.2` for this alpha. The Phase B file swaps deferred in alpha1 are still waiting on upstream primitive work; no Phase B progress this cycle.
+
+### FQ-178: MiniView visually differentiates buy vs sell rows
+
+Sell rows previously had no action prefix while buy rows carried `[BUY]` / `[CHECK MAIL]` / `[DEPOSIT]` in their respective lifecycle colors. On a character with a sell row sandwiched between buy rows, the sell visually disappeared into the buy stack — surfaced by the maintainer's own 2-buys + 1-sell + 4-buys reproducer where the sell never got posted. Every MiniView row now carries a colored verb prefix: sell rows get `[POST]` in green, mirroring the `priceStr` color. `UI/MiniView.lua:707` adds the else branch; no other touchpoints.
+
+### FQ-179: TSM-skipped sell tasks auto-clear from the active list
+
+`TodoList:HandleTSMRejections` already wrote a `auctionStatus="skipped"` log entry for each below-threshold task, but it left the task in `active.tasks` with `status="skipped"` instead of removing it. UI surfaces filter `status=pending` for display, so visibility was correct — but the persistent state grew with TSM-skip residue across sessions, and partner-account sync never saw the skip.
+
+Fix: collect skip indices during the iteration, then `table.remove` in reverse order after the loop so indices stay valid. Each skip cleans up its `ns.db.imports` source record (matches `MoveTaskToLog`) and emits a `TDLOG` delta to the linked partner (re-uses the existing delta type that inserts the log entry on the partner side and removes the task — same shape used by `MoveTaskToLog`). `CheckAutoComplete` runs at the end so a list whose last pending tasks all TSM-skip now archives cleanly.
+
+The reassign-to-alt-char branch is untouched (those tasks legitimately stay pending).
+
+### FQ-177: `/fq debug pricesource` diagnostic helper (root cause still under investigation)
+
+`UI/SlashCommands.lua` adds `/fq debug pricesource <itemName or itemID>`. For each matching active to-do task, dumps:
+
+- raw `expectedPrice` string + `ParseGoldValue` round-trip
+- `priceSource` field + last-update timestamp (TSM auto-update marks this)
+- the `importSource` bucket the task came from (`dealFinder` / `fpScanner` / `fpCrossRealm` / `tsm` / `auctionator`) and that bucket's raw `expectedPrice` / `blendedPrice` / `saleAvg` / `profitAmount`
+- live TSM `DBMinBuyout` / `DBRegionMarketAvg` / `DBRegionSaleAvg` for direct comparison, with an inflation-ratio flag when the stored price is ≥10× or ≤0.1× the region market
+
+This lets a reproducer on the affected list pin the inflation source to the import path rather than the display layer. Until reproducer data arrives the root-cause fix stays deferred — the parser, the FormatGold path, and the FormatGoldPrecise path were all verified correct for the German thousands-separator case during the investigation.
+
+### Open follow-ups
+
+- #177 — Root cause of price inflation. Awaiting `/fq debug pricesource` output or a sample of the affected FlippingPal CSV row.
+- COG #37 / #50 / #51 / #52 / #53 / #54 — Cogworks-side primitives needed to resume Phase B page-by-page swaps.
+
 ## v0.13.0-alpha1
 
 First alpha on the v0.13.0 line. Adopts Cogworks v0.13.x primitives across the addon surface (FQ-143 Phase A complete, Phase B partial), fixes a critical warbound-gear leak into the auto-generated AH list (FQ-173), and removes a redundant manual-refresh button (FQ-140). Phase B remainder (page-by-page swaps for MainFrame / SettingsFrame / MiniView / SetupWizard / BankPopup / TSMFrame / ScrollTable) is gated on Cogworks-side primitive work; tickets filed at COG#37 / #50 / #51 / #52 / #53 / and pending sidebar-sections ticket.
