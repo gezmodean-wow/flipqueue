@@ -161,6 +161,58 @@ function TodoList:RenameList(idx, name)
     end
 end
 
+-- Best-effort ilvl resolution for a task-shaped record. Mirrors the chain
+-- in RegenerateList but works lazily on any task (regenerated or not).
+-- Used by BuildSearchString to heal pre-fix tasks at push-time without
+-- forcing a regenerate, by the /fq debug pricesource diagnostic to show
+-- what the lookup would return, and by RegenerateList itself.
+--
+-- Priority order, first hit wins:
+--   1. task.ilvl when set and >0 (caller's stored value)
+--   2. Original import record (gone in the common case)
+--   3. importKey suffix `:iNNN` (FP's recorded ilvl)
+--   4. ItemKeyToItemString + GetDetailedItemLevelInfo (bonus-aware)
+--
+-- Returns ilvl > 0 on hit, 0 on miss.
+function TodoList:ResolveTaskIlvl(task)
+    if not task then return 0 end
+    if task.ilvl and task.ilvl > 0 then return task.ilvl end
+
+    -- Original import record (cheapest if still present)
+    if task.importSource and task.importKey
+       and ns.db and ns.db.imports
+       and ns.db.imports[task.importSource] then
+        local deal = ns.db.imports[task.importSource][task.importKey]
+        if deal and deal.ilvl and deal.ilvl > 0 then
+            return deal.ilvl
+        end
+    end
+
+    -- FP encodes the scanned ilvl as a `:iNNN` suffix on the importKey;
+    -- this is ground truth for bonus-less variants where the WoW API
+    -- would only know the base ilvl.
+    if task.importKey and task.importKey ~= "" then
+        local fromKey = task.importKey:match(":i(%d+)")
+        if fromKey then
+            local iv = tonumber(fromKey)
+            if iv and iv > 0 then return iv end
+        end
+    end
+
+    -- Bonus-id-aware: convert FQ-format key to a WoW item string, ask
+    -- WoW for the actual ilvl. Handles bonus IDs that bump the variant.
+    if ns.ItemKeyToItemString and GetDetailedItemLevelInfo
+       and task.itemKey and task.itemKey ~= "" then
+        local wowStr = ns:ItemKeyToItemString(task.itemKey)
+        if wowStr then
+            local ok, iLvl = pcall(GetDetailedItemLevelInfo, wowStr)
+            if ok and iLvl and iLvl > 0 then return iLvl end
+        end
+    end
+
+    return 0
+end
+
 -- Reorder upcoming lists. Moves upcoming[from] to upcoming[to].
 function TodoList:ReorderQueue(from, to)
     if not ns.db or not ns.db.todoLists then return end
