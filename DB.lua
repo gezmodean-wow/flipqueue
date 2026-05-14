@@ -27,6 +27,10 @@ function ns:InitDB()
     db.imports.dealFinder   = db.imports.dealFinder or {}
     db.todoLists    = db.todoLists or {}
     db.todoLists.upcoming = db.todoLists.upcoming or {}
+    -- Favorited templates for the Regenerate track (FQ-NEW). Map name -> list
+    -- snapshot ({ name, tasks, importType }). Treated read-only by the
+    -- regenerate flow; new lists go through CommitList per usual.
+    db.todoLists.templates = db.todoLists.templates or {}
     db.log          = db.log or {}
     db.doNotTrack   = db.doNotTrack or {}
     db.sync         = db.sync or {}

@@ -72,6 +72,7 @@ UI/DealFinderPage.lua
 UI/DealFinderDetail.lua
 UI/ResearchPage.lua
 UI/GeneratorPage.lua
+UI/GeneratorRegenerateTrack.lua
 UI/DebugPage.lua
 UI/DebugConsole.lua
 UI/TutorialPage.lua
