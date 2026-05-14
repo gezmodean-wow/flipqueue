@@ -687,14 +687,17 @@ function UI:RefreshMini()
                 statusTag = ns.COLORS.RED .. " [not found]" .. ns.COLORS.RESET
             end
 
-            -- Buy task prefix follows the lifecycle. Each step swap matches
-            -- the next physical action the player has to take:
-            --   browse / buy → AH               [BUY]
-            --   collect      → mailbox          [CHECK MAIL]
-            --   deposit      → warbank          [DEPOSIT]
-            -- Step advances are driven by Tracker.lua AH hooks (browse → buy
-            -- → collect on purchase) and bag detection (collect → deposit
-            -- once the item arrives in bags).
+            -- Action prefix. Sell rows previously had none, which let a
+            -- sell row sandwiched between buys disappear into the buy stack
+            -- (FQ-178). Every row now carries a colored verb prefix so the
+            -- action is identifiable at a glance:
+            --   sell                          [POST]        green
+            --   buy (browse / buy step)       [BUY]         cyan
+            --   buy (collect step)            [CHECK MAIL]  yellow
+            --   buy (deposit step)            [DEPOSIT]     orange
+            -- Step advances on buy tasks are driven by Tracker.lua AH hooks
+            -- (browse → buy → collect on purchase) and bag detection
+            -- (collect → deposit once the item arrives in bags).
             local namePrefix = ""
             if task._isBuy then
                 if task._buyStep == "collect" then
@@ -704,6 +707,8 @@ function UI:RefreshMini()
                 else
                     namePrefix = ns.COLORS.CYAN .. "[BUY] " .. ns.COLORS.RESET
                 end
+            else
+                namePrefix = ns.COLORS.GREEN .. "[POST] " .. ns.COLORS.RESET
             end
             local qtyStr = (task.quantity or 1) > 1 and (" x" .. (task.quantity or 1)) or ""
             row.text:SetText(statusIcon .. namePrefix .. ns.COLORS.WHITE .. task.name .. qtyStr .. ns.COLORS.RESET .. statusTag .. priceStr)
