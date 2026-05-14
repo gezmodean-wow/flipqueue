@@ -1246,6 +1246,7 @@ local function debugPriceSource(rawQuery)
         print(string.format("--- task #%d: %s ---", m.taskIdx, it.name or "?"))
         print("  itemKey:      " .. tostring(it.itemKey))
         print("  itemID:       " .. tostring(it.itemID))
+        print("  ilvl:         " .. tostring(it.ilvl or "(unset)"))
         print("  targetRealm:  " .. tostring(it.targetRealm))
         if it.action == "buy" then
             print("  action:       buy")

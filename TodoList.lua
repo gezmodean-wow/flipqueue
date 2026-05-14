@@ -346,18 +346,50 @@ function TodoList:RegenerateList(sourceList, refreshMode, removedKeys, newName)
                 local bucket = importSource and ns.db
                     and ns.db.imports and ns.db.imports[importSource]
                 local deal = bucket and importKey and bucket[importKey]
-                if deal then
-                    if ns.ResolveFPPrice then
-                        copy.expectedPrice = ns:ResolveFPPrice(deal)
-                    end
-                    -- Backfill ilvl from the import record when the source
-                    -- task didn't carry it. Older tasks predate the
-                    -- TodoGenerator.lua change that started copying
-                    -- deal.ilvl onto taskEntry (FQ-195); Regenerate is the
-                    -- only path that can heal them without forcing the
-                    -- player to re-import.
-                    if (not copy.ilvl or copy.ilvl == 0) and deal.ilvl then
+                if deal and ns.ResolveFPPrice then
+                    copy.expectedPrice = ns:ResolveFPPrice(deal)
+                end
+                -- Backfill ilvl on tasks that predate the TodoGenerator
+                -- ilvl propagation (FQ-195). Three sources in priority
+                -- order; first hit wins:
+                --   1. Original import record (gone if CommitList already
+                --      cleared imports — common case)
+                --   2. Inventory pool — sell tasks usually have the item
+                --      in bags or warbank with ilvl preserved from scan
+                --   3. C_Item.GetItemInfo base ilvl — last resort, no
+                --      bonus-id awareness but better than no bound
+                if not copy.ilvl or copy.ilvl == 0 then
+                    -- 1. Import record (most authoritative for FP-imported
+                    --    tasks; usually empty after CommitList clears imports)
+                    if deal and deal.ilvl and deal.ilvl > 0 then
                         copy.ilvl = deal.ilvl
+                    end
+                    -- 2. Inventory pool (sell tasks usually have the item;
+                    --    poolItem carries per-bonus-variant ilvl from scan)
+                    if (not copy.ilvl or copy.ilvl == 0) then
+                        local lookupID = tonumber(copy.itemID)
+                        local p = poolByKey[copy.itemKey or ""]
+                            or (lookupID and poolByID[lookupID])
+                        if p and p.ilvl and p.ilvl > 0 then
+                            copy.ilvl = p.ilvl
+                        end
+                    end
+                    -- 3. Resolve through the bonus-id-aware WoW API. The
+                    --    itemKey carries bonusIDs (e.g. `258908;12769:6652:13668;`)
+                    --    that bump the variant's ilvl; ItemKeyToItemString
+                    --    builds the canonical item string and
+                    --    GetDetailedItemLevelInfo evaluates it. This is the
+                    --    workhorse for buy tasks that have no inventory.
+                    if (not copy.ilvl or copy.ilvl == 0)
+                       and ns.ItemKeyToItemString and GetDetailedItemLevelInfo
+                       and copy.itemKey and copy.itemKey ~= "" then
+                        local wowStr = ns:ItemKeyToItemString(copy.itemKey)
+                        if wowStr then
+                            local ok, iLvl = pcall(GetDetailedItemLevelInfo, wowStr)
+                            if ok and iLvl and iLvl > 0 then
+                                copy.ilvl = iLvl
+                            end
+                        end
                     end
                 end
             elseif tsmEnabled and copy.itemKey then
