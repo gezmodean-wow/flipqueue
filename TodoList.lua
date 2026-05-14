@@ -24,6 +24,9 @@ function TodoList:CommitList(preview, mode)
     end
 
     if mode == "replace" then
+        if ns.db.todoLists.active then
+            self:ArchiveList(ns.db.todoLists.active, "replaced")
+        end
         ns.db.todoLists.active = preview
     elseif mode == "append" then
         if not ns.db.todoLists.active or not ns.db.todoLists.active.tasks then
@@ -55,17 +58,47 @@ function TodoList:AdvanceQueue()
     return false
 end
 
+-- Max archive entries kept; older ones get trimmed when over.
+local ARCHIVE_CAP = 50
+
+-- Push a list snapshot into the archive (FQ-157). reason is "completed" /
+-- "discarded" / "replaced". Most recent first so Regenerate-track source
+-- picker shows newest history at the top. Cap keeps the saved-vars file
+-- from growing forever; players who want indefinite history can bump the
+-- constant later.
+function TodoList:ArchiveList(list, reason)
+    if not list or not list.tasks then return end
+    if not ns.db or not ns.db.todoLists then return end
+    ns.db.todoLists.archive = ns.db.todoLists.archive or {}
+    table.insert(ns.db.todoLists.archive, 1, {
+        list       = list,
+        archivedAt = time(),
+        reason     = reason or "discarded",
+    })
+    while #ns.db.todoLists.archive > ARCHIVE_CAP do
+        table.remove(ns.db.todoLists.archive)
+    end
+end
+
 -- Delete an upcoming list by index
 function TodoList:DeleteQueuedList(index)
     if not ns.db or not ns.db.todoLists then return end
-    if ns.db.todoLists.upcoming[index] then
+    local list = ns.db.todoLists.upcoming[index]
+    if list then
+        self:ArchiveList(list, "discarded")
         table.remove(ns.db.todoLists.upcoming, index)
     end
 end
 
--- Clear the active list and auto-promote the next queued list
-function TodoList:ClearCurrent()
+-- Clear the active list and auto-promote the next queued list.
+-- reason flows to the archive entry: defaults to "discarded" (manual x
+-- button on the active row) and is overridden to "completed" by
+-- CheckAutoComplete when all tasks reached a terminal state.
+function TodoList:ClearCurrent(reason)
     if not ns.db or not ns.db.todoLists then return end
+    if ns.db.todoLists.active then
+        self:ArchiveList(ns.db.todoLists.active, reason or "discarded")
+    end
     ns.db.todoLists.active = nil
 
     if ns.Sync and ns.Sync.IsLinked and ns.Sync:IsLinked() and not ns.Sync._applying then
@@ -205,6 +238,27 @@ function TodoList:GetRegenSources()
             label = name,
             list  = snapshot,
         }
+    end
+    -- Archived lists: most-recent-first, suffixed with the archive reason so
+    -- the picker can distinguish a finished list from one the player threw
+    -- away. The archive is capped, so a long-running install never grows
+    -- the source picker beyond a manageable count.
+    for i, entry in ipairs(ns.db.todoLists.archive or {}) do
+        if entry.list and entry.list.tasks then
+            local label = entry.list.name or "Unnamed"
+            local reason = entry.reason or "?"
+            local age = entry.archivedAt and ns.FormatRelativeTime
+                and ns:FormatRelativeTime(entry.archivedAt) or nil
+            local tag = "(" .. reason .. (age and (" " .. age) or "") .. ")"
+            sources[#sources + 1] = {
+                kind        = "archive",
+                label       = label .. " " .. tag,
+                list        = entry.list,
+                archiveIdx  = i,
+                archivedAt  = entry.archivedAt,
+                reason      = reason,
+            }
+        end
     end
     return sources
 end
@@ -1678,7 +1732,7 @@ function TodoList:CheckAutoComplete()
     end
 
     ns:Print(ns.COLORS.GREEN .. "All tasks completed or skipped — archiving to-do list.|r")
-    self:ClearCurrent()
+    self:ClearCurrent("completed")
 
     return changed
 end

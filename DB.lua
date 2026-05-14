@@ -31,6 +31,12 @@ function ns:InitDB()
     -- snapshot ({ name, tasks, importType }). Treated read-only by the
     -- regenerate flow; new lists go through CommitList per usual.
     db.todoLists.templates = db.todoLists.templates or {}
+    -- Archive of finished / discarded / replaced lists (FQ-157). Array of
+    -- { list = <snapshot>, archivedAt = epoch, reason = "completed" /
+    -- "discarded" / "replaced" }. Most recent first; capped to 50 entries
+    -- so it doesn't unbounded-grow. Surfaced as a source in the Regenerate
+    -- track Step 1 so old lists can be rebuilt.
+    db.todoLists.archive = db.todoLists.archive or {}
     db.log          = db.log or {}
     db.doNotTrack   = db.doNotTrack or {}
     db.sync         = db.sync or {}
