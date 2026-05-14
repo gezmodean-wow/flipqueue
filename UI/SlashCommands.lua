@@ -1194,12 +1194,18 @@ local function debugPriceSource(rawQuery)
     -- it, otherwise the import record is lost and the trail goes cold.
     rawQuery = strtrim(rawQuery or "")
     if rawQuery == "" then
-        ns:Print("Usage: /fq debug pricesource <itemName or itemID>")
+        ns:Print("Usage: /fq debug pricesource <itemName or itemID or shift-clicked link>")
         return
     end
 
-    local query = rawQuery:lower()
-    local queryID = rawQuery:match("^(%d+)$")
+    -- Shift-clicked item links arrive with color codes stripped but the
+    -- `item:<id>:...` payload and bracketed `[Name]` envelope intact. Pull
+    -- the itemID and name out so link-clicks match the same way typed
+    -- queries do.
+    local linkItemID = rawQuery:match("item:(%d+)")
+    local linkName   = rawQuery:match("%[(.-)%]")
+    local queryID    = linkItemID or rawQuery:match("^(%d+)$")
+    local query      = (linkName or rawQuery):lower()
 
     local function NameMatches(name, itemID)
         local nm = (name or ""):lower()
