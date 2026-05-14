@@ -1842,3 +1842,48 @@ function Import:SaveChunked(items, source, chunkSize, onProgress, onComplete)
 
     ProcessChunk()
 end
+
+--------------------------
+-- FP price-source resolution (FQ-177)
+--------------------------
+-- FlippingPal records carry both a "Listing price" (deal.expectedPrice — the
+-- aggressive recommendation FP suggests posting AT) and a "Sale Avg"
+-- (deal.saleAvg — the conservative historical median). On thin or volatile
+-- items the Listing price can run 50–150× above the realm's actual market,
+-- triggering blanket TSM-skip storms when posting. ResolveFPPrice picks the
+-- price string to feed into the task's expectedPrice based on the user's
+-- fpPriceSource setting (Settings → Imports). Falls back to Listing whenever
+-- the chosen path is missing data so tasks are never priceless.
+function ns:ResolveFPPrice(deal)
+    if not deal then return "" end
+    local listing = deal.expectedPrice or ""
+    local saleAvg = deal.saleAvg or ""
+
+    local mode = (ns.db and ns.db.settings and ns.db.settings.fpPriceSource) or "listing"
+
+    if mode == "saleavg" then
+        if saleAvg ~= "" then return saleAvg end
+        return listing
+    elseif mode == "auto" then
+        -- TSM-clamped: keep Listing unless it's >10× DBRegionMarketAvg, in
+        -- which case prefer Sale Avg. Requires TSM + a numeric Listing + a
+        -- non-empty saleAvg + a usable itemKey; any miss falls through to
+        -- Listing (no regression from "listing" mode).
+        if saleAvg == "" then return listing end
+        if not (ns.TSM and ns.TSM.IsEnabled and ns.TSM:IsEnabled() and ns.TSM.GetPrice) then
+            return listing
+        end
+        local listingGold = ns:ParseGoldValue(listing)
+        if listingGold <= 0 then return listing end
+        local itemKey = deal.itemKey
+        if not itemKey or itemKey == "" then return listing end
+        local tsmCopper = ns.TSM:GetPrice(itemKey, "DBRegionMarketAvg")
+        if not tsmCopper or tsmCopper <= 0 then return listing end
+        if listingGold > 10 * (tsmCopper / 10000) then
+            return saleAvg
+        end
+        return listing
+    end
+
+    return listing
+end

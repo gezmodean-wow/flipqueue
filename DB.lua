@@ -156,6 +156,10 @@ function ns:InitDB()
     -- TSM generation-time filtering: skip deals below TSM min price during todo generation
     -- Skipped deals still appear in results but don't consume inventory
     if db.settings.tsmSkipOnGenerate == nil then db.settings.tsmSkipOnGenerate = true end
+    -- FlippingPal price-source preference (FQ-177). Controls which FP column
+    -- flows into task expectedPrice during /fq generate. See
+    -- ns:ResolveFPPrice in Import.lua. "listing" preserves prior behavior.
+    if db.settings.fpPriceSource == nil then db.settings.fpPriceSource = "listing" end
     -- Debug messages (off by default)
     if db.settings.debugMessages == nil then db.settings.debugMessages = false end
     -- Master scope flags (#148). Re-applied here so existing installs that

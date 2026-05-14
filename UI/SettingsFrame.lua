@@ -396,7 +396,7 @@ end
 --------------------------
 
 -- Section ordering for reflow
-local sectionOrder = { "automation", "items", "gold", "auctionhouse", "notifications", "miniview", "data", "deletedchars", "multiaccount" }
+local sectionOrder = { "automation", "imports", "items", "gold", "auctionhouse", "notifications", "miniview", "data", "deletedchars", "multiaccount" }
 
 -- Rebuild the pooled row list inside the "Deleted Characters" section.
 -- Keeps the section height in sync with how many tombstones exist. Called
@@ -816,6 +816,28 @@ function UI:CreateSettingsPanel(parent)
     sy = sy - 30 - SECTION_SPACING
 
     secAuto.contentHeight = math.abs(sy)
+
+    ------------------------------------------------
+    -- Section: Imports (FQ-177)
+    ------------------------------------------------
+    local secImports = CreateCollapsibleSection(content, y, "imports",
+        "Imports",
+        "Which FlippingPal column flows into task prices")
+    sc = secImports.content
+    sy = 0
+
+    settingsWidgets.fpPriceSource, h = CreateSettingsDropdown(sc, sy,
+        "FlippingPal price source",
+        "Which FP column flows into expectedPrice when /fq generate builds a task. Listing = aggressive recommendation; Sale Avg = conservative historical median; Auto = Listing unless it's >10x TSM region market, then Sale Avg. Applies on next generate; existing tasks keep their stored price.",
+        "fpPriceSource",
+        {
+            { label = "Listing price",  value = "listing" },
+            { label = "Sale Avg",       value = "saleavg" },
+            { label = "Auto (TSM-clamped)", value = "auto" },
+        })
+    sy = sy - h - SECTION_SPACING
+
+    secImports.contentHeight = math.abs(sy)
 
     ------------------------------------------------
     -- Section: Item Management (#148 master + item-related settings)
@@ -1997,6 +2019,9 @@ function UI:RefreshSettings()
     end
     if settingsWidgets.copyOnClickMode then
         settingsWidgets.copyOnClickMode:SetValue(ns.db.settings.copyOnClickMode or "realm")
+    end
+    if settingsWidgets.fpPriceSource then
+        settingsWidgets.fpPriceSource:SetValue(ns.db.settings.fpPriceSource or "listing")
     end
     -- Batch size slider
     if settingsWidgets.batchSizeSlider then
