@@ -594,6 +594,41 @@ function TSM:EvaluateOpPrice(fqKey, expression)
     return nil
 end
 
+-- Evaluate the player's Auctioning operation normalPrice for an item.
+-- Mirrors AuctionPost:ResolvePostPrice's op resolution but skips the
+-- live AH state + decision tree -- callers that just need the "what
+-- would TSM recommend posting at" copper value should use this.
+--
+-- Returns: normalCopper, opName  (either may be nil if no op is bound
+-- to the item or the expression doesn't evaluate).
+function TSM:GetOpNormalPrice(fqKey)
+    if not self:IsEnabled() then return nil, nil end
+    if not fqKey or fqKey == "" then return nil, nil end
+
+    -- AuctioningOpNormal is TSM's built-in source key that resolves to
+    -- the active Auctioning op's normalPrice for the bound item. Try
+    -- it first -- avoids a separate group lookup round-trip when TSM
+    -- can answer directly.
+    local copper = self:EvaluateOpPrice(fqKey, "AuctioningOpNormal")
+    local op     = self:GetItemAuctioningOp(fqKey)
+    local opName = op and op.opName or nil
+    if copper and copper > 0 then
+        return copper, opName
+    end
+
+    -- Fallback: pull the expression off the op record and evaluate
+    -- directly. Covers items where TSM groups the item but the built-
+    -- in key fails (rare; usually a stale group cache).
+    if op and op.normalPrice then
+        copper = self:EvaluateOpPrice(fqKey, op.normalPrice)
+        if copper and copper > 0 then
+            return copper, opName
+        end
+    end
+
+    return nil, opName
+end
+
 -- Walk group hierarchy to find effective operation (handles inheritance)
 function TSM:ResolveGroupOperation(groupsDB, groupPath, moduleName)
     local groupData = groupsDB[groupPath]
