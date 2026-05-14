@@ -77,14 +77,18 @@ local function BuildSearchString(item, opts)
         if t and t >= 1 then tierStr = tostring(t) end
     end
 
-    -- Ilvl bounds: when the task carries an ilvl and the toggle is on,
-    -- emit it as both min and max so Auctionator filters to the exact
-    -- variant. Empty fields mean "any ilvl" — that's the legacy behavior
+    -- Ilvl bounds: when the toggle is on, fill min+max with the task's
+    -- ilvl. If the task doesn't have ilvl stored, resolve it lazily via
+    -- TodoList:ResolveTaskIlvl (parses importKey :iNNN suffix or asks
+    -- WoW directly). Empty fields mean "any ilvl" — legacy behavior
     -- when no ilvl is available (e.g. consumables) or the toggle is off.
     local ilvlMin, ilvlMax = "", ""
-    if opts.includeIlvl and item.ilvl then
-        local iv = tonumber(item.ilvl)
-        if iv and iv > 0 then
+    if opts.includeIlvl then
+        local iv = tonumber(item.ilvl) or 0
+        if iv == 0 and ns.TodoList and ns.TodoList.ResolveTaskIlvl then
+            iv = ns.TodoList:ResolveTaskIlvl(item) or 0
+        end
+        if iv > 0 then
             ilvlMin = tostring(iv)
             ilvlMax = tostring(iv)
         end

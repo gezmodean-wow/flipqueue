@@ -1246,7 +1246,14 @@ local function debugPriceSource(rawQuery)
         print(string.format("--- task #%d: %s ---", m.taskIdx, it.name or "?"))
         print("  itemKey:      " .. tostring(it.itemKey))
         print("  itemID:       " .. tostring(it.itemID))
-        print("  ilvl:         " .. tostring(it.ilvl or "(unset)"))
+        local storedIlvl = tostring(it.ilvl or "(unset)")
+        local resolvedIlvl = ns.TodoList and ns.TodoList.ResolveTaskIlvl
+            and ns.TodoList:ResolveTaskIlvl(it) or 0
+        if resolvedIlvl > 0 and (not it.ilvl or it.ilvl == 0) then
+            print("  ilvl:         " .. storedIlvl .. "  (resolved: " .. resolvedIlvl .. ")")
+        else
+            print("  ilvl:         " .. storedIlvl)
+        end
         print("  targetRealm:  " .. tostring(it.targetRealm))
         if it.action == "buy" then
             print("  action:       buy")
