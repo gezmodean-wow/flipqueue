@@ -232,6 +232,40 @@ function TodoList:RegenerateList(sourceList, refreshMode, removedKeys, newName)
     refreshMode = refreshMode or "fpsaved"
     removedKeys = removedKeys or {}
 
+    -- Inventory pool keyed by itemKey AND by numericID (so a bonus-id
+    -- variant in bags counts as "have it" against the base sell task).
+    local pool = self:BuildItemPool()
+    local poolByKey, poolByID = {}, {}
+    for _, p in ipairs(pool) do
+        poolByKey[p.itemKey] = p
+        local numID = tonumber(p.itemID)
+        if numID then poolByID[numID] = p end
+    end
+
+    -- Cheapest buy-side lookup from current fpCrossRealm imports. Used when
+    -- a sell task has lost its inventory and the original task wasn't a
+    -- cross-realm flip (so no preserved buyRealm/buyPrice). Best-effort
+    -- ad-hoc lookup; a proper research system tracks at FQ-192.
+    local buyByItemID = {}
+    if ns.db and ns.db.imports and ns.db.imports.fpCrossRealm then
+        for _, deal in pairs(ns.db.imports.fpCrossRealm) do
+            local numID = tonumber(deal.itemID)
+            if numID and deal.buyPrice and deal.buyRealm and deal.buyRealm ~= "" then
+                local g = ns.ParseGoldValue and ns:ParseGoldValue(deal.buyPrice) or 0
+                if g > 0 then
+                    local existing = buyByItemID[numID]
+                    if not existing or g < existing.priceGold then
+                        buyByItemID[numID] = {
+                            realm     = deal.buyRealm,
+                            price     = deal.buyPrice,
+                            priceGold = g,
+                        }
+                    end
+                end
+            end
+        end
+    end
+
     local out = {}
     local tsmEnabled = refreshMode == "tsmlive"
         and ns.TSM and ns.TSM.IsEnabled and ns.TSM:IsEnabled()
@@ -249,18 +283,9 @@ function TodoList:RegenerateList(sourceList, refreshMode, removedKeys, newName)
             copy.completedAt = nil
             copy.attempts = 0
 
-            -- Reset step states for the chosen action.
-            if copy.action == "buy" then
-                copy.steps = {
-                    browse = "pending", buy = "pending",
-                    collect = "pending", deposit = "pending",
-                }
-            else
-                copy.steps = {
-                    retrieve = "pending", post = "pending", collect = "pending",
-                }
-            end
-
+            ----------------------------------------------------------------
+            -- 1. Refresh price per chosen mode.
+            ----------------------------------------------------------------
             if refreshMode == "fpsaved" then
                 local importSource = task.importSource
                 local importKey    = task.importKey
@@ -270,7 +295,6 @@ function TodoList:RegenerateList(sourceList, refreshMode, removedKeys, newName)
                 if deal and ns.ResolveFPPrice then
                     copy.expectedPrice = ns:ResolveFPPrice(deal)
                 end
-                -- If no import record survives, keep the stored price.
             elseif tsmEnabled and copy.itemKey then
                 local tsmCopper = ns.TSM:GetPrice(copy.itemKey, "DBRegionMarketAvg")
                 if not tsmCopper or tsmCopper <= 0 then
@@ -281,6 +305,72 @@ function TodoList:RegenerateList(sourceList, refreshMode, removedKeys, newName)
                     copy.priceSource   = "TSM live"
                     copy.priceUpdatedAt = time()
                 end
+            end
+
+            ----------------------------------------------------------------
+            -- 2. Inventory check (sell tasks only). If we don't have it,
+            --    try to turn this into a buy task using preserved cross-
+            --    realm fields or current fpCrossRealm data. Otherwise mark
+            --    needs-acquire.
+            ----------------------------------------------------------------
+            local isSell = (copy.action == nil) or (copy.action == "sell")
+            local numID  = tonumber(copy.itemID)
+            local hasInventory = (copy.itemKey and poolByKey[copy.itemKey])
+                or (numID and poolByID[numID])
+
+            if isSell and not hasInventory then
+                local preservedFlip = task.buyRealm and task.buyPrice
+                    and task.buyRealm ~= "" and task.buyPrice ~= ""
+                local lookup = numID and buyByItemID[numID]
+
+                if preservedFlip then
+                    copy.action   = "buy"
+                    copy.buyRealm = task.buyRealm
+                    copy.buyPrice = task.buyPrice
+                    copy.dealType = "buy"
+                    copy._regenNote = "no inventory \xe2\x86\x92 buy"
+                elseif lookup then
+                    copy.action   = "buy"
+                    copy.buyRealm = lookup.realm
+                    copy.buyPrice = lookup.price
+                    copy.dealType = "buy"
+                    copy._regenNote = "no inventory \xe2\x86\x92 buy"
+                else
+                    copy.status     = "skipped"
+                    copy.failReason = "No inventory and no known buy source"
+                    copy._regenNote = "needs acquire"
+                end
+            end
+
+            ----------------------------------------------------------------
+            -- 3. Underwater check: if a sell task's expectedPrice would be
+            --    below TSM's minimum, commit it as skipped so it shows in
+            --    the log but doesn't pop the active list.
+            ----------------------------------------------------------------
+            if hasInventory and isSell and copy.status == "pending"
+               and ns.TSM and ns.TSM.IsBelowThreshold and ns.TSM:IsEnabled() then
+                local below, ahMin, threshold = ns.TSM:IsBelowThreshold(copy.itemKey or "")
+                if below then
+                    copy.status = "skipped"
+                    local threshStr = threshold and ns.TSM.FormatCopper
+                        and ns.TSM:FormatCopper(threshold) or "?"
+                    copy.failReason = "Below TSM min (" .. threshStr .. ")"
+                    copy._regenNote = "below market"
+                end
+            end
+
+            ----------------------------------------------------------------
+            -- 4. Reset step states AFTER action may have flipped to buy.
+            ----------------------------------------------------------------
+            if copy.action == "buy" then
+                copy.steps = {
+                    browse = "pending", buy = "pending",
+                    collect = "pending", deposit = "pending",
+                }
+            else
+                copy.steps = {
+                    retrieve = "pending", post = "pending", collect = "pending",
+                }
             end
 
             out[#out + 1] = copy

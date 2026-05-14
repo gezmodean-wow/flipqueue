@@ -73,6 +73,10 @@ local function CreateTaskRow(parent)
     row.action:SetTextColor(0.5, 0.8, 1)
     row.action:SetPoint("LEFT", row, "LEFT", 380, 0)
 
+    row.note = CreateLabel(row, "")
+    row.note:SetTextColor(0.7, 0.55, 0.45)
+    row.note:SetPoint("LEFT", row, "LEFT", 460, 0)
+
     row.xBtn = CreateFrame("Button", nil, row, "BackdropTemplate")
     row.xBtn:SetSize(18, 18)
     row.xBtn:SetPoint("RIGHT", row, "RIGHT", -6, 0)
@@ -408,7 +412,21 @@ local function RenderStep3(gf, refresh, contentTop)
         return
     end
 
-    r3.previewLabel:SetText(string.format("Preview (%d tasks, showing first 50):", #preview.tasks))
+    -- Count states for the header summary
+    local nSell, nBuy, nSkipped = 0, 0, 0
+    for _, t in ipairs(preview.tasks) do
+        if t.status == "skipped" then
+            nSkipped = nSkipped + 1
+        elseif t.action == "buy" then
+            nBuy = nBuy + 1
+        else
+            nSell = nSell + 1
+        end
+    end
+    r3.previewLabel:SetText(string.format(
+        "Preview (%d tasks):  %d post  |  %d buy  |  %d skipped",
+        #preview.tasks, nSell, nBuy, nSkipped))
+
     local y = -2
     local shown = math.min(50, #preview.tasks)
     for i = 1, shown do
@@ -424,8 +442,26 @@ local function RenderStep3(gf, refresh, contentTop)
         row:SetPoint("RIGHT",   r3.scrollContent, "RIGHT", -4, 0)
         row.name:SetText(task.name or "?")
         row.char:SetText(task.assignedChar or "(no char)")
-        row.action:SetText(task.action == "buy" and "BUY" or "POST")
         row.price:SetText(task.expectedPrice or "")
+        row.note:SetText(task._regenNote or "")
+
+        if task.status == "skipped" then
+            row.bg:SetColorTexture(0.18, 0.12, 0.06, 0.7)
+            row.name:SetTextColor(0.7, 0.6, 0.5)
+            row.action:SetText("SKIP")
+            row.action:SetTextColor(0.9, 0.6, 0.3)
+        elseif task.action == "buy" then
+            row.bg:SetColorTexture(0.05, 0.13, 0.18, 0.7)
+            row.name:SetTextColor(1, 1, 1)
+            row.action:SetText("BUY")
+            row.action:SetTextColor(0.4, 0.8, 1)
+        else
+            row.bg:SetColorTexture(0.06, 0.10, 0.07, 0.7)
+            row.name:SetTextColor(1, 1, 1)
+            row.action:SetText("POST")
+            row.action:SetTextColor(0.4, 0.9, 0.4)
+        end
+
         row:Show()
         y = y - ROW_H - 1
     end
