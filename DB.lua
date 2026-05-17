@@ -157,6 +157,26 @@ function ns:InitDB()
     if db.settings.pullSaleableIncludeReagents == nil then
         db.settings.pullSaleableIncludeReagents = true
     end
+    -- Tools drawer config (FQ-005 / #115). The built-in tool set lives in
+    -- ns.ToolRegistry (DEFAULT_ORDER / DEFAULT_HIDDEN) -- referenced here so
+    -- the shipped defaults are defined in exactly one place. ToolRegistry
+    -- also self-heals this table on first access.
+    db.settings.toolbox = db.settings.toolbox or {}
+    local toolbox = db.settings.toolbox
+    if type(toolbox.order) ~= "table" then
+        toolbox.order = {}
+        for _, id in ipairs(ns.ToolRegistry and ns.ToolRegistry.DEFAULT_ORDER or {}) do
+            toolbox.order[#toolbox.order + 1] = id
+        end
+    end
+    if type(toolbox.hidden) ~= "table" then
+        toolbox.hidden = {}
+        for id in pairs(ns.ToolRegistry and ns.ToolRegistry.DEFAULT_HIDDEN or {}) do
+            toolbox.hidden[id] = true
+        end
+    end
+    if type(toolbox.methodPriority) ~= "table" then toolbox.methodPriority = {} end
+    if type(toolbox.macros) ~= "table" then toolbox.macros = {} end
     -- Character ordering for manual sort
     db.settings.characterOrder = db.settings.characterOrder or {}
     -- Generator settings (persisted across sessions)

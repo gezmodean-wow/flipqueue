@@ -51,6 +51,7 @@ UI/Shared.lua
 UI/ExportPopup.lua
 UI/UntrackedSection.lua
 UI/BankPopup.lua
+UI/ToolRegistry.lua
 UI/ToolDrawer.lua
 UI/ContextDrawer.lua
 UI/MiniView.lua
