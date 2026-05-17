@@ -396,7 +396,7 @@ end
 --------------------------
 
 -- Section ordering for reflow
-local sectionOrder = { "automation", "imports", "items", "gold", "auctionhouse", "notifications", "miniview", "data", "deletedchars", "multiaccount" }
+local sectionOrder = { "automation", "imports", "items", "gold", "auctionhouse", "notifications", "miniview", "toolbox", "data", "deletedchars", "multiaccount" }
 
 -- Rebuild the pooled row list inside the "Deleted Characters" section.
 -- Keeps the section height in sync with how many tombstones exist. Called
@@ -516,6 +516,335 @@ local function RefreshDeletedCharactersSection()
 end
 
 UI._RefreshDeletedCharactersSection = RefreshDeletedCharactersSection
+
+--------------------------
+-- Tools Drawer section (FQ-005 / #115)
+--------------------------
+
+-- Whether the native-macro picker list is currently expanded.
+local toolboxPickerOpen = false
+
+local MINIBTN_BACKDROP = {
+    bgFile = "Interface\\Tooltips\\UI-Tooltip-Background",
+    edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
+    edgeSize = 8, insets = { left = 1, right = 1, top = 1, bottom = 1 },
+}
+
+-- Rebuild the Tools Drawer settings section. Mirrors the
+-- RefreshDeletedCharactersSection pattern: pooled rows, recomputed height.
+local function RefreshToolboxSection()
+    local container = settingsWidgets.toolboxContainer
+    local section   = settingsWidgets._toolboxSection
+    local TR        = ns.ToolRegistry
+    if not (container and section and ns.db and TR) then return end
+
+    local tb = TR.EnsureConfig and TR:EnsureConfig() or nil
+    if not tb then return end
+
+    local rows = settingsWidgets.toolboxRows
+    if not rows then rows = {}; settingsWidgets.toolboxRows = rows end
+    for _, r in ipairs(rows) do r:Hide() end
+
+    local ROW_H = 24
+    local rowIndex, y = 0, 0
+
+    -- A row carries every possible widget; emitters show/hide what they need.
+    local function AcquireRow()
+        rowIndex = rowIndex + 1
+        local row = rows[rowIndex]
+        if not row then
+            row = CreateFrame("Frame", nil, container)
+            row:SetHeight(ROW_H)
+
+            row.bg = row:CreateTexture(nil, "BACKGROUND")
+            row.bg:SetAllPoints()
+
+            row.check = CreateFrame("CheckButton", nil, row, "UICheckButtonTemplate")
+            row.check:SetSize(20, 20)
+            row.check:SetPoint("LEFT", row, "LEFT", 2, 0)
+
+            row.icon = row:CreateTexture(nil, "ARTWORK")
+            row.icon:SetSize(18, 18)
+            row.icon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
+
+            row.label = row:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+            row.label:SetJustifyH("LEFT")
+            row.label:SetWordWrap(false)
+
+            local function MiniBtn(w)
+                local b = CreateFrame("Button", nil, row, "BackdropTemplate")
+                b:SetSize(w, 18)
+                b:SetBackdrop(MINIBTN_BACKDROP)
+                b.text = b:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+                b.text:SetPoint("CENTER")
+                return b
+            end
+            row.up     = MiniBtn(22)
+            row.down   = MiniBtn(22)
+            row.action = MiniBtn(58)
+            row.up:SetPoint("RIGHT", row, "RIGHT", -28, 0)
+            row.down:SetPoint("RIGHT", row, "RIGHT", -4, 0)
+            row.action:SetPoint("RIGHT", row, "RIGHT", -4, 0)
+
+            rows[rowIndex] = row
+        end
+
+        row:ClearAllPoints()
+        row:SetPoint("TOPLEFT", container, "TOPLEFT", 0, y)
+        row:SetPoint("RIGHT", container, "RIGHT", 0, 0)
+        row.check:Hide(); row.icon:Hide()
+        row.up:Hide(); row.down:Hide(); row.action:Hide()
+        row.up:SetScript("OnClick", nil)
+        row.down:SetScript("OnClick", nil)
+        row.action:SetScript("OnClick", nil)
+        row.check:SetScript("OnClick", nil)
+        -- Restore the default action-button anchor; the macro-toggle row
+        -- re-anchors it LEFT, so every reuse must reset it first.
+        row.action:ClearAllPoints()
+        row.action:SetPoint("RIGHT", row, "RIGHT", -4, 0)
+        row.action:SetWidth(58)
+        row.bg:SetColorTexture(rowIndex % 2 == 0 and 0.07 or 0.04,
+                               rowIndex % 2 == 0 and 0.07 or 0.04,
+                               rowIndex % 2 == 0 and 0.10 or 0.07, 0.5)
+        row.label:ClearAllPoints()
+        row.label:SetWordWrap(false)
+        row:Show()
+        y = y - ROW_H
+        return row
+    end
+
+    -- Style one of the pooled mini buttons. tone: "normal"|"good"|"bad".
+    local function StyleBtn(b, label, enabled, tone, onClick)
+        b.text:SetText(label)
+        b:Show()
+        if enabled then
+            b:Enable()
+            if tone == "good" then
+                b:SetBackdropColor(0.10, 0.22, 0.10, 1)
+                b:SetBackdropBorderColor(0.3, 0.55, 0.3, 0.9)
+                b.text:SetTextColor(0.5, 1, 0.5)
+            elseif tone == "bad" then
+                b:SetBackdropColor(0.24, 0.10, 0.10, 1)
+                b:SetBackdropBorderColor(0.55, 0.3, 0.3, 0.9)
+                b.text:SetTextColor(1, 0.6, 0.6)
+            else
+                b:SetBackdropColor(0.15, 0.15, 0.2, 1)
+                b:SetBackdropBorderColor(0.35, 0.35, 0.45, 0.9)
+                b.text:SetTextColor(0.9, 0.9, 0.9)
+            end
+            b:SetScript("OnClick", onClick)
+        else
+            b:Disable()
+            b:SetBackdropColor(0.10, 0.10, 0.12, 0.7)
+            b:SetBackdropBorderColor(0.25, 0.25, 0.3, 0.6)
+            b.text:SetTextColor(0.4, 0.4, 0.4)
+            b:SetScript("OnClick", nil)
+        end
+    end
+
+    local function Rebuild()
+        RefreshToolboxSection()
+        if UI.RefreshToolDrawer then UI:RefreshToolDrawer() end
+    end
+
+    -- Sub-header row.
+    local function EmitHeader(text)
+        local row = AcquireRow()
+        row.bg:SetColorTexture(0, 0, 0, 0)
+        row.label:SetFontObject("GameFontNormal")
+        row.label:SetTextColor(0.9, 0.8, 0.3)
+        row.label:SetPoint("LEFT", row, "LEFT", 4, 0)
+        row.label:SetPoint("RIGHT", row, "RIGHT", -4, 0)
+        row.label:SetText(text)
+    end
+
+    -- Dim informational line.
+    local function EmitInfo(text, indent)
+        local row = AcquireRow()
+        row.bg:SetColorTexture(0, 0, 0, 0)
+        row.label:SetFontObject("GameFontDisableSmall")
+        row.label:SetTextColor(DESC_COLOR[1], DESC_COLOR[2], DESC_COLOR[3])
+        row.label:SetPoint("LEFT", row, "LEFT", 6 + (indent or 0), 0)
+        row.label:SetPoint("RIGHT", row, "RIGHT", -6, 0)
+        row.label:SetText(text)
+    end
+
+    -- Wire a row's up/down reorder pair. moveFn(dir) does the actual move.
+    local function EmitReorder(row, idx, total, moveFn)
+        StyleBtn(row.up, "\226\150\178", idx > 1, "normal", function()
+            moveFn(-1); Rebuild()
+        end)
+        StyleBtn(row.down, "\226\150\188", idx < total, "normal", function()
+            moveFn(1); Rebuild()
+        end)
+    end
+
+    -- A drawer tool: show/hide checkbox + icon + label + reorder buttons.
+    local function EmitTool(tool, idx, total)
+        local row = AcquireRow()
+        local hidden = TR:IsHidden(tool.id)
+
+        row.check:Show()
+        row.check:SetChecked(not hidden)
+        row.check:SetScript("OnClick", function(self)
+            TR:SetHidden(tool.id, not self:GetChecked())
+            Rebuild()
+        end)
+
+        row.icon:Show()
+        row.icon:SetPoint("LEFT", row, "LEFT", 26, 0)
+        row.icon:SetTexture(tool.icon or tool.iconFallback or TR.MISSING_ICON)
+        row.icon:SetDesaturated(hidden)
+
+        local typeTag
+        if tool.type == "macro" then
+            typeTag = tool.missing and "|cffff5555macro (missing)|r" or "|cff888888macro|r"
+        elseif tool.type == "action" then
+            typeTag = "|cff888888action|r"
+        else
+            typeTag = "|cff888888service|r"
+        end
+        row.label:SetFontObject("GameFontHighlightSmall")
+        row.label:SetTextColor(hidden and 0.5 or 0.95, hidden and 0.5 or 0.95,
+                               hidden and 0.5 or 0.95)
+        row.label:SetPoint("LEFT", row.icon, "RIGHT", 6, 0)
+        row.label:SetPoint("RIGHT", row, "RIGHT", -56, 0)
+        row.label:SetText(tool.label .. "  " .. typeTag)
+
+        EmitReorder(row, idx, total, function(dir) TR:MoveTool(tool.id, dir) end)
+    end
+
+    -- Per-method state string, keyed off the registry's shared classifier.
+    local METHOD_STATE = {
+        active      = "|cff66cc66active|r",
+        cooldown    = "|cffffcc66on cooldown|r",
+        unavailable = "|cff888888unavailable|r",
+        ready       = "|cff888888owned|r",
+    }
+
+    -- A summon method under a service tool: icon + label + reorder buttons.
+    local function EmitMethod(tool, eval, idx, total)
+        local row = AcquireRow()
+        row.icon:Show()
+        row.icon:SetPoint("LEFT", row, "LEFT", 30, 0)
+        row.icon:SetTexture(eval.icon or tool.iconFallback)
+        row.icon:SetDesaturated(false)
+
+        row.label:SetFontObject("GameFontHighlightSmall")
+        row.label:SetTextColor(0.85, 0.85, 0.9)
+        row.label:SetPoint("LEFT", row.icon, "RIGHT", 6, 0)
+        row.label:SetPoint("RIGHT", row, "RIGHT", -56, 0)
+        row.label:SetText(eval.dispatchName .. "  " .. METHOD_STATE[TR:ClassifyEval(eval)])
+
+        local key = TR.MethodKey(eval.method)
+        EmitReorder(row, idx, total, function(dir) TR:MoveMethod(tool, key, dir) end)
+    end
+
+    -- An already-added macro tool: icon + name + Remove button.
+    local function EmitMacro(name)
+        local row = AcquireRow()
+        local def = TR.BuildMacroTool(name)
+        row.icon:Show()
+        row.icon:SetPoint("LEFT", row, "LEFT", 8, 0)
+        row.icon:SetTexture(def.icon)
+        row.icon:SetDesaturated(def.missing)
+        row.label:SetFontObject("GameFontHighlightSmall")
+        row.label:SetTextColor(0.9, 0.9, 0.9)
+        row.label:SetPoint("LEFT", row.icon, "RIGHT", 6, 0)
+        row.label:SetPoint("RIGHT", row, "RIGHT", -68, 0)
+        row.label:SetText(def.missing and (name .. "  |cffff5555(missing)|r") or name)
+        StyleBtn(row.action, "Remove", true, "bad", function()
+            TR:RemoveMacro(name); Rebuild()
+        end)
+    end
+
+    -- A native WoW macro the player can add as a tool.
+    local function EmitPicker(macro)
+        local row = AcquireRow()
+        row.icon:Show()
+        row.icon:SetPoint("LEFT", row, "LEFT", 8, 0)
+        row.icon:SetTexture(macro.icon or TR.MISSING_ICON)
+        row.icon:SetDesaturated(false)
+        row.label:SetFontObject("GameFontHighlightSmall")
+        row.label:SetTextColor(0.85, 0.85, 0.9)
+        row.label:SetPoint("LEFT", row.icon, "RIGHT", 6, 0)
+        row.label:SetPoint("RIGHT", row, "RIGHT", -68, 0)
+        row.label:SetText(macro.name ..
+            (macro.perChar and "  |cff888888(this character)|r" or ""))
+        StyleBtn(row.action, "Add", true, "good", function()
+            TR:AddMacro(macro.name)
+            toolboxPickerOpen = false
+            Rebuild()
+        end)
+    end
+
+    ----------------------------------------------------------------
+    -- Section 1: the ordered drawer tool list (+ per-service methods)
+    ----------------------------------------------------------------
+    EmitHeader("Drawer tools")
+    local allTools = TR:GetAllTools()
+    for i, tool in ipairs(allTools) do
+        EmitTool(tool, i, #allTools)
+        if tool.type == "service" and not TR:IsHidden(tool.id) then
+            local evals = TR:GetOwnedMethodEvals(tool)
+            if #evals >= 2 then
+                for j, e in ipairs(evals) do
+                    EmitMethod(tool, e, j, #evals)
+                end
+            end
+        end
+    end
+
+    ----------------------------------------------------------------
+    -- Section 2: macro tools
+    ----------------------------------------------------------------
+    EmitHeader("Macro tools")
+    EmitInfo("Add one of your WoW macros as a one-click drawer tool. "
+        .. "It keeps the macro's own name and icon.")
+    if #tb.macros == 0 then
+        EmitInfo("No macros added yet.")
+    else
+        for _, name in ipairs(tb.macros) do EmitMacro(name) end
+    end
+
+    do
+        local row = AcquireRow()
+        row.bg:SetColorTexture(0, 0, 0, 0)
+        StyleBtn(row.action, toolboxPickerOpen and "Done" or "Add macro",
+            true, toolboxPickerOpen and "normal" or "good", function()
+                toolboxPickerOpen = not toolboxPickerOpen
+                Rebuild()
+            end)
+        -- The action button anchors RIGHT; widen the click target's label.
+        row.action:ClearAllPoints()
+        row.action:SetPoint("LEFT", row, "LEFT", 8, 0)
+        row.action:SetWidth(90)
+    end
+
+    if toolboxPickerOpen then
+        local added = {}
+        for _, n in ipairs(tb.macros) do added[n] = true end
+        local macros = TR:ListWoWMacros()
+        local shown = 0
+        for _, m in ipairs(macros) do
+            if not added[m.name] then
+                EmitPicker(m)
+                shown = shown + 1
+            end
+        end
+        if shown == 0 then
+            EmitInfo("No other macros found. Create macros with /macro.")
+        end
+    end
+
+    container:SetHeight(math.max(10, math.abs(y)))
+    section.contentHeight = (settingsWidgets._toolboxHeaderAbove or 38)
+        + math.abs(y) + 8
+    if section.UpdateLayout then section.UpdateLayout() end
+    if UI.ReflowSettings then UI:ReflowSettings() end
+end
+
+UI._RefreshToolboxSection = RefreshToolboxSection
 
 function UI:ReflowSettings()
     if not settingsWidgets.contentFrame then return end
@@ -1322,6 +1651,38 @@ function UI:CreateSettingsPanel(parent)
     secMini.contentHeight = math.abs(sy)
 
     ------------------------------------------------
+    -- Section: Tools Drawer
+    ------------------------------------------------
+    -- Static shell only; the dynamic row list is built by
+    -- RefreshToolboxSection (rebuilt whenever tools / macros change).
+    local secToolbox = CreateCollapsibleSection(content, y, "toolbox",
+        "Tools Drawer",
+        "Drawer contents, summon priority, macros")
+    sc = secToolbox.content
+    sy = 0
+
+    local toolboxDesc = sc:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+    toolboxDesc:SetPoint("TOPLEFT", sc, "TOPLEFT", LEFT_MARGIN, sy)
+    toolboxDesc:SetPoint("RIGHT", sc, "RIGHT", RIGHT_MARGIN, 0)
+    toolboxDesc:SetJustifyH("LEFT")
+    toolboxDesc:SetWordWrap(true)
+    toolboxDesc:SetTextColor(DESC_COLOR[1], DESC_COLOR[2], DESC_COLOR[3])
+    toolboxDesc:SetText("Choose which tools appear in the drawer beside the mini overlay, "
+        .. "their order, the preferred summon for each service, and add your own WoW "
+        .. "macros as one-click tools.")
+    sy = sy - 38
+
+    local toolboxContainer = CreateFrame("Frame", nil, sc)
+    toolboxContainer:SetPoint("TOPLEFT", sc, "TOPLEFT", 0, sy)
+    toolboxContainer:SetPoint("RIGHT", sc, "RIGHT", 0, 0)
+    toolboxContainer:SetHeight(10)
+    settingsWidgets.toolboxContainer = toolboxContainer
+    settingsWidgets._toolboxSection = secToolbox
+    settingsWidgets._toolboxHeaderAbove = math.abs(sy)
+
+    secToolbox.contentHeight = math.abs(sy) + 10
+
+    ------------------------------------------------
     -- Section: Data Management
     ------------------------------------------------
     local secData = CreateCollapsibleSection(content, y, "data",
@@ -1902,6 +2263,9 @@ function UI:RefreshSettings()
     if not ns.db then return end
     if UI._RefreshDeletedCharactersSection then
         UI._RefreshDeletedCharactersSection()
+    end
+    if UI._RefreshToolboxSection then
+        UI._RefreshToolboxSection()
     end
     local manageItemsOn = ns.db.settings.manageItems ~= false
     local manageGoldOn  = ns.db.settings.manageGold  ~= false
