@@ -1,5 +1,31 @@
 # Changelog
 
+## v0.13.0-alpha3
+
+Third alpha on the v0.13.0 line. A single feature: the tools-drawer redesign (FQ-005 / #115), rebuilt around a declarative registry model. No other changes. Embedded Cogworks-1.0 stays at `v0.13.2`; no Phase B progress this cycle.
+
+This alpha ships without a maintainer in-game smoke test — the F8 gate was waived by the maintainer and the alpha is published for tester coverage.
+
+### FQ-005: tools drawer rebuilt on a registry model
+
+The tools drawer was a hardcoded button list. It is now driven by a declarative registry so tools can be shown, hidden, reordered, and extended without touching drawer code.
+
+`UI/ToolRegistry.lua` (new, ~700 LOC) owns the model:
+
+- **Tool defs** — Service / Action / Macro kinds. `DEFAULT_ORDER` (`ToolRegistry.lua:202`) is `logout, reload, ah, vendor, warbank, hearthstone, mailbox, bank`; `DEFAULT_HIDDEN` (`:203`) starts mailbox + bank off.
+- **Per-service summon-method pools** — each service carries an ordered list of methods (item / toy / mount / spell). `TR:EvalMethod` (`:585`) resolves ownership + cooldown, `TR:ClassifyEval` (`:608`) buckets the result, `TR:ApplySecureDispatch` (`:618`) wires the secure attributes.
+- **Smart default `TR:ResolveTool`** (`:645`) — active mount wins, else highest-priority ready method, else the method off cooldown soonest.
+- **Native-macro enumeration** — `TR:ListWoWMacros` (`:272`) feeds the macro picker; `AddMacro` / `RemoveMacro` (`:387` / `:398`).
+- **Account-wide config accessors** — order / hidden / methodPriority / macros via `GetTools`, `IsHidden`, `MoveTool`, `GetOrderedMethods`, `MoveMethod`.
+
+`UI/ToolDrawer.lua` rewritten on the registry: mixed tool rows, a hover-opened **float** rollout sub-drawer (chosen over inline), a per-service find button that drops a quest-arrow waypoint to the nearest learned location. Location learning, the public API, and the `ns._serviceState` export are preserved.
+
+`UI/SettingsFrame.lua` adds a `toolbox` collapsible section after `miniview`: show/hide + reorder, per-service method priority, native-macro picker. `RefreshToolboxSection` rebuilds via pooled rows.
+
+`DB.lua` seeds `db.settings.toolbox` and single-sources its defaults from `ns.ToolRegistry.DEFAULT_ORDER` / `DEFAULT_HIDDEN`. `flipqueue.toc` loads `UI/ToolRegistry.lua` before `UI/ToolDrawer.lua`.
+
+A `/simplify` pass is included: closed-drawer early-return in `RefreshToolDrawer`, a 0.1s `C_Timer` event debounce (`ScheduleRefresh`), a per-frame bag-scan cache (`GetBagSet`), per-refresh closure churn removed (handlers set once in `CreateToolButton`), and `ClassifyEval` / `ApplySecureDispatch` dedup.
+
 ## v0.13.0-alpha2
 
 Second alpha on the v0.13.0 line. Three originally-scoped follow-ups (FQ-177 / FQ-178 / FQ-179) plus three substantial features that landed during the FQ-177 investigation: the player-facing FlippingPal price-source preference, a new Regenerate Generator track for rebuilding existing lists, and the start of FQ-157 archive-don't-delete behavior. The Regenerate track wiring also surfaces a per-task ilvl bound through to the Auctionator shopping-list export (FQ-195).

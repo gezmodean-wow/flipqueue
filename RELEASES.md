@@ -6,6 +6,26 @@ The engineering-detail companion lives in `CHANGELOG.md` (commit-readerese — f
 
 ---
 
+## v0.13.0-alpha3
+
+A focused alpha: the Tools drawer has been rebuilt from the ground up.
+
+### The Tools drawer is now yours to arrange
+
+Every summon tool — auction house, vendor, warbank, hearthstone, mailbox, banker, and your own macros — now lives in one drawer you control.
+
+- **Show, hide, and reorder** any tool from Settings → Toolbox. Mailbox and banker start hidden; turn on whatever you use.
+- **Pick how each service summons.** Most services have several options — a toy, a mount, an item, a spell. Set the order you prefer and FlipQueue uses it.
+- **Add your own macros** straight from your saved macro list.
+
+### Smarter summoning
+
+Hover any service and a small sub-drawer rolls out with every way you can summon it, so you can pick on the spot. FlipQueue also chooses for you: if you're already on a relevant mount that one wins, otherwise it uses your highest-priority ready option, otherwise whatever comes off cooldown first.
+
+### Find your way there
+
+Each service gets a find button that drops a map waypoint and quest arrow to the nearest spot FlipQueue has seen it — handy for mailboxes and bankers in unfamiliar towns.
+
 ## v0.13.0-alpha2
 
 A bigger alpha than originally planned. The three follow-ups from alpha1 are all in (mini overlay buy/sell visual fix, TSM-skipped task cleanup, price-inflation root cause), plus three new features that landed while tracking down the inflation: a price-source dropdown so you can pick which FlippingPal column to trust, a Regenerate track on the To-Do Generator that rebuilds an existing list without a fresh paste, and proper ilvl filtering on Auctionator shopping lists. Old to-do lists also now stick around instead of getting deleted on completion.
