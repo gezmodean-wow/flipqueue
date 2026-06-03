@@ -6,6 +6,18 @@ The engineering-detail companion lives in `CHANGELOG.md` (commit-readerese — f
 
 ---
 
+## v0.13.0-alpha4
+
+A focused alpha: the Deal Finder no longer sends items to realms you're already selling them on.
+
+### Deal Finder avoids realms you've already posted on
+
+Before, the Deal Finder could pick a realm where you already had that item up for sale. You'd fly there, pull from your warbank, open the auction house — and FlipQueue would spot the duplicate and drop the task, wasting the trip. Now it checks what you already have posted and steers each item to a realm you're *not* already on, moving to the next best realm instead.
+
+- **On by default.** Turn it off in Settings → Deal Finder ("Avoid realms where I already have an auction posted") if you'd rather rank every realm purely by price.
+- Realms you're already posted on are marked **POSTED** in the realm list. They stay selectable — if you do want to add to an existing listing, just click to pick one.
+- If *every* realm for an item is one you're already on, the item isn't dropped. FlipQueue still shows it and flags the situation so you can decide.
+
 ## v0.13.0-alpha3
 
 A focused alpha: the Tools drawer has been rebuilt from the ground up.

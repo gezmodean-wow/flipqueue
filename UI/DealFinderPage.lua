@@ -376,8 +376,17 @@ ignoreOutlierChk:SetScript("OnClick", function(self)
     if ns.db then ns.db.settings.dfIgnoreOutliers = self:GetChecked() end
 end)
 
+local avoidPostedChk = CreateFrame("CheckButton", nil, rightCol, "UICheckButtonTemplate")
+avoidPostedChk:SetSize(22, 22); avoidPostedChk:SetPoint("TOPLEFT", ignoreOutlierChk, "BOTTOMLEFT", 0, -2)
+local avoidPostedLbl = rightCol:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+avoidPostedLbl:SetPoint("LEFT", avoidPostedChk, "RIGHT", 2, 0)
+avoidPostedLbl:SetText("Avoid realms where I already have an auction posted")
+avoidPostedChk:SetScript("OnClick", function(self)
+    if ns.db then ns.db.settings.dfAvoidPostedRealms = self:GetChecked() end
+end)
+
 local abbrevPctChk = CreateFrame("CheckButton", nil, rightCol, "UICheckButtonTemplate")
-abbrevPctChk:SetSize(22, 22); abbrevPctChk:SetPoint("TOPLEFT", ignoreOutlierChk, "BOTTOMLEFT", 0, -2)
+abbrevPctChk:SetSize(22, 22); abbrevPctChk:SetPoint("TOPLEFT", avoidPostedChk, "BOTTOMLEFT", 0, -2)
 local abbrevPctLbl = rightCol:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
 abbrevPctLbl:SetPoint("LEFT", abbrevPctChk, "RIGHT", 2, 0)
 abbrevPctLbl:SetText("Abbreviate large profit % (1.5k%, 25M%)")
@@ -964,6 +973,7 @@ function UI:RefreshDealFinderPage()
         if ns.db then
             outlierBox:SetText(tostring(ns.db.settings.dfOutlierMultiplier or 1.5))
             ignoreOutlierChk:SetChecked(ns.db.settings.dfIgnoreOutliers or false)
+            avoidPostedChk:SetChecked(ns.db.settings.dfAvoidPostedRealms ~= false)
             abbrevPctChk:SetChecked(ns.db.settings.dfAbbreviatePct or false)
         end
         local ready = ns.DealFinder and ns.DealFinder:IsReady()

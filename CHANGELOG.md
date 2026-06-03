@@ -1,5 +1,30 @@
 # Changelog
 
+## v0.13.0-alpha4
+
+Single feature: the Deal Finder now accounts for auctions the player already has posted (FQ-205 / #205). No other changes. Embedded Cogworks-1.0 stays at `v0.13.2`; no Phase B progress this cycle.
+
+This alpha ships without a maintainer in-game smoke test — the F8 gate was waived by the maintainer and the alpha is published for tester coverage.
+
+### FQ-205: Deal Finder avoids realms with an active auction
+
+The Deal Finder scored realms purely on TSM per-realm pricing and never consulted the active-auction log, so it could auto-assign a deal to a realm where the player was already posted. The duplicate was only caught at AH time by `TrackerAuctions:CheckOwnedAuctions` — after the warbank pull and the flight out — wasting the trip. The data to prevent it already existed in `ns.db.log`; the scan just wasn't reading it.
+
+`SalesIndex.lua` gains the index + query:
+
+- `BuildIndex` now also builds `activeByItem` — base itemID → set of posted target-realm display strings — from `auctionStatus == "active"` entries. The realm is kept as its raw display string (not normalized) so connected-realm matching works at query time.
+- `BaseItemID` (new local) mirrors `TrackerAuctions`' `EntryItemID`: `pet:<speciesID>` for battle pets, base itemID otherwise. Matching at this level keeps the "already posted" check in agreement with the AH-time reconciliation that removes the task across bonus/modifier variants.
+- `SalesIndex:HasActiveAuction(itemKey, targetRealm)` resolves the base ID and returns true if any posted realm shares a connected-realm AH with `targetRealm` via `ns:RealmsOverlap`.
+
+`DealFinder.lua`:
+
+- Each realm option built in `ScanChunked` now carries `hasActiveAuction` (`DealFinder.lua:311`).
+- `ApplyPriority` tracks the best *clean* (non-posted) realm alongside the best overall, and selects the clean one when `dfAvoidPostedRealms` is set — falling back to the best posted realm only when every candidate is posted. Deals are demoted, never dropped, and the player can still override. `group.selectedPosted` flags the all-posted fallback.
+
+`DB.lua` seeds `db.settings.dfAvoidPostedRealms = true` (default on — matches the behavior players already expect from inventory analysis).
+
+`UI/DealFinderPage.lua` adds the **"Avoid realms where I already have an auction posted"** checkbox to the Deal Finder config (with state restore). `UI/DealFinderDetail.lua` adds a `POSTED` flag and a two-line tooltip to each posted realm row in the selection grid; rows stay clickable so the player can deliberately add to an existing listing.
+
 ## v0.13.0-alpha3
 
 Third alpha on the v0.13.0 line. A single feature: the tools-drawer redesign (FQ-005 / #115), rebuilt around a declarative registry model. No other changes. Embedded Cogworks-1.0 stays at `v0.13.2`; no Phase B progress this cycle.

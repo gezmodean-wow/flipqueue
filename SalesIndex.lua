@@ -45,6 +45,17 @@ local function NormalizeRealm(realm)
     return ns.NormalizeRealmKey and ns:NormalizeRealmKey(realm or "") or (realm or ""):lower()
 end
 
+-- Canonical item-ID key for matching across bonus/modifier variants. Mirrors
+-- TrackerAuctions' EntryItemID so the deal-finder "already posted" check agrees
+-- with the AH-time reconciliation that removes the task: battle pets get a
+-- "pet:<speciesID>" form, everything else collapses to its base itemID.
+local function BaseItemID(itemKey)
+    if not itemKey or itemKey == "" then return nil end
+    local petID = itemKey:match("^pet:(%d+)")
+    if petID then return "pet:" .. petID end
+    return itemKey:match("^(%d+)")
+end
+
 local function BuildIndex()
     local log = ns.db and ns.db.log
     if not log then return nil end
@@ -53,6 +64,7 @@ local function BuildIndex()
     local byName = {}   -- lower(name) -> same structure
     local logStats = { sold = 0, active = 0, expired = 0, cancelled = 0, skipped = 0, collected = 0, totalRevenue = 0, totalFees = 0 }
     local uncollected = {}  -- charKey -> { sold, expired, cancelled }
+    local activeByItem = {} -- baseItemID -> { [targetRealm display] = true }
 
     for _, entry in ipairs(log) do
         local key = entry.itemKey
@@ -62,6 +74,17 @@ local function BuildIndex()
         local isFailed = SalesIndex.IsFailed(entry)
         local isActive = SalesIndex.IsActive(entry)
         local soldCopper = isSold and (entry.soldPrice or 0) or 0
+
+        -- Active auctions, indexed by base itemID -> the realms they sit on.
+        -- Keep the raw display realm (not normalized) so connected-realm
+        -- matching via ns:RealmsOverlap works at query time.
+        if isActive then
+            local baseID = BaseItemID(entry.itemKey)
+            if baseID and entry.targetRealm and entry.targetRealm ~= "" then
+                activeByItem[baseID] = activeByItem[baseID] or {}
+                activeByItem[baseID][entry.targetRealm] = true
+            end
+        end
 
         -- Per-item index (by key)
         if key then
@@ -160,6 +183,7 @@ local function BuildIndex()
         byName = byName,
         logStats = logStats,
         uncollected = uncollected,
+        activeByItem = activeByItem,
         builtAt = time(),
     }
 end
@@ -230,6 +254,25 @@ function SalesIndex:GetSalesForRealm(itemKey, itemName, targetRealm)
     local rr = rec.byRealm[realm]
     if not rr or rr.sold == 0 then return 0, 0 end
     return math.floor(rr.revenue / rr.sold), rr.sold
+end
+
+-- True if the player currently has an *active* auction for this item on a
+-- realm sharing a connected-realm AH with targetRealm. Matched at base-itemID
+-- level (across bonus/modifier variants) to agree with the AH-time owned-auction
+-- reconciliation in TrackerAuctions. Used by the Deal Finder to avoid assigning
+-- a deal to a realm where the player is already posted.
+function SalesIndex:HasActiveAuction(itemKey, targetRealm)
+    if not targetRealm or targetRealm == "" then return false end
+    local index = self:EnsureIndex()
+    if not index or not index.activeByItem then return false end
+    local baseID = BaseItemID(itemKey)
+    if not baseID then return false end
+    local realms = index.activeByItem[baseID]
+    if not realms then return false end
+    for postedRealm in pairs(realms) do
+        if ns:RealmsOverlap(postedRealm, targetRealm) then return true end
+    end
+    return false
 end
 
 function SalesIndex:GetLogStats()
