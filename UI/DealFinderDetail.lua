@@ -370,6 +370,7 @@ function UI:RenderDealFinderRealmTable(parent, group, numCols, onToggle)
         if realm.isOutlier then table.insert(flags, (C.RED or "") .. "OL|r") end
         if realm.noCompetition then table.insert(flags, (C.GREEN or "") .. "NC|r") end
         if realm.hasPreviousSales then table.insert(flags, (C.YELLOW or "") .. (realm.personalCount or 0) .. "s|r") end
+        if realm.hasActiveAuction then table.insert(flags, "|cffff8800POSTED|r") end
 
         local lbl = Lbl(f, "t", "GameFontHighlightSmall")
         lbl:SetPoint("LEFT", chk, "RIGHT", 4, 0)
@@ -412,6 +413,10 @@ function UI:RenderDealFinderRealmTable(parent, group, numCols, onToggle)
             end
             if ref.noCompetition then
                 GameTooltip:AddLine("No competition on AH", 0.3, 1, 0.3)
+            end
+            if ref.hasActiveAuction then
+                GameTooltip:AddLine("POSTED - you already have an active auction here", 1, 0.53, 0)
+                GameTooltip:AddLine("Demoted in auto-selection; click to override.", 0.7, 0.7, 0.7)
             end
             GameTooltip:Show()
         end)

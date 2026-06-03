@@ -276,6 +276,10 @@ function ns:InitDB()
     db.settings.dfOutlierMultiplier = db.settings.dfOutlierMultiplier or 1.5
     if db.settings.dfIgnoreOutliers == nil then db.settings.dfIgnoreOutliers = false end
     if db.settings.dfAbbreviatePct == nil then db.settings.dfAbbreviatePct = false end
+    -- Avoid auto-assigning deals to realms where an auction is already posted
+    -- (demote the posted realm so a clean one wins; #205). Default on: matches
+    -- the behavior players already expect from the inventory analysis.
+    if db.settings.dfAvoidPostedRealms == nil then db.settings.dfAvoidPostedRealms = true end
     db.settings.dfPriorityOrder = db.settings.dfPriorityOrder or {"profit", "noCompetition", "previousSales"}
     -- Skip deals that have no matching character (suppress "create character" tasks)
     if db.settings.skipUnassigned == nil then db.settings.skipUnassigned = false end

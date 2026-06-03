@@ -136,10 +136,16 @@ end
 -- Sets _selected = true on best realm, false on others.
 function DealFinder:ApplyPriority(itemGroups, priorityOrder)
     priorityOrder = priorityOrder or (ns.db and ns.db.settings.dfPriorityOrder) or {"profit"}
+    local avoidPosted = ns.db and ns.db.settings.dfAvoidPostedRealms
 
     for _, group in ipairs(itemGroups) do
         if #group.realms > 0 then
+            -- Best realm overall, plus best among realms with no active auction.
+            -- When avoidPosted is on we prefer the clean pick and only fall back
+            -- to a posted realm when every candidate is already posted, so a deal
+            -- is demoted (not dropped) and the player can still override it.
             local bestIdx, bestScore = 1, -1
+            local cleanIdx, cleanScore = nil, -1
             for i, realmOpt in ipairs(group.realms) do
                 realmOpt.score = self:ScoreRealm(realmOpt, priorityOrder)
                 realmOpt._selected = false
@@ -147,9 +153,18 @@ function DealFinder:ApplyPriority(itemGroups, priorityOrder)
                     bestScore = realmOpt.score
                     bestIdx = i
                 end
+                if not realmOpt.hasActiveAuction and realmOpt.score > cleanScore then
+                    cleanScore = realmOpt.score
+                    cleanIdx = i
+                end
             end
-            group.realms[bestIdx]._selected = true
-            group.selectedRealm = bestIdx
+            local chosen = (avoidPosted and cleanIdx) or bestIdx
+            group.realms[chosen]._selected = true
+            group.selectedRealm = chosen
+            -- Flag the group when its auto-pick is still a posted realm (every
+            -- candidate was posted) so the UI can warn rather than silently
+            -- assign a realm the player is already on.
+            group.selectedPosted = group.realms[chosen].hasActiveAuction or false
         end
     end
 end
@@ -309,6 +324,7 @@ function DealFinder:ScanChunked(pool, onProgress, onComplete)
                             isOutlier     = isOutlier,
                             noCompetition = (numAuctions ~= nil and numAuctions == 0),
                             hasPreviousSales = (personalCount or 0) > 0,
+                            hasActiveAuction = ns.SalesIndex:HasActiveAuction(itemKey, targetRealm),
                             dataQuality   = dataQuality or "perRealm",
                             score         = 0,  -- set by ApplyPriority
                         })
