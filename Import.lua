@@ -37,6 +37,24 @@ local function IsFPSourceString(str)
     return FP_SOURCE_STRINGS[str:lower()] or false
 end
 
+-- FlippingPal reuses the cross-realm CSV column layout for its inventory
+-- sell-deal export, padding the buy side with a "Realm 0" / "0g" placeholder
+-- (the item came from the player's own inventory, so there's nothing to buy).
+-- A buy side only counts as a real cross-realm flip when the realm names an
+-- actual realm and the price parses to positive gold — otherwise the row is a
+-- plain sell deal and must not be tagged dealType="flip". Shared by every
+-- parser that detects cross-realm deals (FP comma CSV, tab-delimited, FP
+-- website). See FQ-208.
+local FP_PLACEHOLDER_BUY_REALM = "realm 0"
+
+local function IsRealBuySide(buyRealm, buyPrice)
+    if not buyRealm or buyRealm == "" then return false end
+    if buyRealm:lower() == FP_PLACEHOLDER_BUY_REALM then return false end
+    if IsFPSourceString(buyRealm) then return false end
+    if not buyPrice or buyPrice == "" then return false end
+    return (ns:ParseGoldValue(buyPrice) or 0) > 0
+end
+
 --------------------------
 -- Known WoW values
 --------------------------
@@ -168,8 +186,9 @@ local function ParseRealmLine(realmLine)
         local buyRealm = buyRealmPart:match("^(.-)%s%s+") or buyRealmPart
         buyRealm = CleanRealmString(strtrim(buyRealm))
 
-        -- Check if buyPrice looks like a gold value and buyRealm is a real realm (not a source string)
-        if buyPricePart:match("[%d,]+g") and buyRealm ~= "" and not IsFPSourceString(buyRealm) then
+        -- Cross-realm only when the buy side is a real realm with positive
+        -- gold — not FP's "Realm 0" / "0g" inventory-sell placeholder (FQ-208).
+        if IsRealBuySide(buyRealm, buyPricePart) then
             return sellRealm, buyPricePart, buyRealm
         end
     end
@@ -607,8 +626,7 @@ local function ProcessTabRow(line, colMap, hasCrossRealm)
 
     local key = ns:MakeItemKey(itemID ~= "" and itemID or name, bonusIDs, modifiers)
 
-    local isCrossRealm = buyRealmVal ~= "" and buyPriceVal ~= ""
-        and not IsFPSourceString(buyRealmVal)
+    local isCrossRealm = IsRealBuySide(buyRealmVal, buyPriceVal)
     local dealType = nil
     local profitAmount = nil
     local profitPct = nil
@@ -819,8 +837,7 @@ local function ProcessFPCommaCSVRow(line, colMap, hasCrossRealm)
 
     local key = itemID ~= "" and ns:MakeItemKey(itemID, "", "") or name
 
-    local isCrossRealm = buyRealmVal ~= "" and buyPriceVal ~= ""
-        and not IsFPSourceString(buyRealmVal)
+    local isCrossRealm = IsRealBuySide(buyRealmVal, buyPriceVal)
     local dealType = isCrossRealm and "flip" or "sell"
     local profitAmount = nil
     local profitPct = nil
