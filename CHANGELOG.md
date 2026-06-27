@@ -1,5 +1,35 @@
 # Changelog
 
+## v0.13.0-beta1
+
+Release candidate for **v0.13.0** — the first beta on this line, consolidating alpha1–alpha4 plus seven fixes landed for the beta. Per the beta-as-RC convention this is the commit intended to ship as stable v0.13.0 after small-group testing. Embedded Cogworks-1.0 stays at `v0.13.2`.
+
+The `## Interface` in `flipqueue.toc` moves from `120005` to **`120007`** for the WoW 12.0.7 client (suite-wide chronoforge CF-12 bump).
+
+### FQ-208: FP inventory sell-deals no longer misclassified as cross-realm flips
+
+FlippingPal's inventory-scan CSV uses a `Buy Realm = Realm 0` / `Buy Price = 0g` placeholder for "sell what you already own" deals (no buy leg). `Import.lua` was reading that placeholder as a genuine cross-realm flip, so the deal got a bogus buy step on the non-existent "Realm 0". The parser now treats the `Realm 0` / zero-buy placeholder as `dealType = "sell"` with no `buyRealm`, while real cross-realm rows (positive buy price + real realm) still classify as `"flip"` with `buyRealm` preserved. Covered by a headless harness (`test/import_spec.lua`, 8 assertions) that loads the real `Import.lua` against a WoW-API shim. *(Confirmed against the FQ-216 field data: every returned row in that report carried the `Realm 0`/`0g` placeholder — a textbook inventory scan, not a flip.)*
+
+### FQ-211: Deal Finder priority controls no longer overlapped
+
+The deal-priority list rendered into a fixed 120px frame while `RenderAllocList`'s returned content height was discarded, so once enough priority rows showed, the Outlier Detection section (anchored to the frame's bottom) drew over them. `RenderPriority` now sizes `prioFrame` to the y-offset `RenderAllocList` returns (`UI/DealFinderPage.lua`), so downstream sections reflow for any row count.
+
+### FQ-212: ScrollTable scroll-bar strip reclaimed when hidden
+
+`ScrollTable` reserved a fixed 22px right inset for the vertical scroll bar but only toggled the bar's alpha on visibility changes — leaving a dead 22px gap on every short list. `UpdateScrollBarVisibility` now re-anchors the scroll frame's right edge (full inset when shown so the bar sits flush, a small margin when hidden), via a guarded `SetScrollbarInset` that can't recurse through `OnSizeChanged`. Shared widget: the change is edge-inset only and applies uniformly to all consumers.
+
+### FQ-213: Clear Current vs Clear All split
+
+The single "Clear All Lists" button called `ClearCurrent()` (which auto-promotes the next queued list into active) and *then* wiped `upcoming`, so the just-promoted list survived — "clear all" left a list behind, exactly as reported. Two explicit actions now: **Clear Current** (`ClearCurrent()`, next queued promoted) and **Clear All** (new `TodoList:ClearAll()`, which archives every queued list and empties the queue *before* clearing active, so nothing is promoted). Both confirm; cleared lists remain recoverable via the archive (FQ-157). `UI/MainFrame.lua`, `TodoList.lua`, `UI/TodoPage.lua`.
+
+### FQ-214: Sales-log pause toggle + configurable retention
+
+New `salesLoggingEnabled` (default true), `salesRetentionDays` (default 30, `0` = never prune by age), and `salesRetentionCount` (default nil = unlimited) settings. Append sites gated on the toggle — `AuctionPost` post-logging and `TrackerAuctions` orphan recovery (`else`→`elseif` so the log isn't repopulated when logging is off). `DB.Cleanup` reads `salesRetentionDays` instead of the hardcoded 30 and applies `salesRetentionCount` as a newest-kept cap. New **Sales Log** settings section (enable toggle + retention-days / max-entries dropdowns) with state restore. Defaults preserve existing behavior.
+
+### FQ-215: Posting logic audited against TSM v4.14.69
+
+Re-audited `AuctionPost:ResolvePostPrice` against TSM v4.14.69's `MakePostDecision` (lines 417-512) and `IsAuctionFiltered` (269-285): both unchanged from v4.14.66 — identical line numbers, identical branch structure, no new required operation fields in `Load`. The local port remains accurate, so this is a constant bump (`TSM_AUDITED_VERSION` → `v4.14.69`) with the audit date recorded, not a logic change. The diagnostics blob (`UI/AboutPage`) now prints a `TSM posting audit: running=.. audited=.. status=..` line so a pasted report carries the version-drift signal even when the player missed the one-time chat warning.
+
 ## v0.13.0-alpha4
 
 Single feature: the Deal Finder now accounts for auctions the player already has posted (FQ-205 / #205). No other changes. Embedded Cogworks-1.0 stays at `v0.13.2`; no Phase B progress this cycle.
