@@ -334,6 +334,7 @@ local DF_ALLOC_META = {
     population     = {label = "High Population", icon = "Interface\\Icons\\Achievement_GuildPerk_EverybodysFriend", color = {0.7, 0.5, 1}},
 }
 
+local PRIO_Y_START = -2
 local prioFrame = CreateFrame("Frame", nil, rightCol)
 prioFrame:SetHeight(120)
 prioFrame:SetPoint("TOPLEFT", prioLabel, "BOTTOMLEFT", -8, -4)
@@ -342,7 +343,12 @@ prioFrame:SetPoint("RIGHT", rightCol, "RIGHT", -12, 0)
 local prioAllocRows = {}
 local function RenderPriority()
     if not ns.db then return end
-    UI:RenderAllocList(ns.db.settings.dfPriorityOrder, DF_ALLOC_META, prioAllocRows, prioFrame, -2, RenderPriority)
+    -- RenderAllocList returns the y-offset after the last row (negative, growing
+    -- downward). Grow prioFrame to fit the rows it just laid out so the Outlier
+    -- Detection section anchored off prioFrame's bottom never overlaps, no matter
+    -- how many priority rows are shown. (FQ-211)
+    local endY = UI:RenderAllocList(ns.db.settings.dfPriorityOrder, DF_ALLOC_META, prioAllocRows, prioFrame, PRIO_Y_START, RenderPriority)
+    prioFrame:SetHeight(math.max(-endY + 4, 1))
 end
 
 local outlierLabel = rightCol:CreateFontString(nil, "OVERLAY", "GameFontNormal")
