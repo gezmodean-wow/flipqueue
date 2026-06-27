@@ -2,7 +2,7 @@
 
 ## v0.13.0-beta1
 
-Release candidate for **v0.13.0** — the first beta on this line, consolidating alpha1–alpha4 plus seven fixes landed for the beta. Per the beta-as-RC convention this is the commit intended to ship as stable v0.13.0 after small-group testing. Embedded Cogworks-1.0 is bumped from `v0.13.2` to **`v0.15.0`** (library MINOR 19 → 30) — additive-only across that range (new primitives such as `CreateAppearanceTab`, `CreateTaskProgress`, `CreateStepper`, `ShowLoading`; no removals), so backward-compatible with FlipQueue's current usage.
+Release candidate for **v0.13.0** — the first beta on this line, consolidating alpha1–alpha4 plus seven fixes landed for the beta. Per the beta-as-RC convention this is the commit intended to ship as stable v0.13.0 after small-group testing. Embedded Cogworks-1.0 is bumped from `v0.13.2` to **`v0.16.0`** (library MINOR 19 → 31) — additive-only across that range (new primitives such as `CreateAppearanceTab`, `CreateTaskProgress`, `CreateStepper`, `ShowLoading`; no removals). FlipQueue's UI already calls several v0.14.x-era primitives, so this also realigns the pin with the code's actual dependency surface. This is the Cogworks build the beta was smoke-tested against.
 
 The `## Interface` in `flipqueue.toc` moves from `120005` to **`120007`** for the WoW 12.0.7 client (suite-wide chronoforge CF-12 bump).
 

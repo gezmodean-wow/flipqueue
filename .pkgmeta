@@ -23,7 +23,7 @@ manual-changelog:
 externals:
   Libs/Cogworks-1.0:
     url: https://github.com/gezmodean-wow/cogworks.git
-    tag: v0.15.0
+    tag: v0.16.0
     path: Cogworks-1.0
 
 # CurseForge / Wago dependency relations. Mirrors the toc's
