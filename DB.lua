@@ -194,6 +194,15 @@ function ns:InitDB()
     -- flows into task expectedPrice during /fq generate. See
     -- ns:ResolveFPPrice in Import.lua. "listing" preserves prior behavior.
     if db.settings.fpPriceSource == nil then db.settings.fpPriceSource = "listing" end
+    -- Sales-log retention (FQ-214). Logging is on by default (backward
+    -- compatible). salesRetentionDays mirrors the previous hardcoded 30-day
+    -- prune; 0 means "never prune by age". salesRetentionCount is an optional
+    -- entry cap (nil = unlimited) applied after the age prune, newest kept.
+    if db.settings.salesLoggingEnabled == nil then db.settings.salesLoggingEnabled = true end
+    if db.settings.salesRetentionDays == nil then db.settings.salesRetentionDays = 30 end
+    -- salesRetentionCount intentionally defaults to nil (unlimited); only set
+    -- when the player opts into a count cap, so existing installs are unchanged.
+
     -- Debug messages (off by default)
     if db.settings.debugMessages == nil then db.settings.debugMessages = false end
     -- Master scope flags (#148). Re-applied here so existing installs that
@@ -357,21 +366,44 @@ function ns:CleanupLegacyData()
         end
     end
 
-    -- 3) Clean up old log entries: remove "collected" entries older than 30 days
+    -- 3) Clean up old log entries (FQ-214). Retention is player-configurable:
+    --    salesRetentionDays  (default 30; 0 = never prune by age)
+    --    salesRetentionCount (default nil = unlimited; cap on total entries)
+    -- Age prune only touches "collected" entries (active/expired auctions are
+    -- live state, not history). The count cap, when set, trims the oldest
+    -- entries regardless of status so the table can't exceed the chosen size.
     if db.log then
         local now = time()
-        local thirtyDays = 30 * 24 * 3600
+        local s = db.settings or {}
+        local retentionDays = s.salesRetentionDays
+        if retentionDays == nil then retentionDays = 30 end
         local removedLogs = 0
-        for i = #db.log, 1, -1 do
-            local entry = db.log[i]
-            if entry.auctionStatus == "collected" then
-                local entryTime = entry.soldAt or entry.postedAt or 0
-                if entryTime > 0 and (now - entryTime) > thirtyDays then
-                    table.remove(db.log, i)
-                    removedLogs = removedLogs + 1
+
+        if retentionDays > 0 then
+            local maxAge = retentionDays * 24 * 3600
+            for i = #db.log, 1, -1 do
+                local entry = db.log[i]
+                if entry.auctionStatus == "collected" then
+                    local entryTime = entry.soldAt or entry.postedAt or 0
+                    if entryTime > 0 and (now - entryTime) > maxAge then
+                        table.remove(db.log, i)
+                        removedLogs = removedLogs + 1
+                    end
                 end
             end
         end
+
+        -- Count cap: keep the newest salesRetentionCount entries. Entries are
+        -- appended chronologically, so the oldest sit at the front.
+        local cap = s.salesRetentionCount
+        if type(cap) == "number" and cap > 0 and #db.log > cap then
+            local excess = #db.log - cap
+            for _ = 1, excess do
+                table.remove(db.log, 1)
+                removedLogs = removedLogs + 1
+            end
+        end
+
         if removedLogs > 0 then
             cleaned.oldLogs = removedLogs
         end
