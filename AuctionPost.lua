@@ -904,8 +904,8 @@ function AuctionPost:PostItem(scanResult, callback)
         C_AuctionHouse.PostItem(itemLoc, duration, quantity, nil, unitPrice)
     end
 
-    -- Log the posting
-    if ns.db then
+    -- Log the posting (gated on salesLoggingEnabled, FQ-214)
+    if ns.db and ns.db.settings.salesLoggingEnabled ~= false then
         local now = time()
         local charKey = ns:GetCharKey()
         local durationHours = DURATION_HOURS[duration] or 48

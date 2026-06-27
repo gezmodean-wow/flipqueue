@@ -214,8 +214,10 @@ function Tracker:CheckOwnedAuctions()
         local slots = accountedFor[id] or 0
         if slots > 0 then
             accountedFor[id] = slots - 1
-        else
-            -- Orphan: no active log entry for this owned auction.
+        elseif ns.db.settings.salesLoggingEnabled ~= false then
+            -- Orphan: no active log entry for this owned auction. Skipped
+            -- entirely when sales logging is disabled (FQ-214) so the log
+            -- isn't repopulated behind the player's back.
             local speciesID = auction.itemKey.battlePetSpeciesID
             local isPet = speciesID and speciesID > 0
             local auctionKey = isPet

@@ -396,7 +396,7 @@ end
 --------------------------
 
 -- Section ordering for reflow
-local sectionOrder = { "automation", "imports", "items", "gold", "auctionhouse", "notifications", "miniview", "toolbox", "data", "deletedchars", "multiaccount" }
+local sectionOrder = { "automation", "imports", "items", "gold", "auctionhouse", "notifications", "miniview", "toolbox", "saleslog", "data", "deletedchars", "multiaccount" }
 
 -- Rebuild the pooled row list inside the "Deleted Characters" section.
 -- Keeps the section height in sync with how many tombstones exist. Called
@@ -1685,6 +1685,53 @@ function UI:CreateSettingsPanel(parent)
     ------------------------------------------------
     -- Section: Data Management
     ------------------------------------------------
+    ------------------------------------------------
+    -- Section: Sales Log (FQ-214)
+    ------------------------------------------------
+    local secSalesLog = CreateCollapsibleSection(content, y, "saleslog",
+        "Sales Log",
+        "Record sales, history retention")
+    sc = secSalesLog.content
+    sy = 0
+
+    settingsWidgets.salesLoggingEnabled, h = CreateSettingsCheckbox(sc, sy,
+        "Record sales to the log",
+        "When on, every post, sale, expire, and cancel is recorded in the activity log and reconciled for profit accounting. Turn off to stop new entries — existing history is kept.",
+        "salesLoggingEnabled")
+    sy = sy - h - ITEM_SPACING
+
+    local retentionDayOpts = {
+        {value = 7,   label = "7 days"},
+        {value = 14,  label = "14 days"},
+        {value = 30,  label = "30 days"},
+        {value = 60,  label = "60 days"},
+        {value = 90,  label = "90 days"},
+        {value = 365, label = "1 year"},
+        {value = 0,   label = "Never (keep all)"},
+    }
+    settingsWidgets.salesRetentionDays, h = CreateSettingsDropdown(sc, sy,
+        "Keep history for",
+        "Collected sales older than this are pruned automatically. 'Never' disables age-based pruning.",
+        "salesRetentionDays", retentionDayOpts)
+    sy = sy - h - ITEM_SPACING
+
+    -- nil value = unlimited (matches the DB default; no count cap applied).
+    local retentionCountOpts = {
+        {value = nil,   label = "Unlimited"},
+        {value = 500,   label = "500 entries"},
+        {value = 1000,  label = "1,000 entries"},
+        {value = 2500,  label = "2,500 entries"},
+        {value = 5000,  label = "5,000 entries"},
+        {value = 10000, label = "10,000 entries"},
+    }
+    settingsWidgets.salesRetentionCount, h = CreateSettingsDropdown(sc, sy,
+        "Max entries kept",
+        "Hard cap on total log size — when exceeded, the oldest entries are removed. 'Unlimited' keeps everything within the time window above.",
+        "salesRetentionCount", retentionCountOpts)
+    sy = sy - h - ITEM_SPACING
+
+    secSalesLog.contentHeight = math.abs(sy)
+
     local secData = CreateCollapsibleSection(content, y, "data",
         "Data Management",
         "Clear inventory, imports, logs, do-not-track")
@@ -2386,6 +2433,18 @@ function UI:RefreshSettings()
     end
     if settingsWidgets.fpPriceSource then
         settingsWidgets.fpPriceSource:SetValue(ns.db.settings.fpPriceSource or "listing")
+    end
+    -- Sales Log (FQ-214)
+    if settingsWidgets.salesLoggingEnabled then
+        settingsWidgets.salesLoggingEnabled:SetChecked(ns.db.settings.salesLoggingEnabled ~= false)
+    end
+    if settingsWidgets.salesRetentionDays then
+        local d = ns.db.settings.salesRetentionDays
+        if d == nil then d = 30 end
+        settingsWidgets.salesRetentionDays:SetValue(d)
+    end
+    if settingsWidgets.salesRetentionCount then
+        settingsWidgets.salesRetentionCount:SetValue(ns.db.settings.salesRetentionCount)
     end
     -- Batch size slider
     if settingsWidgets.batchSizeSlider then
