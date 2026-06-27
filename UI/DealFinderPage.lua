@@ -189,8 +189,14 @@ configPanel:SetScript("OnSizeChanged", function(self, w, h)
     rightCol:ClearAllPoints()
     rightCol:SetPoint("TOPLEFT", leftCol, "TOPRIGHT", 1, 0)
     rightCol:SetPoint("BOTTOMRIGHT", invPreviewPanel, "TOPRIGHT", 0, 0)
-    -- Preview panel: 65% of available height (dominant), min 120px
-    local previewH = math.max(120, math.floor((h - 36) * 0.65))
+    -- Preview panel: up to 65% of available height (dominant), min 120px, but
+    -- never so tall that the config columns get squeezed below the height the
+    -- right column needs (priority list + outlier controls + the two
+    -- checkboxes). Without this floor the lower checkboxes overflow downward
+    -- and draw on top of the inventory preview. (FQ-211 follow-up)
+    local avail = h - 36
+    local CONFIG_MIN_H = 300
+    local previewH = math.max(120, math.min(math.floor(avail * 0.65), avail - CONFIG_MIN_H))
     invPreviewPanel:SetHeight(previewH)
 end)
 
