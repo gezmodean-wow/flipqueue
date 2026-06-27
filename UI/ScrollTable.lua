@@ -8,6 +8,13 @@ ns.UI = UI
 local ROW_HEIGHT = 20
 local HEADER_HEIGHT = 22
 local COL_PADDING = 4
+-- Width reserved at the scroll frame's right edge for the vertical scroll bar.
+-- 22px matches UIPanelScrollFrameTemplate's bar (left offset 6 + bar width ~16),
+-- so the bar sits flush against the parent's right edge when shown.
+local SCROLLBAR_INSET = 22
+-- When the bar is hidden there's nothing to reserve room for; reclaim the strip
+-- down to a small margin so the rows don't leave a dead gap on the right. (FQ-212)
+local SCROLLBAR_HIDDEN_INSET = 2
 
 --------------------------
 -- ScrollTable Class
@@ -195,8 +202,9 @@ end
 
 function ScrollTableMixin:CreateScrollArea(parent)
     self.scrollFrame = CreateFrame("ScrollFrame", nil, parent, "UIPanelScrollFrameTemplate")
+    self._scrollParent = parent
     self.scrollFrame:SetPoint("TOPLEFT", self.headerFrame, "BOTTOMLEFT", 0, 0)
-    self.scrollFrame:SetPoint("BOTTOMRIGHT", parent, "BOTTOMRIGHT", -22, 0)
+    self:SetScrollbarInset(SCROLLBAR_INSET)
 
     self.content = CreateFrame("Frame", nil, self.scrollFrame)
     self.content:SetWidth(self.scrollFrame:GetWidth())
@@ -360,6 +368,15 @@ function ScrollTableMixin:UpdateHScrollThumb()
     end)
 end
 
+-- Re-anchor the scroll frame's right edge. Guarded so the OnSizeChanged ->
+-- UpdateScrollBarVisibility -> SetScrollbarInset path can't re-fire SetPoint and
+-- recurse: once the inset is applied the early return breaks the loop.
+function ScrollTableMixin:SetScrollbarInset(inset)
+    if self._appliedInset == inset then return end
+    self._appliedInset = inset
+    self.scrollFrame:SetPoint("BOTTOMRIGHT", self._scrollParent, "BOTTOMRIGHT", -inset, 0)
+end
+
 function ScrollTableMixin:UpdateScrollBarVisibility()
     local scrollBar = self.scrollBar
     if not scrollBar then return end
@@ -373,13 +390,16 @@ function ScrollTableMixin:UpdateScrollBarVisibility()
     local hasHScroll = totalColW > visibleW + 1
 
     if range and range <= 0.5 then
-        -- Nothing to scroll vertically: hide scroll bar (thumb + track)
+        -- Nothing to scroll vertically: hide scroll bar (thumb + track) and
+        -- reclaim the reserved strip so the rows extend flush to the edge.
         scrollBar:SetAlpha(0)
         scrollBar:EnableMouse(false)
+        self:SetScrollbarInset(SCROLLBAR_HIDDEN_INSET)
     else
-        -- Content overflows: show scroll bar
+        -- Content overflows: show scroll bar and reserve room so it sits flush.
         scrollBar:SetAlpha(1)
         scrollBar:EnableMouse(true)
+        self:SetScrollbarInset(SCROLLBAR_INSET)
     end
 
     -- Update horizontal scroll bar visibility
