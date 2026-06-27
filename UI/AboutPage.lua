@@ -73,6 +73,17 @@ function UI:GetDiagnostics()
           " connected=" .. tostring(ns.Sync.IsConnected and ns.Sync:IsConnected() or "?"))
     end
 
+    -- TSM posting-logic audit status (FQ-215). Surfacing the audited-vs-running
+    -- delta in the pasted blob means a "prices look off" report carries the
+    -- drift signal even if the player never noticed the one-time chat warning.
+    if ns.TSM and ns.TSM.IsAvailable and ns.TSM:IsAvailable() then
+        local running = ns.TSM.GetLoadedVersion and ns.TSM:GetLoadedVersion() or "?"
+        local audited = ns.TSM.GetAuditedVersion and ns.TSM:GetAuditedVersion() or "?"
+        local status = ns.TSM.GetAuditStatus and ns.TSM:GetAuditStatus() or "?"
+        L(string.format("TSM posting audit: running=%s audited=%s status=%s",
+            tostring(running), tostring(audited), tostring(status)))
+    end
+
     return table.concat(lines, "\n")
 end
 

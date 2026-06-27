@@ -36,7 +36,12 @@ local OP_CACHE_TTL = 300 -- 5 min for operations (they rarely change mid-session
 --      AuctioningOperation.Load for new fields we'd need in
 --      GetItemAuctioningOp.
 --   4. Update the comment in ResolvePostPrice with the audit date.
-local TSM_AUDITED_VERSION = "v4.14.66"
+--
+-- Audited 2026-06-27 against TSM v4.14.69: MakePostDecision (lines 417-512)
+-- and IsAuctionFiltered (269-285) are unchanged from v4.14.66 — identical line
+-- numbers and branch structure, no new required operation fields in Load. The
+-- local port in AuctionPost:ResolvePostPrice remains accurate (FQ-215).
+local TSM_AUDITED_VERSION = "v4.14.69"
 
 -- Fields we expect every Auctioning operation record to expose. If TSM
 -- renames one, GetItemAuctioningOp returns nil for it and ResolvePostPrice
@@ -103,6 +108,12 @@ function TSM:GetLoadedVersion()
     if not getMeta then return nil end
     local ok, ver = pcall(getMeta, "TradeSkillMaster", "Version")
     return ok and ver or nil
+end
+
+-- The TSM version our posting logic was last audited against. Exposed so the
+-- diagnostics blob can report the audited-vs-running delta (FQ-215).
+function TSM:GetAuditedVersion()
+    return TSM_AUDITED_VERSION
 end
 
 -- Returns "ok" | "ahead" | "behind" | "unknown" comparing the running TSM

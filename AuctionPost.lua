@@ -251,7 +251,7 @@ local function FormatShortAge(sec)
     return math.floor(sec / 86400) .. "d"
 end
 
--- TSM AuctioningOperation.IsAuctionFiltered (LibTSMSystem v4.14.66:269-285).
+-- TSM AuctioningOperation.IsAuctionFiltered (LibTSMSystem v4.14.69:269-285).
 -- Drops a listing before it can be considered the lowest competitor.
 local function IsAuctionFiltered(op, listing, opCtx)
     if not op then return false end
@@ -306,7 +306,7 @@ local function GetLowestFromListings(listings, op, opCtx)
     return nil
 end
 
--- AuctioningOperation.MakePostDecision (LibTSMSystem v4.14.66:417-506) port.
+-- AuctioningOperation.MakePostDecision (LibTSMSystem v4.14.69:417-512) port.
 -- Returns: { reason, buyoutCopper, seller, belowThreshold, aboveMaxSkip,
 --            invalidReason, skipWhitelist }
 local function MakePostDecision(itemKey, lowest, ctx)
@@ -399,9 +399,10 @@ local function ReadMatchWhitelist()
     return v ~= false
 end
 
--- Resolve the actual posting buyout for an item by mirroring TSM v4.14.66's
+-- Resolve the actual posting buyout for an item by mirroring TSM's
 -- AuctioningOperation.MakePostDecision (LibTSMSystem/Source/Operation/
--- AuctioningOperation.lua:417). Decision data:
+-- AuctioningOperation.lua:417). Last audited 2026-06-27 against TSM v4.14.69
+-- (decision tree unchanged since v4.14.66). Decision data:
 --   - normal/min/max prices via TSM's AuctioningOpNormal/Min/Max sources
 --     (TSM resolves the assigned op AND evaluates the expression in one
 --     call — no drift if the player changes ops or groups).
