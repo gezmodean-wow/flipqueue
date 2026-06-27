@@ -179,10 +179,26 @@ local function ProjectCharacterInventory(charData)
         end
     end
 
+    -- Character bank, modern retail (11.x bank-tab system): Syndicator stores
+    -- it under `bankTabs`, one entry per tab shaped { slots = {...}, name,
+    -- iconTexture, depositFlags }, and WIPES the legacy `bank` field to {} when
+    -- that system is active. Reading only `bank` (below) therefore found zero
+    -- bank items on current retail. Mirror ProjectWarband's `tab.slots or tab`
+    -- handling so the personal bank reaches the deal pool. (FQ-218)
+    if type(charData.bankTabs) == "table" then
+        for _, tab in pairs(charData.bankTabs) do
+            if type(tab) == "table" then
+                local slots = tab.slots or tab
+                if type(slots) == "table" then
+                    FoldContainerSlots(slots, items, "bank")
+                end
+            end
+        end
+    end
+
+    -- Legacy character bank (pre-bank-tabs saved data): `bank` is a list of
+    -- tab slot arrays, or a flat slot array. Still read for older caches.
     if type(charData.bank) == "table" then
-        -- bank is a list of tab slot arrays; we don't care which tab, just
-        -- that it's bank-side. If Syndicator exposes it as a flat array of
-        -- slots instead, FoldContainerSlots handles that too.
         for _, tab in pairs(charData.bank) do
             if type(tab) == "table" then
                 -- Heuristic: if the first entry looks like a slot (has
