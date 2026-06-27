@@ -115,6 +115,22 @@ function TodoList:ClearCurrent(reason)
     end
 end
 
+-- Clear the active list AND every queued (upcoming) list (FQ-213). Each list is
+-- archived (recoverable via the Regenerate track) before removal. The upcoming
+-- queue is emptied first so ClearCurrent's AdvanceQueue finds nothing to promote
+-- and leaves active nil -- otherwise a queued list gets promoted into active and
+-- survives the "clear all", which is the bug players reported.
+function TodoList:ClearAll(reason)
+    if not ns.db or not ns.db.todoLists then return end
+    reason = reason or "discarded"
+    local upcoming = ns.db.todoLists.upcoming
+    for i = #upcoming, 1, -1 do
+        if upcoming[i] then self:ArchiveList(upcoming[i], reason) end
+        table.remove(upcoming, i)
+    end
+    self:ClearCurrent(reason)
+end
+
 -- Duplicate a list by index. Returns new index or nil.
 function TodoList:DuplicateList(idx)
     if not ns.db or not ns.db.todoLists then return nil end

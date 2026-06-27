@@ -514,17 +514,40 @@ mainFrame.actionBtns.exportPoolToFP = CreateActionBtn("Export to FP", "Export fi
     end
 end)
 
-mainFrame.actionBtns.clearTodoList = CreateActionBtn("Clear All Lists", "Clear current and all queued to-do lists", function()
-    StaticPopupDialogs["FLIPQUEUE_CLEAR_TODOLIST"] = {
-        text = "Clear ALL to-do lists (current + queued)?",
-        button1 = "Yes",
-        button2 = "No",
+-- Clear current: the active list only. The next queued list is promoted in its
+-- place (ClearCurrent -> AdvanceQueue), so the queue is left intact. (FQ-213)
+mainFrame.actionBtns.clearTodoList = CreateActionBtn("Clear Current", "Clear only the active list (the next queued list, if any, is promoted in its place)", function()
+    StaticPopupDialogs["FLIPQUEUE_CLEAR_CURRENT"] = {
+        text = "Clear the current to-do list? Queued lists are kept (the next one is promoted).",
+        button1 = "Clear current",
+        button2 = "Cancel",
         OnAccept = function()
             if ns.TodoList then
                 ns.TodoList:ClearCurrent()
-                if ns.db and ns.db.todoLists then
-                    wipe(ns.db.todoLists.upcoming)
-                end
+                UI._generatorPreview = nil
+                ns:Print("Current to-do list cleared.")
+                UI:Refresh()
+                if UI.RefreshMini then UI:RefreshMini() end
+            end
+        end,
+        timeout = 0,
+        whileDead = true,
+        hideOnEscape = true,
+    }
+    StaticPopup_Show("FLIPQUEUE_CLEAR_CURRENT")
+end)
+
+-- Clear all: the active list and every queued list. ClearAll archives each one
+-- and empties the queue before clearing active, so nothing is auto-promoted and
+-- no list survives. (FQ-213)
+mainFrame.actionBtns.clearAllTodoLists = CreateActionBtn("Clear All", "Clear the active list AND every queued list", function()
+    StaticPopupDialogs["FLIPQUEUE_CLEAR_ALL_LISTS"] = {
+        text = "Clear ALL to-do lists (current + every queued list)?",
+        button1 = "Clear all",
+        button2 = "Cancel",
+        OnAccept = function()
+            if ns.TodoList then
+                ns.TodoList:ClearAll()
                 UI._generatorPreview = nil
                 ns:Print("All to-do lists cleared.")
                 UI:Refresh()
@@ -535,7 +558,7 @@ mainFrame.actionBtns.clearTodoList = CreateActionBtn("Clear All Lists", "Clear c
         whileDead = true,
         hideOnEscape = true,
     }
-    StaticPopup_Show("FLIPQUEUE_CLEAR_TODOLIST")
+    StaticPopup_Show("FLIPQUEUE_CLEAR_ALL_LISTS")
 end)
 
 mainFrame.actionBtns.auctBuyList = CreateActionBtn("Buy List", "Refresh the Auctionator buy list from current buy tasks", function()

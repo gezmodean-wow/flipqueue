@@ -280,10 +280,11 @@ function UI:RefreshTodoPage()
     local hasAuctionator = type(Auctionator) == "table" and type(Auctionator.API) == "table"
         and type(Auctionator.API.v1) == "table"
     if hasBuyTasks and hasAuctionator then
-        UI._LayoutActionBtns(mainFrame.actionBtns.clearTodoList, mainFrame.actionBtns.rescan,
-            mainFrame.actionBtns.pullBank, mainFrame.actionBtns.auctBuyList)
+        UI._LayoutActionBtns(mainFrame.actionBtns.clearAllTodoLists, mainFrame.actionBtns.clearTodoList,
+            mainFrame.actionBtns.rescan, mainFrame.actionBtns.pullBank, mainFrame.actionBtns.auctBuyList)
     else
-        UI._LayoutActionBtns(mainFrame.actionBtns.clearTodoList, mainFrame.actionBtns.rescan, mainFrame.actionBtns.pullBank)
+        UI._LayoutActionBtns(mainFrame.actionBtns.clearAllTodoLists, mainFrame.actionBtns.clearTodoList,
+            mainFrame.actionBtns.rescan, mainFrame.actionBtns.pullBank)
     end
 
     -- Try TodoList first, fall back to queue-based data
