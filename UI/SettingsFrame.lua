@@ -670,11 +670,16 @@ local function RefreshToolboxSection()
     end
 
     -- Wire a row's up/down reorder pair. moveFn(dir) does the actual move.
+    -- Arrows are inline textures, not Unicode triangles (U+25B2/U+25BC) — the
+    -- default WoW font has no glyph for those and renders them as boxes, which
+    -- recurs all over the UI. An inline |T texture is font-independent.
+    local ARROW_UP   = "|TInterface\\Buttons\\Arrow-Up-Up:14:14:0:0|t"
+    local ARROW_DOWN = "|TInterface\\Buttons\\Arrow-Down-Up:14:14:0:0|t"
     local function EmitReorder(row, idx, total, moveFn)
-        StyleBtn(row.up, "\226\150\178", idx > 1, "normal", function()
+        StyleBtn(row.up, ARROW_UP, idx > 1, "normal", function()
             moveFn(-1); Rebuild()
         end)
-        StyleBtn(row.down, "\226\150\188", idx < total, "normal", function()
+        StyleBtn(row.down, ARROW_DOWN, idx < total, "normal", function()
             moveFn(1); Rebuild()
         end)
     end

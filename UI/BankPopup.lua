@@ -319,7 +319,7 @@ end
 
 -- Clickable section header. If sectionKey is provided, the row toggles
 -- the collapse state for that key on click and the popup re-renders.
--- A ▼/▶ marker indicates current state.
+-- A plus/minus texture marker indicates current state.
 local function AddSectionHeader(f, index, text, sectionKey)
     local row = GetOrCreateRow(f, index)
     row.icon:SetTexture(nil)
