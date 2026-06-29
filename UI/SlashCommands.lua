@@ -673,6 +673,18 @@ local function debugPerf()
         L("  AuctionScanCache:  " .. ns.AuctionScanCache:GetSize() .. " entries")
     end
 
+    -- Current-character projection cost (FQ-222). This is the path a TSM
+    -- post scan hammers via Syndicator BagCacheUpdate; high avg/refresh ms
+    -- here is the "lag while posting" signal. Counters reset on /reload, so
+    -- the protocol is: /reload, run a posting session, then /fq debug perf.
+    if ns.Scanner and ns.Scanner.GetProjPerf then
+        local p = ns.Scanner:GetProjPerf()
+        local avg = (p.refreshes > 0) and (p.totalMs / p.refreshes) or 0
+        L(string.format("  projection:        %d refresh(es), %.1f ms total, "
+            .. "%.2f ms avg, %.2f ms max (since load)",
+            p.refreshes, p.totalMs, avg, p.maxMs))
+    end
+
     if ns.AuctionAutoScan and ns.AuctionAutoScan.GetStats then
         local s = ns.AuctionAutoScan:GetStats()
         L(string.format("  inflight scans:    %d queued, %d inflight",

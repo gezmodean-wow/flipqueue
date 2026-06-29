@@ -1,5 +1,26 @@
 # Changelog
 
+## v0.13.0-beta2
+
+Second release candidate on the v0.13.0 line. Single-issue rev: it fixes the posting-time lag regression reported on beta1 (FQ-222). Per the beta-as-RC convention this is the commit intended to ship as stable v0.13.0 once the perf fix is confirmed in the field. Embedded Cogworks-1.0 stays at **`v0.16.0`** (MINOR 31); `## Interface` stays at `120007`.
+
+### FQ-222: Heavy lag while posting items
+
+FQ-218 (beta1) correctly fixed character-bank visibility by folding `charData.bankTabs` into `ProjectCharacterInventory` (`Scanner.lua`). The side effect: the per-character projection now walks **bags + the entire character bank** instead of bags alone (the legacy `bank` field was wiped to `{}` on modern retail, so pre-218 the bank fold was a no-op). A TSM post scan fires `BAG_UPDATE` per posted auction → Syndicator emits `BagCacheUpdate` → FlipQueue's 0.3s-debounced `RefreshCurrentCharacterFromSyndicator` rebuilds the projection ~every 0.3s. Two costs scaled with the now-much-larger item set and ran every tick during a post burst:
+
+- **Per-item info storm.** `FoldContainerSlots` rebuilt every item entry from scratch each pass, calling `C_Item.GetItemInfo` + `GetDetailedItemLevelInfo` (and a second `ParseItemLink`) per unique item — hundreds of API calls every 0.3s for a stocked flipper's bank, all returning identical results.
+- **Quadratic enrichment.** `EnrichDealsFromInventory` ran on every refresh as `O(incomplete imports × scanned items)`, with "scanned items" now including the whole bank.
+
+Fixes:
+
+- **Memoized item metadata** (`ItemLookup.lua`): new `ItemLookup:GetItemMeta(itemKey, itemLink)` caches the stable fields (`name`, `ilvl`, `bindType`, parsed `itemID`/`bonusIDs`/`modifiers`) by itemKey. Cached only once item data has actually loaded — a cold `Unknown`/`ilvl=0` placeholder is returned but not cached, so a later pass re-resolves it (mirrors `ItemBindings:IsWarbound`). `FoldContainerSlots` now reads through it, so the `GetItemInfo`/`GetDetailedItemLevelInfo` calls fire once per item per session instead of once per item per refresh. `ItemLookup:ClearCache` wipes both caches. This also speeds the PLAYER_LOGIN bulk alt projection (FQ-137 lineage).
+- **Enrichment early-out + index** (`Scanner.lua`): `EnrichDealsFromInventory` returns immediately when no import is missing bonus-ID data (the steady-state case), and when work is needed it indexes the scanned set by numeric ID and lowercased name for O(1) resolution — collapsing the old nested scan from `O(imports × items)` to `O(imports + items)`. Behavior is otherwise unchanged.
+
+### Profiling instrumentation
+
+- `Scanner._projPerf` counts current-char projection refreshes and the wall time spent in `WriteProjectedInventory` via `debugprofilestop()` (no `scriptProfile` CVar required), exposed as `Scanner:GetProjPerf` / `Scanner:ResetProjPerf`. Counters reset on `/reload`.
+- `/fq debug perf` (`UI/SlashCommands.lua`) gains a `projection:` line reporting refresh count, total / avg / max ms since load. Protocol for a clean before/after: `/reload`, run a posting session, `/fq debug perf`. The existing per-addon `flipqueue` CPU line (via `GetAddOnCPUUsage`, requires `/console scriptProfile 1`) remains the apples-to-apples metric for comparing beta1 vs beta2 since both builds report it.
+
 ## v0.13.0-beta1
 
 Release candidate for **v0.13.0** — the first beta on this line, consolidating alpha1–alpha4 plus seven fixes landed for the beta. Per the beta-as-RC convention this is the commit intended to ship as stable v0.13.0 after small-group testing. Embedded Cogworks-1.0 is bumped from `v0.13.2` to **`v0.16.0`** (library MINOR 19 → 31) — additive-only across that range (new primitives such as `CreateAppearanceTab`, `CreateTaskProgress`, `CreateStepper`, `ShowLoading`; no removals). FlipQueue's UI already calls several v0.14.x-era primitives, so this also realigns the pin with the code's actual dependency surface. This is the Cogworks build the beta was smoke-tested against.

@@ -6,6 +6,20 @@ The engineering-detail companion lives in `CHANGELOG.md` (commit-readerese — f
 
 ---
 
+## v0.13.0-beta2
+
+A focused follow-up to beta1 that fixes the heavy lag some of you hit while posting auctions.
+
+### Posting is smooth again
+
+In beta1, the same change that made your character bank's items show up in deals also made FlipQueue re-read your entire bank every time an item left your bags — and during a TSM posting run that happens dozens of times in a few seconds, causing the stutter. FlipQueue now remembers each item's details instead of re-reading them on every change, and skips work it doesn't need to do mid-post. Your bank still counts toward your deals exactly as it did in beta1 — it just no longer costs you frames while posting.
+
+If you want to see the difference yourself: type `/reload`, do a posting run, then `/fq debug perf` and look at the `projection:` line — the average time per refresh is the number that was high before.
+
+### Everything else from v0.13.0
+
+Nothing else changed from beta1 — see the v0.13.0-beta1 notes below for the full list of what's new since v0.12.0.
+
 ## v0.13.0-beta1
 
 The release candidate for v0.13.0. This pulls together everything from the recent test builds and adds a round of fixes — including better handling of FlippingPal inventory scans, a clearer way to clear your to-do lists, and support for the latest WoW client and TradeSkillMaster.

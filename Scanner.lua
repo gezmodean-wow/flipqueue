@@ -27,42 +27,71 @@ ns.Scanner = Scanner
 local function EnrichDealsFromInventory(scannedItems)
     if not ns.db or not ns.db.imports or not ns.db.imports.fpScanner then return end
 
+    -- Collect the imports still missing bonus-ID data. In steady state
+    -- (everything already enriched) this stays nil and we return before
+    -- touching the scanned-items set. This path runs on every BagCacheUpdate
+    -- refresh, which a TSM post scan fires ~every 0.3s — so the common-case
+    -- early-out matters (FQ-222).
+    local incomplete
     for _, queueItem in pairs(ns.db.imports.fpScanner) do
-        local queueNumID = tonumber(queueItem.itemID) or tonumber((queueItem.itemKey or ""):match("^(%d+)"))
-        local queueName = (queueItem.name or ""):lower()
-        local queueHasBonuses = queueItem.itemKey and queueItem.itemKey:match("^[^;]*;([^;]*)") or ""
-
+        local queueNumID = tonumber(queueItem.itemID)
+            or tonumber((queueItem.itemKey or ""):match("^(%d+)"))
+        local queueHasBonuses = queueItem.itemKey
+            and queueItem.itemKey:match("^[^;]*;([^;]*)") or ""
         if queueHasBonuses == "" and queueNumID then
-            for key, itemData in pairs(scannedItems) do
-                local scannedNumID = tonumber((key:match("^(%d+)")))
-                local scannedBonuses = key:match("^[^;]*;([^;]*)") or ""
-                local nameMatch = queueName ~= "" and itemData.name
-                    and itemData.name:lower() == queueName
+            incomplete = incomplete or {}
+            incomplete[#incomplete + 1] = {
+                item  = queueItem,
+                numID = queueNumID,
+                name  = (queueItem.name or ""):lower(),
+            }
+        end
+    end
+    if not incomplete then return end
 
-                if (scannedNumID and scannedNumID == queueNumID) or nameMatch then
-                    if scannedBonuses ~= "" then
-                        queueItem.itemKey = key
-                        queueItem.bonusIDs = itemData.bonusIDs
-                        queueItem.modifiers = itemData.modifiers
+    -- Index the scanned items by numeric ID and by lowercased name so each
+    -- incomplete import resolves with O(1) lookups. The previous nested scan
+    -- was O(incomplete imports × scanned items) — quadratic, and FQ-218 grew
+    -- the scanned set to include the whole character bank (FQ-222).
+    local byID, byName = {}, {}
+    for key, itemData in pairs(scannedItems) do
+        local scannedNumID = tonumber((key:match("^(%d+)")))
+        if scannedNumID and byID[scannedNumID] == nil then
+            byID[scannedNumID] = { key = key, data = itemData }
+        end
+        local nm = itemData.name and itemData.name:lower()
+        if nm and nm ~= "" and byName[nm] == nil then
+            byName[nm] = { key = key, data = itemData }
+        end
+    end
+
+    for _, want in ipairs(incomplete) do
+        local match = byID[want.numID]
+        if not match and want.name ~= "" then match = byName[want.name] end
+        if match then
+            local queueItem = want.item
+            local key, itemData = match.key, match.data
+            local scannedBonuses = key:match("^[^;]*;([^;]*)") or ""
+            if scannedBonuses ~= "" then
+                queueItem.itemKey = key
+                queueItem.bonusIDs = itemData.bonusIDs
+                queueItem.modifiers = itemData.modifiers
+            end
+            if not queueItem.icon and itemData.icon then
+                queueItem.icon = itemData.icon
+            end
+            if (not queueItem.name or queueItem.name == "") and itemData.name then
+                queueItem.name = itemData.name
+            end
+            if not queueItem.quality or queueItem.quality == "" then
+                local numID = tonumber(itemData.itemID)
+                if numID and numID > 0 then
+                    local ok, _, _, q = pcall(C_Item.GetItemInfo, numID)
+                    if ok and q then
+                        local qualityNames = {[0]="Poor",[1]="Common",[2]="Uncommon",
+                            [3]="Rare",[4]="Epic",[5]="Legendary"}
+                        queueItem.quality = qualityNames[q] or ""
                     end
-                    if not queueItem.icon and itemData.icon then
-                        queueItem.icon = itemData.icon
-                    end
-                    if (not queueItem.name or queueItem.name == "") and itemData.name then
-                        queueItem.name = itemData.name
-                    end
-                    if not queueItem.quality or queueItem.quality == "" then
-                        local numID = tonumber(itemData.itemID)
-                        if numID and numID > 0 then
-                            local ok, _, _, q = pcall(C_Item.GetItemInfo, numID)
-                            if ok and q then
-                                local qualityNames = {[0]="Poor",[1]="Common",[2]="Uncommon",
-                                    [3]="Rare",[4]="Epic",[5]="Legendary"}
-                                queueItem.quality = qualityNames[q] or ""
-                            end
-                        end
-                    end
-                    break
                 end
             end
         end
@@ -100,47 +129,27 @@ local function FoldContainerSlots(slots, items, location)
             if key then
                 local entry = items[key]
                 if not entry then
-                    local itemID, bonusIDs, modifiers = ns:ParseItemLink(link)
-                    local itemName
-                    local ilvl = 0
-                    local bindType = 0
-                    if link:find("|Hbattlepet:") then
-                        itemName = link:match("|h%[(.-)%]|h")
-                    else
-                        -- C_Item.GetItemInfo returns (name, link, quality,
-                        -- ilvl, reqLevel, class, subclass, stackCount,
-                        -- equipLoc, texture, sellPrice, classID, subclassID,
-                        -- bindType, expacID, setID, isCraftingReagent).
-                        -- bindType is index 14 — downstream code filters on
-                        -- it (BoP=1, Quest=4, BtA=7, BtW=8) to exclude
-                        -- non-tradeable items from the deal pool.
-                        -- Single combined call: previously this fired
-                        -- C_Item.GetItemInfo twice per unique slot (once for
-                        -- bindType, once for name). Halving the call count
-                        -- materially reduces relog projection cost when many
-                        -- alts are bulk-projected at PLAYER_LOGIN (FQ-137
-                        -- followup).
-                        local ok, n, _, _, _, _, _, _, _, _, _, _, _, _, bt =
-                            pcall(C_Item.GetItemInfo, link)
-                        if ok then
-                            itemName = n
-                            if bt then bindType = bt end
-                        end
-                        if GetDetailedItemLevelInfo then
-                            local okIlvl, result = pcall(GetDetailedItemLevelInfo, link)
-                            if okIlvl and result then ilvl = tonumber(result) or 0 end
-                        end
-                    end
+                    -- Stable metadata (name/ilvl/bindType + parsed id/bonuses)
+                    -- is resolved and memoized by ItemLookup. Before FQ-222 the
+                    -- C_Item.GetItemInfo + GetDetailedItemLevelInfo calls ran
+                    -- here on every projection pass; a TSM post scan rebuilds
+                    -- the items table ~every 0.3s, so the whole bag+bank set
+                    -- paid those calls each tick. Now they fire once per item
+                    -- per session (until the cache clears).
+                    -- bindType (BoP=1, Quest=4, BtA=7, BtW=8) feeds the
+                    -- downstream "tradeable" filters that keep non-tradeable
+                    -- items out of the deal pool.
+                    local meta = ns.ItemLookup and ns.ItemLookup:GetItemMeta(key, link)
                     entry = {
-                        itemID     = itemID,
-                        name       = itemName or "Unknown",
-                        bonusIDs   = bonusIDs or "",
-                        modifiers  = modifiers or "",
+                        itemID     = meta and meta.itemID,
+                        name       = (meta and meta.name) or "Unknown",
+                        bonusIDs   = (meta and meta.bonusIDs) or "",
+                        modifiers  = (meta and meta.modifiers) or "",
                         quantity   = 0,
                         icon       = slot.iconTexture,
-                        ilvl       = ilvl,
+                        ilvl       = (meta and meta.ilvl) or 0,
                         locations  = {},
-                        bindType   = bindType,
+                        bindType   = (meta and meta.bindType) or 0,
                         isBound    = slot.isBound and true or false,
                         isWarbound = false,
                     }
@@ -464,6 +473,23 @@ function Scanner:GetBulkProjectStatus()
     return Scanner._bulkProjectStatus
 end
 
+-- Lightweight projection profiler for the current character (FQ-222). Counts
+-- current-char refreshes and the wall time spent in WriteProjectedInventory,
+-- which is the path a TSM post scan hammers via BagCacheUpdate. Uses
+-- debugprofilestop() (always available, microsecond precision) so it works
+-- without `/console scriptProfile`. Counters reset on /reload along with the
+-- rest of the addon's Lua state. Surfaced by `/fq debug perf`.
+Scanner._projPerf = { refreshes = 0, totalMs = 0, lastMs = 0, maxMs = 0 }
+
+function Scanner:GetProjPerf()
+    return Scanner._projPerf
+end
+
+function Scanner:ResetProjPerf()
+    local p = Scanner._projPerf
+    p.refreshes, p.totalMs, p.lastMs, p.maxMs = 0, 0, 0, 0
+end
+
 function Scanner:RefreshCurrentCharacterFromSyndicator()
     if not ns.db then return end
     if not (Syndicator and Syndicator.API and Syndicator.API.GetByCharacterFullName) then
@@ -492,7 +518,16 @@ function Scanner:RefreshCurrentCharacterFromSyndicator()
     ns.db.characters[fqKey] = ns.db.characters[fqKey] or {}
     ns.db.characters[fqKey].class = select(2, UnitClass("player"))
 
+    local t0 = debugprofilestop and debugprofilestop() or nil
     WriteProjectedInventory(fqKey, charData, "current")
+    if t0 then
+        local dt = debugprofilestop() - t0
+        local p = Scanner._projPerf
+        p.refreshes = p.refreshes + 1
+        p.totalMs = p.totalMs + dt
+        p.lastMs = dt
+        if dt > p.maxMs then p.maxMs = dt end
+    end
 
     -- Opportunistic pass over Syndicator's other known characters. Only
     -- touches alts whose realm we've already got a display-name alias for,
