@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.13.0
+
+Public stable release. **Same commit as `v0.13.0-beta2`** — no code changes between the RC and stable, per the beta-as-RC convention; this promotion is the docs finalization plus the release tag. Embedded Cogworks-1.0 is `v0.16.0` (MINOR 31); `## Interface` is `120007` (WoW 12.0.7).
+
+Since v0.12.0 this line shipped, across alpha1–alpha4 and beta1–beta2: the tools-drawer redesign on a registry model (FQ-005), Deal Finder posted-realm avoidance (FQ-205), the FlippingPal price-source preference and price-inflation diagnostic (FQ-177), the inventory-aware Regenerate track (FQ-187), item-level bounds in Auctionator exports (FQ-195), to-do list archiving (FQ-157), the SlashCommands/debug-console restructure onto Cogworks primitives (FQ-143), warbound-gear exclusion (FQ-173), FP inventory-scan classification (FQ-208), the sales-log pause/retention controls (FQ-214), the TSM v4.14.69 posting audit (FQ-215), the Interface 120007 bump, the beta1 UI fixes (FQ-211/212/213), and the beta2 posting-performance fix (FQ-222). Full engineering detail in the per-alpha/beta sections below.
+
 ## v0.13.0-beta2
 
 Second release candidate on the v0.13.0 line. Single-issue rev: it fixes the posting-time lag regression reported on beta1 (FQ-222). Per the beta-as-RC convention this is the commit intended to ship as stable v0.13.0 once the perf fix is confirmed in the field. Embedded Cogworks-1.0 stays at **`v0.16.0`** (MINOR 31); `## Interface` stays at `120007`.

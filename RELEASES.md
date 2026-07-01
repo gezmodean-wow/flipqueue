@@ -6,63 +6,50 @@ The engineering-detail companion lives in `CHANGELOG.md` (commit-readerese — f
 
 ---
 
-## v0.13.0-beta2
+## v0.13.0
 
-A focused follow-up to beta1 that fixes the heavy lag some of you hit while posting auctions.
+The big themes this release: a rebuilt Tools drawer you arrange yourself, a Deal Finder that steers around realms you're already posted on, more control over pricing and your to-do lists, and support for the latest WoW client and TradeSkillMaster. Everything below is new since v0.12.0.
 
-### Posting is smooth again
+### A Tools drawer you arrange yourself
 
-In beta1, the same change that made your character bank's items show up in deals also made FlipQueue re-read your entire bank every time an item left your bags — and during a TSM posting run that happens dozens of times in a few seconds, causing the stutter. FlipQueue now remembers each item's details instead of re-reading them on every change, and skips work it doesn't need to do mid-post. Your bank still counts toward your deals exactly as it did in beta1 — it just no longer costs you frames while posting.
+The Tools drawer is now yours to lay out — show or hide each tool, reorder them, and choose how each service is summoned. You can also add your own macros so the things you reach for most are one click away.
 
-If you want to see the difference yourself: type `/reload`, do a posting run, then `/fq debug perf` and look at the `projection:` line — the average time per refresh is the number that was high before.
+### Deal Finder gets smarter about where to sell
 
-### Everything else from v0.13.0
+- **Avoids realms you've already posted on**, steering each item toward a realm where you're not already competing with yourself — so you stop splitting your own listings.
+- **Pick which FlippingPal column** sets your expected price, so thin items stop importing with wildly inflated numbers.
+- The deal-priority controls no longer overlap the section beneath them, and list scrollbars sit flush instead of leaving a gap on shorter lists.
 
-Nothing else changed from beta1 — see the v0.13.0-beta1 notes below for the full list of what's new since v0.12.0.
+### More control over your to-do lists
 
-## v0.13.0-beta1
+- **Regenerate an existing list** without re-pasting your deals — rebuild in place when prices or inventory shift.
+- **Clear Current vs Clear All** are now separate buttons, each with a confirmation. "Clear all" no longer leaves a queued list behind.
+- **Finished lists are archived** instead of deleted, so you can rebuild from them later.
+- **Item-level filtering on Auctionator shopping lists**, so the right gear variant comes up first.
 
-The release candidate for v0.13.0. This pulls together everything from the recent test builds and adds a round of fixes — including better handling of FlippingPal inventory scans, a clearer way to clear your to-do lists, and support for the latest WoW client and TradeSkillMaster.
+### FlippingPal inventory scans read correctly
+
+When you scan your inventory on FlippingPal, the deals it sends back are "sell what you already own on another realm" — there's no buying involved. FlipQueue was mistakenly treating those as cross-realm flips and adding pointless buy steps. Now they're correctly recognized as sell deals.
+
+> Heads up on inventory scans: FlippingPal only returns the items it found a worthwhile sell on. If you send 300 items and get 40 back, that's normal — the rest just didn't have a good cross-realm sale.
+
+### Pause and trim your sales log
+
+A new **Sales Log** section in Settings lets you turn sales logging off, choose how long history is kept (from 7 days up to a year, or forever), and cap the total number of entries. Your existing history and the previous 30-day default are untouched unless you change them.
+
+### Smooth auction posting
+
+Posting a batch of auctions no longer causes lag or stutter, even with a heavily stocked bank. Your bank items still count toward your deals — FlipQueue just stops re-reading everything on every post.
 
 ### Updated for the latest WoW and TradeSkillMaster
 
 FlipQueue now targets the current WoW 12.0.7 client, so it no longer shows as out of date. Posting behavior has been re-checked against the newest TradeSkillMaster (v4.14.69) and continues to match it.
 
-### FlippingPal inventory scans read correctly
+### Smaller polish
 
-When you scan your inventory on FlippingPal, the deals it sends back are "sell what you already own on another realm" — there's no buying involved. FlipQueue was mistakenly treating those as cross-realm flips and adding pointless buy steps. Now they're correctly recognized as sell deals, so your list reflects what you actually need to do.
-
-> Heads up on inventory scans: FlippingPal only returns the items it found a worthwhile sell on. If you send 300 items and get 40 back, that's normal — the other items just didn't have a good cross-realm sale. FlipQueue sends your whole inventory; what comes back is FlippingPal's call.
-
-### Pause and trim your sales log
-
-A new **Sales Log** section in Settings lets you:
-
-- **Turn sales logging off** if you don't want FlipQueue recording every post and sale (it's on by default).
-- **Choose how long history is kept** — from 7 days up to a year, or forever.
-- **Cap the total number of entries** so the log can't grow without bound.
-
-Your existing history and the previous 30-day default are untouched unless you change them.
-
-### Clearer to-do list clearing
-
-The To-Do screen now has two separate buttons: **Clear Current** (just the list you're working) and **Clear All** (every list, including queued ones). Previously "Clear all" could leave a queued list behind — that's fixed, and each button confirms before clearing. Cleared lists are still recoverable from your history.
-
-### Deal Finder polish
-
-- The deal-priority controls no longer overlap the section beneath them when several priorities are shown.
-- List scrollbars sit flush against the edge instead of leaving a gap on shorter lists.
-
-### Everything else in v0.13.0 (since v0.12.0)
-
-If you're coming from the last stable release, this version also brings:
-
-- **A rebuilt Tools drawer** you arrange yourself — show, hide, reorder, set how each service summons, and add your own macros.
-- **Deal Finder avoids realms you've already posted on**, steering each item to a realm you're not already selling it on.
-- **Pick which FlippingPal column** sets your expected price, to stop thin items from importing wildly inflated.
-- **A Regenerate track** that rebuilds an existing to-do list without re-pasting your deals.
-- **Item-level filtering on Auctionator shopping lists**, so the right gear variant comes up first.
-- **Old to-do lists are archived** instead of deleted when finished, so you can rebuild from them later.
+- Warbound gear stays out of auto-generated AH lists.
+- Routine confirmations now show as brief toasts instead of cluttering your chat.
+- Buy and sell rows are visually distinct in the mini overlay, and buy rows relabel themselves through the `[BUY]` → `[CHECK MAIL]` → `[DEPOSIT]` lifecycle.
 
 ## v0.13.0-alpha4
 
