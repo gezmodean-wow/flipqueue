@@ -4,7 +4,7 @@
 
 FlipQueue isn't here to replace the great tools you already use — it's built to augment them. TSM handles pricing and posting rules. Auctionator handles shopping and scanning. FlippingPal finds the deals. FlipQueue ties them all together into one workflow, so you spend less time managing alts and more time making gold.
 
-![FlipQueue main view: per-character to-do list with [POST], [BUY], and [CHECK MAIL] tasks](https://raw.githubusercontent.com/gezmodean-wow/flipqueue/master/docs/storefront/screenshots/01-todo.png)
+![FlipQueue main view: per-character to-do list with POST, BUY, and CHECK MAIL tasks](https://raw.githubusercontent.com/gezmodean-wow/flipqueue/master/docs/storefront/screenshots/01-todo.png)
 
 > **Requires [Syndicator](https://addons.wago.io/addons/syndicator)** — the cross-character inventory backbone FlipQueue reads. It installs automatically alongside FlipQueue.
 
@@ -92,7 +92,7 @@ Two master switches at the top of the settings page — **Manage my items** and 
 
 ![Settings page showing the Auto / Manual / Disabled tri-state controls and the Manage my items / Manage my gold master switches](https://raw.githubusercontent.com/gezmodean-wow/flipqueue/master/docs/storefront/screenshots/04-settings-tri-state.png)
 
-![Mini overlay showing the buy-task lifecycle: cyan [BUY], yellow [CHECK MAIL], orange [DEPOSIT], with the four-way title split at the top](https://raw.githubusercontent.com/gezmodean-wow/flipqueue/master/docs/storefront/screenshots/03-mini-view-lifecycle.png)
+![Mini overlay showing the buy-task lifecycle: cyan BUY, yellow CHECK MAIL, orange DEPOSIT, with the four-way title split at the top](https://raw.githubusercontent.com/gezmodean-wow/flipqueue/master/docs/storefront/screenshots/03-mini-view-lifecycle.png)
 
 ![Auctionator integration page showing the buy-list sync settings and the live FlipQueue - Buy shopping list](https://raw.githubusercontent.com/gezmodean-wow/flipqueue/master/docs/storefront/screenshots/06-auctionator-buylist.png)
 
