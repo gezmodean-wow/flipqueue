@@ -93,7 +93,7 @@ FlipQueue maintains two changelogs and a separate storefront-materials directory
 
 When tagging an alpha or beta: only `CHANGELOG.md` and `RELEASES.md` need touching. The storefront stays on whatever the last public release described.
 
-When tagging a public release (no `-alphaN` / `-betaN` suffix): also review `docs/storefront/description.md`, refresh screenshots if UI changed materially, then paste `description.md` into both project dashboards. The release commit updates `CHANGELOG.md` and finalizes the relevant section of `RELEASES.md`.
+When tagging a public release (no `-alphaN` / `-betaN` suffix): also review the two per-platform descriptions — `docs/curseforge-description.md` and `docs/wago-description.md` (same body copy; they differ only in addon links and the feedback link) — refresh screenshots if UI changed materially, then paste each into its own project dashboard (CurseForge file → CurseForge, Wago file → Wago). The release commit updates `CHANGELOG.md` and finalizes the relevant section of `RELEASES.md`.
 
 ## Cross-cog feature requests
 

@@ -4,7 +4,8 @@ Project-page assets for CurseForge and Wago. **Updated only on public releases**
 
 ## Files in this directory
 
-- **`description.md`** — full project description that goes in the CurseForge / Wago project page main content area. Source of truth for the pitch text. Copy-paste into both dashboards on each public release.
+- **`../curseforge-description.md`** — full project description for the **CurseForge** dashboard. Canonical source for the CurseForge pitch text.
+- **`../wago-description.md`** — full project description for the **Wago** dashboard. Canonical source for the Wago pitch text. Shares body copy with the CurseForge file, but addon links point at `addons.wago.io` and the feedback link points at GitHub. Keep the two in sync when editing shared copy.
 - **`short-description.md`** — one-line tagline shown in addon listings and search results. Same on both platforms.
 - **`screenshots/`** — current screenshot set referenced by the project pages. Numbered to indicate display order. Re-upload when UI changes materially.
 - **`faq.md`** *(to add)* — common Q&A for the project page. Currently TBD.
@@ -36,11 +37,11 @@ CurseForge has no description-update API ([CF-I-6366](https://curseforge-ideas.o
 
 When tagging a full public release (no `-alphaN` / `-betaN` suffix):
 
-1. **Review `description.md`** — does it still describe the addon accurately? Are the headline features still the right ones? Any new capabilities since the last public release that deserve mention?
+1. **Review `../curseforge-description.md` and `../wago-description.md`** — do they still describe the addon accurately? Are the headline features still the right ones? Any new capabilities since the last public release that deserve mention? Edit shared body copy in both; the files differ only in addon links (CurseForge URLs vs `addons.wago.io`) and the feedback link.
 2. **Update screenshots if UI changed** — drop new files in `screenshots/`, update the order numbers, note in the commit message which CurseForge / Wago slots they fill.
 3. **Review `RELEASES.md`** — is the section for the just-tagged version final? Does the prose describe what shipped, not what was attempted?
 4. **Tag the release.** Packager auto-uploads files, dependency relations, and the changelog tab.
-5. **Manual paste step** — open the CurseForge dashboard for FlipQueue, edit the description, paste the contents of `description.md`. Save. Repeat on Wago.
+5. **Manual paste step** — open the CurseForge dashboard for FlipQueue, edit the description, paste the contents of `../curseforge-description.md`. Save. Then open the Wago dashboard and paste `../wago-description.md`.
 6. **Commit any updated screenshots** to this directory so the next release inherits the current state.
 
 For alpha and beta releases, skip steps 1, 2, and 5 — the project page stays on whatever the last public release described. Players running alphas already know they're testing pre-release builds.

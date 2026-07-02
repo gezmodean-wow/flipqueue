@@ -6,11 +6,13 @@ FlipQueue isn't here to replace the great tools you already use — it's built t
 
 ![FlipQueue main view: per-character to-do list with [POST], [BUY], and [CHECK MAIL] tasks](https://raw.githubusercontent.com/gezmodean-wow/flipqueue/master/docs/storefront/screenshots/01-todo.png)
 
+> **Requires [Syndicator](https://www.curseforge.com/wow/addons/syndicator)** — the cross-character inventory backbone FlipQueue reads. It installs automatically alongside FlipQueue.
+
 ---
 
 ## Step 1: Know What You Have
 
-The foundation of cross-realm flipping is knowing your inventory. FlipQueue tracks every tradeable item across all of your characters — bags, bank, and warbank — and keeps it updated in real time as items move around.
+The foundation of cross-realm flipping is knowing your inventory. Through Syndicator, FlipQueue tracks every tradeable item across all of your characters — bags, bank, and warbank — and keeps it updated in real time as items move around.
 
 - **Full cross-character inventory** — see every item you own in one place, with status badges showing what's assigned, posted, or sitting idle
 - **Character overview** — gold totals, task counts, auction stats, and which AH cluster each character belongs to
@@ -28,7 +30,7 @@ Once FlipQueue knows your inventory, it's time to find what's worth flipping.
 
 ### Deal Finder (Built-in)
 
-Powered by [TSM](https://www.curseforge.com/wow/addons/tradeskill-master) pricing data, the Deal Finder scans your entire inventory and finds items that are worth more on another realm's auction house. It auto-selects the best destination realm for each item based on profit margin — then lets you generate tasks with one click.
+Powered by [TSM](https://www.curseforge.com/wow/addons/tradeskill-master) pricing data, the Deal Finder scans your entire inventory and finds items that are worth more on another realm's auction house. It auto-selects the best destination realm for each item based on profit margin — and steers around realms where you already have that item posted, so you never split your own listings — then lets you generate tasks with one click.
 
 ![Deal Finder showing cross-realm price grid with profit columns and ilvl variant breakdown](https://raw.githubusercontent.com/gezmodean-wow/flipqueue/master/docs/storefront/screenshots/02-deal-finder.png)
 
@@ -116,6 +118,8 @@ Don't wait for deals — snipe them. Export your deal data from FlipQueue as AAA
 
 ## Other Features
 
+- **Customizable Tools drawer** — a quick-access drawer you arrange yourself: show, hide, and reorder the tools you use, choose how each service is summoned, and add your own macros
+- **Activity log & sales reconciliation** — every post, sale, expire, and cancel is logged and reconciled against TSM's CSV exports for accurate fee/profit accounting; pause logging or set retention limits in Settings
 - **Pause Automation** — drawer button that pauses auto-fire on bank open without disabling manual access. Drawer buttons stay clickable while paused
 - **Instance auto-pause** — automatically pauses bank ops while you're inside a raid, dungeon, arena, battleground, or scenario, so a stale queued op can't fire from an unsafe context
 - **About page** with installed version, embedded library version, current WoW build, and a one-click Copy Diagnostics button for bug reports
@@ -131,7 +135,7 @@ Don't wait for deals — snipe them. Export your deal data from FlipQueue as AAA
 
 ## Getting Started
 
-1. Install FlipQueue alongside [TradeSkillMaster](https://www.curseforge.com/wow/addons/tradeskill-master) and/or [Auctionator](https://www.curseforge.com/wow/addons/auctionator)
+1. Install FlipQueue — [Syndicator](https://www.curseforge.com/wow/addons/syndicator) (required) installs automatically. Add [TradeSkillMaster](https://www.curseforge.com/wow/addons/tradeskill-master) and/or [Auctionator](https://www.curseforge.com/wow/addons/auctionator) for the full experience
 2. Open FlipQueue with `/fq` or the minimap button
 3. Log into your characters and open your bank and warbank — FlipQueue scans and builds your inventory automatically
 4. Open the **Deal Finder** to scan for profitable flips, or import deals from [FlippingPal](https://flippingpal.com/?via=gezmodean) or an [Auctionator](https://www.curseforge.com/wow/addons/auctionator) shopping list
@@ -144,6 +148,7 @@ Don't wait for deals — snipe them. Export your deal data from FlipQueue as AAA
 ## FlipQueue in the Wild
 
 - [FlipQueue Overview by Boophie](https://www.youtube.com/watch?v=29F83q7ARqo)
+- [The Future of Flipping in World of Warcraft by Boophie](https://youtu.be/nEIWCnDLGfc?t=1035)
 <!-- - [Upcoming video title](URL) -->
 
 ---
