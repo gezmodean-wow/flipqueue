@@ -1,5 +1,27 @@
 # Changelog
 
+## v0.13.1-alpha1
+
+First alpha on the v0.13.1 line. Performance pass for large multi-character accounts (FQ-223): to-do generation, the per-refresh task-step pass, and the sales-log ceiling no longer let a big account freeze or bloat the client. Embedded Cogworks-1.0 stays at **`v0.16.0`** (MINOR 31); `## Interface` stays at `120007`.
+
+Reported by a 69-character user whose FlippingPal import (thousands of cross-realm deals, a 17.5k-entry sales log) hard-froze the client on import and again while checking mail / posting with TSM — badly enough to need a game restart. Three independent hot paths, all synchronous and superlinear:
+
+### FQ-223: To-do generation froze on large imports
+
+`TodoList:GenerateTodoList` (`TodoGenerator.lua`) ran one synchronous pass over every deal, and per deal:
+
+- **Repeated TSM lookups.** A cross-realm import lists one item once per target realm, so a single pool item recurs as many deals — each re-calling `GetItemAuctioningOp` + `IsBelowThreshold` (up to four TSM API calls). Now memoized by itemKey (`tsmOpCache` / `tsmThreshCache`) for the run, collapsing O(deals) → O(unique items). Behavior-preserving — results are stable within a generation.
+- **O(#tasks × pool) post-pass.** The "which pool items got no deals" scan was a nested `for task × for pool` loop (~2,400 × 1,700 for the reporter). Replaced with a one-time `poolIdxByKey` / `poolIdxByID` hash index → O(#tasks). Semantics preserved (items/rejected match by key; overflow by key-or-id, lowest index wins).
+- **Synchronous main loop.** Even optimized, a large import shouldn't block the frame. New `TodoList:GenerateTodoListAsync` runs the exact same generation inside a coroutine that yields every 150 deals via `C_Timer.After(0)`, with a determinate `cw:ShowLoading` progress banner. A guarded `coroutine.yield()` at loop-top (outside every pcall, so legal under WoW's Lua 5.1) makes the synchronous path a no-op. `UI:GenerateTodoListWithLoading` (`UI/Shared.lua`) centralizes the banner + async glue; the import auto-generate path (`UI/ImportPage.lua`) is converted. The interactive Generator-page callers stay synchronous for now (follow-up).
+
+### FQ-223: Posting / mail froze on large accounts
+
+`TodoList:RefreshTaskSteps` (`TodoList.lua`) called `IsItemInAccountInventory` and `FindItemHolder` **per task**, each re-walking every character's inventory (≈117k item entries for the reporter). It fires on `BAG_UPDATE_DELAYED` — which repeats continuously through a TSM post scan — and on `MAIL_SHOW`, so the cost was O(tasks × 117k) every tick. New `BuildAccountIndex()` builds the account inventory once per refresh into presence maps (`presKey/ID/Pet`) and per-item holder lists (`holdKey/ID/Pet`); both helpers become hash lookups. Built lazily — skipped entirely when every task's item is already on the acting character. O(tasks × 117k) → O(tasks + 117k). Verified equivalent to the old walk with a standalone Lua 5.1 harness: 400 randomized accounts plus fixed edge cases (numeric-ID variants, pets, `role="none"`, warbank-only, zero-quantity, `excludeChar`, consumed-exhaustion).
+
+### FQ-223: Sales-log count cap now defaults to a finite value
+
+The 30-day age prune only removes `collected` entries, so a heavy multi-character user accumulates an unbounded pile of active/recent rows (17.5k observed) that slows every log pass. `salesRetentionCount` (`DB.lua`) now defaults to **10,000** for installs that never chose a value. "Unlimited" is now stored as `0` rather than `nil` (`UI/SettingsFrame.lua` `retentionCountOpts`) so the default-init can distinguish a deliberate opt-out (kept) from a never-set install (capped once); the cap only prunes when `cap > 0`. Players who want everything can re-select Unlimited from Settings.
+
 ## v0.13.0
 
 Public stable release. **Same commit as `v0.13.0-beta2`** — no code changes between the RC and stable, per the beta-as-RC convention; this promotion is the docs finalization plus the release tag. Embedded Cogworks-1.0 is `v0.16.0` (MINOR 31); `## Interface` is `120007` (WoW 12.0.7).

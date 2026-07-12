@@ -147,17 +147,23 @@ local function TryAutoGenerateTodo()
     if not importAutoGenCheck:GetChecked() then return end
     if not ns.TodoList then return end
     local allocationOrder = UI:GetGenAllocationOrder()
-    local preview = ns.TodoList:GenerateTodoList("fpScanner", allocationOrder)
-    if preview and preview.items and #preview.items > 0 then
-        local count = #preview.items
-        local existingList = ns.TodoList:GetCurrentList()
-        if existingList then
-            ns.TodoList:CommitList(preview, "upcoming")
-        else
-            ns.TodoList:CommitList(preview, "replace")
-        end
-        ns:Print(ns.COLORS.CYAN .. "Auto-generated To-Do list with " .. count .. " tasks (replaced previous list).|r")
-    end
+    -- Async so a large import can't freeze the client while the list builds
+    -- (FQ-223). The commit + refresh move into the completion handler.
+    UI:GenerateTodoListWithLoading(importPage, "fpScanner", allocationOrder, nil,
+        function(preview)
+            if preview and preview.items and #preview.items > 0 then
+                local count = #preview.items
+                local existingList = ns.TodoList:GetCurrentList()
+                if existingList then
+                    ns.TodoList:CommitList(preview, "upcoming")
+                else
+                    ns.TodoList:CommitList(preview, "replace")
+                end
+                ns:Print(ns.COLORS.CYAN .. "Auto-generated To-Do list with " .. count .. " tasks (replaced previous list).|r")
+                UI:Refresh()
+                UI:RefreshMini()
+            end
+        end)
 end
 UI._tryAutoGenerateTodo = TryAutoGenerateTodo
 

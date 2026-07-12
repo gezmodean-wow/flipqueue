@@ -1220,51 +1220,85 @@ local function ExtractPetSpecies(key)
     return key:match("^pet:(%d+)") or key:match("^pet_(%d+)")
 end
 
--- Check if an inventory entry has quantity > 0
-local function InvHasQuantity(inv)
-    if not inv then return false end
+-- Sum an inventory entry's quantity (locations sum, else .quantity). A sum > 0
+-- is equivalent to the old InvHasQuantity presence test, and the total matches
+-- FindItemHolder's HasAvailable check.
+local function InvQuantity(inv)
+    if not inv then return 0 end
     if inv.locations then
-        for _, qty in pairs(inv.locations) do
-            if qty > 0 then return true end
-        end
-    elseif (inv.quantity or 0) > 0 then
-        return true
+        local total = 0
+        for _, qty in pairs(inv.locations) do total = total + qty end
+        return total
     end
-    return false
+    return inv.quantity or 0
 end
 
-local function IsItemInAccountInventory(itemKey, itemNumID)
-    local petSpecies = ExtractPetSpecies(itemKey)
-
-    for _, charData in pairs(ns.db.characters or {}) do
-        if charData.inventory and charData.inventory.items then
-            if InvHasQuantity(charData.inventory.items[itemKey]) then return true end
-            for k, invItem in pairs(charData.inventory.items) do
-                if k ~= itemKey then
-                    local kNumID = tonumber((k:gsub(";.*", "")))
-                    if itemNumID and kNumID == itemNumID then
-                        if InvHasQuantity(invItem) then return true end
-                    end
-                    -- Pet species match across formats
-                    if petSpecies and ExtractPetSpecies(k) == petSpecies then
-                        if InvHasQuantity(invItem) then return true end
+-- Build a one-pass index of the whole account's inventory so the per-task
+-- availability checks below become hash lookups instead of full 69-char x
+-- ~1700-item walks (FQ-223). RefreshTaskSteps used to call
+-- IsItemInAccountInventory / FindItemHolder once per task, each re-walking the
+-- entire account — O(tasks x 117k) on every BAG_UPDATE during a posting scan,
+-- which froze the client. We pay one 117k pass here instead.
+--
+--   pres{Key,ID,Pet}  — presence flags for IsItemInAccountInventory. Include
+--                       ALL characters (no role filter) + warbank, matching the
+--                       old function exactly.
+--   hold{Key,ID,Pet}  — per-item holder lists { {ck, qty}, ... } for
+--                       FindItemHolder. Characters only (role ~= "none"),
+--                       warbank excluded — the old function never returned it.
+--                       Per-item (not per-char-aggregated) so the qty used in
+--                       the availability check matches the old one-item check.
+local function BuildAccountIndex()
+    local idx = {
+        presKey = {}, presID = {}, presPet = {},
+        holdKey = {}, holdID = {}, holdPet = {},
+    }
+    local function addHold(map, k, ck, qty)
+        local lst = map[k]
+        if not lst then lst = {}; map[k] = lst end
+        lst[#lst + 1] = { ck = ck, qty = qty }
+    end
+    for ck, charData in pairs(ns.db.characters or {}) do
+        local items = charData.inventory and charData.inventory.items
+        if items then
+            local roleOK = (charData.role or "both") ~= "none"
+            for k, invItem in pairs(items) do
+                local qty = InvQuantity(invItem)
+                if qty > 0 then
+                    local numID = tonumber((k:gsub(";.*", "")))
+                    local species = ExtractPetSpecies(k)
+                    idx.presKey[k] = true
+                    if numID then idx.presID[numID] = true end
+                    if species then idx.presPet[species] = true end
+                    if roleOK then
+                        addHold(idx.holdKey, k, ck, qty)
+                        if numID then addHold(idx.holdID, numID, ck, qty) end
+                        if species then addHold(idx.holdPet, species, ck, qty) end
                     end
                 end
             end
         end
     end
-
+    -- Warbank feeds presence only (FindItemHolder never returned warbank).
     if ns.db.warbank and ns.db.warbank.items then
-        if InvHasQuantity(ns.db.warbank.items[itemKey]) then return true end
         for k, wb in pairs(ns.db.warbank.items) do
-            if k ~= itemKey then
-                local kNumID = tonumber((k:gsub(";.*", "")))
-                if itemNumID and kNumID == itemNumID and (wb.quantity or 0) > 0 then return true end
-                if petSpecies and ExtractPetSpecies(k) == petSpecies and (wb.quantity or 0) > 0 then return true end
+            if (wb.quantity or 0) > 0 then
+                idx.presKey[k] = true
+                local numID = tonumber((k:gsub(";.*", "")))
+                if numID then idx.presID[numID] = true end
+                local species = ExtractPetSpecies(k)
+                if species then idx.presPet[species] = true end
             end
         end
     end
+    return idx
+end
 
+local function IsItemInAccountInventory(idx, itemKey, itemNumID)
+    if idx.presKey[itemKey] then return true end
+    if itemNumID and idx.presID[itemNumID] then return true end
+    local petSpecies = ExtractPetSpecies(itemKey)
+    if petSpecies and idx.presPet[petSpecies] then return true end
     return false
 end
 
@@ -1275,67 +1309,39 @@ end
 -- consumed: optional table { "charKey:lname" -> qty } to track allocated quantities.
 -- itemName: item name for quantity tracking (required if consumed is provided).
 -- taskQty: quantity needed (default 1).
-local function FindItemHolder(itemKey, itemNumID, excludeChar, consumed, itemName, taskQty)
-    local petSpecies = ExtractPetSpecies(itemKey)
+local function FindItemHolder(idx, itemKey, itemNumID, excludeChar, consumed, itemName, taskQty)
     taskQty = taskQty or 1
+    local petSpecies = ExtractPetSpecies(itemKey)
+    local nameSuffix = (consumed and itemName) and (":" .. itemName:lower()) or nil
 
-    -- Helper: check if a character has enough unconsumed quantity of an item
-    local function HasAvailable(charKey, inv)
-        if not inv then return false end
-        local totalQty = 0
-        if inv.locations then
-            for _, qty in pairs(inv.locations) do totalQty = totalQty + qty end
-        elseif (inv.quantity or 0) > 0 then
-            totalQty = inv.quantity
-        end
-        if totalQty <= 0 then return false end
-        -- Check consumed quantities
-        if consumed and itemName then
-            local ckey = charKey .. ":" .. itemName:lower()
-            local used = consumed[ckey] or 0
-            if totalQty - used < taskQty then return false end
-        end
-        return true
-    end
-
-    -- Helper: mark quantity as consumed
-    local function Consume(charKey)
-        if consumed and itemName then
-            local ckey = charKey .. ":" .. itemName:lower()
-            consumed[ckey] = (consumed[ckey] or 0) + taskQty
-        end
-    end
-
-    for charKey, charData in pairs(ns.db.characters or {}) do
-        if charKey ~= excludeChar and (charData.role or "both") ~= "none"
-            and charData.inventory and charData.inventory.items then
-            -- Exact key
-            if HasAvailable(charKey, charData.inventory.items[itemKey]) then
-                Consume(charKey)
-                return charKey
-            end
-            -- Fallback matching
-            for k, invItem in pairs(charData.inventory.items) do
-                if k ~= itemKey then
-                    local kNumID = tonumber((k:gsub(";.*", "")))
-                    if itemNumID and kNumID == itemNumID then
-                        if HasAvailable(charKey, invItem) then
-                            Consume(charKey)
-                            return charKey
-                        end
-                    end
-                    if petSpecies and ExtractPetSpecies(k) == petSpecies then
-                        if HasAvailable(charKey, invItem) then
-                            Consume(charKey)
-                            return charKey
-                        end
-                    end
+    -- Scan a holder list (built by BuildAccountIndex) for the first character
+    -- with enough unconsumed quantity. Consuming here mirrors the old
+    -- per-character allocation so repeated calls don't over-assign one holder.
+    local function tryList(lst)
+        if not lst then return nil end
+        for _, e in ipairs(lst) do
+            if e.ck ~= excludeChar then
+                local avail = e.qty
+                local ckey
+                if nameSuffix then
+                    ckey = e.ck .. nameSuffix
+                    avail = avail - (consumed[ckey] or 0)
+                end
+                if avail >= taskQty then
+                    if ckey then consumed[ckey] = (consumed[ckey] or 0) + taskQty end
+                    return e.ck
                 end
             end
         end
+        return nil
     end
 
-    return nil
+    -- Exact key first (matches the old per-character exact-then-variant order),
+    -- then numeric-ID variants, then pet species.
+    local holder = tryList(idx.holdKey[itemKey])
+    if not holder and itemNumID then holder = tryList(idx.holdID[itemNumID]) end
+    if not holder and petSpecies then holder = tryList(idx.holdPet[petSpecies]) end
+    return holder
 end
 
 -- Find actual storage location of a task's item accessible to the current character.
@@ -1423,6 +1429,15 @@ function TodoList:RefreshTaskSteps()
             local ckey = charKey .. ":" .. task.name:lower()
             holderConsumed[ckey] = (holderConsumed[ckey] or 0) + (task.quantity or 1)
         end
+    end
+
+    -- Account-inventory index shared by the availability checks in both task
+    -- loops (FQ-223). Built once, lazily — a list where every task's item is
+    -- already on the acting character skips the 117k pass entirely.
+    local acctIndex
+    local function AccountIndex()
+        if not acctIndex then acctIndex = BuildAccountIndex() end
+        return acctIndex
     end
 
     -- One-time cleanup: strip "..." from targetRealm fields (FP website truncation)
@@ -1590,7 +1605,7 @@ function TodoList:RefreshTaskSteps()
 
                 if not actualSource then
                     -- Item not found for this character — check account-wide
-                    if not IsItemInAccountInventory(itemKey, itemNumID) then
+                    if not IsItemInAccountInventory(AccountIndex(), itemKey, itemNumID) then
                         -- Item not in saved DB — defer, don't skip
                         -- (saved inventory may be stale; bank/warbank not scanned yet)
                         if not task.deferredAt then
@@ -1600,7 +1615,7 @@ function TodoList:RefreshTaskSteps()
                     else
                         -- Item exists on account but not on this character —
                         -- find who has it and set blockedBy/depositFrom
-                        local holder = FindItemHolder(itemKey, itemNumID, charKey,
+                        local holder = FindItemHolder(AccountIndex(), itemKey, itemNumID, charKey,
                             holderConsumed, task.name, task.quantity)
                         if holder and task.blockedBy ~= holder then
                             task.blockedBy = holder
@@ -1719,7 +1734,7 @@ function TodoList:RefreshTaskSteps()
                 else
                     -- Item exists on account but not on assigned char —
                     -- find who has it and set blockedBy/depositFrom
-                    local holder = FindItemHolder(itemKey, itemNumID, task.assignedChar,
+                    local holder = FindItemHolder(AccountIndex(), itemKey, itemNumID, task.assignedChar,
                         holderConsumed, task.name, task.quantity)
                     if holder and task.blockedBy ~= holder then
                         task.blockedBy = holder

@@ -875,16 +875,51 @@ function TodoList:GenerateTodoList(source, allocationOrder, opts)
         SortDealsForAllocation(deals, allocationOrder)
     end
 
-    -- Track remaining pool quantities
+    -- Track remaining pool quantities. Also index the pool by itemKey and
+    -- numeric itemID so the post-pass "which pool items got no deals" scan is
+    -- a hash lookup instead of O(#tasks x pool) (FQ-223). Pool entries are
+    -- deduped one-per-key/id upstream, so first-seen wins is unambiguous.
     local poolRemaining = {}
+    local poolIdxByKey = {}
+    local poolIdxByID = {}
     for i, p in ipairs(pool) do
         poolRemaining[i] = p.totalQuantity
+        if p.itemKey and poolIdxByKey[p.itemKey] == nil then poolIdxByKey[p.itemKey] = i end
+        if p.itemID and poolIdxByID[p.itemID] == nil then poolIdxByID[p.itemID] = i end
     end
 
     local sellQtyMode = ns.db.settings.sellQtyMode or "tsm"
     local tsmEnabled = sellQtyMode == "tsm" and ns.TSM and ns.TSM.IsEnabled and ns.TSM:IsEnabled()
     local tsmSkipOnGenerate = ns.db.settings.tsmSkipOnGenerate ~= false
     local defaultQty = ns.db.settings.defaultSellQty or 1
+
+    -- Memoize per-item TSM lookups across deals (FQ-223). A cross-realm import
+    -- lists the same item once per target realm, so a single pool item recurs
+    -- as many deals — and each deal otherwise repeats identical GetItemAuctioningOp
+    -- / IsBelowThreshold API calls. Those calls dominate generation time on large
+    -- imports; caching by itemKey collapses them from O(deals) to O(unique items).
+    -- Results are stable for the lifetime of one generation, so this is
+    -- behavior-preserving. Caches are keyed by the exact itemKey queried, so the
+    -- poolItem-key-then-deal-key fallback below still caches each key independently.
+    local tsmOpCache = {}      -- itemKey -> op table, or false for a miss
+    local tsmThreshCache = {}  -- itemKey -> { belowThreshold, ahMin, threshold, opName }
+    local function GetOpCached(itemKey)
+        if not itemKey then return nil end
+        local cached = tsmOpCache[itemKey]
+        if cached ~= nil then return cached or nil end
+        local op
+        local ok, res = pcall(function() return ns.TSM:GetItemAuctioningOp(itemKey) end)
+        if ok and res then op = res end
+        tsmOpCache[itemKey] = op or false
+        return op
+    end
+    local function IsBelowThresholdCached(itemKey)
+        local c = tsmThreshCache[itemKey]
+        if c then return c[1], c[2], c[3], c[4] end
+        local below, ahMin, threshold, opName = ns.TSM:IsBelowThreshold(itemKey)
+        tsmThreshCache[itemKey] = { below, ahMin, threshold, opName }
+        return below, ahMin, threshold, opName
+    end
 
     local debugGen = ns.db.settings.debugMessages
     if debugGen then
@@ -898,7 +933,26 @@ function TodoList:GenerateTodoList(source, allocationOrder, opts)
         end
     end
 
+    -- Async chunking hook (FQ-223). When GenerateTodoList runs inside the
+    -- coroutine created by GenerateTodoListAsync, opts._asyncYield is true and
+    -- we hand control back to the frame every YIELD_EVERY deals so a large
+    -- import can never freeze the client. Synchronous callers leave
+    -- _asyncYield nil, making this a no-op. The yield sits at loop-top,
+    -- outside every pcall, so it never crosses a C-call boundary (which is
+    -- illegal in WoW's Lua 5.1).
+    local asyncYield = opts._asyncYield
+    local asyncProgress = opts._asyncProgress
+    local YIELD_EVERY = 150
+    local totalDeals = #deals
+    local dealNum = 0
+
     for _, deal in ipairs(deals) do
+        dealNum = dealNum + 1
+        if asyncYield and dealNum % YIELD_EVERY == 0 then
+            if asyncProgress then asyncProgress(dealNum, totalDeals) end
+            coroutine.yield()
+        end
+
         local isCrossRealmFlip = (deal.dealType == "flip" or deal.dealType == "buy")
             and deal.buyRealm and deal.buyRealm ~= ""
 
@@ -937,18 +991,10 @@ function TodoList:GenerateTodoList(source, allocationOrder, opts)
                 -- Post quantity: defaultSellQty as base, TSM postCap overrides
                 local qty = math.max(deal.quantity or 1, defaultQty)
                 if tsmEnabled then
-                    -- Try pool item key first, then deal key as fallback
-                    local op
-                    local ok1, res1 = pcall(function()
-                        return ns.TSM:GetItemAuctioningOp(poolItem.itemKey)
-                    end)
-                    if ok1 and res1 then
-                        op = res1
-                    elseif deal.itemKey and deal.itemKey ~= poolItem.itemKey then
-                        local ok2, res2 = pcall(function()
-                            return ns.TSM:GetItemAuctioningOp(deal.itemKey)
-                        end)
-                        if ok2 and res2 then op = res2 end
+                    -- Try pool item key first, then deal key as fallback (cached)
+                    local op = GetOpCached(poolItem.itemKey)
+                    if not op and deal.itemKey and deal.itemKey ~= poolItem.itemKey then
+                        op = GetOpCached(deal.itemKey)
                     end
                     if op and op.postCap then
                         local cap = tonumber(op.postCap)
@@ -967,7 +1013,7 @@ function TodoList:GenerateTodoList(source, allocationOrder, opts)
                     local failReason = nil
                     local tsmRejected = false
                     if tsmEnabled then
-                        local belowThreshold, ahMin, threshold, opName = ns.TSM:IsBelowThreshold(poolItem.itemKey)
+                        local belowThreshold, ahMin, threshold, opName = IsBelowThresholdCached(poolItem.itemKey)
                         -- Only fall back to deal.itemKey if poolItem had NO TSM data
                         -- at all (ahMin nil). The old logic fell back whenever
                         -- poolItem was "not below threshold" — which fires in TWO
@@ -984,7 +1030,7 @@ function TodoList:GenerateTodoList(source, allocationOrder, opts)
                         -- back in case (b). Also reassigns all four return values
                         -- so the failReason message isn't stale.
                         if not ahMin and deal.itemKey and deal.itemKey ~= poolItem.itemKey then
-                            belowThreshold, ahMin, threshold, opName = ns.TSM:IsBelowThreshold(deal.itemKey)
+                            belowThreshold, ahMin, threshold, opName = IsBelowThresholdCached(deal.itemKey)
                         end
                         if belowThreshold then
                             tsmRejected = true
@@ -1315,24 +1361,21 @@ function TodoList:GenerateTodoList(source, allocationOrder, opts)
         end
     end
 
-    -- Detect inventory items that had zero matching deals
-    -- Track which pool indices were touched by any deal (allocated, skipped, or overflow)
+    -- Detect inventory items that had zero matching deals.
+    -- Track which pool indices were touched by any deal (allocated, skipped, or
+    -- overflow) via the itemKey/itemID index built above. Mirrors the previous
+    -- nested-scan semantics: items/rejected match by key only; overflow matches
+    -- by key OR id, lowest index wins.
     local poolTouched = {}
-    for _, item in ipairs(preview.items) do
-        for idx, p in ipairs(pool) do
-            if p.itemKey == item.itemKey then poolTouched[idx] = true; break end
-        end
+    local function MarkTouched(itemKey, itemID)
+        local idx = itemKey and poolIdxByKey[itemKey] or nil
+        local byID = itemID and poolIdxByID[itemID] or nil
+        if byID and (not idx or byID < idx) then idx = byID end
+        if idx then poolTouched[idx] = true end
     end
-    for _, item in ipairs(preview.rejected) do
-        for idx, p in ipairs(pool) do
-            if p.itemKey == item.itemKey then poolTouched[idx] = true; break end
-        end
-    end
-    for _, item in ipairs(preview.overflow) do
-        for idx, p in ipairs(pool) do
-            if p.itemKey == item.itemKey or p.itemID == item.itemID then poolTouched[idx] = true; break end
-        end
-    end
+    for _, item in ipairs(preview.items) do MarkTouched(item.itemKey, nil) end
+    for _, item in ipairs(preview.rejected) do MarkTouched(item.itemKey, nil) end
+    for _, item in ipairs(preview.overflow) do MarkTouched(item.itemKey, item.itemID) end
     for idx, p in ipairs(pool) do
         if not poolTouched[idx] then
             table.insert(preview.noDeals, {
@@ -1382,4 +1425,48 @@ function TodoList:GenerateTodoList(source, allocationOrder, opts)
 
     -- Items are not pre-sorted here — the UI calls BuildDisplayGroups() for grouped display
     return preview
+end
+
+-- Async wrapper for GenerateTodoList (FQ-223). Runs the exact same generation
+-- inside a coroutine, handing control back to the frame every chunk so a large
+-- import can never freeze the client. Contract:
+--   onProgress(processed, total)  fires per chunk (for a determinate bar)
+--   onComplete(preview)           fires once with the finished preview — same
+--                                 shape/return as GenerateTodoList, honoring
+--                                 opts.listMode ("separate" -> {buy,sell})
+--   onComplete(nil)               fires if generation errored (caller should
+--                                 clear its loading UI and surface a failure)
+-- The heavy work (BuildItemPool, deal sort) still runs synchronously up front;
+-- only the per-deal allocation loop — the part that scaled with import size —
+-- is chunked. See UI:GenerateTodoListWithLoading for the loading-banner glue.
+function TodoList:GenerateTodoListAsync(source, allocationOrder, opts, onProgress, onComplete)
+    opts = opts or {}
+    -- Shallow-copy opts so the private async fields don't mutate the caller's table.
+    local asyncOpts = {}
+    for k, v in pairs(opts) do asyncOpts[k] = v end
+    asyncOpts._asyncYield = true
+    asyncOpts._asyncProgress = onProgress
+
+    local co = coroutine.create(function()
+        return self:GenerateTodoList(source, allocationOrder, asyncOpts)
+    end)
+
+    local function Pump()
+        local ok, result = coroutine.resume(co)
+        if not ok then
+            -- Generation errored inside the coroutine. Surface to the default
+            -- error handler and tell the caller so it can clear its loading UI.
+            if geterrorhandler then geterrorhandler()(result) end
+            if onComplete then onComplete(nil) end
+            return
+        end
+        if coroutine.status(co) == "dead" then
+            if onProgress then onProgress(1, 1) end
+            if onComplete then onComplete(result) end
+        else
+            C_Timer.After(0, Pump)
+        end
+    end
+
+    Pump()
 end

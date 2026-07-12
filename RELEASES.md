@@ -6,6 +6,14 @@ The engineering-detail companion lives in `CHANGELOG.md` (commit-readerese — f
 
 ---
 
+## v0.13.1-alpha1
+
+Performance fixes for large accounts. If you run a lot of characters and import big cross-realm lists, FlipQueue could freeze — sometimes badly enough to need a game restart — while importing, or while checking mail and posting. This build fixes the three causes:
+
+- **Importing a big list no longer freezes the game.** Building your to-do list from a large import now runs in the background with a progress bar instead of locking up the client, and it does far less duplicate work along the way.
+- **Checking mail and posting stays smooth.** Refreshing your to-do steps no longer re-scans your whole account's inventory for every task on every bag change — the part that made posting and mail lag pile up when you have lots of characters.
+- **Your sales log won't grow without limit.** "Max entries kept" now defaults to 10,000 instead of unlimited, so a long-running account's log can't balloon and slow things down. Want to keep everything? Set it back to Unlimited in Settings → Sales Log.
+
 ## v0.13.0
 
 The big themes this release: a rebuilt Tools drawer you arrange yourself, a Deal Finder that steers around realms you're already posted on, more control over pricing and your to-do lists, and support for the latest WoW client and TradeSkillMaster. Everything below is new since v0.12.0.

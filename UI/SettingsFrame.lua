@@ -1720,9 +1720,11 @@ function UI:CreateSettingsPanel(parent)
         "salesRetentionDays", retentionDayOpts)
     sy = sy - h - ITEM_SPACING
 
-    -- nil value = unlimited (matches the DB default; no count cap applied).
+    -- value 0 = unlimited (no count cap applied). Stored as 0 rather than nil
+    -- so the finite default in DB.lua can tell a deliberate opt-out from a
+    -- never-set install (FQ-223). The count cap only prunes when cap > 0.
     local retentionCountOpts = {
-        {value = nil,   label = "Unlimited"},
+        {value = 0,     label = "Unlimited"},
         {value = 500,   label = "500 entries"},
         {value = 1000,  label = "1,000 entries"},
         {value = 2500,  label = "2,500 entries"},

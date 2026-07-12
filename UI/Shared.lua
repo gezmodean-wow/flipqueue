@@ -575,6 +575,52 @@ function UI.WireTaskActionBtns(row, taskIndex, refreshFn)
 end
 
 -- ==========================================
+-- ASYNC TO-DO GENERATION
+-- ==========================================
+-- Centralizes the loading-banner + GenerateTodoListAsync glue (FQ-223) so the
+-- half-dozen call sites that build a preview don't each freeze the client on a
+-- large import. Callers pass the frame to anchor the banner on and a completion
+-- handler; onComplete(preview) runs after the banner hides. preview is nil if
+-- generation errored. A second call while one is in flight is ignored (returns
+-- false) so overlapping generations can't stack banners or duplicate work.
+UI._genInFlight = UI._genInFlight or false
+function UI:GenerateTodoListWithLoading(parent, source, allocationOrder, opts, onComplete)
+    -- Fallback to synchronous if the async engine isn't present (older core).
+    if not (ns.TodoList and ns.TodoList.GenerateTodoListAsync) then
+        local preview = ns.TodoList
+            and ns.TodoList:GenerateTodoList(source, allocationOrder, opts) or nil
+        if onComplete then onComplete(preview) end
+        return true
+    end
+
+    if UI._genInFlight then return false end
+    UI._genInFlight = true
+
+    local handle
+    if parent and ns.cw and ns.cw.ShowLoading then
+        handle = ns.cw:ShowLoading(parent, {
+            text = "Generating to-do list…",
+            progress = 0,
+        })
+    end
+
+    ns.TodoList:GenerateTodoListAsync(source, allocationOrder, opts,
+        function(processed, total)
+            if handle and total and total > 0 then
+                handle:SetProgress(processed / total)
+                handle:SetText(string.format(
+                    "Generating to-do list… %d of %d", processed, total))
+            end
+        end,
+        function(preview)
+            UI._genInFlight = false
+            if handle then handle:Hide() end
+            if onComplete then onComplete(preview) end
+        end)
+    return true
+end
+
+-- ==========================================
 -- EXPOSE ON UI TABLE
 -- ==========================================
 

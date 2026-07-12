@@ -200,8 +200,18 @@ function ns:InitDB()
     -- entry cap (nil = unlimited) applied after the age prune, newest kept.
     if db.settings.salesLoggingEnabled == nil then db.settings.salesLoggingEnabled = true end
     if db.settings.salesRetentionDays == nil then db.settings.salesRetentionDays = 30 end
-    -- salesRetentionCount intentionally defaults to nil (unlimited); only set
-    -- when the player opts into a count cap, so existing installs are unchanged.
+    -- salesRetentionCount: hard cap on total log entries — a runaway backstop
+    -- (FQ-223). The 30-day age prune above only touches *collected* entries, so
+    -- a heavy multi-character user accumulates an unbounded pile of active/recent
+    -- rows that froze mail and posting scans (17k+ entries observed). Default to
+    -- a finite cap for installs that never chose a value.
+    --
+    -- "Unlimited" is now stored as 0, not nil (see retentionCountOpts in
+    -- SettingsFrame). That lets this default-init distinguish a deliberate
+    -- opt-out (0, preserved) from "never set" (nil, capped once). A legacy nil
+    -- from before this change is treated as never-set and picks up the cap —
+    -- one-shot, and the player can re-select Unlimited from Settings afterward.
+    if db.settings.salesRetentionCount == nil then db.settings.salesRetentionCount = 10000 end
 
     -- Debug messages (off by default)
     if db.settings.debugMessages == nil then db.settings.debugMessages = false end
