@@ -10,6 +10,12 @@ local UI = ns.UI
 
 -- Generator state (session + persisted)
 UI._generatorPreview = UI._generatorPreview or nil
+
+-- Shared "accept every deal" filter for the cross-realm track. Must be one
+-- stable reference: the step-3 regeneration dirty-check compares the active
+-- filter by identity, and a per-render closure would look like a config change
+-- on every frame (FQ-223).
+local CR_ACCEPT_ALL_DEALS = function() return true end
 UI._genListCollapsed = UI._genListCollapsed or {}
 UI._genFilterMode = UI._genFilterMode or "all"
 UI._genFilterValue = UI._genFilterValue or ""
@@ -52,15 +58,29 @@ local function SaveWizardState(track, step)
     end
 end
 
--- Auto-generate: build preview from current filter settings
+-- Auto-generate: build preview from current filter settings.
+-- Async (FQ-223): a heavy multi-realm import made the synchronous build a
+-- multi-second freeze, and this — not the import auto-generate path — is what
+-- most players actually hit, since the Generate button and every filter toggle
+-- land here. Callers keep their trailing UI:Refresh(); the completion handler
+-- refreshes again once the preview is real.
 local function AutoGenerate()
     if not ns.TodoList then return end
     local allocationOrder = UI:GetGenAllocationOrder()
-    UI._generatorPreview = ns.TodoList:GenerateTodoList("fpScanner", allocationOrder, {
+    UI:GenerateTodoListWithLoading(UI._genFrame, "fpScanner", allocationOrder, {
         filterMode = UI._genFilterMode,
         filterValue = UI._genFilterValue,
         excludedItems = UI._genExcludedItems,
-    })
+    }, function(preview)
+        UI._generatorPreview = preview
+        -- Latch failure. The step-3 render auto-kicks generation whenever no
+        -- preview exists, so an erroring generation would otherwise loop
+        -- forever: render -> generate -> error -> nil preview -> refresh ->
+        -- render. Explicit user actions call AutoGenerate directly and are
+        -- unaffected, so a filter click still retries.
+        UI._genAutoFailed = (preview == nil)
+        UI:Refresh()
+    end)
 end
 
 -- Accessors that read/write DB settings (with fallback defaults for before InitDB runs)
@@ -1952,7 +1972,7 @@ function UI:RefreshGeneratorPage(pending)
 
         local xBtn = TopSmallBtn(hdr, "x", "Delete list", function()
             ns.TodoList:ClearCurrent()
-            UI._generatorPreview = nil
+            UI:InvalidateGeneratorPreview()
             ns:Print("Current to-do list deleted.")
             UI:Refresh()
             if UI.RefreshMini then UI:RefreshMini() end
@@ -2792,7 +2812,14 @@ function UI:RefreshGeneratorPage(pending)
 
         local function AutoRegenerate()
             if ns.TodoList and ns:ImportGetCount("fpScanner") > 0 then
-                UI._generatorPreview = ns.TodoList:GenerateTodoList("fpScanner", UI:GetGenAllocationOrder())
+                -- Fires on every allocation-priority reorder; async so dragging
+                -- the list doesn't freeze the client (FQ-223).
+                UI:GenerateTodoListWithLoading(UI._genFrame, "fpScanner",
+                    UI:GetGenAllocationOrder(), nil,
+                    function(preview)
+                        UI._generatorPreview = preview
+                        UI:Refresh()
+                    end)
             end
             UI:Refresh()
         end
@@ -2834,8 +2861,15 @@ function UI:RefreshGeneratorPage(pending)
         -- Import FP Data button
         s3.importBtn:Hide()
 
-        -- Auto-generate on step 3 entry (always keep preview up-to-date)
-        if not UI._generatorPreview and ns:ImportGetCount("fpScanner") > 0 then
+        -- Auto-generate on step 3 entry (always keep preview up-to-date).
+        -- AutoGenerate is async now, so this render runs once more with no
+        -- preview and the completion handler refreshes us. Skip while a build
+        -- is in flight: without the guard each render would supersede the last
+        -- and the preview would never land.
+        if not UI._generatorPreview
+            and not UI._genAutoFailed
+            and not UI:IsGeneratingTodoList()
+            and ns:ImportGetCount("fpScanner") > 0 then
             AutoGenerate()
         end
 
@@ -3316,7 +3350,7 @@ function UI:RefreshGeneratorPage(pending)
                     ns.TodoList:CommitList(UI._generatorPreview, "replace")
                     ns.cw:Toast({ severity = "success", text = "Saved \"" .. listName .. "\" with " .. count .. " tasks." })
                 end
-                UI._generatorPreview = nil
+                UI:InvalidateGeneratorPreview()
                 gf.nameBox._initialized = false
                 SaveWizardState(nil, 0)
                 UI:Refresh()
@@ -4135,11 +4169,10 @@ function UI:RefreshGeneratorPage(pending)
             local sellAllocOrder = UI:GetGenAllocationOrder()
             local buyAllocOrder = ns.db.settings.genBuyAllocationOrder or {"profit", "discount", "lowInventory"}
 
-            -- Build filter function from step 2 state
-            local dealFilter = UI._crDealFilter
-            if not dealFilter then
-                dealFilter = function() return true end
-            end
+            -- Build filter function from step 2 state. The no-filter fallback
+            -- must be a single shared closure, not a fresh one per render — the
+            -- signature check below compares it by identity.
+            local dealFilter = UI._crDealFilter or CR_ACCEPT_ALL_DEALS
 
             local opts = {
                 buyAllocationOrder = buyAllocOrder,
@@ -4148,7 +4181,34 @@ function UI:RefreshGeneratorPage(pending)
                 dealFilter = dealFilter,
             }
 
-            UI._generatorPreview = ns.TodoList:GenerateTodoList("fpCrossRealm", sellAllocOrder, opts)
+            -- Only regenerate when the config actually changed (FQ-223). This
+            -- used to rebuild the whole cross-realm list synchronously on every
+            -- render — the generation is async now, and its completion handler
+            -- refreshes, so an unconditional rebuild here would never settle.
+            -- dealFilter is a closure rebuilt by step 2; compare it by identity.
+            -- Include the import count: the signature otherwise covers only
+            -- config, and the old unconditional per-render rebuild always saw
+            -- fresh data. Without this, a new cross-realm import that lands
+            -- while the player is on step 3 would keep showing the previous
+            -- import's preview.
+            local sig = table.concat(sellAllocOrder, ",")
+                .. "|" .. table.concat(buyAllocOrder, ",")
+                .. "|" .. tostring(listMode)
+                .. "|" .. tostring(intSortMode)
+                .. "|" .. tostring(ns:ImportGetCount("fpCrossRealm"))
+            if (UI._crGenSig ~= sig or UI._crGenFilter ~= dealFilter)
+                and not UI:IsGeneratingTodoList() then
+                -- Stamp before starting: on an error the preview stays nil, and
+                -- re-deriving the same signature must not retry in a loop.
+                UI._crGenSig = sig
+                UI._crGenFilter = dealFilter
+                UI:GenerateTodoListWithLoading(UI._genFrame, "fpCrossRealm",
+                    sellAllocOrder, opts,
+                    function(preview)
+                        UI._generatorPreview = preview
+                        UI:Refresh()
+                    end)
+            end
         end
 
         -- Status label
@@ -4508,7 +4568,7 @@ function UI:RefreshGeneratorPage(pending)
                     end
                 end
 
-                UI._generatorPreview = nil
+                UI:InvalidateGeneratorPreview()
                 gf.nameBox._initialized = false
                 cr3.buyNameBox._initialized = false
                 cr3.sellNameBox._initialized = false

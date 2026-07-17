@@ -578,12 +578,39 @@ end
 -- ASYNC TO-DO GENERATION
 -- ==========================================
 -- Centralizes the loading-banner + GenerateTodoListAsync glue (FQ-223) so the
--- half-dozen call sites that build a preview don't each freeze the client on a
--- large import. Callers pass the frame to anchor the banner on and a completion
+-- call sites that build a preview don't each freeze the client on a large
+-- import. Callers pass the frame to anchor the banner on and a completion
 -- handler; onComplete(preview) runs after the banner hides. preview is nil if
--- generation errored. A second call while one is in flight is ignored (returns
--- false) so overlapping generations can't stack banners or duplicate work.
+-- generation errored.
+--
+-- Overlapping calls SUPERSEDE: a new request cancels the in-flight one and
+-- takes over its banner. The player changing a generator filter mid-build must
+-- end up with the newest filter's preview, so dropping the newer request (the
+-- original FQ-223 behavior) would leave a preview that doesn't match the UI.
+-- Callers that merely want to *ensure* a preview exists — the render paths —
+-- must check UI:IsGeneratingTodoList() first rather than relying on this, or
+-- every render would cancel and restart the build and it would never finish.
 UI._genInFlight = UI._genInFlight or false
+UI._genRun = UI._genRun or nil
+
+function UI:IsGeneratingTodoList()
+    return UI._genInFlight and true or false
+end
+
+-- Drop the current preview and any dirty-check state derived from it. The
+-- cross-realm step-3 render regenerates only when its config signature changes
+-- (FQ-223 — it used to rebuild synchronously on every single render), so a
+-- caller that clears the preview must also clear that signature or the page
+-- would sit empty until the player happened to touch a filter.
+function UI:InvalidateGeneratorPreview()
+    UI._generatorPreview = nil
+    UI._crGenSig = nil
+    UI._crGenFilter = nil
+    -- Clear the error latch too: whatever invalidated the preview (a new
+    -- import, a commit) may well have fixed what made generation fail.
+    UI._genAutoFailed = nil
+end
+
 function UI:GenerateTodoListWithLoading(parent, source, allocationOrder, opts, onComplete)
     -- Fallback to synchronous if the async engine isn't present (older core).
     if not (ns.TodoList and ns.TodoList.GenerateTodoListAsync) then
@@ -593,18 +620,48 @@ function UI:GenerateTodoListWithLoading(parent, source, allocationOrder, opts, o
         return true
     end
 
-    if UI._genInFlight then return false end
-    UI._genInFlight = true
-
-    local handle
-    if parent and ns.cw and ns.cw.ShowLoading then
+    -- Supersede any in-flight generation. Cancel() guarantees the abandoned
+    -- run's onComplete never fires, so it can't clobber this one's preview.
+    if UI._genRun then
+        UI._genRun.Cancel()
+        UI._genRun = nil
+    end
+    -- Reuse the existing banner only when it's anchored to the SAME frame, so
+    -- superseding on one page doesn't flicker. A different parent means a
+    -- different page (e.g. generator -> Deal Finder), and reusing there would
+    -- leave the banner on a hidden frame and the new work with no visible
+    -- loading indicator at all.
+    local handle = UI._genLoadingHandle
+    if handle and UI._genLoadingParent ~= parent then
+        handle:Hide()
+        handle = nil
+        UI._genLoadingHandle = nil
+        UI._genLoadingParent = nil
+    end
+    if not handle and parent and ns.cw and ns.cw.ShowLoading then
         handle = ns.cw:ShowLoading(parent, {
             text = "Generating to-do list…",
             progress = 0,
         })
+        UI._genLoadingHandle = handle
+        UI._genLoadingParent = parent
+    end
+    UI._genInFlight = true
+
+    local done = false
+    local function Finish(preview)
+        done = true
+        UI._genInFlight = false
+        UI._genRun = nil
+        if UI._genLoadingHandle then
+            UI._genLoadingHandle:Hide()
+            UI._genLoadingHandle = nil
+            UI._genLoadingParent = nil
+        end
+        if onComplete then onComplete(preview) end
     end
 
-    ns.TodoList:GenerateTodoListAsync(source, allocationOrder, opts,
+    local run = ns.TodoList:GenerateTodoListAsync(source, allocationOrder, opts,
         function(processed, total)
             if handle and total and total > 0 then
                 handle:SetProgress(processed / total)
@@ -612,11 +669,12 @@ function UI:GenerateTodoListWithLoading(parent, source, allocationOrder, opts, o
                     "Generating to-do list… %d of %d", processed, total))
             end
         end,
-        function(preview)
-            UI._genInFlight = false
-            if handle then handle:Hide() end
-            if onComplete then onComplete(preview) end
-        end)
+        Finish)
+    -- A small list can finish inside the first pump, i.e. before this
+    -- assignment — don't park a handle for an already-completed run, or the
+    -- next call would "supersede" a dead one and, worse, we'd hold a stale
+    -- _genRun while _genInFlight is false.
+    if not done then UI._genRun = run end
     return true
 end
 

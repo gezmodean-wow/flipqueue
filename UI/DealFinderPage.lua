@@ -922,14 +922,19 @@ genBtn:SetScript("OnClick", function()
     end
     if #genOrder == 0 then genOrder = {"gold"} end
 
-    dfPreview = ns.TodoList:GenerateTodoList("dealFinder", genOrder)
-    if dfPreview then
-        dfPreview.name = "Deal Finder " .. date("%Y-%m-%d %H:%M")
-        previewMode = true
-        UI:RefreshDealFinderPage()
-    else
-        ns:Print("Failed to generate preview.")
-    end
+    -- Async with a loading banner (FQ-223): a large deal set made this a
+    -- multi-second client freeze.
+    UI:GenerateTodoListWithLoading(page, "dealFinder", genOrder, nil,
+        function(preview)
+            dfPreview = preview
+            if dfPreview then
+                dfPreview.name = "Deal Finder " .. date("%Y-%m-%d %H:%M")
+                previewMode = true
+                UI:RefreshDealFinderPage()
+            else
+                ns:Print("Failed to generate preview.")
+            end
+        end)
 end)
 
 -- ==========================================

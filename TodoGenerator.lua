@@ -1439,20 +1439,35 @@ end
 -- The heavy work (BuildItemPool, deal sort) still runs synchronously up front;
 -- only the per-deal allocation loop — the part that scaled with import size —
 -- is chunked. See UI:GenerateTodoListWithLoading for the loading-banner glue.
+--
+-- Returns a handle with :Cancel(). Cancelling stops the pump and guarantees
+-- neither onProgress nor onComplete fires again — the UI layer supersedes an
+-- in-flight generation when the player changes a filter, and a late callback
+-- from the abandoned run would otherwise clobber the newer preview (FQ-223).
 function TodoList:GenerateTodoListAsync(source, allocationOrder, opts, onProgress, onComplete)
     opts = opts or {}
     -- Shallow-copy opts so the private async fields don't mutate the caller's table.
     local asyncOpts = {}
     for k, v in pairs(opts) do asyncOpts[k] = v end
     asyncOpts._asyncYield = true
-    asyncOpts._asyncProgress = onProgress
+
+    local cancelled = false
+
+    -- Gate the inner progress callback too: GenerateTodoList invokes
+    -- _asyncProgress mid-chunk, before the pump regains control.
+    asyncOpts._asyncProgress = onProgress and function(...)
+        if cancelled then return end
+        return onProgress(...)
+    end or nil
 
     local co = coroutine.create(function()
         return self:GenerateTodoList(source, allocationOrder, asyncOpts)
     end)
 
     local function Pump()
+        if cancelled then return end
         local ok, result = coroutine.resume(co)
+        if cancelled then return end
         if not ok then
             -- Generation errored inside the coroutine. Surface to the default
             -- error handler and tell the caller so it can clear its loading UI.
@@ -1469,4 +1484,11 @@ function TodoList:GenerateTodoListAsync(source, allocationOrder, opts, onProgres
     end
 
     Pump()
+
+    return {
+        Cancel = function()
+            cancelled = true
+        end,
+        IsCancelled = function() return cancelled end,
+    }
 end

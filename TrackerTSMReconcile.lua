@@ -13,6 +13,32 @@ local addonName, ns = ...
 local Tracker = ns.Tracker
 
 --------------------------
+-- Cooperative yielding
+--------------------------
+
+-- The reconcile parses TSM's whole CSV corpus (three CSVs, tens of thousands of
+-- rows for a heavy TSM user) and then walks the entire FQ log. It ran inline 2s
+-- after AUCTION_HOUSE_SHOW and was a multi-second freeze on "open the AH and
+-- post" (FQ-223). It's throttled to once an hour, but the throttle is
+-- deliberately reset on PLAYER_LOGIN — and switching characters fires that — so
+-- a player hopping realms pays it on nearly every AH open.
+--
+-- MaybeYield is a no-op when called on the main thread, so the synchronous entry
+-- point (/fq slash command) keeps working unchanged.
+local YIELD_EVERY = 2000
+local yieldCounter = 0
+
+local function MaybeYield()
+    -- Lua 5.1: coroutine.running() returns nil on the main thread.
+    if not coroutine.running() then return end
+    yieldCounter = yieldCounter + 1
+    if yieldCounter >= YIELD_EVERY then
+        yieldCounter = 0
+        coroutine.yield()
+    end
+end
+
+--------------------------
 -- Key helpers
 --------------------------
 
@@ -116,6 +142,7 @@ local function ReadTSMCSV(csvName, requireSource)
                     local pos = headerEnd + 1
                     local len = #value
                     while pos <= len do
+                        MaybeYield()
                         local nlPos = value:find("\n", pos, true) or (len + 1)
                         if nlPos > pos then
                             local row = value:sub(pos, nlPos - 1)
@@ -283,6 +310,7 @@ function Tracker:ReconcileWithTSM(verbose)
     local now = time()
 
     for _, entry in ipairs(ns.db.log) do
+        MaybeYield()
         if IsEligible(entry) then
             scanned = scanned + 1
             local matched = false
@@ -398,6 +426,51 @@ function Tracker:ResetTSMReconcile()
         end
     end
     return cleared
+end
+
+-- Async form of ReconcileWithTSM (FQ-223). Same work, same result, spread
+-- across frames via the MaybeYield calls in the CSV and log loops. Used by the
+-- automatic AH-open path; /fq's manual reconcile still calls the sync form,
+-- where a brief stall is expected and the player asked for it.
+-- onDone(upgraded, finalized) fires when complete, or (0, 0) if it errored.
+-- Only one reconcile at a time. The async form now spans many frames while
+-- iterating ns.db.log, so a second run (or a manual /fq reconcile) starting
+-- mid-flight would walk the same entries against the same TSM records with a
+-- separate `usedRec` claim set.
+function Tracker:IsReconcilingTSM()
+    return Tracker._tsmReconcileInFlight and true or false
+end
+
+function Tracker:ReconcileWithTSMAsync(verbose, onDone)
+    if Tracker._tsmReconcileInFlight then
+        if onDone then onDone(0, 0) end
+        return false
+    end
+    Tracker._tsmReconcileInFlight = true
+    yieldCounter = 0
+
+    local co = coroutine.create(function()
+        return self:ReconcileWithTSM(verbose)
+    end)
+
+    local function Pump()
+        local ok, a, b = coroutine.resume(co)
+        if not ok then
+            Tracker._tsmReconcileInFlight = false
+            if geterrorhandler then geterrorhandler()(a) end
+            if onDone then onDone(0, 0) end
+            return
+        end
+        if coroutine.status(co) == "dead" then
+            Tracker._tsmReconcileInFlight = false
+            if onDone then onDone(a or 0, b or 0) end
+        else
+            C_Timer.After(0, Pump)
+        end
+    end
+
+    Pump()
+    return true
 end
 
 -- TSM rewrites csvSales on logout, so each new session may bring data that

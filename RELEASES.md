@@ -6,6 +6,16 @@ The engineering-detail companion lives in `CHANGELOG.md` (commit-readerese — f
 
 ---
 
+## v0.13.1-alpha2
+
+More freeze fixes for large accounts — this build finishes the job alpha1 started. If you tested alpha1 and still froze, this one is for you.
+
+- **The Generate button no longer freezes the game.** alpha1 only covered the automatic "generate after import" path. If you have that option switched off — or you just click **Generate** yourself, or change a filter, or reorder your priorities — you were still hitting the old freeze with no progress bar. Every one of those now builds in the background with a progress bar.
+- **Full auction house scans don't lock up the client.** If you run Auctionator, its full scan made FlipQueue read the entire auction house in one go, freezing you for seconds at a time. Busy realms were far worse than quiet ones. That work now happens in the background.
+- **FlipQueue stops hogging memory over a long session.** Its record of scanned auction prices had no size limit while you played, so on a busy realm it grew until you logged out — one reported session ballooned to over 400 MB. It's now capped as you go.
+- **Opening the auction house is smooth again.** FlipQueue cross-checks your sales against TradeSkillMaster's records shortly after you open the AH. On big TSM setups that check froze the client, and it ran again each time you switched characters. It now runs in the background.
+- **Checking mail and posting is faster.** Several checks were re-scanning your whole account's inventory far more often than they needed to — worst when you have many characters and a big to-do list.
+
 ## v0.13.1-alpha1
 
 Performance fixes for large accounts. If you run a lot of characters and import big cross-realm lists, FlipQueue could freeze — sometimes badly enough to need a game restart — while importing, or while checking mail and posting. This build fixes the three causes:

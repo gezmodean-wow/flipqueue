@@ -211,12 +211,16 @@ local function ProcessQueue()
     task.sentAt = NowSec()
     local scanKey = ScanKeyFor(task.itemID, task.speciesID)
     inflight[scanKey] = task
-    ns:PrintDebug("[AutoScan] SendSearchQuery itemID=" .. tostring(task.itemID) ..
-        (task.speciesID and (" species=" .. task.speciesID) or "") ..
-        " commodity=" .. tostring(task.isCommodity) ..
-        " (queued=" .. #pendingQueue .. ", inflight=" .. (function()
-            local n = 0; for _ in pairs(inflight) do n = n + 1 end; return n
-        end)() .. ")")
+    -- Gated (FQ-223): runs per query, and the inflight count allocated a
+    -- closure and walked the table even when debug was off.
+    if ns:IsDebugEnabled() then
+        local n = 0
+        for _ in pairs(inflight) do n = n + 1 end
+        ns:PrintDebug("[AutoScan] SendSearchQuery itemID=" .. tostring(task.itemID) ..
+            (task.speciesID and (" species=" .. task.speciesID) or "") ..
+            " commodity=" .. tostring(task.isCommodity) ..
+            " (queued=" .. #pendingQueue .. ", inflight=" .. n .. ")")
+    end
 end
 
 local function EnsureKickerRunning()

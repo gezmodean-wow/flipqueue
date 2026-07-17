@@ -1,5 +1,76 @@
 # Changelog
 
+## v0.13.1-alpha2
+
+Second alpha on the v0.13.1 line, and a direct follow-up to alpha1: the reporter tested it and **still froze on import, with no progress banner at all**. Embedded Cogworks-1.0 stays at **`v0.16.0`** (MINOR 31); `## Interface` stays at `120007`.
+
+The "no banner" detail was the whole diagnosis. alpha1 only converted the *import auto-generate* path and explicitly deferred the Generator-page callers ("stay synchronous for now (follow-up)" — see the alpha1 notes below). The reporter's `/fq state` shows `autoGen=0`: auto-generate is **off** for him, so `TryAutoGenerateTodo` (`UI/ImportPage.lua:147`) early-returns and the async path never ran. He imports, then clicks **Generate** manually — still the synchronous call. alpha1 fixed a path he had turned off.
+
+His post-alpha1 `/fq debug perf` also showed FlipQueue at **21,052 ms CPU** (vs TSM's 8,261 ms) and addon memory at **438 MB**, up from 109 MB on v0.13.0.
+
+### FQ-223: Every remaining to-do generation call site is now async
+
+All interactive callers now route through `UI:GenerateTodoListWithLoading`:
+
+- `UI/GeneratorPage.lua` — `AutoGenerate` (11 call sites: the Generate button, every filter toggle, TSM/Auctionator selection), `AutoRegenerate` (allocation-priority reorder), and the cross-realm step-3 build.
+- `UI/MainFrame.lua:451` — the **Generate** action button (the reporter's actual path). Also fixed a latent nil-deref: the old code guarded `#preview.items` with `or 0` and then unguarded `ipairs(preview.items)` on the next line.
+- `UI/DealFinderPage.lua` — preview generation.
+
+Grep-verified: no `GenerateTodoList(` call sites remain outside the coroutine body and the legacy-core fallback in `UI/Shared.lua`.
+
+Three non-obvious hazards this created, all guarded:
+
+- **Supersede, don't drop.** alpha1's `_genInFlight` guard *ignored* a second request. With filter toggles now async, that would leave a preview that doesn't match the visible filter. `GenerateTodoListAsync` returns a handle with `Cancel()` (gating both `onProgress` and `onComplete`, and the inner `_asyncProgress` the generator calls mid-chunk), and `GenerateTodoListWithLoading` cancels the in-flight run and reuses its banner.
+- **Render-triggered generation must not loop.** Both step-3 renders kick generation whose completion calls `UI:Refresh()`, i.e. re-renders. The inventory track is guarded by `UI:IsGeneratingTodoList()` plus a `UI._genAutoFailed` latch — without the latch, an *erroring* generation loops forever (nil preview → refresh → render → regenerate). The cross-realm track regenerates only when a config signature (`UI._crGenSig`) or the `dealFilter` identity (`UI._crGenFilter`) changes, stamped **before** the run so an error can't retry the same signature. It previously rebuilt the whole cross-realm list synchronously **on every render**, unconditionally. Its no-filter fallback closure was hoisted to a single shared `CR_ACCEPT_ALL_DEALS` upvalue — a per-render closure would fail the identity check every frame.
+- **Sync completion ordering.** A small list finishes inside the first pump, i.e. before `UI._genRun` is assigned; the handle is only stored if the run didn't already complete.
+
+`UI:InvalidateGeneratorPreview()` replaces the seven scattered `UI._generatorPreview = nil` writes so the derived dirty-check state can't outlive the preview.
+
+### FQ-223: Full auction-house scans froze the client (and leaked ~330 MB)
+
+`HarvestReplicate` (`AuctionScanCache.lua`) parsed the entire AH — 50k–200k auctions, per the code's own comment — **synchronously in the `REPLICATE_ITEM_LIST_UPDATE` handler**. FlipQueue never initiates this: any **Auctionator** full scan fires the event, and the reporter runs Auctionator. Cost scales with realm auction volume, which explains his "on some servers its better and on others its much worse".
+
+- Now chunked across frames (`HarvestReplicateAsync`, 2,000 auctions/frame). Blizzard's replicate list is only valid until the next `ReplicateItems()`, so a fresh event mid-run bumps a run token and the stale run drops its work rather than committing data read across two snapshots.
+- **Allocation hoist.** A `listing` table was built for every auction *before* `InsertListing` decided to discard it — on a full realm ~199k of every 200k were immediate garbage. New `WouldAcceptListing` pre-check. Verified equivalent with a Lua 5.1 harness: 120k randomized cases with heavy price ties, zero accept/reject mismatches, identical resulting arrays. `hasInvalidSeller` still latches for every ownerless auction regardless of acceptance, matching the old behavior.
+- **The cache had no runtime cap.** `PERSIST_MAX_ENTRIES = 20000` was applied *only* at `PLAYER_LOGOUT`, so the live table grew unbounded all session (a busy realm has far more distinct variants than 20k). This is the 109 MB → 438 MB. Added counted accessors (`SetCacheEntry`/`DeleteCacheEntry`) with eviction at `RUNTIME_MAX_ENTRIES + EVICT_SLACK`, sweeping back to the cap so the sort amortizes to ~one pass per 4,000 inserts.
+- **`FlipQueueDB.scanCache` is released at login.** It shares references with the live `cache`, so it pinned every *superseded* entry for the session — each rescan of a cached item leaked its previous listings. `PLAYER_LOGOUT` rebuilds it.
+- **`TSM.lua` `keyCache` is capped** at 20,000. It's a pure-function memo (`fqKey` → tsmString) but was unbounded and never wiped — `InvalidateCache` only clears `priceCache`/`opCache` — so a replicate harvest parked 100k+ key/string pairs. Eviction only costs a recompute.
+
+### FQ-223: TSM reconcile froze the client on AH open
+
+`Tracker:ReconcileWithTSM` parses TSM's whole CSV corpus (three CSVs; the reporter's TSM DB is 195 MB) plus a full log walk, inline, 2s after `AUCTION_HOUSE_SHOW`. It's throttled to once an hour, but the throttle is deliberately reset on `PLAYER_LOGIN` (TSM rewrites `csvSales` on logout) — and **switching characters fires `PLAYER_LOGIN`**. With 69 characters across realms, he pays it on nearly every AH open. This matches "check mail and post using tsm" freezing, and the realm-to-realm variance.
+
+New `ReconcileWithTSMAsync` runs the same logic in a coroutine; `MaybeYield()` (every 2,000 iterations, in the CSV row loop and the log loop) no-ops on the main thread via `coroutine.running() == nil`, so `/fq reconcile` keeps its synchronous behavior. There is no `pcall` anywhere in the file, so no yield-across-C-boundary hazard. The AH-open path uses the async form.
+
+### FQ-223: Constant factors on the mail / posting paths
+
+- **`inventoryLookupByName` (`Core.lua`) is indexed, not scanned.** Reached from any `ItemsMatch` with an unresolved itemID (pets, imports with stripped keys); every *miss* walked all characters plus the warbank (~120k rows, `:lower()` per row) with no memoization, and it sits inside per-task and per-auction loops — the single biggest constant factor here. Safe to index because, despite reading inventory, it's really a name → itemID dictionary, and that mapping is a property of the game's item database, not of what the player holds. `Scanner.lua` invalidates on both inventory and warbank writes.
+- **`TrackerAuctions:UpdateLogExpiry:314`** passed `resolvedID = nil`, so `ItemsMatch` re-resolved *inside* the owned-auctions loop. Hoisted to one `ResolveItemID` per log entry, passed as `or false` — mirroring the correct pattern already at `:99`, which this function never got.
+- **`AuctionPost:ScanBags`** re-walked all ~2,456 tasks for every bag slot (~490k matches/scan), re-checking status each time. Tasks are now filtered and their IDs pre-resolved once per scan, with the verdict memoized per item key.
+- **`PruneStaleForItemIDs`** nested a full `pairs(cache)` inside the itemID loop and allocated a substring per entry via `k:sub`. `CheckTimeouts` calls it per timed-out item, so 150 timeouts × 20k entries was ~3M iterations and ~3M string allocations. Now one walk for the whole set, with an allocation-free `find(..., plain)` prefix test.
+- **`CurrentRealm()` is memoized** — two string allocations per call, on every `Lookup`/`Forget`/`MarkEmpty` and every replicate iteration. Only cached once the API returns a real name, so an early nil can't poison the session's keys.
+- **Debug strings are gated** at the three hot sites (`AuctionPost:ResolvePostPrice`, the scan-cache per-bucket dump, `AuctionAutoScan`'s per-query line — which also allocated a closure and walked `inflight` to count it). `ns:PrintDebug` always costs something with debug off: Cogworks records to its ring buffer regardless, and Lua has already built the argument string by the time it's called. New `ns:IsDebugEnabled()`; non-hot sites stay unconditional so their history stays in the ring.
+
+### Hazards caught in review (fixed before ship)
+
+The async conversion introduced several bugs of its own; an adversarial pass over the diff caught these:
+
+- **`nameIndex` went stale on every Sync-delivered write.** The index's safety argument (a stale entry still maps a name to the right ID) covers *deletions* but not *additions*. `Sync.lua` writes partner-account characters (`:1689`, `:1925`) and the warbank (`:1730`, `:1955`) without invalidating, and the index memoizes on first use — which easily precedes BNet sync. Result: `ItemsMatch` returns nil where the old walk found the ID, so tasks for items on a synced character silently stop matching in `ScanBags` / `UpdateLogExpiry`. With 69 characters across two accounts this is a live path. All four sites now invalidate.
+- **The replicate run token couldn't catch a mid-walk snapshot swap.** `ReplicateItems()` invalidates the list when it's *called*, but `REPLICATE_ITEM_LIST_UPDATE` (which bumps the token) only fires when the new data lands. Indices read across two snapshots would commit a mixed cheapest-10 marked fresh — silently wrong post prices, no error. `Step` now re-checks `GetNumReplicateItems() == n` and abandons on any change rather than committing half-truth.
+- **`CurrentRealm()`'s fallback changed `"unknown"` → `"Unknown"`** by returning before the `:gsub():lower()`, so keys written during the early nil-realm window stopped matching entries persisted by prior builds. Restored.
+- **Cross-realm step 3 could show a stale preview.** The dirty-check signature covered only config, while the old unconditional rebuild always saw fresh data — a new import landing while the player sits on step 3 wouldn't regenerate. The import count is now part of the signature.
+- **A superseding banner kept its original parent**, so generating on the Deal Finder while a generator-page banner was up left the new work with no visible loading indicator. The banner is now reused only for the same parent.
+- **`ReconcileWithTSMAsync` had no in-flight guard**, so a manual `/fq reconcile` could interleave with an in-flight async run over the same log with a separate claim set.
+- **An erroring generation looped forever** on the inventory track (nil preview → refresh → render → regenerate, one error popup per frame). Latched via `UI._genAutoFailed`.
+
+### Known gaps (deliberate)
+
+- `Tracker:GetAuctionSummaryByCharacter` still walks the full log per `UI:Refresh` (up to 2×). It's ~17k *cheap* iterations — milliseconds, not a freeze — and it has side effects (auto-expiring entries) plus a time-relative `soonest`, so caching the result is wrong. Routing it through `SalesIndex`'s 10s TTL would make the summary bar's "active" count lag visibly after posting. Not worth the regression risk.
+- `ScanMailForSales` still makes 3–4 full log passes per mailbox open (plus up to 3 retries). With retention now capped this is ≤40k cheap iterations.
+- Cogworks' `Debug.lua` does an O(500) `table.remove(ring, 1)` per debug call and builds its timestamp/message even when disabled. That's a shared-library fix — cross-cog issue, not this rev.
+- Cogworks' `Loading.lua` `ShowLoading` does a `CreateFrame` per call with no pool, and WoW frames can't be destroyed. Routing every filter toggle and priority reorder through it now orphans a frame per generation. Cross-cog pooling issue.
+- Gating the three hot debug sites means those lines no longer reach Cogworks' ring buffer unless chat-echo is on (`cw:DebugPrint` records unconditionally and gates only the echo). The `ResolvePostPrice` line and the scan-cache bucket dump are the two used by the `/fq debug pricesource` FP-inflation workflow, so they become post-hoc unrecoverable. Accepted: the per-auction cost with debug off outweighed it.
+
 ## v0.13.1-alpha1
 
 First alpha on the v0.13.1 line. Performance pass for large multi-character accounts (FQ-223): to-do generation, the per-refresh task-step pass, and the sales-log ceiling no longer let a big account freeze or bloat the client. Embedded Cogworks-1.0 stays at **`v0.16.0`** (MINOR 31); `## Interface` stays at `120007`.

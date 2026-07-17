@@ -566,13 +566,18 @@ function AuctionPost:ResolvePostPrice(itemKey, itemID, itemLink, isCommodity)
         end
     end
 
-    ns:PrintDebug(("[AuctionPost] ResolvePostPrice: %s op=%s lowest=%s(%s) own=%s normal=%s min=%s max=%s uc=%s -> buyout=%s (%s)"):format(
-        tostring(itemKey), tostring(opName),
-        tostring(lowestCopper), tostring(lowestSourceLabel or "?"),
-        tostring(ownLowestCopper),
-        tostring(normalCopper), tostring(minCopper), tostring(maxCopper),
-        tostring(undercut),
-        tostring(decision.buyoutCopper), tostring(decision.reason)))
+    -- Gated: RerunPricing re-prices every scan row every 2s for the length of a
+    -- TSM post scan, so this 11-argument format ran hundreds of times a second
+    -- with debug off (FQ-223).
+    if ns:IsDebugEnabled() then
+        ns:PrintDebug(("[AuctionPost] ResolvePostPrice: %s op=%s lowest=%s(%s) own=%s normal=%s min=%s max=%s uc=%s -> buyout=%s (%s)"):format(
+            tostring(itemKey), tostring(opName),
+            tostring(lowestCopper), tostring(lowestSourceLabel or "?"),
+            tostring(ownLowestCopper),
+            tostring(normalCopper), tostring(minCopper), tostring(maxCopper),
+            tostring(undercut),
+            tostring(decision.buyoutCopper), tostring(decision.reason)))
+    end
 
     return {
         buyoutCopper      = decision.buyoutCopper,
@@ -649,13 +654,44 @@ function AuctionPost:ScanBags(filterToTodo)
     local bagList = ns.ALL_PLAYER_BAGS or ns.INVENTORY_BAGS
     if not bagList then return {} end
 
-    -- Pre-build todo task lookup if filtering
-    local todoTasks
+    -- Pre-build todo task lookup if filtering.
+    -- FQ-223: this used to re-walk every task for every bag slot, re-checking
+    -- status each time and letting ItemsMatch lazily resolve each task's itemID
+    -- on every comparison — and each unresolvable task (pets, no numeric ID)
+    -- costs a walk of all characters' inventories. With ~2.4k tasks and ~200
+    -- slots that was ~490k matches per scan. Filter and resolve once here, then
+    -- memoize the verdict per item key below.
+    local todoTasks, todoResolvedIDs
     if filterToTodo and ns.TodoList then
         local currentList = ns.TodoList:GetCurrentList()
         if currentList and currentList.tasks then
-            todoTasks = currentList.tasks
+            todoTasks = {}
+            todoResolvedIDs = {}
+            for _, task in ipairs(currentList.tasks) do
+                if task.status == "pending" or task.status == "skipped" then
+                    todoTasks[#todoTasks + 1] = task
+                    -- `or false` = "already resolved, don't retry" to ItemsMatch.
+                    todoResolvedIDs[#todoTasks] = ns:ResolveItemID(task) or false
+                end
+            end
         end
+    end
+
+    -- itemKey -> bool. Bag slots repeat keys (stacks, split stacks), and the
+    -- todo list can't change mid-scan.
+    local todoMatchCache = {}
+    local function MatchesTodo(key, name)
+        local cached = todoMatchCache[key]
+        if cached ~= nil then return cached end
+        local matched = false
+        for i = 1, #todoTasks do
+            if ns:ItemsMatch(key, name, todoTasks[i], todoResolvedIDs[i]) then
+                matched = true
+                break
+            end
+        end
+        todoMatchCache[key] = matched
+        return matched
     end
 
     local byKey = {} -- itemKey -> scan result (for deduplication)
@@ -706,16 +742,7 @@ function AuctionPost:ScanBags(filterToTodo)
                             -- Filter to todo tasks if requested
                             local todoMatched = true
                             if filterToTodo and todoTasks then
-                                todoMatched = false
-                                for _, task in ipairs(todoTasks) do
-                                    if task.status == "pending" or task.status == "skipped" then
-                                        local m = ns:ItemsMatch(key, name, task, nil)
-                                        if m then
-                                            todoMatched = true
-                                            break
-                                        end
-                                    end
-                                end
+                                todoMatched = MatchesTodo(key, name)
                             end
 
                             if todoMatched and not byKey[key] then

@@ -307,11 +307,19 @@ function Tracker:UpdateLogExpiry()
                 logEntry.auctionStatus = "expired"
                 logEntry.saleOutcome = "expired"  -- timer ran out = unsold
             else
+                -- Resolve once per log entry, not once per (entry x auction)
+                -- pair (FQ-223). Passing nil here meant ItemsMatch re-resolved
+                -- inside the inner loop, and every miss walks all 69 characters'
+                -- inventories plus the warbank via inventoryLookupByName — pet
+                -- entries ("pet:<species>") and entries with no numeric itemID
+                -- miss every time. `or false` tells ItemsMatch we've already
+                -- done the lookup. Mirrors CheckOwnedAuctions above.
+                local logResolvedID = ns:ResolveItemID(logEntry)
                 -- Try to match against owned auctions to update/confirm expiry
                 for aIdx, auction in ipairs(owned) do
                     local auctionName = auctionNames[aIdx]
                     local auctionKey = tostring(auction.itemKey.itemID) .. ";;"
-                    local matches = ns:ItemsMatch(auctionKey, auctionName, logEntry, nil, false)
+                    local matches = ns:ItemsMatch(auctionKey, auctionName, logEntry, logResolvedID or false, false)
 
                     if matches and auction.timeLeftSeconds then
                         logEntry.expiresAt = now + auction.timeLeftSeconds

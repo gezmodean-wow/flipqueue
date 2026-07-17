@@ -40,6 +40,21 @@ local CACHE_LISTING_LIMIT = 10
 local PERSIST_MAX_AGE = 7 * 24 * 3600
 local PERSIST_MAX_ENTRIES = 20000
 
+-- Runtime ceiling on the live cache (FQ-223). PERSIST_MAX_ENTRIES used to be
+-- enforced only at PLAYER_LOGOUT, so a session that harvested a full auction
+-- house grew `cache` without bound — a heavy user reported addon memory going
+-- from 109 MB to 438 MB in one session, because a busy realm has far more
+-- distinct item variants than the persist cap. Evict here instead, so the live
+-- set is bounded regardless of how much gets harvested.
+--
+-- Evicting exactly at the cap would mean a sort per insert once full. Let the
+-- table run up to _SLACK over the cap, then sweep back down to it, so the
+-- O(n log n) sweep amortizes to roughly one pass per EVICT_SLACK inserts.
+local RUNTIME_MAX_ENTRIES = PERSIST_MAX_ENTRIES
+local EVICT_SLACK = 4000
+
+local cacheCount = 0
+
 -- Default freshness ceiling on Lookup. Anything older than this returns
 -- nil so callers know to trigger an auto-scan instead of trusting a stale
 -- entry. 30 minutes is short enough that turnover won't have moved the
@@ -55,10 +70,20 @@ local DEFAULT_FRESH_AGE_SEC = 30 * 60
 -- single cache, so prefix everything with the player's normalized realm.
 -- Connected realms each get their own bucket and converge after one
 -- scan each — acceptable for v1.
+-- Memoized: the realm can't change without a full client restart, and this sits
+-- on every Lookup/Forget/MarkEmpty and every iteration of the replicate harvest
+-- — it was allocating two strings per call (FQ-223). Only cache once the API
+-- returns a real name; it's nil this early on some load paths, and caching
+-- "Unknown" would poison every key for the session.
+local realmCache
 local function CurrentRealm()
-    local r = (GetNormalizedRealmName and GetNormalizedRealmName())
-        or GetRealmName() or "Unknown"
-    return r:gsub("%s+", ""):lower()
+    if realmCache then return realmCache end
+    local r = (GetNormalizedRealmName and GetNormalizedRealmName()) or GetRealmName()
+    -- Lowercase to match the old gsub():lower() fallback exactly — keys written
+    -- during the early nil-realm window must stay comparable across builds.
+    if not r or r == "" then return "unknown" end
+    realmCache = r:gsub("%s+", ""):lower()
+    return realmCache
 end
 
 -- Cache key shape:
@@ -96,12 +121,58 @@ local function MakeCacheKey(fqKey, isCommodity, realm)
 end
 
 --------------------------
+-- Cache accessors (counted + bounded)
+--------------------------
+
+-- All cache writes/deletes go through these so `cacheCount` stays honest --
+-- counting a 20k-entry hash with pairs() on every insert would defeat the point.
+
+local function EvictOldest()
+    local rows = {}
+    for k, v in pairs(cache) do
+        rows[#rows + 1] = { k = k, at = v.scannedAt or 0 }
+    end
+    table.sort(rows, function(a, b) return a.at > b.at end)
+    for i = RUNTIME_MAX_ENTRIES + 1, #rows do
+        cache[rows[i].k] = nil
+    end
+    cacheCount = math.min(#rows, RUNTIME_MAX_ENTRIES)
+    ns:PrintDebug("[ScanCache] evicted to " .. cacheCount .. " entries")
+end
+
+local function SetCacheEntry(k, v)
+    if cache[k] == nil then cacheCount = cacheCount + 1 end
+    cache[k] = v
+    if cacheCount > RUNTIME_MAX_ENTRIES + EVICT_SLACK then
+        EvictOldest()
+    end
+end
+
+local function DeleteCacheEntry(k)
+    if cache[k] ~= nil then
+        cache[k] = nil
+        cacheCount = cacheCount - 1
+    end
+end
+
+--------------------------
 -- Listing insertion
 --------------------------
 
 -- Insert a listing into a buyout-ascending array, capped at `limit`. Listings
 -- past the cap fall off; ties preserve insertion order so the player's own
 -- listing doesn't get bumped by an identically-priced competitor.
+-- Cheap pre-check so callers in a 200k-auction loop don't allocate a listing
+-- table that InsertListing would immediately drop (FQ-223). `listings` is
+-- buyout-ascending and capped at `limit`, so once it's full the only way in is
+-- to beat the current worst. Mirrors InsertListing's strict `<` so ties are
+-- rejected identically (insertion order preserved).
+local function WouldAcceptListing(listings, buyout, limit)
+    local n = #listings
+    if n < limit then return true end
+    return buyout < listings[n].buyout
+end
+
 local function InsertListing(listings, listing, limit)
     local n = #listings
     local insertAt = n + 1
@@ -189,19 +260,19 @@ local function HarvestNonCommodity(itemKey, now)
 
     local stored = 0
     for k, b in pairs(buckets) do
-        cache[k] = {
+        SetCacheEntry(k, {
             listings         = b.listings,
             scannedAt        = now,
             source           = "item",
             hasInvalidSeller = b.hasInvalidSeller,
-        }
+        })
         stored = stored + 1
         -- Per-bucket detail for canonicalisation diagnostics. Helps spot
         -- when listings TSM treats as the same variant land in different
         -- buckets (or vice versa) — that's where post-price mismatches
         -- with TSM originate.
         local lo = b.listings[1]
-        if lo then
+        if lo and ns:IsDebugEnabled() then
             ns:PrintDebug("[ScanCache]   bucket " .. k ..
                 " lowest=" .. string.format("%.0f", lo.buyout) .. "c x" .. tostring(lo.quantity) ..
                 " seller=" .. tostring(lo.seller) ..
@@ -247,76 +318,128 @@ local function HarvestCommodity(itemID, now)
     end
 
     if #listings == 0 then return false end
-    cache[k] = {
+    SetCacheEntry(k, {
         listings         = listings,
         scannedAt        = now,
         source           = "commodity",
         hasInvalidSeller = hasInvalidSeller,
-    }
+    })
     return true
 end
 
 -- Auctionator's Full Scan path uses C_AuctionHouse.ReplicateItems →
--- REPLICATE_ITEM_LIST_UPDATE. Returns count of cache entries written.
--- Replicate batches can be 50k–200k auctions on a busy realm; we iterate
--- inline. If frame hitching becomes a complaint we can shift to a coroutine.
-local function HarvestReplicate()
-    if not C_AuctionHouse or not C_AuctionHouse.GetNumReplicateItems then return 0 end
+-- REPLICATE_ITEM_LIST_UPDATE.
+--
+-- Replicate batches can be 50k–200k auctions on a busy realm. This used to
+-- iterate inline in the event handler and was a multi-second hard freeze
+-- (FQ-223) — and FlipQueue doesn't even initiate it: any Auctionator full scan
+-- triggers the event, so the stall hit players who never asked FQ to scan. The
+-- cost scales with realm auction volume, which is why the same user saw it
+-- "better on some servers and much worse on others".
+--
+-- Now chunked across frames via C_Timer. Blizzard's replicate list stays valid
+-- until the next ReplicateItems() call, so a fresh REPLICATE_ITEM_LIST_UPDATE
+-- mid-run invalidates our indices — we cancel and restart rather than commit
+-- data read across two different snapshots.
+local REPLICATE_CHUNK = 2000
+local replicateRun = 0
+
+local function HarvestReplicateAsync(onDone)
+    if not C_AuctionHouse or not C_AuctionHouse.GetNumReplicateItems then
+        if onDone then onDone(0) end
+        return
+    end
     local n = C_AuctionHouse.GetNumReplicateItems() or 0
-    if n == 0 then return 0 end
+    if n == 0 then
+        if onDone then onDone(0) end
+        return
+    end
+
+    replicateRun = replicateRun + 1
+    local myRun = replicateRun
 
     local realm = CurrentRealm()
     local now = time()
     local buckets = {}
-    for i = 0, n - 1 do
-        local _, _, count, _, _, _, _, _, _, buyout, _, _, _, owner = C_AuctionHouse.GetReplicateItemInfo(i)
-        if buyout and buyout > 0 and count and count > 0 then
-            local link = C_AuctionHouse.GetReplicateItemLink(i)
-            if link then
-                local id, bonus, mods = ns:ParseItemLink(link)
-                if id then
-                    local fqKey = ns:MakeItemKey(id, bonus, mods)
-                    local k = MakeCacheKey(fqKey, false, realm)
-                    if k then
-                        -- Replicate is non-commodity in retail (commodities
-                        -- go through SendSearchQuery → GetCommoditySearchResults).
-                        -- Same per-listing semantic as HarvestNonCommodity:
-                        -- store the full listing buyout, not buyout/count.
-                        if buyout > 0 then
+    local i = 0
+
+    local function Step()
+        -- A newer replicate snapshot superseded us; drop this run's work.
+        if myRun ~= replicateRun then return end
+
+        -- ReplicateItems() invalidates the list when it's CALLED, but
+        -- REPLICATE_ITEM_LIST_UPDATE (which bumps replicateRun) only fires when
+        -- the new data lands — so the run token alone can't catch a snapshot
+        -- swapped out mid-walk. Reading indices across two snapshots would
+        -- commit a mixed cheapest-10 and mark it fresh: silently wrong post
+        -- prices, no error. A size change is the cheap detectable signal; on
+        -- any change, abandon rather than commit half-truth. The old inline
+        -- harvest was atomic within one event and immune to this.
+        local live = C_AuctionHouse.GetNumReplicateItems() or 0
+        if live ~= n then return end
+
+        local stop = math.min(i + REPLICATE_CHUNK, n)
+        while i < stop do
+            local _, _, count, _, _, _, _, _, _, buyout, _, _, _, owner = C_AuctionHouse.GetReplicateItemInfo(i)
+            if buyout and buyout > 0 and count and count > 0 then
+                local link = C_AuctionHouse.GetReplicateItemLink(i)
+                if link then
+                    local id, bonus, mods = ns:ParseItemLink(link)
+                    if id then
+                        local fqKey = ns:MakeItemKey(id, bonus, mods)
+                        local k = MakeCacheKey(fqKey, false, realm)
+                        if k then
+                            -- Replicate is non-commodity in retail (commodities
+                            -- go through SendSearchQuery → GetCommoditySearchResults).
+                            -- Same per-listing semantic as HarvestNonCommodity:
+                            -- store the full listing buyout, not buyout/count.
                             local b = buckets[k]
                             if not b then
                                 b = { listings = {}, hasInvalidSeller = false }
                                 buckets[k] = b
                             end
                             local seller = owner or ""
-                            local listing = {
-                                buyout      = buyout,
-                                quantity    = count,
-                                seller      = seller,
-                                timeLeftSec = nil,  -- replicate has no timeLeft
-                                isPlayer    = false,
-                                hasOwner    = (seller ~= ""),
-                            }
-                            if not listing.hasOwner then b.hasInvalidSeller = true end
-                            InsertListing(b.listings, listing, CACHE_LISTING_LIMIT)
+                            -- Check before allocating: on a full realm most
+                            -- auctions lose to the 10 cheapest already held, so
+                            -- building the table first made ~199k of every 200k
+                            -- immediate garbage.
+                            if seller == "" then b.hasInvalidSeller = true end
+                            if WouldAcceptListing(b.listings, buyout, CACHE_LISTING_LIMIT) then
+                                InsertListing(b.listings, {
+                                    buyout      = buyout,
+                                    quantity    = count,
+                                    seller      = seller,
+                                    timeLeftSec = nil,  -- replicate has no timeLeft
+                                    isPlayer    = false,
+                                    hasOwner    = (seller ~= ""),
+                                }, CACHE_LISTING_LIMIT)
+                            end
                         end
                     end
                 end
             end
+            i = i + 1
         end
+
+        if i < n then
+            C_Timer.After(0, Step)
+            return
+        end
+
+        local stored = 0
+        for k, b in pairs(buckets) do
+            SetCacheEntry(k, {
+                listings         = b.listings,
+                scannedAt        = now,
+                source           = "replicate",
+                hasInvalidSeller = b.hasInvalidSeller,
+            })
+            stored = stored + 1
+        end
+        if onDone then onDone(stored) end
     end
 
-    local stored = 0
-    for k, b in pairs(buckets) do
-        cache[k] = {
-            listings         = b.listings,
-            scannedAt        = now,
-            source           = "replicate",
-            hasInvalidSeller = b.hasInvalidSeller,
-        }
-        stored = stored + 1
-    end
-    return stored
+    Step()
 end
 
 --------------------------
@@ -438,7 +561,7 @@ listener:SetScript("OnEvent", function(_, event, arg1)
                 local existing = k and cache[k]
                 local stomp = existing and existing.source == "empty"
                 if k and (not existing or stomp) then
-                    cache[k] = {
+                    SetCacheEntry(k, {
                         listings = {{
                             buyout      = br.minPrice,
                             quantity    = 1,
@@ -450,7 +573,7 @@ listener:SetScript("OnEvent", function(_, event, arg1)
                         scannedAt        = now,
                         source           = "browse",
                         hasInvalidSeller = true,  -- browse never gives sellers
-                    }
+                    })
                     stored = stored + 1
                 end
             end
@@ -458,11 +581,12 @@ listener:SetScript("OnEvent", function(_, event, arg1)
         if stored > 0 then ScheduleNotify() end
 
     elseif event == "REPLICATE_ITEM_LIST_UPDATE" then
-        local stored = HarvestReplicate()
-        if stored > 0 then
-            ns:PrintDebug("[ScanCache] Replicate harvested " .. stored .. " entries")
-            ScheduleNotify()
-        end
+        HarvestReplicateAsync(function(stored)
+            if stored > 0 then
+                ns:PrintDebug("[ScanCache] Replicate harvested " .. stored .. " entries")
+                ScheduleNotify()
+            end
+        end)
     end
 end)
 
@@ -481,18 +605,37 @@ end)
 -- The auto-scanner registers `expectedItemIDs` before issuing the search;
 -- after harvest fires NotifyNow(), it calls PruneStaleForItemIDs to wipe
 -- entries that weren't refreshed.
+-- Walks the cache ONCE for the whole itemID set (FQ-223). This used to nest a
+-- full pairs(cache) inside the itemID loop, and CheckTimeouts calls it per
+-- timed-out item — on a realm where many queued items simply aren't listed,
+-- 150 timeouts x 20k entries was ~3M iterations, each allocating a substring
+-- via k:sub(). Build the prefix set first, then one pass with an
+-- allocation-free find(..., plain) prefix test.
 function ScanCache:PruneStaleForItemIDs(itemIDs, beforeTime)
     if not itemIDs then return end
     local realm = CurrentRealm()
+
+    local itemPrefixes, commodKeys = {}, {}
+    local any = false
     for itemID in pairs(itemIDs) do
-        local prefixItem = realm .. "|" .. tostring(itemID) .. ";"
-        local prefixCommod = realm .. "|c:" .. tostring(itemID)
-        for k, v in pairs(cache) do
-            if v.scannedAt and v.scannedAt < beforeTime then
-                if k:sub(1, #prefixItem) == prefixItem or k == prefixCommod then
-                    cache[k] = nil
+        itemPrefixes[#itemPrefixes + 1] = realm .. "|" .. tostring(itemID) .. ";"
+        commodKeys[realm .. "|c:" .. tostring(itemID)] = true
+        any = true
+    end
+    if not any then return end
+
+    for k, v in pairs(cache) do
+        if v.scannedAt and v.scannedAt < beforeTime then
+            local match = commodKeys[k]
+            if not match then
+                for i = 1, #itemPrefixes do
+                    if k:find(itemPrefixes[i], 1, true) == 1 then
+                        match = true
+                        break
+                    end
                 end
             end
+            if match then DeleteCacheEntry(k) end
         end
     end
 end
@@ -583,13 +726,14 @@ end
 
 function ScanCache:Clear()
     wipe(cache)
+    cacheCount = 0
 end
 
 -- Drop the entry for a single fqKey. Used when an item is sold or
 -- cancelled and we want the next post decision to require a fresh scan.
 function ScanCache:Forget(fqKey, isCommodity)
     local key = MakeCacheKey(fqKey, isCommodity)
-    if key then cache[key] = nil end
+    if key then DeleteCacheEntry(key) end
 end
 
 -- Write a sentinel "we scanned and there are zero listings" entry. Lets
@@ -607,12 +751,12 @@ function ScanCache:MarkEmpty(fqKey, isCommodity)
     if existing and existing.listings and #existing.listings > 0 then
         return
     end
-    cache[key] = {
+    SetCacheEntry(key, {
         listings         = {},
         scannedAt        = time(),
         source           = "empty",
         hasInvalidSeller = false,
-    }
+    })
 end
 
 -- For /fq debug — dump a few cache entries most recently touched.
@@ -671,10 +815,20 @@ persistFrame:SetScript("OnEvent", function(_, event)
                     dropped = dropped + 1
                 end
             end
+            -- Seed the counter from the load rather than incrementing through
+            -- SetCacheEntry per key — the saved set is already within the cap,
+            -- and this avoids an eviction sweep during login.
+            cacheCount = kept
             if dropped > 0 then
                 ns:PrintDebug("[ScanCache] loaded " .. kept ..
                     " entries, dropped " .. dropped .. " from older build")
             end
+            -- Release the SavedVariables table now that `cache` holds the
+            -- entries (FQ-223). It shares references with `cache`, so keeping it
+            -- around pinned every *superseded* entry — each rescan of a cached
+            -- item leaked its previous listings for the rest of the session.
+            -- PLAYER_LOGOUT rebuilds it from scratch, including on /reload.
+            FlipQueueDB.scanCache = nil
         end
         if type(FlipQueueDB) == "table" and type(FlipQueueDB.itemScans) == "table" then
             for k, t in pairs(FlipQueueDB.itemScans) do

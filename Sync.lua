@@ -1687,6 +1687,10 @@ function Sync:MergeCharacters(remoteChars, ownedChars, remoteUUID)
         -- is authoritative until the user explicitly restores.
         if charOwner ~= myUUID and not ns:IsCharDeleted(charKey) then
             ns.db.characters[charKey] = charData
+            -- Synced characters bring item names the name -> itemID index
+            -- hasn't seen (FQ-223). The index memoizes on first use, which can
+            -- easily happen before BNet sync delivers the partner account.
+            ns:InvalidateInventoryNameIndex()
         end
     end
 end
@@ -1728,6 +1732,7 @@ function Sync:MergeWarbank(remoteWarbank)
 
     if remoteScan > localScan then
         ns.db.warbank = remoteWarbank
+        ns:InvalidateInventoryNameIndex()
     end
 end
 
@@ -1923,6 +1928,7 @@ function Sync:ApplyDelta(delta)
             if not ns:IsCharDeleted(data.charKey) then
                 data.charData.accountUUID = delta.accountUUID
                 ns.db.characters[data.charKey] = data.charData
+                ns:InvalidateInventoryNameIndex()
             end
         end
     elseif deltaType == "CDEL" then
@@ -1953,6 +1959,7 @@ function Sync:ApplyDelta(delta)
             local remoteScan = data.lastScan or 0
             if remoteScan > localScan then
                 ns.db.warbank = data
+                ns:InvalidateInventoryNameIndex()
             end
         end
     elseif deltaType == "CMETA" then

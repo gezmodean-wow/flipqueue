@@ -1140,7 +1140,13 @@ frame:SetScript("OnEvent", function(self, event)
                 Tracker._tsmLastReconcile = time()
                 C_Timer.After(2, function()
                     if Tracker._isAHOpen then
-                        Tracker:ReconcileWithTSM(false)
+                        -- Async (FQ-223): parsing TSM's CSV corpus plus the full
+                        -- log inline froze the client right as the AH opened.
+                        if Tracker.ReconcileWithTSMAsync then
+                            Tracker:ReconcileWithTSMAsync(false)
+                        else
+                            Tracker:ReconcileWithTSM(false)
+                        end
                     end
                 end)
             end

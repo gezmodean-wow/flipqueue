@@ -12,6 +12,25 @@ ns.TSM = TSM
 local isAvailable       -- cached availability (nil = not checked yet)
 local priceCache = {}   -- "fqKey|source" -> {value = copper_or_nil, ts = time()}
 local keyCache = {}     -- fqKey -> tsmString
+local keyCacheCount = 0
+
+-- keyCache is a pure-function memo (fqKey -> tsmString is deterministic), but
+-- it was unbounded and never wiped — InvalidateCache only clears priceCache and
+-- opCache. A replicate harvest calls through here once per distinct variant on
+-- the realm, so a full-AH scan permanently parked 100k+ key/string pairs for the
+-- session (FQ-223). Cap it; dropping entries only costs a recompute.
+local KEY_CACHE_MAX = 20000
+
+local function SetKeyCache(fqKey, value)
+    if keyCache[fqKey] == nil then
+        if keyCacheCount >= KEY_CACHE_MAX then
+            wipe(keyCache)
+            keyCacheCount = 0
+        end
+        keyCacheCount = keyCacheCount + 1
+    end
+    keyCache[fqKey] = value
+end
 local opCache = {}      -- fqKey -> {minPrice, maxPrice, normalPrice, opName, ts}
 local CACHE_TTL = 60    -- seconds
 local OP_CACHE_TTL = 300 -- 5 min for operations (they rarely change mid-session)
@@ -178,7 +197,7 @@ function TSM:ItemKeyToTSMString(fqKey)
     local petID = fqKey:match("^pet:(%d+)")
     if petID then
         local result = "p:" .. petID
-        keyCache[fqKey] = result
+        SetKeyCache(fqKey, result)
         return result
     end
 
@@ -194,7 +213,7 @@ function TSM:ItemKeyToTSMString(fqKey)
         if wowStr then
             local ok, tsmStr = pcall(TSM_API.ToItemString, wowStr)
             if ok and type(tsmStr) == "string" and tsmStr ~= "" then
-                keyCache[fqKey] = tsmStr
+                SetKeyCache(fqKey, tsmStr)
                 return tsmStr
             end
         end
@@ -236,7 +255,7 @@ function TSM:ItemKeyToTSMString(fqKey)
     end
 
     local result = table.concat(parts, ":")
-    keyCache[fqKey] = result
+    SetKeyCache(fqKey, result)
     return result
 end
 

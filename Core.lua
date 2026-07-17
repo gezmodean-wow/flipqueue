@@ -102,6 +102,20 @@ function ns:PrintDebug(msg)
     end
 end
 
+-- Cheap gate for hot paths (FQ-223). PrintDebug always costs something even
+-- with debug off — Cogworks records into its ring buffer regardless, and Lua
+-- has already built the argument string by the time we're called. Sites that
+-- run per-auction or per-item must wrap their :format() in this; a handful of
+-- them were formatting 10-argument strings inside 200k-iteration loops.
+-- Anything not on a hot path should keep calling PrintDebug unconditionally so
+-- its history stays in the ring for the debug console.
+function ns:IsDebugEnabled()
+    if ns.cw and ns.cw.IsDebugEnabled then
+        return ns.cw:IsDebugEnabled("FlipQueue")
+    end
+    return ns.db and ns.db.settings and ns.db.settings.debugMessages or false
+end
+
 function ns:SetDebugEnabled(enabled)
     enabled = enabled and true or false
     if ns.db and ns.db.settings then
@@ -362,17 +376,40 @@ end
 -- recipe-prefix guard) and FQ supplies a name-lookup closure that walks our
 -- scanned inventory tables. Reads ns.db lazily so callers run before SV init
 -- get nil instead of an indexing error.
-local function inventoryLookupByName(searchNameLower)
-    if not ns.db then return nil end
+-- Indexed rather than scanned (FQ-223). This is called from ItemsMatch whenever
+-- a queue item has no numeric itemID (pets, imports with stripped keys), and
+-- every MISS used to walk all characters plus the warbank — ~120k rows with a
+-- :lower() allocation each — with no memoization. Sitting inside per-task or
+-- per-auction loops, that was the single biggest constant factor on the mail
+-- and posting paths.
+--
+-- Safe to cache: despite reading inventory, this is really a name -> itemID
+-- dictionary, and that mapping is a property of the game's item database, not
+-- of what the player currently holds. An entry staying after the item leaves a
+-- bag still maps the name to the correct ID. Scanner rebuilds the index when it
+-- writes inventory, which is what picks up names we hadn't seen before.
+local nameIndex = nil
+
+function ns:InvalidateInventoryNameIndex()
+    nameIndex = nil
+end
+
+local function BuildInventoryNameIndex()
+    local idx = {}
+
+    local function Add(itemData)
+        if not itemData.name then return end
+        local n = itemData.name:lower()
+        if idx[n] then return end -- first hit wins, matching the old walk order
+        local invID = tonumber(itemData.itemID)
+        if invID and invID > 0 then idx[n] = invID end
+    end
 
     if ns.db.characters then
         for _, charData in pairs(ns.db.characters) do
             if charData.inventory and charData.inventory.items then
                 for _, itemData in pairs(charData.inventory.items) do
-                    if itemData.name and itemData.name:lower() == searchNameLower then
-                        local invID = tonumber(itemData.itemID)
-                        if invID and invID > 0 then return invID end
-                    end
+                    Add(itemData)
                 end
             end
         end
@@ -380,14 +417,17 @@ local function inventoryLookupByName(searchNameLower)
 
     if ns.db.warbank and ns.db.warbank.items then
         for _, itemData in pairs(ns.db.warbank.items) do
-            if itemData.name and itemData.name:lower() == searchNameLower then
-                local invID = tonumber(itemData.itemID)
-                if invID and invID > 0 then return invID end
-            end
+            Add(itemData)
         end
     end
 
-    return nil
+    return idx
+end
+
+local function inventoryLookupByName(searchNameLower)
+    if not ns.db then return nil end
+    if not nameIndex then nameIndex = BuildInventoryNameIndex() end
+    return nameIndex[searchNameLower]
 end
 
 function ns:ResolveItemID(queueItem)

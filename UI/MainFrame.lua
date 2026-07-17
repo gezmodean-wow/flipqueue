@@ -450,19 +450,29 @@ end)
 
 mainFrame.actionBtns.generate = CreateActionBtn("Generate", "Match queue deals against inventory (preview)", function()
     if ns.TodoList then
-        UI._generatorPreview = ns.TodoList:GenerateTodoList(
-            "fpScanner", UI:GetGenAllocationOrder())
-        local count = UI._generatorPreview and UI._generatorPreview.items and #UI._generatorPreview.items or 0
-        local pending, missing = 0, 0
-        for _, item in ipairs(UI._generatorPreview.items) do
-            if item.status == "pending" then pending = pending + 1
-            elseif item.status == "missing" then missing = missing + 1 end
-        end
-        ns:Print(ns.COLORS.GREEN .. "Generated " .. count .. " task(s): " ..
-            pending .. " ready" ..
-            (missing > 0 and (", " .. missing .. " missing") or "") ..
-            " — click Save to commit|r")
-        UI:Refresh()
+        -- Async with a loading banner (FQ-223): on a large multi-realm import
+        -- the synchronous build froze the client hard enough to need a task-kill.
+        UI:GenerateTodoListWithLoading(mainFrame, "fpScanner",
+            UI:GetGenAllocationOrder(), nil,
+            function(preview)
+                UI._generatorPreview = preview
+                if not preview then
+                    ns:Print(ns.COLORS.RED .. "Failed to generate to-do list.|r")
+                    return
+                end
+                local items = preview.items or {}
+                local count = #items
+                local pending, missing = 0, 0
+                for _, item in ipairs(items) do
+                    if item.status == "pending" then pending = pending + 1
+                    elseif item.status == "missing" then missing = missing + 1 end
+                end
+                ns:Print(ns.COLORS.GREEN .. "Generated " .. count .. " task(s): " ..
+                    pending .. " ready" ..
+                    (missing > 0 and (", " .. missing .. " missing") or "") ..
+                    " — click Save to commit|r")
+                UI:Refresh()
+            end)
     end
 end)
 
@@ -478,7 +488,7 @@ mainFrame.actionBtns.commitSave = CreateActionBtn("Save", "Save generated to-do 
             ns.TodoList:CommitList(UI._generatorPreview, "replace")
             ns:Print(ns.COLORS.GREEN .. "Saved to-do list with " .. count .. " tasks.|r")
         end
-        UI._generatorPreview = nil
+        UI:InvalidateGeneratorPreview()
         UI:Refresh()
         if UI.RefreshMini then UI:RefreshMini() end
     end
@@ -524,7 +534,7 @@ mainFrame.actionBtns.clearTodoList = CreateActionBtn("Clear Current", "Clear onl
         OnAccept = function()
             if ns.TodoList then
                 ns.TodoList:ClearCurrent()
-                UI._generatorPreview = nil
+                UI:InvalidateGeneratorPreview()
                 ns:Print("Current to-do list cleared.")
                 UI:Refresh()
                 if UI.RefreshMini then UI:RefreshMini() end
@@ -548,7 +558,7 @@ mainFrame.actionBtns.clearAllTodoLists = CreateActionBtn("Clear All", "Clear the
         OnAccept = function()
             if ns.TodoList then
                 ns.TodoList:ClearAll()
-                UI._generatorPreview = nil
+                UI:InvalidateGeneratorPreview()
                 ns:Print("All to-do lists cleared.")
                 UI:Refresh()
                 if UI.RefreshMini then UI:RefreshMini() end
@@ -836,7 +846,7 @@ UI.generatorPreviewTable = UI:CreateScrollTable(tableContainer, {
 UI.generatorPreviewTable:SetSort("status", true)
 
 -- Generator state
-UI._generatorPreview = nil
+UI:InvalidateGeneratorPreview()
 
 -- Keep references for backward compatibility
 UI.content = tableContainer

@@ -328,6 +328,8 @@ local function WriteProjectedInventory(fqKey, charData, sourceLabel)
         items        = items,
     }
     charEntry._invSig = newSig
+    -- New rows may carry names the name -> itemID index hasn't seen (FQ-223).
+    ns:InvalidateInventoryNameIndex()
     -- Migration indicator: this character's inventory came from a
     -- Syndicator projection, not from the old C_Container scanner.
     -- The Characters tab reads this flag to render a "Live" badge.
@@ -550,6 +552,7 @@ function Scanner:RefreshWarbankFromSyndicator()
         totalSlots = totalSlots,
         freeSlots  = freeSlots,
     }
+    ns:InvalidateInventoryNameIndex()
 
     local count = 0
     for _ in pairs(items) do count = count + 1 end
