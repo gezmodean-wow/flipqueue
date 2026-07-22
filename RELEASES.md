@@ -6,6 +6,12 @@ The engineering-detail companion lives in `CHANGELOG.md` (commit-readerese — f
 
 ---
 
+## v0.13.1-alpha4
+
+One fix, and it's the big one for anyone whose game died the moment they pasted a large FlippingPal export.
+
+- **Pasting a huge export no longer crashes the game.** It turns out the crash happened *while the paste was still arriving* — on some systems the game delivers a paste one character at a time, and FlipQueue was re-reading the entire pasted text on every one of those events. On a few-hundred-KB paste that adds up to a colossal amount of wasted memory in a fraction of a second, and the client died before any progress bar could appear. FlipQueue now waits quietly until the paste has fully arrived (you'll see a "Receiving paste..." note for big ones), reads it exactly once, and then processes it in the background as before.
+
 ## v0.13.1-alpha3
 
 This build fixes a serious bug where FlipQueue couldn't find deals on the auction house that were sitting right there — plus two import-and-inventory annoyances.

@@ -1,5 +1,27 @@
 # Changelog
 
+## v0.13.1-alpha4
+
+Emergency follow-up: Crameroni retested and still crashed **at paste time, with no popup** — alpha3's fix was unreachable in the failing mode. Embedded Cogworks-1.0 stays at **`v0.16.0`** (MINOR 31); `## Interface` stays at `120007`.
+
+### FQ-228 round 2: per-character streamed pastes crashed the client before detection ever ran
+
+Headless timing on the reporter's actual 373 KB export (driven through the real `Import.lua` under the `test/wow_shim.lua` harness) killed the sync-parse theory for good: `Import:Parse` = **61 ms**, preview dup-scan = 850 ms (chunked in-game). The parse was never the freeze.
+
+The real killer was `UI/ImportPage.lua`'s own `OnTextChanged` calling `GetText()` on **every input event**. The client can deliver a paste as a stream of per-character events; under that mode a 370 KB paste re-allocates the entire growing text hundreds of thousands of times — tens of GB of cumulative string churn → hard crash before any banner draws. The `importLastLen < 10` detection gate also never fires under streaming (it outgrows the check by the 11th character), which is why alpha3's clear-the-box fix never executed on this path, and why the crash predates 0.13 entirely.
+
+Rework (`UI/ImportPage.lua`):
+
+- `OnChar` (zero allocation) flags the burst and starts a per-frame settle loop.
+- `OnTextChanged` goes dormant while a burst is active — **no GetText during the stream**.
+- The settle loop does at most one `GetText()` per frame until the length stops changing, then runs the unchanged detection logic once against the complete snapshot (where the pre-paste `importLastLen` makes the `< 10` gate behave as designed).
+- Single-shot paste delivery (one big OnTextChanged, no burst) still goes straight through the direct path.
+- "Receiving paste... N KB" status shows during multi-frame streams.
+
+If this build *still* crashes at paste, the remaining suspect is the client's own text insertion into the edit box, and the escalation is a WeakAuras-style import box that never lets text accumulate in the widget at all.
+
+Also corrected in the alpha3 notes below: FP per-realm-group rows do **not** merge to one entry per item on import — `MakeImportKey` includes the normalized realm and the groups are disjoint, so all ~2k rows import as separate per-realm-group entries (2,137 parsed / 0 in-batch dups on his file).
+
 ## v0.13.1-alpha3
 
 Two live-user regressions off the back of the FQ-223 line: a buy-list search filter that hid most gear listings (FQ-227), and the paste/right-click pair from FQ-228. Embedded Cogworks-1.0 stays at **`v0.16.0`** (MINOR 31); `## Interface` stays at `120007`.
