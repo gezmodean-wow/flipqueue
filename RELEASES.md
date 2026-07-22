@@ -6,6 +6,14 @@ The engineering-detail companion lives in `CHANGELOG.md` (commit-readerese — f
 
 ---
 
+## v0.13.1-alpha3
+
+This build fixes a serious bug where FlipQueue couldn't find deals on the auction house that were sitting right there — plus two import-and-inventory annoyances.
+
+- **Your shopping lists find deals again.** Version 0.13.0 added a "Match exact item level" option to the Auctionator shopping lists FlipQueue builds, and turned it on for everyone. The catch: the auction house shows item levels *scaled to your character's level*, and most of us buy on low-level characters — so the exact match quietly hid almost every armor and weapon listing. Only recipes, pets, and similar items still came up, which made it look like your imported deals had vanished from the AH. The option is now **off** by default (a chat message will tell you it changed). If you snipe specific gear variants on a max-level character, you can turn it back on in Settings → Auctionator.
+- **Pasting a big FlippingPal export is easier on the game.** The paste box now empties itself the moment a large paste is picked up — just holding that much text on screen was enough to freeze the game, even with the import itself running in the background.
+- **Right-clicking items in the Inventory tab always responds now.** Before, items already assigned to your queue ignored the right-click completely — which felt like "I can't add anything to Do Not Track," especially right after an import when almost everything is assigned. Now assigned items open a small menu (**Remove from queue** / **Add to Do Not Track**), posted items tell you the live auction has to be collected or cancelled first, and if an action can't find anything to act on you get a message instead of silence.
+
 ## v0.13.1-alpha2
 
 More freeze fixes for large accounts — this build finishes the job alpha1 started. If you tested alpha1 and still froze, this one is for you.

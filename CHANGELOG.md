@@ -1,5 +1,35 @@
 # Changelog
 
+## v0.13.1-alpha3
+
+Two live-user regressions off the back of the FQ-223 line: a buy-list search filter that hid most gear listings (FQ-227), and the paste/right-click pair from FQ-228. Embedded Cogworks-1.0 stays at **`v0.16.0`** (MINOR 31); `## Interface` stays at `120007`.
+
+### FQ-227: exact-ilvl bounds on Auctionator buy lists hid real listings — now default off
+
+The regression window was clean: reporter rolled back to v0.12.0 and deals reappeared, and the only buy-path change in v0.12.0..HEAD was FQ-195's ilvl bounds (`BuildSearchString`, `BuyListSync.lua`), shipped v0.13.0-alpha2 with `auctBuyListIncludeIlvl` defaulted **on**.
+
+The mechanism: FQ emits min=max=resolved-ilvl, and Auctionator's `ItemLevel` filter (`Source_ModernAH/Search/Filters/ItemLevel.lua`) compares that against `itemKey.itemLevel` from the browse results — which the client **scales to the viewing character's level** for level-scaling gear. FP cross-realm buyers shop on level-10 alts, so the recorded (unscaled) ilvl essentially never equals the scaled browse value and every gear listing fails the exact match. Items with no ilvl (recipes, pets, consumables) bypass the filter (`HasItemLevel` guard), which is why a couple of deals per character still surfaced — "16 deals, found at best 2."
+
+- `auctBuyListIncludeIlvl` defaults **off** (`DB.lua`), restoring pre-0.13 search strings.
+- **Migration 12** one-shot flips existing installs off, with a login notice through the Scanner `PLAYER_LOGIN` message path so anyone who enabled it deliberately knows where it went.
+- Settings tooltip (`UI/AuctionatorFrame.lua`) rewritten: off-default documented, plus a caution about scaled browse ilvls on low-level characters.
+
+### FQ-228: large-paste editbox freeze + silent inventory right-clicks
+
+Reporter is on v0.13.0 stable, so the paste freeze is the known synchronous-parse family fixed in alpha1/2 — but his 334 KB FP CSV exposed a residual cost the async parse can't touch: the client re-lays-out the editbox's full multiline text while it's displayed. `UI/ImportPage.lua`'s large-paste path now captures the text and empties the box immediately (with the `importLastLen` reset so the next paste still trips the `< 10` detection gate).
+
+His export, for the record: 2,036 rows, **422 unique itemIDs**, 10 sell-realm groups (FP emits one row per group; 79 items appear in all 10), every row the `Realm 0`/0g inventory-sell placeholder (FQ-208 shape). Import keys collapse those to one entry per item, so the "duplicates to different realms" he worried about never reach the queue.
+
+The DNT half was a coverage gap, not a regression: `UI/InventoryPage.lua`'s right-click handler only acted on *Unknown / Unassigned / Check Mail* rows. Right after a big import most rows are **Assigned**, and those (plus *Posted*) ate the click silently. Now:
+
+- **Assigned** plain right-click opens a `MenuUtil.CreateContextMenu` — *Remove from queue* / *Add to Do Not Track* (which also drops the matching queue entry so no dead import lingers, since DNT'd items generate no tasks). Shift-right-click keeps the quick remove, now with a warning toast when no queue entry matches instead of doing nothing.
+- **Posted** right-click gets a warning toast naming the live auction as the blocker.
+- `UI/ScrollTable.lua` passes the row frame to `onRowClick` as a trailing arg for menu anchoring (backward compatible).
+
+### Housekeeping
+
+Cogworks shared/ pool synced to 2026-05-07a (issue/PR templates, scripts, `.gitattributes`); standards-sync 2026-06-27a acknowledged (cross-repo-coordination runbook now tracked in `CLAUDE.md`).
+
 ## v0.13.1-alpha2
 
 Second alpha on the v0.13.1 line, and a direct follow-up to alpha1: the reporter tested it and **still froze on import, with no progress banner at all**. Embedded Cogworks-1.0 stays at **`v0.16.0`** (MINOR 31); `## Interface` stays at `120007`.
