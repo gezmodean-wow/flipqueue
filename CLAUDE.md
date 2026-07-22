@@ -38,8 +38,9 @@ Each session, check the top entry of each source against the codes below. If new
 | [branch & release flow](https://github.com/gezmodean-wow/cogworks/blob/main/runbooks/branch-and-release-flow.md) | 2026-05-06a |
 | [doc conventions](https://github.com/gezmodean-wow/cogworks/blob/main/runbooks/doc-conventions.md) | 2026-05-05a |
 | [technical standards](https://github.com/gezmodean-wow/cogworks/blob/main/runbooks/technical-standards.md) | 2026-05-05a |
-| [shared/ file pool](https://github.com/gezmodean-wow/cogworks/blob/main/shared/VERSION) | 2026-05-05a — `bash scripts/sync-standards.sh check` |
-| [standards-sync (this mechanism)](https://github.com/gezmodean-wow/cogworks/blob/main/runbooks/standards-sync.md) | 2026-05-05a |
+| [shared/ file pool](https://github.com/gezmodean-wow/cogworks/blob/main/shared/VERSION) | 2026-05-07a — `bash scripts/sync-standards.sh check` |
+| [standards-sync (this mechanism)](https://github.com/gezmodean-wow/cogworks/blob/main/runbooks/standards-sync.md) | 2026-06-27a |
+| [cross-repo coordination](https://github.com/gezmodean-wow/cogworks/blob/main/runbooks/cross-repo-coordination.md) | 2026-05-07a |
 
 ## Coding Conventions
 - All Lua files use `local addonName, ns = ...` for namespace

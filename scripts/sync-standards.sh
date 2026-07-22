@@ -58,7 +58,11 @@ get_local_ack() {
   # Pull the cog's currently-acknowledged shared/ version from CLAUDE.md.
   # Format expected (single line in the Standards acknowledgments table):
   #   | shared/ file pool | <code> |
-  # We grep that row and extract the second pipe-delimited field.
+  # The cell may carry a trailing annotation, e.g.
+  #   | shared/ file pool | 2026-05-05a — `bash scripts/sync-standards.sh check` |
+  # We extract field 3, trim outer whitespace, then drop everything from the
+  # first interior whitespace onward — the version code itself never contains
+  # whitespace, so the leading non-whitespace token is the code.
   if [[ ! -f CLAUDE.md ]]; then
     echo ""
     return
@@ -67,6 +71,7 @@ get_local_ack() {
     /Standards acknowledgments/ { in_block=1; next }
     in_block && /shared\// {
       gsub(/^[[:space:]]+|[[:space:]]+$/, "", $3)
+      sub(/[[:space:]].*$/, "", $3)
       print $3
       exit
     }
