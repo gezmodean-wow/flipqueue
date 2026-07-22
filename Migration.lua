@@ -7,7 +7,7 @@ local addonName, ns = ...
 --------------------------
 
 -- Current schema version
-local CURRENT_SCHEMA = 11
+local CURRENT_SCHEMA = 12
 
 -- Schema history:
 -- nil/0  = v0.5.0 (stable release): queue array, separate inventory/characters/hiddenCharacters
@@ -38,6 +38,10 @@ local CURRENT_SCHEMA = 11
 --          Pause Automation cutting manual access entirely. Migrates per-
 --          char overrides too. Old keys are dropped post-derive so legacy
 --          reads return nil rather than stale conflicting state.
+-- 12     = FQ-227: auctBuyListIncludeIlvl forced off. The exact ilvl bound
+--          from FQ-195 compares against player-level-scaled AH browse ilvls
+--          and hid most gear listings on low-level buyer alts. One-shot;
+--          players can re-enable from the Auctionator settings page.
 
 local function RunMigrations(db)
     db.schemaVersion = db.schemaVersion or 0
@@ -518,6 +522,29 @@ local function RunMigrations(db)
             "See /fq settings or /fq about for details."
         db.schemaVersion = 11
     end  -- migration 11
+
+    -- Migration 12: FQ-227 — switch off exact ilvl bounds on Auctionator
+    -- buy lists. The min=max ilvl constraint added in v0.13.0 (FQ-195)
+    -- filters against the browse result's itemKey.itemLevel, which the
+    -- client scales to the viewing character's level for level-scaling
+    -- gear. On low-level buyer alts (the standard FP cross-realm setup)
+    -- nearly every gear listing failed the exact match, so imported deals
+    -- looked like they'd vanished from the AH even though a manual search
+    -- found them. One-shot flip back to the pre-0.13 "any ilvl" behavior;
+    -- players who want variant-exact matching can re-enable it from the
+    -- Auctionator settings page.
+    if db.schemaVersion < 12 then
+        db.settings = db.settings or {}
+        if db.settings.auctBuyListIncludeIlvl == true then
+            db.settings.auctBuyListIncludeIlvl = false
+            db._ilvlBoundsMigrationMessage =
+                "Auctionator buy lists: the exact item-level match introduced in " ..
+                "v0.13.0 could hide real listings on low-level characters (the AH " ..
+                "shows scaled item levels), so it has been switched off. Re-enable " ..
+                "it under Settings > Auctionator if you relied on it."
+        end
+        db.schemaVersion = 12
+    end  -- migration 12
 end  -- RunMigrations
 
 -- Expose for DB.lua

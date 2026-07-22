@@ -128,10 +128,13 @@ function ns:InitDB()
     db.settings.auctBuyListMode    = db.settings.auctBuyListMode or "single"  -- "single" | "perRealm"
     if db.settings.auctBuyListIncludeQuality == nil then db.settings.auctBuyListIncludeQuality = false end
     if db.settings.auctBuyListIncludeTier    == nil then db.settings.auctBuyListIncludeTier = false end
-    -- Auctionator shopping-list ilvl bounding (FQ-195). Default ON: when
-    -- the task carries an ilvl, the generated search string constrains
-    -- min/max ilvl so AH listings of the right variant come up first.
-    if db.settings.auctBuyListIncludeIlvl    == nil then db.settings.auctBuyListIncludeIlvl = true end
+    -- Auctionator shopping-list ilvl bounding (FQ-195). Default OFF since
+    -- FQ-227: the exact min=max bound compares against the browse result's
+    -- itemKey.itemLevel, which the client scales to the viewing character's
+    -- level for level-scaling gear — on low-level buyer alts nearly every
+    -- gear listing failed the match and shopping lists came back near-empty.
+    -- Opt-in for max-level snipers who want variant-exact matches.
+    if db.settings.auctBuyListIncludeIlvl    == nil then db.settings.auctBuyListIncludeIlvl = false end
     if db.settings.auctBuyListAutoDelete     == nil then db.settings.auctBuyListAutoDelete = true end
     -- Transform page defaults
     db.settings.transformPriceSource  = db.settings.transformPriceSource or "45% DBRegionMarketAvg"

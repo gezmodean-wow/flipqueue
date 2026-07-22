@@ -225,7 +225,7 @@ function UI:CreateAuctionatorPanel(parent)
 
     auctWidgets.includeIlvl = CreateCheckRow(content,
         "Match exact item level",
-        "On (default) constrains the search to the exact ilvl on the buy task so a level-220 Tarnished Dawnlit Band doesn't surface ilvl-200 variants. Off widens the search to any ilvl — useful when an item's ilvl wasn't captured at import.",
+        "Off (default) leaves item level unconstrained. On constrains the search to the exact ilvl on the buy task so a level-220 Tarnished Dawnlit Band doesn't surface ilvl-200 variants. |cffff8800Caution:|r the AH shows item levels scaled to your character's level, so on a low-level character the exact match can hide valid listings (FQ-227).",
         "auctBuyListIncludeIlvl",
         function() if ns.BuyListSync then ns.BuyListSync:Rebuild(true) end end)
     auctWidgets.includeIlvl:SetPoint("TOPLEFT", content, "TOPLEFT", LEFT_MARGIN + 18, y)
