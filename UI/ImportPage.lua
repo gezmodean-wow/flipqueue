@@ -247,10 +247,11 @@ local function HandleParsedItems(items)
     end
 end
 
-importEdit:SetScript("OnTextChanged", function(self, userInput)
-    if not userInput then return end
+-- Shared input handler: runs the paste detection ONCE against a complete
+-- text snapshot. Callers own the GetText() — this function must never read
+-- the box itself (see the streaming-paste guard below for why).
+local function HandleTextInput(editBox, text)
     if importBusy then return end
-    local text = self:GetText()
     local newLen = #text
     if importLastLen < 10 and newLen > 50 and text:find("\n") then
         if newLen > PARSE_CHUNK_THRESHOLD then
@@ -264,8 +265,8 @@ importEdit:SetScript("OnTextChanged", function(self, userInput)
             -- hundred-KB FP paste freezes the client on that alone, no
             -- matter how async the parse is (FQ-228). The captured
             -- `text` local is all the parser needs.
-            self:SetText("")
-            self:ClearFocus()
+            editBox:SetText("")
+            editBox:ClearFocus()
             importStatus:SetText(ns.COLORS.YELLOW ..
                 "Parsing large paste... please wait.|r")
             ShowProgress(0, 1)  -- indeterminate until parse reports first chunk
@@ -292,6 +293,52 @@ importEdit:SetScript("OnTextChanged", function(self, userInput)
         end
     end
     importLastLen = newLen
+end
+
+-- Streaming-paste guard (FQ-228, round 2). The client can deliver a paste
+-- either as one insertion (single OnTextChanged) or as a STREAM of per-
+-- character input events. The old handler called GetText() on every event;
+-- under streaming that allocates the entire growing text each time —
+-- a 370 KB paste churns tens of GB of strings in one frame batch and
+-- hard-crashes the client before any detection fires ("crashed right when
+-- pasted, no popup"). The detection gate also never triggered under
+-- streaming, because importLastLen outgrew its `< 10` check by the 11th
+-- character. So: OnChar (zero allocation) flags the burst, OnTextChanged
+-- goes dormant while it's active, and a per-frame settle loop waits until
+-- the text stops growing — at most ONE GetText() per frame — then runs the
+-- normal detection against the complete snapshot.
+local pasteSettlePending = false
+
+local function SettlePaste()
+    if importBusy then pasteSettlePending = false; return end
+    local text = importEdit:GetText()
+    local len = #text
+    if len > PARSE_CHUNK_THRESHOLD then
+        importStatus:SetText(ns.COLORS.YELLOW ..
+            ("Receiving paste... %d KB|r"):format(math.floor(len / 1024)))
+    end
+    if importEdit._settleLastLen ~= len then
+        importEdit._settleLastLen = len
+        C_Timer.After(0, SettlePaste)  -- still streaming in: look again next frame
+        return
+    end
+    pasteSettlePending = false
+    HandleTextInput(importEdit, text)
+end
+
+importEdit:SetScript("OnChar", function()
+    if pasteSettlePending or importBusy then return end
+    pasteSettlePending = true
+    importEdit._settleLastLen = -1
+    C_Timer.After(0, SettlePaste)
+end)
+
+importEdit:SetScript("OnTextChanged", function(self, userInput)
+    if not userInput then return end
+    if importBusy then return end
+    -- A char burst is in flight: the settle loop owns the (single) GetText.
+    if pasteSettlePending then return end
+    HandleTextInput(self, self:GetText())
 end)
 importEdit:SetScript("OnEscapePressed", function() importEdit:ClearFocus() end)
 

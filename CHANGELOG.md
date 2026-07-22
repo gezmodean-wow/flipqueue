@@ -18,7 +18,7 @@ The mechanism: FQ emits min=max=resolved-ilvl, and Auctionator's `ItemLevel` fil
 
 Reporter is on v0.13.0 stable, so the paste freeze is the known synchronous-parse family fixed in alpha1/2 — but his 334 KB FP CSV exposed a residual cost the async parse can't touch: the client re-lays-out the editbox's full multiline text while it's displayed. `UI/ImportPage.lua`'s large-paste path now captures the text and empties the box immediately (with the `importLastLen` reset so the next paste still trips the `< 10` detection gate).
 
-His export, for the record: 2,036 rows, **422 unique itemIDs**, 10 sell-realm groups (FP emits one row per group; 79 items appear in all 10), every row the `Realm 0`/0g inventory-sell placeholder (FQ-208 shape). Import keys collapse those to one entry per item, so the "duplicates to different realms" he worried about never reach the queue.
+His export, for the record: 2,036 rows, **422 unique itemIDs**, 10 sell-realm groups (FP emits one row per group; 79 items appear in all 10), every row the `Realm 0`/0g inventory-sell placeholder (FQ-208 shape). ~~Import keys collapse those to one entry per item~~ *Correction (alpha4): wrong — `MakeImportKey` includes the normalized realm, and the realm groups are disjoint, so all ~2k rows import as separate per-realm-group entries. Verified against his file with the headless harness: 2,137 parsed, 0 in-batch duplicates.*
 
 The DNT half was a coverage gap, not a regression: `UI/InventoryPage.lua`'s right-click handler only acted on *Unknown / Unassigned / Check Mail* rows. Right after a big import most rows are **Assigned**, and those (plus *Posted*) ate the click silently. Now:
 
