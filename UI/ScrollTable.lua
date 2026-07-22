@@ -683,8 +683,10 @@ function ScrollTableMixin:Render()
         if self.onRowClick then
             local capturedData = rowData
             local capturedIndex = i
+            -- The row frame rides along as a 4th arg so handlers can anchor
+            -- context menus to the clicked row (UI/InventoryPage.lua).
             row:SetScript("OnMouseDown", function(_, button)
-                self.onRowClick(capturedData, button, capturedIndex)
+                self.onRowClick(capturedData, button, capturedIndex, row)
             end)
         end
 

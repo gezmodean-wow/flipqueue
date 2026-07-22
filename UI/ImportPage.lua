@@ -259,6 +259,13 @@ importEdit:SetScript("OnTextChanged", function(self, userInput)
             -- the player knows we're working and has feedback during
             -- the multi-second parse window.
             importBusy = true
+            -- Clear the editbox right away: the client re-lays-out the
+            -- full multiline text while it's displayed, and a several-
+            -- hundred-KB FP paste freezes the client on that alone, no
+            -- matter how async the parse is (FQ-228). The captured
+            -- `text` local is all the parser needs.
+            self:SetText("")
+            self:ClearFocus()
             importStatus:SetText(ns.COLORS.YELLOW ..
                 "Parsing large paste... please wait.|r")
             ShowProgress(0, 1)  -- indeterminate until parse reports first chunk
@@ -273,6 +280,10 @@ importEdit:SetScript("OnTextChanged", function(self, userInput)
                     HandleParsedItems(items)
                 end
             )
+            -- The box was cleared above; track that, not the paste length,
+            -- so the next paste still trips the `importLastLen < 10` gate.
+            importLastLen = 0
+            return
         else
             -- Small paste: synchronous parse keeps the existing behavior
             -- (preview shows up instantly, no progress bar flash).

@@ -268,7 +268,21 @@ function UI:RefreshInventoryPage()
     UI._ShowTable(self.inventoryTable)
 
     local data = BuildFullInventoryData()
-    self.inventoryTable:SetRowClickHandler(function(rowData, button)
+
+    -- Find and remove the queue (fpScanner import) entry matching this row.
+    -- Returns true when an entry was removed — callers toast on failure so
+    -- a miss is never silent (FQ-228).
+    local function RemoveFromQueue(rowData)
+        for importKey, qItem in pairs(ns.db.imports.fpScanner or {}) do
+            if ns:ItemsMatch(qItem.itemKey, qItem.name, {itemKey = rowData._itemKey, itemID = tostring(rowData._itemID), name = rowData._itemName}) then
+                ns:ImportRemove("fpScanner", importKey)
+                return true
+            end
+        end
+        return false
+    end
+
+    self.inventoryTable:SetRowClickHandler(function(rowData, button, _, rowFrame)
         if button == "LeftButton" then
             UI._researchTargetItemKey = rowData._itemKey
             UI._researchTargetItemName = rowData._itemName
@@ -278,6 +292,7 @@ function UI:RefreshInventoryPage()
         end
         if button == "RightButton" then
             local statusKey = rowData._statusKey
+            local itemLabel = rowData._itemName or rowData.name
             if statusKey == "Unknown" or statusKey == "Unassigned" or statusKey == "Check Mail" then
                 if IsShiftKeyDown() then
                     local added = ns.Import:Save({{
@@ -287,29 +302,57 @@ function UI:RefreshInventoryPage()
                         quantity = rowData._quantity or 1,
                     }})
                     if added > 0 then
-                        ns.cw:Toast({ severity = "success", text = "Added to queue: " .. (rowData._itemName or rowData.name) })
+                        ns.cw:Toast({ severity = "success", text = "Added to queue: " .. itemLabel })
                     else
-                        ns.cw:Toast({ severity = "info", text = "Already in queue: " .. (rowData._itemName or rowData.name) })
+                        ns.cw:Toast({ severity = "info", text = "Already in queue: " .. itemLabel })
                     end
                 else
                     ns:AddDoNotTrack(rowData._itemID, rowData._itemName)
                     ns:Print("Do not track: " .. rowData.name)
                 end
+                self:Refresh()
             elseif statusKey == "Ignored" then
                 ns:RemoveDoNotTrack(tostring(rowData._itemID))
-                ns:Print("Removed from Do Not Track: " .. (rowData._itemName or rowData.name))
+                ns:Print("Removed from Do Not Track: " .. itemLabel)
+                self:Refresh()
             elseif statusKey == "Assigned" then
                 if IsShiftKeyDown() then
-                    for importKey, qItem in pairs(ns.db.imports.fpScanner or {}) do
-                        if ns:ItemsMatch(qItem.itemKey, qItem.name, {itemKey = rowData._itemKey, itemID = tostring(rowData._itemID), name = rowData._itemName}) then
-                            ns:ImportRemove("fpScanner", importKey)
-                            ns.cw:Toast({ severity = "info", text = "Removed from queue: " .. (rowData._itemName or rowData.name) })
-                            break
-                        end
+                    -- Quick path: shift skips the menu and removes outright.
+                    if RemoveFromQueue(rowData) then
+                        ns.cw:Toast({ severity = "info", text = "Removed from queue: " .. itemLabel })
+                    else
+                        ns.cw:Toast({ severity = "warning", text = "No matching queue entry found for " .. itemLabel })
                     end
+                    self:Refresh()
+                else
+                    -- An assigned item supports two different actions, so a
+                    -- plain right-click asks instead of guessing (FQ-228 —
+                    -- previously this silently did nothing).
+                    MenuUtil.CreateContextMenu(rowFrame or UIParent, function(_, rootDescription)
+                        rootDescription:CreateTitle(itemLabel)
+                        rootDescription:CreateButton("Remove from queue", function()
+                            if RemoveFromQueue(rowData) then
+                                ns.cw:Toast({ severity = "info", text = "Removed from queue: " .. itemLabel })
+                            else
+                                ns.cw:Toast({ severity = "warning", text = "No matching queue entry found for " .. itemLabel })
+                            end
+                            UI:Refresh()
+                        end)
+                        rootDescription:CreateButton("Add to Do Not Track", function()
+                            ns:AddDoNotTrack(rowData._itemID, rowData._itemName)
+                            -- Also drop the queue entry: DNT'd items generate
+                            -- no tasks, so a leftover import would sit dead.
+                            RemoveFromQueue(rowData)
+                            ns.cw:Toast({ severity = "success", text = "Do not track: " .. itemLabel })
+                            UI:Refresh()
+                        end)
+                    end)
                 end
+            elseif statusKey == "Posted" then
+                -- Nothing actionable while the auction is live; say so
+                -- instead of eating the click (FQ-228).
+                ns.cw:Toast({ severity = "warning", text = itemLabel .. " is posted on the AH — collect or cancel the auction first." })
             end
-            self:Refresh()
         end
     end)
     self.inventoryTable:SetData(data)
