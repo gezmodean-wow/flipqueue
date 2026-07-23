@@ -45,9 +45,12 @@ local BUILTIN_TOOLS = {
     -- Action tools
     --------------------------------------------------------------------
     {
+        -- Logout() is a protected function (ADDON_ACTION_FORBIDDEN from
+        -- insecure code, FQ-221), so this dispatches "/logout" through the
+        -- button's secure macrotext attribute instead of an onUse handler.
         id = "logout", type = "action", label = "Log Out",
         icon = "Interface\\Icons\\INV_Misc_Bell_01",
-        onUse = function() Logout() end,
+        macrotext = "/logout",
         tooltip = "Log out to the character-select screen.",
     },
     {
@@ -613,20 +616,26 @@ function TR:ClassifyEval(e)
 end
 
 -- Apply (or clear) a button's secure click attributes. `kind` is
--- "item" | "spell" | "macro"; pass nil to clear. The caller must guard
--- against combat lockdown -- SetAttribute is protected mid-combat.
+-- "item" | "spell" | "macro" | "macrotext"; pass nil to clear. The caller
+-- must guard against combat lockdown -- SetAttribute is protected mid-combat.
 function TR:ApplySecureDispatch(button, kind, name)
     button:SetAttribute("type", nil)
     button:SetAttribute("item", nil)
     button:SetAttribute("spell", nil)
     button:SetAttribute("macro", nil)
+    button:SetAttribute("macrotext", nil)
     if not (kind and name) then return end
-    button:SetAttribute("type", kind)
     if kind == "spell" then
+        button:SetAttribute("type", "spell")
         button:SetAttribute("spell", name)
     elseif kind == "macro" then
+        button:SetAttribute("type", "macro")
         button:SetAttribute("macro", name)
+    elseif kind == "macrotext" then
+        button:SetAttribute("type", "macro")
+        button:SetAttribute("macrotext", name)
     else
+        button:SetAttribute("type", "item")
         button:SetAttribute("item", name)
     end
 end
