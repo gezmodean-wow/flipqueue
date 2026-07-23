@@ -662,6 +662,7 @@ function UI:HideToolDrawer()
             btn:SetAttribute("item", nil)
             btn:SetAttribute("spell", nil)
             btn:SetAttribute("macro", nil)
+            btn:SetAttribute("macrotext", nil)
         end
     end
 end
@@ -781,9 +782,13 @@ function UI:RefreshToolDrawer()
 
         -- Secure dispatch (skipped during combat lockdown). Action tools and
         -- unowned services get a cleared button -- PostClick handles them.
+        -- Exception: action tools with a `macrotext` (logout) run protected
+        -- functions, so they dispatch through the secure attribute path.
         if not (InCombatLockdown and InCombatLockdown()) then
             if tool.type == "macro" and not tool.missing then
                 TR:ApplySecureDispatch(btn, "macro", tool.macroName)
+            elseif tool.type == "action" and tool.macrotext then
+                TR:ApplySecureDispatch(btn, "macrotext", tool.macrotext)
             elseif tool.type == "service"
                    and (res.state == "ready" or res.state == "cooldown") then
                 TR:ApplySecureDispatch(btn, res.dispatchKind, res.dispatchName)
