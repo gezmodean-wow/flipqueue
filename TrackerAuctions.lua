@@ -30,6 +30,32 @@ local function EntryItemID(entry)
     return key:match("^(%d+)")
 end
 
+-- Variant-aware key helpers (FQ-229). A todo key carrying bonus IDs or
+-- modifiers pins a specific item variant; matching such tasks against owned
+-- auctions at base-itemID granularity removed them when a *different*
+-- variant of the same item was already posted. Owned-auction links carry
+-- the full variant, so variant tasks require normalized key equality
+-- instead. Pet keys stay on the name-match path — their "q<quality>" bonus
+-- field isn't a gear variant.
+local function KeyHasVariant(key)
+    if not key or key == "" or key:find("^pet:") then return false end
+    local _, bonus, mods = strsplit(";", key)
+    return (bonus ~= nil and bonus ~= "") or (mods ~= nil and mods ~= "")
+end
+
+-- Bonus-ID order differs between item links and imported keys; sort before
+-- comparing so the same variant always yields the same string.
+local function NormalizeVariantKey(key)
+    local id, bonus, mods = strsplit(";", key)
+    if not id then return key end
+    if bonus and bonus ~= "" then
+        local list = { strsplit(":", bonus) }
+        table.sort(list, function(a, b) return (tonumber(a) or 0) < (tonumber(b) or 0) end)
+        bonus = table.concat(list, ":")
+    end
+    return id .. ";" .. (bonus or "") .. ";" .. (mods or "")
+end
+
 function Tracker:CheckOwnedAuctions()
     if not ns.db or not C_AuctionHouse then return end
 
@@ -97,12 +123,29 @@ function Tracker:CheckOwnedAuctions()
                     local totalMatched = 0
                     local firstExpiry = nil
                     local todoResolvedID = ns:ResolveItemID(todoItem)
+                    local todoVariantKey = KeyHasVariant(todoItem.itemKey)
+                        and NormalizeVariantKey(todoItem.itemKey) or nil
 
                     for aIdx, auction in ipairs(owned) do
                         if not consumed[aIdx] and remainingQty > 0 then
                             local auctionName = auctionNames[aIdx]
-                            local auctionKey = tostring(auction.itemKey.itemID) .. ";;"
-                            local matches = ns:ItemsMatch(auctionKey, auctionName, todoItem, todoResolvedID or false)
+                            local matches
+                            if todoVariantKey then
+                                -- Variant task: only the exact variant from the
+                                -- auction's link counts. Link not loaded yet →
+                                -- no match; leaving the task pending beats
+                                -- removing it on a sibling variant (FQ-229).
+                                local fullKey
+                                if auction.itemLink then
+                                    local id, bonus, mods = ns:ParseItemLink(auction.itemLink)
+                                    if id then fullKey = ns:MakeItemKey(id, bonus, mods) end
+                                end
+                                matches = fullKey ~= nil
+                                    and NormalizeVariantKey(fullKey) == todoVariantKey
+                            else
+                                local auctionKey = tostring(auction.itemKey.itemID) .. ";;"
+                                matches = ns:ItemsMatch(auctionKey, auctionName, todoItem, todoResolvedID or false)
+                            end
 
                             if matches then
                                 consumed[aIdx] = true
