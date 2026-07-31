@@ -691,3 +691,124 @@ UI.BuildCurrentCharTasks = BuildCurrentCharTasks
 
 -- Auctionator buy-list creation now lives in BuyListSync.lua. Callers should
 -- use `ns.BuyListSync:Rebuild(true)` for a manual refresh.
+
+--------------------------
+-- Paste capture (FQ-228)
+--------------------------
+
+-- Large FlippingPal pastes crashed the client outright. Two separate costs
+-- were behind it, and every import box in the addon is exposed to both:
+--
+--   1. Reading the box on every input event. The client can deliver one
+--      paste as a STREAM of per-character events, so a 370 KB paste meant
+--      hundreds of thousands of full-text allocations — tens of GB of string
+--      churn in one frame batch, and a hard crash before any banner drew.
+--      An earlier fix keyed the guard on OnChar alone; if a client streams
+--      via OnTextChanged instead, that guard never arms and the old cost is
+--      back. Arming from BOTH events is what actually makes this safe.
+--   2. The widget holding the whole paste. The client re-lays-out a
+--      multiline EditBox's full contents while it is displayed, which is
+--      C-side cost no amount of async Lua can avoid.
+--
+-- AttachPasteCapture fixes both. It reads the box AT MOST ONCE PER FRAME
+-- regardless of how the paste is delivered, and once the text crosses
+-- WIPE_THRESHOLD it drains the box every frame (GetText then SetText("")) so
+-- the widget never holds more than one frame's worth. Draining the widget
+-- rather than buffering OnChar's character argument is deliberate: OnChar
+-- never delivers newlines, and every FlippingPal format is line-based —
+-- GetText returns the literal contents, so table.concat reconstructs the
+-- paste exactly, newlines included.
+--
+-- Below the threshold nothing is drained at all, so ordinary typing keeps
+-- its text, its cursor and its selection.
+--
+-- opts:
+--   isBusy():  optional; true suspends capture while a parse is running
+--   onText(text, wasPasted):  complete snapshot, fired once per burst
+--   onProgress(bytes):  optional; called while a large paste streams in
+local WIPE_THRESHOLD = 4096   -- nobody types this much; a paste crosses it at once
+local SETTLE_FRAMES = 2       -- consecutive quiet frames that end a burst
+
+function UI:AttachPasteCapture(editBox, opts)
+    local buf, pending, wiping, total, lastLen, idle = {}, false, false, 0, -1, 0
+
+    local function Reset()
+        pending, wiping, total, lastLen, idle = false, false, 0, -1, 0
+        wipe(buf)
+    end
+
+    local function Finish(text, wasPasted)
+        Reset()
+        if text and text ~= "" and opts.onText then opts.onText(text, wasPasted) end
+    end
+
+    local Drain
+    Drain = function()
+        if opts.isBusy and opts.isBusy() then Reset() return end
+
+        local chunk = editBox:GetText() or ""
+        local n = #chunk
+
+        if wiping then
+            if n > 0 then
+                buf[#buf + 1] = chunk
+                total = total + n
+                editBox:SetText("")
+                idle = 0
+                if opts.onProgress then opts.onProgress(total) end
+            else
+                idle = idle + 1
+            end
+            if idle >= SETTLE_FRAMES then
+                Finish(table.concat(buf), true)
+            else
+                C_Timer.After(0, Drain)
+            end
+            return
+        end
+
+        if n >= WIPE_THRESHOLD then
+            -- Crossed into paste territory: take what's there and start
+            -- draining so the widget stops carrying it.
+            buf[#buf + 1] = chunk
+            total = n
+            wiping = true
+            idle = 0
+            editBox:SetText("")
+            if opts.onProgress then opts.onProgress(total) end
+            C_Timer.After(0, Drain)
+            return
+        end
+
+        -- Small input: just watch until it stops changing. The box is left
+        -- untouched, so typing behaves exactly as it always has.
+        if n ~= lastLen then
+            lastLen = n
+            idle = 0
+            C_Timer.After(0, Drain)
+        else
+            idle = idle + 1
+            if idle >= SETTLE_FRAMES then
+                Finish(chunk, false)
+            else
+                C_Timer.After(0, Drain)
+            end
+        end
+    end
+
+    local function Arm()
+        if pending then return end
+        if opts.isBusy and opts.isBusy() then return end
+        pending, wiping, total, lastLen, idle = true, false, 0, -1, 0
+        wipe(buf)
+        C_Timer.After(0, Drain)
+    end
+
+    -- Armed from both delivery paths. Neither handler reads the box: that is
+    -- the settle loop's job, exactly once per frame.
+    editBox:SetScript("OnChar", Arm)
+    editBox:SetScript("OnTextChanged", function(_, userInput)
+        if not userInput then return end   -- our own SetText calls land here
+        Arm()
+    end)
+end

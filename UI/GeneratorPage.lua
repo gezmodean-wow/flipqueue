@@ -1194,10 +1194,12 @@ function UI:RefreshGeneratorPage(pending)
         end
 
         -- Auto-detect paste and route through chunked parse for large inputs.
-        s2.editBox:SetScript("OnTextChanged", function(self, userInput)
-            if not userInput then return end
+        -- Capture goes through the shared helper (FQ-228): the box is read at
+        -- most once per frame however the client delivers the paste, and is
+        -- drained once it grows large so the widget never carries the whole
+        -- FlippingPal export.
+        local function HandleS2Text(text)
             if s2._busy then return end
-            local text = self:GetText()
             local newLen = #text
             if s2._lastLen < 10 and newLen > 50 and text:find("\n") then
                 if newLen > PARSE_CHUNK_THRESHOLD then
@@ -1210,12 +1212,25 @@ function UI:RefreshGeneratorPage(pending)
                                 .. ("Parsing %d / %d items...|r"):format(processed, total))
                         end,
                         HandleParsedS2)
+                    -- The box was drained during capture; keep the gate armed
+                    -- so the next paste is still detected.
+                    s2._lastLen = 0
+                    return
                 else
                     HandleParsedS2(ns.Import:Parse(text))
                 end
             end
             s2._lastLen = newLen
-        end)
+        end
+
+        UI:AttachPasteCapture(s2.editBox, {
+            isBusy = function() return s2._busy end,
+            onProgress = function(bytes)
+                s2.statusLabel:SetText(ns.COLORS.YELLOW
+                    .. ("Receiving paste... %d KB|r"):format(math.floor(bytes / 1024)))
+            end,
+            onText = HandleS2Text,
+        })
         s2.editBox:SetScript("OnEscapePressed", function() s2.editBox:ClearFocus() end)
 
         -- ===== STEP 3 CONTAINER: Configure & Generate =====
@@ -1486,10 +1501,9 @@ function UI:RefreshGeneratorPage(pending)
             end
         end
 
-        cr1.editBox:SetScript("OnTextChanged", function(self, userInput)
-            if not userInput then return end
+        -- Same shared capture as Step 2 (FQ-228).
+        local function HandleCR1Text(text)
             if cr1._busy then return end
-            local text = self:GetText()
             local newLen = #text
             if cr1._lastLen < 10 and newLen > 50 and text:find("\n") then
                 if newLen > CR_PARSE_CHUNK_THRESHOLD then
@@ -1502,12 +1516,23 @@ function UI:RefreshGeneratorPage(pending)
                                 .. ("Parsing %d / %d items...|r"):format(processed, total))
                         end,
                         HandleParsedCR1)
+                    cr1._lastLen = 0
+                    return
                 else
                     HandleParsedCR1(ns.Import:Parse(text))
                 end
             end
             cr1._lastLen = newLen
-        end)
+        end
+
+        UI:AttachPasteCapture(cr1.editBox, {
+            isBusy = function() return cr1._busy end,
+            onProgress = function(bytes)
+                cr1.statusLabel:SetText(ns.COLORS.YELLOW
+                    .. ("Receiving paste... %d KB|r"):format(math.floor(bytes / 1024)))
+            end,
+            onText = HandleCR1Text,
+        })
         cr1.editBox:SetScript("OnEscapePressed", function() cr1.editBox:ClearFocus() end)
 
         -- ===== CR STEP 2: Filter Deals =====

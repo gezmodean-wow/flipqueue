@@ -231,7 +231,12 @@ local function cmdState()
 
     local buildOk, buildErr = pcall(function()
 
-    L("FQ|" .. (ns.db.schemaVersion or "?") .. "|" .. date("%Y-%m-%d %H:%M:%S") .. "|" .. ns:GetCharKey())
+    -- Addon version FIRST: this line is what testers are asked to paste to
+    -- confirm which build they are on. It used to lead with the DB schema
+    -- version, which only moves on migrations — schema 12 covers alpha3,
+    -- alpha4 and alpha5 alike, so it could not confirm a test build at all.
+    L("FQ|" .. (ns.VERSION or "?") .. "|schema=" .. (ns.db.schemaVersion or "?")
+        .. "|" .. date("%Y-%m-%d %H:%M:%S") .. "|" .. ns:GetCharKey())
 
     -- Settings (all relevant)
     local s = ns.db.settings or {}
