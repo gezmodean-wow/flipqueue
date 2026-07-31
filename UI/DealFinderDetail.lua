@@ -406,8 +406,23 @@ function UI:RenderDealFinderRealmTable(parent, group, numCols, onToggle)
                     G(rp) .. " (" .. ((ref.realProfitPct or 0) >= 0 and "+" or "") .. ns:FormatPctNum(ref.realProfitPct or 0) .. "%)",
                     0.7,0.7,0.7, rp > 0 and 0.3 or 1, rp > 0 and 1 or 0.3, 0.3)
             end
-            GameTooltip:AddDoubleLine("Data Source", ref.dataQuality == "perRealm" and "Per-Realm TSM" or "Regional Fallback",
-                0.7,0.7,0.7, 0.6,0.6,0.6)
+            local srcLabel = "Regional Fallback"
+            if ref.dataQuality == "perRealm" then
+                srcLabel = "Per-Realm TSM"
+            elseif ref.dataQuality == "perRealmApprox" then
+                srcLabel = (ref.approxSource == "baseItem")
+                    and "Per-Realm TSM (base item)"
+                    or "Per-Realm TSM (nearest item level)"
+            end
+            GameTooltip:AddDoubleLine("Data Source", srcLabel, 0.7,0.7,0.7, 0.6,0.6,0.6)
+            if ref.dataQuality == "perRealmApprox" then
+                GameTooltip:AddLine("This realm's own pricing, but for a close variant", 0.8, 0.7, 0.4)
+                if ref.approxIlvl then
+                    GameTooltip:AddLine("(matched at item level " .. ref.approxIlvl .. ")", 0.8, 0.7, 0.4)
+                else
+                    GameTooltip:AddLine("rather than this exact item level.", 0.8, 0.7, 0.4)
+                end
+            end
             if ref.isOutlier then
                 GameTooltip:AddLine("OUTLIER - Price exceeds regional threshold", 1, 0.3, 0.3)
             end
@@ -580,7 +595,9 @@ function UI:RenderDealFinderResearch(parent, group)
         TblRow({
             name = rn, tsm = G(realm.tsmPrice), blend = G(realm.blendedPrice),
             ah = tostring(realm.numAuctions or 0), sold = soldStr,
-            src = (realm.dataQuality == "perRealm") and "Realm" or "|cffaa6666Rgn|r",
+            src = (realm.dataQuality == "perRealm") and "Realm"
+                or (realm.dataQuality == "perRealmApprox") and "|cffccaa55Realm~|r"
+                or "|cffaa6666Rgn|r",
             spread = spreadStr,
         }, nil, ri % 2 == 0 and {0.06, 0.06, 0.08, 0.3} or nil)
     end

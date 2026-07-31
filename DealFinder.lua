@@ -276,12 +276,21 @@ function DealFinder:ScanChunked(pool, onProgress, onComplete)
                 local targetRealm = realmInfo.display
                 local pricing = FindRealmPricing(allRealmPrices, targetRealm)
 
-                local tsmPrice, numAuctions, dataQuality
+                local tsmPrice, numAuctions, dataQuality, approxSource, approxIlvl
 
                 if pricing then
                     tsmPrice = pricing.marketValueRecent or pricing.minBuyout
                     numAuctions = pricing.numAuctions
-                    dataQuality = "perRealm"
+                    -- "nearestIlvl"/"baseItem" are this realm's own pricing but
+                    -- for a neighbouring variant, so they carry realm-to-realm
+                    -- signal while still being approximate — worth showing, and
+                    -- worth labelling. See TSMRealms:GetBatchPricing.
+                    if pricing.source == "nearestIlvl" or pricing.source == "baseItem" then
+                        dataQuality = "perRealmApprox"
+                        approxSource = pricing.source
+                    else
+                        dataQuality = "perRealm"
+                    end
                 elseif regionMarketAvg and regionMarketAvg > 0 then
                     tsmPrice = regionMarketAvg
                     dataQuality = "regional"
@@ -326,6 +335,8 @@ function DealFinder:ScanChunked(pool, onProgress, onComplete)
                             hasPreviousSales = (personalCount or 0) > 0,
                             hasActiveAuction = ns.SalesIndex:HasActiveAuction(itemKey, targetRealm),
                             dataQuality   = dataQuality or "perRealm",
+                            approxSource  = approxSource,
+                            approxIlvl    = approxIlvl,
                             score         = 0,  -- set by ApplyPriority
                         })
                     end

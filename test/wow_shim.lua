@@ -50,3 +50,23 @@ function wipe(t)
     for k in pairs(t) do t[k] = nil end
     return t
 end
+
+-- CreateFrame(...) — a frame stub that records its scripts and registered
+-- events so a test can drive event handlers by hand. Every frame created is
+-- appended to _G.__testFrames; fire one with __testFireEvent(frame, event).
+__testFrames = {}
+function CreateFrame(_, _, _, _)
+    local frame = { _scripts = {}, _events = {} }
+    function frame:SetScript(kind, fn) self._scripts[kind] = fn end
+    function frame:GetScript(kind) return self._scripts[kind] end
+    function frame:RegisterEvent(event) self._events[event] = true end
+    function frame:UnregisterEvent(event) self._events[event] = nil end
+    function frame:UnregisterAllEvents() self._events = {} end
+    table.insert(__testFrames, frame)
+    return frame
+end
+
+function __testFireEvent(frame, event, ...)
+    local fn = frame._scripts and frame._scripts.OnEvent
+    if fn then fn(frame, event, ...) end
+end
