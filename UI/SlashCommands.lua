@@ -1107,18 +1107,46 @@ local function debugPricing(rawQuery)
         return
     end
 
-    print(DumpHeader("/fq debug pricing"))
+    -- Buffer the dump instead of print()ing it: players have to paste this
+    -- back to us and WoW's chat frame can't be selected (FQ-230 — the first
+    -- reporter couldn't copy the chat output, so the trail went cold).
+    local lines = {}
+    local function L(s) lines[#lines + 1] = s or "" end
+
+    L(DumpHeader("/fq debug pricing"))
+    L("captured: " .. date("%Y-%m-%d %H:%M:%S"))
     if found then
-        print("name:    " .. tostring(found.name))
-        print("itemID:  " .. tostring(found.itemID))
-        print("itemKey (from " .. found.source .. "): " .. tostring(found.itemKey))
+        L("name:    " .. tostring(found.name))
+        L("itemID:  " .. tostring(found.itemID))
+        L("itemKey (from " .. found.source .. "): " .. tostring(found.itemKey))
     end
     if linkItemKey and (not found or found.itemKey ~= linkItemKey) then
-        print("itemKey (parsed from link): " .. linkItemKey)
+        L("itemKey (parsed from link): " .. linkItemKey)
+    end
+
+    -- Commodity check. Retail's commodity auction house is REGION-wide, so
+    -- a commodity legitimately has one price across every realm — TSM ships
+    -- commodity data under "US"/"EU", not per realm, and TSMRealms only
+    -- captures AUCTIONDB_NON_COMMODITY_DATA. Identical prices for a
+    -- commodity are correct behaviour, not the FQ-230 fallback bug, so
+    -- surface this first to keep the two apart.
+    local probeID = tonumber(found and found.itemID) or tonumber(linkID) or
+        tonumber(linkItemKey and linkItemKey:match("^(%d+)"))
+    if probeID and C_AuctionHouse and C_AuctionHouse.GetItemCommodityStatus then
+        local okC, status = pcall(C_AuctionHouse.GetItemCommodityStatus, probeID)
+        if okC and status == Enum.ItemCommodityStatus.Commodity then
+            L("commodity: YES — region-wide AH. Same price on every realm is")
+            L("           CORRECT; there is no per-realm data for commodities.")
+        elseif okC and status == Enum.ItemCommodityStatus.Item then
+            L("commodity: no (per-realm item — per-realm pricing expected)")
+        else
+            L("commodity: unknown (AH data not loaded — open the AH once)")
+        end
     end
 
     if not ns.TSMRealms or not ns.TSMRealms:IsLoaded() then
-        print("(TSMRealms not loaded)")
+        L("(TSMRealms not loaded)")
+        UI:ShowExportPopup(table.concat(lines, "\n"), "Ctrl+A, Ctrl+C to copy")
         return
     end
 
@@ -1126,26 +1154,27 @@ local function debugPricing(rawQuery)
     -- log, variant form from link). Reports per-realm hit/miss for each
     -- so we can see whether the variant lookup is what's missing.
     local function TestKey(label, itemKey)
-        print("--- pricing for " .. label .. " (itemKey=" .. itemKey .. ") ---")
+        L("")
+        L("--- pricing for " .. label .. " (itemKey=" .. itemKey .. ") ---")
         local tsmStr = ns.TSM and ns.TSM.ItemKeyToTSMString
             and ns.TSM:ItemKeyToTSMString(itemKey)
             or nil
-        print("tsmStr:        " .. tostring(tsmStr))
+        L("tsmStr:        " .. tostring(tsmStr))
         -- Show the level-form variant we'd use as a fallback against
         -- TSM's per-realm AuctionDB. If different from tsmStr, that's
         -- the key actually used for the match.
         if tsmStr and ns.TSMRealms and ns.TSMRealms.ToLevelForm then
             local levelStr = ns.TSMRealms:ToLevelForm(tsmStr)
             if levelStr and levelStr ~= tsmStr then
-                print("level form:    " .. levelStr)
+                L("level form:    " .. levelStr)
             elseif levelStr == tsmStr then
-                print("level form:    (same as tsmStr)")
+                L("level form:    (same as tsmStr)")
             else
-                print("level form:    (could not derive — item may not be loaded)")
+                L("level form:    (could not derive — item may not be loaded)")
             end
         end
         if not tsmStr then
-            print("(no TSM string — lookup not possible)")
+            L("(no TSM string — lookup not possible)")
             return
         end
         local pricing = ns.TSMRealms:GetAllRealmPricing(tsmStr) or {}
@@ -1157,13 +1186,44 @@ local function debugPricing(rawQuery)
                 hits = hits + 1
                 local mb = p.minBuyout and ns:FormatGold(p.minBuyout) or "?"
                 local mvr = p.marketValueRecent and ns:FormatGold(p.marketValueRecent) or "?"
-                print(string.format("  HIT  %-20s minBuyout=%s recent=%s n=%s",
+                L(string.format("  HIT  %-20s minBuyout=%s recent=%s n=%s",
                     realmName, mb, mvr, tostring(p.numAuctions)))
             else
                 misses = misses + 1
+                L(string.format("  miss %s", realmName))
             end
         end
-        print(string.format("  %d hit(s), %d miss(es) across %d realms", hits, misses, #realms))
+        L(string.format("  %d hit(s), %d miss(es) across %d realms", hits, misses, #realms))
+
+        -- Replay DealFinder's own realm resolution for this item: for each
+        -- sell realm, does FindRealmPricing land on per-realm data or drop
+        -- to DBRegionMarketAvg? This is the exact branch that produces the
+        -- "same price on every realm" display (DealFinder.lua:281-288).
+        if ns.DealFinder and ns.DealFinder.GetSellRealms then
+            L("  sell realms DealFinder would price:")
+            local any = false
+            for _, info in pairs(ns.DealFinder:GetSellRealms()) do
+                any = true
+                local resolved = pricing[info.display]
+                local via = resolved and info.display or nil
+                if not resolved then
+                    for realmName, p in pairs(pricing) do
+                        if ns:RealmMatches(realmName, info.display) then
+                            resolved, via = p, realmName
+                            break
+                        end
+                    end
+                end
+                if resolved then
+                    L(string.format("    %-22s Per-Realm TSM (via %s)", info.display, via))
+                else
+                    L(string.format("    %-22s REGIONAL FALLBACK", info.display))
+                end
+            end
+            if not any then
+                L("    (none — no characters with a sell/both role)")
+            end
+        end
     end
 
     -- De-dup: only test each unique itemKey once.
@@ -1178,15 +1238,21 @@ local function debugPricing(rawQuery)
     end
 
     -- Show TSM region/single-realm fallback values DealFinder would use.
-    if ns.TSM and ns.TSM.GetPrice then
-        print("TSM region fallbacks:")
-        print("  DBMinBuyout (current realm only): " ..
-            tostring(ns.TSM:GetPrice(found.itemKey, "DBMinBuyout") or "nil"))
-        print("  DBRegionMarketAvg: " ..
-            tostring(ns.TSM:GetPrice(found.itemKey, "DBRegionMarketAvg") or "nil"))
-        print("  DBRegionSaleAvg: " ..
-            tostring(ns.TSM:GetPrice(found.itemKey, "DBRegionSaleAvg") or "nil"))
+    -- Guarded on `found`: a pasted link with no log/inventory hit leaves
+    -- found nil, and indexing it here would error out of the dump.
+    local fallbackKey = (found and found.itemKey) or linkItemKey
+    if ns.TSM and ns.TSM.GetPrice and fallbackKey then
+        L("")
+        L("TSM region fallbacks (itemKey=" .. fallbackKey .. "):")
+        L("  DBMinBuyout (current realm only): " ..
+            tostring(ns.TSM:GetPrice(fallbackKey, "DBMinBuyout") or "nil"))
+        L("  DBRegionMarketAvg: " ..
+            tostring(ns.TSM:GetPrice(fallbackKey, "DBRegionMarketAvg") or "nil"))
+        L("  DBRegionSaleAvg: " ..
+            tostring(ns.TSM:GetPrice(fallbackKey, "DBRegionSaleAvg") or "nil"))
     end
+
+    UI:ShowExportPopup(table.concat(lines, "\n"), "Ctrl+A, Ctrl+C to copy")
 end
 
 local function debugPriceSource(rawQuery)
@@ -1344,27 +1410,78 @@ local function debugRealms()
     -- FlipQueue's hook captured it before TSM, DealFinder falls back to
     -- region-wide pricing for everything.
     if not ns.TSMRealms then ns:Print("TSMRealms not loaded.") return end
+
+    -- Buffered, not print()ed: the chat frame can't be selected, and the
+    -- first FQ-230 reporter couldn't send us this output at all.
+    local lines = {}
+    local function L(s) lines[#lines + 1] = s or "" end
+
     local realms = ns.TSMRealms:GetRealmList() or {}
-    print(DumpHeader("/fq debug realms"))
-    print(string.format("captured %d realm(s)", #realms))
+    L(DumpHeader("/fq debug realms"))
+    L("captured: " .. date("%Y-%m-%d %H:%M:%S"))
+    L(string.format("TSM realms captured: %d", #realms))
     if ns._tsmRealmsHookInstalled then
-        print("hook: installed at file load")
+        L("hook: installed at file load")
     else
-        print("hook: NOT installed (TSM_APPHELPER_LOAD_DATA was missing)")
+        L("hook: NOT installed (TSM_APPHELPER_LOAD_DATA was missing)")
     end
+    L("")
     if #realms == 0 then
-        print("(empty — TSM_AppHelper's AppData.lua likely fired before our")
-        print(" hook. DealFinder will use TSM region-wide pricing for all")
-        print(" non-current-realm targets, so prices will look identical.")
-        print(" Confirm by checking the realm rows in DealFinder Detail —")
-        print(" each line ends with 'Per-Realm TSM' or 'Regional Fallback'.)")
+        L("(empty — TSM_AppHelper's AppData.lua likely fired before our")
+        L(" hook. DealFinder will use TSM region-wide pricing for all")
+        L(" non-current-realm targets, so prices will look identical.")
+        L(" Confirm by checking the realm rows in DealFinder Detail —")
+        L(" each line ends with 'Per-Realm TSM' or 'Regional Fallback'.)")
     else
+        L("--- AuctionDB realm data captured from TSM ---")
         for i, realmName in ipairs(realms) do
             local ts = ns.TSMRealms:GetRealmUpdateTime(realmName)
             local age = ts and string.format("%.1fh ago", (time() - ts) / 3600) or "?"
-            print(string.format("  [%d] %s (updated %s)", i, realmName, age))
+            L(string.format("  [%d] %s (updated %s)", i, realmName, age))
         end
     end
+
+    -- The half that was missing: captured-realm count alone doesn't tell us
+    -- whether the realms DealFinder actually prices against are covered. A
+    -- sell realm with no captured counterpart takes the regional fallback
+    -- for *every* item, which is the FQ-230 symptom regardless of how many
+    -- realms TSM handed us. Mirrors DealFinder's FindRealmPricing lookup
+    -- (exact key first, then RealmMatches for connected realms).
+    L("")
+    L("--- DealFinder sell realms (characters with sell/both role) ---")
+    if not ns.DealFinder or not ns.DealFinder.GetSellRealms then
+        L("  (DealFinder not loaded)")
+    else
+        local total, matched = 0, 0
+        for _, info in pairs(ns.DealFinder:GetSellRealms()) do
+            total = total + 1
+            local hit
+            for _, realmName in ipairs(realms) do
+                if realmName == info.display or ns:RealmMatches(realmName, info.display) then
+                    hit = realmName
+                    break
+                end
+            end
+            if hit then matched = matched + 1 end
+            L(string.format("  %-22s %s  (%d char)", info.display,
+                hit and ("OK -> TSM:" .. hit) or "NO TSM DATA -> regional fallback",
+                #info.chars))
+        end
+        if total == 0 then
+            L("  (none — no characters have a sell or both role)")
+        else
+            L(string.format("  %d/%d sell realm(s) backed by per-realm TSM data",
+                matched, total))
+        end
+    end
+
+    L("")
+    L("Note: commodities (stackable mats/consumables) trade on a REGION-wide")
+    L("auction house. TSM ships those under US/EU, not per realm, so one")
+    L("price across every realm is correct for them. Use /fq debug pricing")
+    L("<shift-clicked item> to check a specific item.")
+
+    UI:ShowExportPopup(table.concat(lines, "\n"), "Ctrl+A, Ctrl+C to copy")
 end
 
 local function debugExpired(rest)
