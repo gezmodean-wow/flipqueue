@@ -6,6 +6,12 @@ The engineering-detail companion lives in `CHANGELOG.md` (commit-readerese — f
 
 ---
 
+## v0.13.1-alpha7
+
+A small fix for a setting that looked like it kept switching itself off.
+
+- **"Skip deals with no character" stays checked.** The setting itself was always being saved and always being obeyed — but the checkbox in Settings drew itself unchecked every time you logged in or reloaded, so it looked like it had turned itself off. Worth knowing if you hit this: clicking it to "turn it back on" was actually turning it off, which could explain unexpected "create character" tasks showing up in a generated list.
+
 ## v0.13.1-alpha6
 
 Two long-running bugs finally have their real causes, plus two smaller fixes. If you reported the "same price on every realm" problem or the crash when pasting a big FlippingPal export, this is the build to test.

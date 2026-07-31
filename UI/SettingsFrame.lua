@@ -2333,6 +2333,13 @@ function UI:RefreshSettings()
     if settingsWidgets.autoScan then
         settingsWidgets.autoScan:SetChecked(ns.db.settings.autoScan)
     end
+    -- (FQ-241) skipUnassigned was the one checkbox of thirteen with no
+    -- refresh binding: the stored value persisted fine, but every fresh
+    -- frame after a reload rendered it unchecked, so it read as "the
+    -- setting turned itself off on login".
+    if settingsWidgets.skipUnassigned then
+        settingsWidgets.skipUnassigned:SetChecked(ns.db.settings.skipUnassigned and true or false)
+    end
     -- autoPull, autoDeposit, autoDepositAll moved to Characters page
     if settingsWidgets.autoGold then
         settingsWidgets.autoGold:SetChecked(ns.db.settings.autoWithdrawGold)

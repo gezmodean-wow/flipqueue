@@ -1,5 +1,24 @@
 # Changelog
 
+## v0.13.1-alpha7
+
+One fix, plus the triage that split the FQ-230 thread. Embedded Cogworks-1.0 stays at **`v0.16.0`** (MINOR 31); `## Interface` stays at `120007`. **F8 (in-game smoke test) waived on maintainer direction** — shipped for tester coverage.
+
+### FQ-241 (#241): "Skip deals with no character" rendered unchecked after every reload
+
+Reported on #230 as *"logging in and out turns off the setting"*. It is a display bug, not a persistence bug, which makes it worse than it reads.
+
+`CreateSettingsCheckbox`'s `OnClick` writes `ns.db.settings[settingKey] = self:GetChecked()` (`UI/SettingsFrame.lua:138-142`) and that write persists correctly — `DB.lua:307` only defaults `skipUnassigned` when nil, and nothing else in the codebase assigns it (`UI/SetupWizard.lua:33` is the recommended-defaults table, applied only on an explicit "Use Recommended Defaults" click). What was missing is the read-back: there is no generic refresh loop over `settingsWidgets`, every checkbox is restored by an explicit `:SetChecked` in the refresh pass, and `skipUnassigned` was **the only one of thirteen without one**. The widget therefore held its state for the life of a session and rendered unchecked on every fresh frame after a reload, while the generator kept honouring the real stored value.
+
+Not cosmetic in effect: a player who sees it unchecked and clicks to "turn it back on" toggles a setting that was already on. Fixed with the one missing `:SetChecked` alongside the other twelve (`UI/SettingsFrame.lua:2333`). Present since the setting was added — not an alpha6 regression.
+
+### Triage: #230 split into #240 and #241
+
+The FQ-230 per-realm gear pricing fix is confirmed working by the reporter on alpha6 (*"the alpha 6 seems to have fixed majority of the items in the deal scan"*). Three unrelated defects then arrived in the same thread and would have been lost when #230 closed:
+
+- **#240** — bank ops stop planning: no warbank deposits, no cross-realm pulls, with `manageItems` on. The obvious suspects are ruled out: FQ-218 (`c1ccf89`) and FQ-222 (`65fcd1b`) changed the Syndicator projection in `Scanner.lua`, while `Tracker:BuildPullOps` (`Tracker.lua:666`) and `Tracker:BuildDepositOps` (`Tracker.lua:765`) read live `C_Container` APIs and never touch it. The coupling is one layer up — both planners are driven by `task.depositFrom` / `assignedChar` / `source` / step type, all set by `TodoList:RefreshTaskSteps` via `FindItemSource` / `FindItemHolder`, which **were** rewritten in alpha1 (FQ-223, `09fb8c0`) onto a prebuilt `BuildAccountIndex` that reads `charData.inventory.items` — the very projection FQ-218 grew to include the character bank. Leading hypothesis, unverified. Alpha6's FQ-229 (`4f78dfd`) is the competing suspect on timing but explains stranded sell tasks, not missing pull ops. Needs `/fq state` + `/fq debug pulls`, requested on #230.
+- **#241** — the settings checkbox above, fixed in this build.
+
 ## v0.13.1-alpha6
 
 Four fixes, two of them root causes that earlier alphas had misdiagnosed. Embedded Cogworks-1.0 stays at **`v0.16.0`** (MINOR 31); `## Interface` stays at `120007`. **F8 (in-game smoke test) waived on maintainer direction** — shipped for tester coverage, so treat the two paste boxes and the Deal Finder price columns as unverified in the client.
