@@ -964,11 +964,10 @@ function UI:RefreshGeneratorPage(pending)
         }
 
         -- Inputs above this many bytes route through the async chunked parser
-        -- to avoid client freezes during the parse stage. Mirrors the gate in
-        -- UI/ImportPage.lua — the dedicated Import page got the chunked-parse
-        -- retrofit in alpha13, but this wizard step still ran sync Parse() on
-        -- whatever the player pasted, which was the freeze zpectre hit on
-        -- 4500-deal full-region pastes (FQ-131 reopen on alpha13).
+        -- to avoid client freezes during the parse stage. This wizard step
+        -- used to run a sync Parse() on whatever the player pasted, which was
+        -- the freeze zpectre hit on 4500-deal full-region pastes (FQ-131
+        -- reopen on alpha13).
         local PARSE_CHUNK_THRESHOLD = 50000
 
         -- Continuation that runs after parsing finishes. Holds the entire
