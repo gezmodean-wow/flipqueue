@@ -6,6 +6,15 @@ The engineering-detail companion lives in `CHANGELOG.md` (commit-readerese — f
 
 ---
 
+## v0.13.1-alpha5
+
+A diagnostics build. Nothing changes in how Deal Finder prices your items — this build only improves the troubleshooting commands, so we can get to the bottom of "every realm shows the same price."
+
+- **Debug output you can actually copy.** `/fq debug realms` and `/fq debug pricing` used to print into chat, which the game won't let you select or copy. Both now open the same copyable box the other debug commands use — click it, Ctrl+A, Ctrl+C, paste it to us.
+- **`/fq debug realms` now shows the half that mattered.** It listed how many realms TradeSkillMaster gave us, but never whether *your selling realms* were among them. It now lists each of your sell realms and tells you plainly whether it has real per-realm pricing behind it or is falling back to a region-wide average.
+- **`/fq debug pricing` tells you if an item is a commodity.** Crafting materials, potions, ore, herbs and anything else that stacks trade on a **region-wide** auction house in retail WoW — there is genuinely one price across every realm for those, and no cross-realm profit to be had. The command now says so up front, so you can tell "working as intended" apart from a real bug. It also names which realms it couldn't find the item on instead of just counting them.
+- **Fixed an error when shift-clicking an item into `/fq debug pricing`.** If the item wasn't in your log, inventory, or warbank, the command errored out partway through instead of finishing the report.
+
 ## v0.13.1-alpha4
 
 One fix, and it's the big one for anyone whose game died the moment they pasted a large FlippingPal export.

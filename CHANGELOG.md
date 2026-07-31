@@ -1,5 +1,24 @@
 # Changelog
 
+## v0.13.1-alpha5
+
+Diagnostics-only build for the FQ-230 reporter. No behaviour change to Deal Finder itself. Embedded Cogworks-1.0 stays at **`v0.16.0`** (MINOR 31); `## Interface` stays at `120007`.
+
+### FQ-230 (#230): the debug dumps couldn't be copied, and couldn't tell the two causes apart
+
+The reporter's own debug log kills the hypothesis recorded on the issue. `TSMRealms: loaded pricing for 12 realms` is the `#realmList > 0` branch at `TSMRealms.lua:161` — the `TSM_APPHELPER_LOAD_DATA` hook installed and AppData was captured, so this is **not** the load-order miss documented at `TSMRealms.lua:104-115`. He also couldn't send us `/fq debug realms` at all ("I couldn't copy the fp debug realms"), because both it and `/fq debug pricing` wrote through raw `print()` and WoW chat frames can't be selected. Both now route through `UI:ShowExportPopup`, the copyable box `/fq debug log` already uses.
+
+Two causes remain live, and neither dump could distinguish them:
+
+1. **Commodities.** Retail's commodity auction house is region-wide. TSM ships that data under `US`/`EU`, and `TSMRealms.lua:50` deliberately captures only `AUCTIONDB_NON_COMMODITY_DATA`, so `DealFinder.lua:285` correctly falls to `DBRegionMarketAvg` and every realm shows one price. For a commodity that is right. The real defect there is upstream: `GetFilteredItemPool` doesn't exclude commodities, so Deal Finder offers them as cross-realm deals that can never carry an edge — to be tracked separately.
+2. **Sell-realm coverage.** A captured-realm count says nothing about whether the realms `GetSellRealms()` actually targets are among them. An uncovered sell realm takes the regional fallback for *every* item, producing the identical-price symptom no matter how many realms TSM handed us — and his remark about purged realms still appearing says his TSM realm set and his FQ character set have drifted apart.
+
+Dump changes (`UI/SlashCommands.lua`):
+
+- `/fq debug realms` now prints the **sell-realm → captured-TSM-realm mapping**, each marked `OK -> TSM:<realm>` or `NO TSM DATA -> regional fallback`, mirroring `FindRealmPricing`'s own lookup (exact key first, then `RealmMatches` for connected realms). Plus a footer explaining the region-wide commodity AH.
+- `/fq debug pricing` now reports `commodity: YES/no/unknown` up front via `C_AuctionHouse.GetItemCommodityStatus`, lists missed realms by name instead of only counting them, and replays DealFinder's per-sell-realm resolution as `Per-Realm TSM (via <realm>)` / `REGIONAL FALLBACK`.
+- Latent error fixed in the same function: the "TSM region fallbacks" block indexed `found.itemKey` unguarded, so a shift-clicked link that matched nothing in log/inventory/warbank errored out mid-dump — exactly the path a reporter takes when asked to paste an item link.
+
 ## v0.13.1-alpha4
 
 Emergency follow-up: Crameroni retested and still crashed **at paste time, with no popup** — alpha3's fix was unreachable in the failing mode. Embedded Cogworks-1.0 stays at **`v0.16.0`** (MINOR 31); `## Interface` stays at `120007`.
