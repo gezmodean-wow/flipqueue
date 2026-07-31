@@ -10,7 +10,7 @@ The reporter's own debug log kills the hypothesis recorded on the issue. `TSMRea
 
 Two causes remain live, and neither dump could distinguish them:
 
-1. **Commodities.** Retail's commodity auction house is region-wide. TSM ships that data under `US`/`EU`, and `TSMRealms.lua:50` deliberately captures only `AUCTIONDB_NON_COMMODITY_DATA`, so `DealFinder.lua:285` correctly falls to `DBRegionMarketAvg` and every realm shows one price. For a commodity that is right. The real defect there is upstream: `GetFilteredItemPool` doesn't exclude commodities, so Deal Finder offers them as cross-realm deals that can never carry an edge — to be tracked separately.
+1. **Commodities.** Retail's commodity auction house is region-wide. TSM ships that data under `US`/`EU`, and `TSMRealms.lua:50` deliberately captures only `AUCTIONDB_NON_COMMODITY_DATA`, so `DealFinder.lua:285` correctly falls to `DBRegionMarketAvg` and every realm shows one price. For a commodity that is right. The real defect there is upstream: `GetFilteredItemPool` doesn't exclude commodities, so Deal Finder offers them as cross-realm deals that can never carry an edge — split out as #235.
 2. **Sell-realm coverage.** A captured-realm count says nothing about whether the realms `GetSellRealms()` actually targets are among them. An uncovered sell realm takes the regional fallback for *every* item, producing the identical-price symptom no matter how many realms TSM handed us — and his remark about purged realms still appearing says his TSM realm set and his FQ character set have drifted apart.
 
 Dump changes (`UI/SlashCommands.lua`):
