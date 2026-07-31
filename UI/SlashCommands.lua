@@ -1177,6 +1177,20 @@ local function debugPricing(rawQuery)
             L("(no TSM string — lookup not possible)")
             return
         end
+        -- The level form we derive is one guess; TSM records whatever item
+        -- level each scanning client reported, so the same item can occupy
+        -- several level-form keys. List what's actually stored so a miss is
+        -- visible as "wrong bucket" rather than "no data" (FQ-230).
+        if ns.TSMRealms.GetRecordedItemLevels then
+            local baseID = tsmStr:match("^i:(%d+)")
+            local levels = baseID and ns.TSMRealms:GetRecordedItemLevels(baseID)
+            if levels and #levels > 0 then
+                L("recorded ilvls: " .. table.concat(levels, ", ") ..
+                    "  (across all captured realms)")
+            elseif baseID then
+                L("recorded ilvls: (none — this item is stored by plain ID only)")
+            end
+        end
         local pricing = ns.TSMRealms:GetAllRealmPricing(tsmStr) or {}
         local hits, misses = 0, 0
         local realms = ns.TSMRealms:GetRealmList() or {}
@@ -1186,8 +1200,8 @@ local function debugPricing(rawQuery)
                 hits = hits + 1
                 local mb = p.minBuyout and ns:FormatGold(p.minBuyout) or "?"
                 local mvr = p.marketValueRecent and ns:FormatGold(p.marketValueRecent) or "?"
-                L(string.format("  HIT  %-20s minBuyout=%s recent=%s n=%s",
-                    realmName, mb, mvr, tostring(p.numAuctions)))
+                L(string.format("  HIT  %-20s minBuyout=%s recent=%s n=%s via=%s",
+                    realmName, mb, mvr, tostring(p.numAuctions), p.source or "exact"))
             else
                 misses = misses + 1
                 L(string.format("  miss %s", realmName))
@@ -1215,7 +1229,8 @@ local function debugPricing(rawQuery)
                     end
                 end
                 if resolved then
-                    L(string.format("    %-22s Per-Realm TSM (via %s)", info.display, via))
+                    L(string.format("    %-22s Per-Realm TSM (via %s, match=%s)",
+                        info.display, via, resolved.source or "exact"))
                 else
                     L(string.format("    %-22s REGIONAL FALLBACK", info.display))
                 end

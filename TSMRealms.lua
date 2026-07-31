@@ -226,10 +226,11 @@ end
 -- On-demand item lookup
 --------------------------
 
--- Search a realm's raw item-data string for a specific item. Tries both the
--- given form and (if applicable) the level form, since TSM stores variants
--- under the level form in its per-realm AuctionDB.
--- Returns decoded field values or nil.
+-- Search a realm's raw item-data string for a specific item. Tries the given
+-- form, then the level form, then (for variant gear) the nearest recorded
+-- item level, then the base item — see the resolution ladder documented on
+-- GetBatchPricing.
+-- Returns decoded field values plus the match source, or nil.
 local function FindItemInRaw(rawEntry, tsmItemStr)
     if not rawEntry or not rawEntry.str then return nil end
 
@@ -247,13 +248,44 @@ local function FindItemInRaw(rawEntry, tsmItemStr)
         local escaped = tsmItemStr:gsub("([%.%+%-%*%?%[%]%^%$%(%)%%])", "%%%1")
         otherData = rawEntry.str:match('{"' .. escaped .. '",([^}]+)}')
     end
+    local source = otherData and "exact" or nil
+
+    local baseID = tsmItemStr:match("^i:(%d+)")
+    local wantIlvl, matchedIlvl
     if not otherData then
         -- Try the level form before giving up.
         local levelStr = ToLevelForm(tsmItemStr)
         if levelStr and levelStr ~= tsmItemStr then
+            wantIlvl = tonumber(levelStr:match("::i(%d+)$"))
             local escapedLevel = levelStr:gsub("([%.%+%-%*%?%[%]%^%$%(%)%%])", "%%%1")
             otherData = rawEntry.str:match('{"' .. escapedLevel .. '",([^}]+)}')
+            if otherData then source = "exact" end
         end
+    end
+    if not otherData and baseID then
+        -- Nearest recorded item level for this base item. TSM's per-realm
+        -- AuctionDB records whatever ilvl each scanner's client reported, so
+        -- one item routinely occupies several level-form keys and our single
+        -- computed ilvl need not be among them.
+        local bestDelta
+        for ilvlStr, values in rawEntry.str:gmatch('{"i:' .. baseID .. '::i(%d+)",([^}]+)}') do
+            local ilvl = tonumber(ilvlStr)
+            if ilvl then
+                local delta = wantIlvl and math.abs(ilvl - wantIlvl) or 0
+                if not bestDelta or delta < bestDelta then
+                    bestDelta = delta
+                    otherData = values
+                    matchedIlvl = ilvl
+                end
+            end
+        end
+        if otherData then source = "nearestIlvl" end
+    end
+    if not otherData and baseID then
+        -- Base item. Coarser than the variant, but it is this realm's own
+        -- pricing rather than a region-wide average across every realm.
+        otherData = rawEntry.str:match("{" .. baseID .. ",([^}]+)}")
+        if otherData then source = "baseItem" end
     end
     if not otherData then return nil end
 
@@ -263,7 +295,7 @@ local function FindItemInRaw(rawEntry, tsmItemStr)
     for i = 1, #parts do
         result[i] = DecodeValue(parts[i])
     end
-    return result
+    return result, source, matchedIlvl
 end
 
 --------------------------
@@ -285,6 +317,31 @@ function TSMRealms:GetRealmList()
     return realmList
 end
 
+-- Every distinct item level this base item is recorded under, across all
+-- captured realms, sorted ascending. Diagnostic support for /fq debug
+-- pricing: our derived level form is a single guess, and TSM's data can hold
+-- many buckets for one item, so a lookup miss needs to be readable as "wrong
+-- bucket" rather than "no data". Returns an empty table when the item is
+-- stored by plain ID only.
+function TSMRealms:GetRecordedItemLevels(baseID)
+    local seen, out = {}, {}
+    if not isLoaded or not baseID then return out end
+    for _, realm in ipairs(realmList) do
+        local rawEntry = realmRaw[realm]
+        if rawEntry and rawEntry.str then
+            for ilvlStr in rawEntry.str:gmatch('{"i:' .. baseID .. '::i(%d+)"') do
+                local ilvl = tonumber(ilvlStr)
+                if ilvl and not seen[ilvl] then
+                    seen[ilvl] = true
+                    out[#out + 1] = ilvl
+                end
+            end
+        end
+    end
+    table.sort(out)
+    return out
+end
+
 function TSMRealms:GetRealmUpdateTime(realmName)
     local r = realmRaw[realmName]
     return r and r.downloadTime
@@ -304,7 +361,7 @@ function TSMRealms:GetAllRealmPricing(itemString)
     local result = {}
     for _, realm in ipairs(realmList) do
         local rawEntry = realmRaw[realm]
-        local values = FindItemInRaw(rawEntry, itemString)
+        local values, source, matchedIlvl = FindItemInRaw(rawEntry, itemString)
         if values then
             local fl = rawEntry.fieldLookup
             local minBuyout = fl.minBuyout and values[fl.minBuyout]
@@ -317,6 +374,8 @@ function TSMRealms:GetAllRealmPricing(itemString)
                     numAuctions = (numAuctions and numAuctions > 0) and numAuctions or nil,
                     marketValueRecent = (recent and recent > 0) and recent or nil,
                     updateTime = rawEntry.downloadTime,
+                    source = source,
+                    matchedIlvl = matchedIlvl,
                 }
             end
         end
@@ -377,21 +436,38 @@ end
 --   at every item match).
 --
 -- Returns: { [tsmItemString] = { [realmName] = { minBuyout, numAuctions,
---             marketValueRecent, updateTime } } }
+--             marketValueRecent, updateTime, source } } }
+--
+-- `source` records which rung of the resolution ladder produced the price:
+-- "exact" (the variant we asked for), "nearestIlvl" (another recorded item
+-- level of the same item) or "baseItem" (the base item's own listings).
+--
+-- The ladder exists because TSM's per-realm AuctionDB stores variant gear
+-- ONLY in level form ("i:258955::i171") — there is not a single bonus-form
+-- key in the dataset. Worse, the item level TSM records is whatever the
+-- scanning client reported, and the auction house reports item levels SCALED
+-- TO THE VIEWING CHARACTER, so one item routinely occupies many level-form
+-- keys (item 258955 appears at ilvl 133/139/152/158/165/171/192/198/220 on a
+-- single realm; 45% of gear items carry more than one). Our locally computed
+-- ilvl is therefore one guess against up to nine buckets, and a miss used to
+-- drop the item all the way to the region-wide average on EVERY realm —
+-- which is exactly the "same price on all realms" report in FQ-230.
+-- Measured on a live 40-realm AppData: every gear item that appears in level
+-- form also has a plain base-item entry, so rung 3 always has something.
 function TSMRealms:GetBatchPricing(itemStrings)
     local result = {}
     if not isLoaded or not itemStrings or #itemStrings == 0 then return result end
 
-    -- Two lookup sets: numeric IDs (for "i:NNNN" plain items) and the full
-    -- quoted form (for items with bonus/modifier tails like "i:225575::2:1663:2293").
-    --
-    -- For variant items, also try the LEVEL FORM ("i:225575::i253") since
-    -- that's how TSM stores them in its per-realm AuctionDB. Both forms get
-    -- registered; whichever matches first wins, and the quotedToOriginal
-    -- map back-translates a level-form hit to the caller's original key.
+    -- Lookup sets: numeric IDs (for "i:NNNN" plain items), the full quoted
+    -- form (for items with bonus/modifier tails like "i:225575::2:1663:2293"),
+    -- and — for variant gear — the base item ID, which drives the nearest-ilvl
+    -- and base-item rungs of the ladder below.
     local wantedIDs = {}             -- numericID string -> tsmItemString
-    local wantedQuoted = {}          -- full tsmItemString -> true
-    local quotedToOriginal = {}      -- level-form string -> caller's input string
+    local wantedQuoted = {}          -- exact/level form -> caller's input string
+    local wantedBase = {}            -- baseID string -> array of caller input strings
+    local variantBase = {}           -- caller input string -> baseID string
+    local targetIlvl = {}            -- caller input string -> ilvl we computed
+    local anyVariant = false
     local emptyResult = {}           -- shared empty default for items with no hits
     for _, str in ipairs(itemStrings) do
         if str then
@@ -399,11 +475,24 @@ function TSMRealms:GetBatchPricing(itemStrings)
             if id then
                 wantedIDs[id] = str
             else
-                wantedQuoted[str] = true
+                wantedQuoted[str] = str
                 local levelStr = ToLevelForm(str)
                 if levelStr and levelStr ~= str then
-                    wantedQuoted[levelStr] = true
-                    quotedToOriginal[levelStr] = str
+                    wantedQuoted[levelStr] = str
+                    targetIlvl[str] = tonumber(levelStr:match("::i(%d+)$"))
+                end
+                -- Pets ("p:1965") have no base ID here by design — they are
+                -- matched only in exact form, exactly as before.
+                local baseID = str:match("^i:(%d+)")
+                if baseID and not variantBase[str] then
+                    variantBase[str] = baseID
+                    local list = wantedBase[baseID]
+                    if not list then
+                        list = {}
+                        wantedBase[baseID] = list
+                    end
+                    list[#list + 1] = str
+                    anyVariant = true
                 end
             end
             result[str] = nil  -- placeholder so callers can distinguish
@@ -419,36 +508,127 @@ function TSMRealms:GetBatchPricing(itemStrings)
             local fRecent = fl.marketValueRecent
             local downloadTime = rawEntry.downloadTime
 
+            -- Decode just the values we care about (minBuyout, numAuctions,
+            -- marketValueRecent). Avoid the cost of decoding every column.
+            -- Returns nil when the entry carries no usable price.
+            local function Decode(valuesPart)
+                local parts = { strsplit(",", valuesPart) }
+                local minBuyout   = fMin and parts[fMin] and DecodeValue(parts[fMin]) or nil
+                local numAuctions = fNum and parts[fNum] and DecodeValue(parts[fNum]) or nil
+                local recent      = fRecent and parts[fRecent] and DecodeValue(parts[fRecent]) or nil
+                if (minBuyout and minBuyout > 0) or (recent and recent > 0) then
+                    return minBuyout, numAuctions, recent
+                end
+                return nil
+            end
+
+            -- Per-realm accumulators for the fallback rungs. Only the exact
+            -- rung writes straight through; the others need the whole realm
+            -- walked before the best candidate is known.
+            local lvlMin, lvlNum, lvlRecent, lvlDelta, lvlAt = {}, {}, {}, {}, {}
+            local baseMin, baseNum, baseRecent = {}, {}, {}
+
             -- Walk every item entry in the realm string exactly once.
             -- Format is `{itemPart,values}` where itemPart is either a numeric
             -- itemID or a quoted "itemString". Values are comma-separated
             -- base-32 encoded numbers; brace nesting doesn't occur in values.
             for itemPart, valuesPart in rawEntry.str:gmatch("{([^,]+),([^}]+)}") do
-                local key
                 if itemPart:sub(1, 1) == '"' then
-                    -- Quoted item string variant. If this matches a level
-                    -- form we registered, back-translate to the caller's
-                    -- original input key so result[] uses their key.
+                    -- Quoted item string variant. wantedQuoted maps both the
+                    -- bonus form and the level form back to the caller's key.
                     local stripped = itemPart:sub(2, -2)
-                    if wantedQuoted[stripped] then
-                        key = quotedToOriginal[stripped] or stripped
+                    local key = wantedQuoted[stripped]
+                    if key then
+                        local minBuyout, numAuctions, recent = Decode(valuesPart)
+                        if minBuyout or recent then
+                            local entry = result[key]
+                            if not entry then
+                                entry = {}
+                                result[key] = entry
+                            end
+                            entry[realm] = {
+                                minBuyout = (minBuyout and minBuyout > 0) and minBuyout or nil,
+                                numAuctions = (numAuctions and numAuctions > 0) and numAuctions or nil,
+                                marketValueRecent = (recent and recent > 0) and recent or nil,
+                                updateTime = downloadTime,
+                                source = "exact",
+                            }
+                        end
+                    elseif anyVariant then
+                        -- Not the exact key we computed, but possibly another
+                        -- recorded item level of an item we want.
+                        local bid, ilvlStr = stripped:match("^i:(%d+)::i(%d+)$")
+                        local wanters = bid and wantedBase[bid]
+                        if wanters then
+                            local ilvl = tonumber(ilvlStr)
+                            local minBuyout, numAuctions, recent = Decode(valuesPart)
+                            if ilvl and (minBuyout or recent) then
+                                for i = 1, #wanters do
+                                    local k = wanters[i]
+                                    local want = targetIlvl[k]
+                                    local delta = want and math.abs(ilvl - want) or 0
+                                    if lvlDelta[k] == nil or delta < lvlDelta[k] then
+                                        lvlDelta[k] = delta
+                                        lvlMin[k] = minBuyout
+                                        lvlNum[k] = numAuctions
+                                        lvlRecent[k] = recent
+                                        lvlAt[k] = ilvl
+                                    end
+                                end
+                            end
+                        end
                     end
                 else
-                    -- Plain numeric ID
-                    key = wantedIDs[itemPart]
+                    -- Plain numeric ID: serves both plain inputs (exact) and
+                    -- variant inputs (base-item fallback).
+                    local key = wantedIDs[itemPart]
+                    local wanters = anyVariant and wantedBase[itemPart] or nil
+                    if key or wanters then
+                        local minBuyout, numAuctions, recent = Decode(valuesPart)
+                        if minBuyout or recent then
+                            if key then
+                                local entry = result[key]
+                                if not entry then
+                                    entry = {}
+                                    result[key] = entry
+                                end
+                                entry[realm] = {
+                                    minBuyout = (minBuyout and minBuyout > 0) and minBuyout or nil,
+                                    numAuctions = (numAuctions and numAuctions > 0) and numAuctions or nil,
+                                    marketValueRecent = (recent and recent > 0) and recent or nil,
+                                    updateTime = downloadTime,
+                                    source = "exact",
+                                }
+                            end
+                            if wanters then
+                                baseMin[itemPart] = minBuyout
+                                baseNum[itemPart] = numAuctions
+                                baseRecent[itemPart] = recent
+                            end
+                        end
+                    end
                 end
+            end
 
-                if key then
-                    -- Decode just the values we care about (minBuyout,
-                    -- numAuctions, marketValueRecent). Avoid the cost of
-                    -- decoding every column.
-                    local parts = { strsplit(",", valuesPart) }
-                    local minBuyout   = fMin and parts[fMin] and DecodeValue(parts[fMin]) or nil
-                    local numAuctions = fNum and parts[fNum] and DecodeValue(parts[fNum]) or nil
-                    local recent      = fRecent and parts[fRecent] and DecodeValue(parts[fRecent]) or nil
-
-                    if (minBuyout and minBuyout > 0) or (recent and recent > 0) then
-                        local entry = result[key]
+            -- Resolution ladder for variant gear on this realm, best first:
+            --   1. exact      — already written above
+            --   2. nearestIlvl — another recorded item level of the same item
+            --   3. baseItem    — the base item's own listings on this realm
+            -- Anything still unresolved falls to DealFinder's region-wide
+            -- average, which is what made every realm show one price.
+            for key, baseID in pairs(variantBase) do
+                local entry = result[key]
+                if not (entry and entry[realm]) then
+                    local minBuyout, numAuctions, recent, source, matchedIlvl
+                    if lvlDelta[key] ~= nil then
+                        minBuyout, numAuctions, recent = lvlMin[key], lvlNum[key], lvlRecent[key]
+                        source = "nearestIlvl"
+                        matchedIlvl = lvlAt[key]
+                    elseif baseMin[baseID] ~= nil or baseRecent[baseID] ~= nil then
+                        minBuyout, numAuctions, recent = baseMin[baseID], baseNum[baseID], baseRecent[baseID]
+                        source = "baseItem"
+                    end
+                    if source then
                         if not entry then
                             entry = {}
                             result[key] = entry
@@ -458,6 +638,8 @@ function TSMRealms:GetBatchPricing(itemStrings)
                             numAuctions = (numAuctions and numAuctions > 0) and numAuctions or nil,
                             marketValueRecent = (recent and recent > 0) and recent or nil,
                             updateTime = downloadTime,
+                            source = source,
+                            matchedIlvl = matchedIlvl,
                         }
                     end
                 end
