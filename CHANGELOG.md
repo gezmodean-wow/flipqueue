@@ -1,5 +1,31 @@
 # Changelog
 
+## v0.13.1-alpha8
+
+Root cause found for #240 — bank operations have been dead for everyone with a cross-realm to-do list since v0.13.1-alpha1. Embedded Cogworks-1.0 stays at **`v0.16.0`** (MINOR 31); `## Interface` stays at `120007`. **F8 (in-game smoke test) waived on maintainer direction** — shipped for tester coverage.
+
+### FQ-240 (#240): a missed call site killed `RefreshTaskSteps`, taking the whole bank chain with it
+
+FQ-223 (`09fb8c0`, alpha1) hoisted the account-inventory walk out of the per-task helpers into a single prebuilt index, adding a leading `idx` parameter to `IsItemInAccountInventory` and `FindItemHolder`. Three of the four call sites were updated. **`TodoList.lua:1729` — the second loop, over other characters' tasks — was left on the old two-argument form**, so `idx` received the item key string and `itemKey` received the numeric ID.
+
+That is a hard error every time it is reached, and the reason it went unnoticed for four alphas is that Lua 5.1 does not fail where you would expect. `("12345;;").presKey` resolves through the string metatable to `string.presKey` and yields **nil**, not an error; the throw lands one index later, on `nil[itemKey]`, as `attempt to index field 'presKey' (a nil value)`. Verified against stock Lua 5.1 — it fires for every key value including `""`, so no input dodges it.
+
+The trigger is the ordinary cross-realm case: any pending non-buy task assigned to a *different* character whose item is not in that character's stored inventory or the warbank. `FindItemSource` returns nil, and the next line throws.
+
+Blast radius is larger than the function, because `BANKFRAME_OPENED` runs this inside one timer closure (`Tracker.lua:1200-1215`):
+
+```
+RefreshLocations() → RefreshTaskSteps() → UI refresh → Tracker:ShowBankOpsPopup()
+```
+
+The throw at step 2 means `ShowBankOpsPopup` **never runs** — so a bank visit lost pulls, deposits, gold and extras simultaneously, which is exactly the report ("not depositing the items in the warbank and withdrawing on proper realms... its not depositing tasks either"). No caller wraps `RefreshTaskSteps` in `pcall`, and with retail's default "Display Lua Errors" off the player sees nothing happen at all. The same throw also degraded the `BAG_UPDATE_DELAYED` handler (`Tracker.lua:1180`) and the AH-open chain (`Tracker.lua:1110-1122`, hence no "N items ready to post!" and no TSM rejection handling).
+
+Note the first loop completes before the throw, so the *current* character's step advancement kept working — which is why this presented as "deposits and pulls are broken" rather than "the addon is dead."
+
+Fix is the missing `AccountIndex()` argument. New `test/todolist_acctindex_spec.lua` (10 assertions) asserts both helpers still declare `idx` first and that **every** call site passes `AccountIndex()` — verified non-vacuous by running it against the pre-fix source, where it fails 1/10. It also pins the Lua 5.1 string-metatable semantics that made the miss silent, so the next reader doesn't assume a wrong-type argument would have failed loudly.
+
+Audited the rest of both FQ-223 commits for the same hazard: `FindItemHolder`'s two call sites are correct, and the renames (`InvHasQuantity`→`InvQuantity`, `HarvestReplicate`→`HarvestReplicateAsync`) have no stale references.
+
 ## v0.13.1-alpha7
 
 One fix, plus the triage that split the FQ-230 thread. Embedded Cogworks-1.0 stays at **`v0.16.0`** (MINOR 31); `## Interface` stays at `120007`. **F8 (in-game smoke test) waived on maintainer direction** — shipped for tester coverage.

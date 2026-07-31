@@ -6,6 +6,13 @@ The engineering-detail companion lives in `CHANGELOG.md` (commit-readerese — f
 
 ---
 
+## v0.13.1-alpha8
+
+**If your bank stopped doing anything, this is the build.** One bug, and it was a bad one.
+
+- **Bank operations work again — pulls, deposits, gold, the lot.** Since v0.13.1-alpha1, opening your bank quietly did nothing at all for anyone with a cross-realm to-do list. A performance rewrite in that build changed how FlipQueue looks up which character is holding an item, and one place in the code was left calling the old version. That threw an error the moment FlipQueue checked a task belonging to another character — which is most of them in a cross-realm setup — and the error happened *just before* the bank operations window was due to appear, so nothing was pulled, nothing was deposited, no gold was withdrawn, and no window ever opened. Because WoW hides addon errors unless you turn them on, there was nothing on screen to explain it. The same error also stopped the "N items ready to post!" message when you opened the auction house.
+- Nothing about your to-do lists, settings or inventory data was damaged by this — the work simply wasn't being done. Open your bank once after updating and it should pick up where it left off.
+
 ## v0.13.1-alpha7
 
 A small fix for a setting that looked like it kept switching itself off.

@@ -1726,7 +1726,7 @@ function TodoList:RefreshTaskSteps()
 
             if not actualSource then
                 -- Item not found for assigned char — check account-wide
-                if not IsItemInAccountInventory(itemKey, itemNumID) then
+                if not IsItemInAccountInventory(AccountIndex(), itemKey, itemNumID) then
                     if not task.deferredAt then
                         task.deferredAt = time()
                         changed = true
