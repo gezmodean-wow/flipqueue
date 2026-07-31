@@ -1,5 +1,53 @@
 # Changelog
 
+## v0.13.1-alpha6
+
+Four fixes, two of them root causes that earlier alphas had misdiagnosed. Embedded Cogworks-1.0 stays at **`v0.16.0`** (MINOR 31); `## Interface` stays at `120007`. **F8 (in-game smoke test) waived on maintainer direction** — shipped for tester coverage, so treat the two paste boxes and the Deal Finder price columns as unverified in the client.
+
+### FQ-230 (#230): variant gear priced region-wide on every realm (PR #236)
+
+Both hypotheses recorded in alpha5 are dead. The load-order miss is ruled out by the reporter's own log (`TSMRealms: loaded pricing for 12 realms`), and the commodity split (#235) is ruled out by the reporter: his items are transmog gear, which is non-commodity. Diagnosed instead against a live 40-realm `TradeSkillMaster_AppHelper/AppData.lua`:
+
+- **TSM's per-realm AuctionDB stores variant gear only in level form.** Every quoted key in the dataset is `i:N::iN`, `p:N` or `p:N:iN` — there is not one bonus-form key anywhere in it. The bonus form `TSM_API.ToItemString` produces therefore never matches, and every gear lookup rode entirely on `ToLevelForm` (`TSMRealms.lua:188`).
+- **That derived item level is one guess among many.** TSM records whatever ilvl each scanning client reported, and the AH reports item levels *scaled to the viewing character* — the FQ-227 pathology one layer down. **731 of 1,641 gear itemIDs (45%) occupy more than one bucket**; item 258955 alone spans ilvl 133/139/152/158/165/171/192/198/220 on a single realm.
+- A miss fell straight to `DBRegionMarketAvg` (`DealFinder.lua:285-288`) for **every** sell realm — the reported symptom. The 2-3 items that did work for him are plain no-bonus items matched by numeric ID.
+- `GetBatchPricing` registered a numeric ID only for keys with no bonus tail (`TSMRealms.lua:399`), so gear had no base-item fallback either — and **0 of 1,641** gear itemIDs are level-form-only, i.e. that rung always has something to return.
+
+`GetBatchPricing` and `FindItemInRaw` now climb a ladder per realm — `exact` → `nearestIlvl` (closest recorded item level for the same base item) → `baseItem` → regional — recording the rung as `source` so approximate matches stay labelled. Measured on 12 realms × 400 gear items:
+
+| scenario | per-realm coverage | items regional on every realm |
+|---|---|---|
+| derived ilvl hits a recorded bucket | 41.5% → 84.9% | 0% → 0% |
+| ilvl scaled off the buckets | 19.8% → 84.9% | 69.5% → 0% |
+| ilvl underivable | 0% → 84.9% | 100% → 0% |
+
+Residual ~15% is items genuinely absent from that realm's data. A 2,500-item pool over 12 realms went from 34 per-realm hits to 12,375, at 0.071s → 0.211s once per scan. UI: approximate rows read `Realm~` (vs `Realm`/`Rgn`) and name their matched item level in the tooltip. `/fq debug pricing` now lists the item levels TSM actually holds and the rung each realm resolved through — alpha5's dumps could not have shown this, since they printed the level form we derive but never the ones TSM stores. New `test/tsmrealms_spec.lua` (34 assertions).
+
+### FQ-228 (#228): the last two fixes went into a file the client never loads (PR #237)
+
+**`UI/ImportPage.lua` was never listed in `flipqueue.toc`** — `git log -S "UI/ImportPage.lua" -- flipqueue.toc` returns nothing, and no loaded file referenced it. Both the alpha3 box-clear and the alpha4 streaming guard were written into orphaned dead code, which is why the reporter kept crashing on builds that were supposed to contain the fix. The file is deleted this build.
+
+The live FlippingPal paste UI is the To-Do Generator wizard, and both of its boxes (`UI/GeneratorPage.lua` step 2 and the cross-realm import step) still ran the original handler: `GetText()` on every input event, behind the `_lastLen < 10` gate that a streamed paste outgrows by its 11th character, with no box clear at all. `UI/ExportPopup.lua:549` only reads on button click and is unaffected.
+
+New shared `UI:AttachPasteCapture` (`UI/Shared.lua`), both live boxes moved onto it:
+
+- Armed from **both** `OnChar` and `OnTextChanged`. The alpha4 guard keyed on `OnChar` alone, so a client streaming via `OnTextChanged` never armed it and paid the full per-event cost. Neither handler reads the box; a per-frame settle loop owns the single `GetText`.
+- Past 4096 bytes the box is drained every frame (`GetText` then `SetText("")`), so the widget never holds more than one frame's worth — the half no amount of async Lua could fix, since the client re-lays-out a multiline EditBox's full contents while displayed.
+- Draining the widget rather than buffering `OnChar`'s character argument is what makes this safe for FP's line-based formats: `OnChar` never delivers newlines, `GetText` returns literal contents, so `table.concat` reconstructs the paste exactly.
+- Below the threshold nothing is drained, so typing keeps its text, cursor and selection.
+
+Measured by `test/pastecapture_spec.lua` (30 assertions) on a 17 KB export delivered per character inside a single frame: **17,145 input events → 3 `GetText` calls**.
+
+Also: `/fq state`'s first line led with the DB schema version, not the addon version (`UI/SlashCommands.lua:234`). Schema 12 covers alpha3, alpha4 and alpha5 alike, so asking a tester to paste that line to confirm their build could never work. It now leads with `ns.VERSION` and keeps the schema alongside.
+
+### FQ-229 (#229): sibling variants cleared variant-pinned sell tasks (PR #231)
+
+`CheckOwnedAuctions` phase 1 matched owned auctions to todo tasks at base-itemID only (`<itemID>;;` key → `ItemsMatch` Tier 2), so a posted *sibling variant* removed a variant-pinned task the moment the AH opened, while TSM still showed it postable. Variant-pinned todo keys now require normalized full-key equality (bonus IDs sorted, parsed from the auction itemLink via `ns:ParseItemLink` + `MakeItemKey`); a link that hasn't loaded yields no match (conservative). Plain keys and pets are unchanged.
+
+### FQ-221 (#221): Log Out tool threw ADDON_ACTION_FORBIDDEN (PR #232)
+
+The drawer's Log Out called protected `Logout()` from an insecure `PostClick`. The tool now carries `macrotext="/logout"`, and `ApplySecureDispatch` grew a `"macrotext"` kind (`type="macro"` + the `macrotext` attribute, cleared at both clearing sites).
+
 ## v0.13.1-alpha5
 
 Diagnostics-only build for the FQ-230 reporter. No behaviour change to Deal Finder itself. Embedded Cogworks-1.0 stays at **`v0.16.0`** (MINOR 31); `## Interface` stays at `120007`.

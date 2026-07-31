@@ -6,6 +6,16 @@ The engineering-detail companion lives in `CHANGELOG.md` (commit-readerese — f
 
 ---
 
+## v0.13.1-alpha6
+
+Two long-running bugs finally have their real causes, plus two smaller fixes. If you reported the "same price on every realm" problem or the crash when pasting a big FlippingPal export, this is the build to test.
+
+- **Deal Finder shows real per-realm prices for gear again.** Gear gets listed on the auction house at many different item levels, and FlipQueue could only recognise your item at one exact item level. When that didn't line up with what TradeSkillMaster had recorded — which is most of the time, because the auction house reports item levels scaled to whichever character is looking — we quietly fell back to a single region-wide average, so every realm showed the same number. Plain items like recipes and pets were never affected, which is why a handful of items looked fine while hundreds didn't. FlipQueue now uses the closest item level TSM actually has for that item, then the base item, and only falls back to a region-wide average when the item is genuinely missing from that realm's data. Prices matched approximately are marked with a `~` and the item level they came from, so you can see how solid each number is.
+- **Pasting a large FlippingPal export no longer crashes the game.** Earlier attempts at this fix went into a part of the addon that was no longer being used, so the box you actually paste into never received them — which is why it kept happening for anyone who reported it. The paste boxes in the To-Do Generator now take a big export in small steps instead of holding all of it at once. Typing into those boxes is unchanged.
+- **Posting one version of an item no longer clears a to-do for a different version.** If you had a to-do for a specific version of an item and posted a different version of it, opening the auction house wiped the to-do — while TSM still (correctly) offered the original to post.
+- **The Log Out button in the tools drawer works.** It was throwing a blocked-action error instead of logging out.
+- **`/fq state` now shows your FlipQueue version on its first line**, so when we ask you to confirm which build you're testing, that line actually answers it.
+
 ## v0.13.1-alpha5
 
 A diagnostics build. Nothing changes in how Deal Finder prices your items — this build only improves the troubleshooting commands, so we can get to the bottom of "every realm shows the same price."
