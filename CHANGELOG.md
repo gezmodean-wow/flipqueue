@@ -1,5 +1,39 @@
 # Changelog
 
+## v0.13.1-alpha11
+
+Two improvement-backlog items, plus a board correction. Embedded Cogworks-1.0 stays at **`v0.16.0`** (MINOR 31); `## Interface` stays at `120007`. **F8 (in-game smoke test) waived on maintainer direction.**
+
+### FQ-238 (#238): uncached items were exported to FlippingPal as `Unknown`
+
+`Scanner.lua:145` stores whatever `ItemLookup:GetItemMeta` returns, and that is `name = "Unknown"` for any item the client had not cached when the scan ran (the meta is deliberately not memoized in that state, but the projection keeps it). `Export:ExportSaved` then wrote it straight into the CSV players upload to FlippingPal, where a placeholder is indistinguishable from a real item name — one reporter's export carried it in 22 of the first 99 rows. `itemName or "Unknown"` at `Export.lua:265` never even fired: the placeholder arrived as a real string.
+
+Quality and item level came off the same uncached `C_Item.GetItemInfo` call, so an affected row was wrong in three columns, not one. And `maxStack` being nil meant the `maxStack > 1` commodity skip failed open — uncached commodities went into the file too.
+
+`ExportSaved` now treats the client's answer as authoritative and the stored name as the fallback, resolves cold pets through `C_PetJournal.GetPetInfoBySpeciesID` (`GetItemInfo` answers "Pet Cage" for caged pets), and keeps anything it cannot name **out** of the file. It returns `(csv, count, skipped, unresolvedIDs)`; `Export:RequestItemData` issues `C_Item.RequestLoadItemDataByID` for those IDs, capped at 500. `DoFilteredExport` (`UI/MainFrame.lua`) requests once, re-runs after 1.5s, and reports whatever is still missing instead of leaving it silently absent.
+
+Behaviour change worth stating: a row with a real stored name but no client cache is now **excluded** rather than exported with `ilvl=0`. That is the trade the issue's own player summary promised — wrong data in a file the player hands to an external service is worse than a row that says it is missing.
+
+`test/export_spec.lua` (23 assertions) states the invariant as an absolute — no emitted row may carry a placeholder name, an empty quality, or a zero item level — and covers request-then-retry landing the row, a stale stored name losing to the client's, and the existing bound/untradeable exclusions.
+
+### FQ-233 (#233): pulls planned against bag space they did not have
+
+Two pull planners, one bag-space check. `Tracker:AutoPullFromBank` counted free slots and truncated with a notice; **`Tracker:BuildPullOps` had none** — and it is the planner behind both the bank-open popup (`Tracker.lua:328`) and the manual Pull tool (`UI/ContextDrawer.lua:275`). The reporter's 304 pull tasks were all planned against 164 free slots. Execution's only defence is reactive: `BankQueue.lua:1099` drains the remaining ops on `ERR_INV_FULL`. Nothing corrupts, but the run dies partway with no warning and no account of what happened.
+
+- **`ns:GetFreeBagSlots`** (`Core.lua`) is now shared by both planners, since the drift between them is what produced the bug. Empty-slot based, `INVENTORY_BAGS` only (pulls are not routed to the reagent bag), so it under-counts capacity for stackables — a conservative bound is the right error here. Note the corollary: a reagent-only pull with full normal bags now plans nothing, matching `AutoPullFromBank`.
+- **`ns:PlanPullWave`** (`Core.lua`) orders before it truncates, and the order is the half that matters. Emission order is bank-scan order (bag index, then slot), which bears no relation to the to-do list — 164 arbitrary slots span every target realm and the player cannot close out one realm's posting. Now sorted realm → character → item name, with `_seq` (emission index) breaking ties because `table.sort` is not stable and a reshuffling popup between redraws is its own bug.
+- **Reported at every exit.** Popup header reads `Pull tasks (164 of 304)` with a row naming what will not fit; completely full bags get their own `(0 of N)` section instead of the pull section silently vanishing; both entry points print the same line in chat, which is the only channel left when the popup has no section to carry it.
+
+Design point 4 from the issue — planning deposits *before* pulls when bags are near-full — is **not** in this build. `ExecuteAllOps` runs pulls in phase 1, so the free-slot count is accurate as it stands; reordering the phases interacts with the FQ-132 failure-suppression path and wants its own change.
+
+`test/pullwave_spec.lua` (19 assertions) covers realm-closing order under a cap, tie determinism across repeated calls, and the boundaries — exact fit, no room, nil and negative slot counts.
+
+### Board correction
+
+#213 (Clear Current vs Clear All) and #178 (MiniView buy/sell distinction) were both picked up from the improvement shortlist and found **already shipped in v0.13.0** — `ffbba92` and `713fda0` respectively, with the FQ-N comments in place. Both closed with player summaries, along with #179, #211, #212, #214, #218, #223 and #227: nine issues carrying shipped fixes that were never closed. A changelog cross-reference of the whole open board is what surfaced them; #177 also has a shipped fix but is deliberately still open (see below).
+
+**#177 stays open on purpose.** The price-source preference shipped in v0.13.0-alpha2, but `DB.lua:199` defaults `fpPriceSource` to `"listing"` — the aggressive FlippingPal column the issue is *about*. The fix is real and opt-in, so the reported symptom persists out of the box. Defaulting to `"auto"` (TSM-clamped, falls back to Listing on any missing data, so no regression by construction) plus a migration for existing installs would close it properly — a live-player default change, so it wants the maintainer's call rather than an unattended one.
+
 ## v0.13.1-alpha10
 
 FQ-228, the stage before every fix that came before it. The reporter answered the three-way diagnostic on #228 with the first branch — **the "Receiving paste... N KB" line never appears at all** — and attached a screenshot of the frozen client: alpha9, generator step 2, paste box **empty**, Windows' busy cursor over it, status bar still reading `0 deals imported`. Embedded Cogworks-1.0 stays at **`v0.16.0`** (MINOR 31); `## Interface` stays at `120007`. **F8 (in-game smoke test) waived on maintainer direction** — shipped for tester coverage.

@@ -6,6 +6,13 @@ The engineering-detail companion lives in `CHANGELOG.md` (commit-readerese — f
 
 ---
 
+## v0.13.1-alpha11
+
+Two fixes from the list of things players have asked for.
+
+- **Your inventory export no longer contains items called "Unknown".** When the game hadn't finished loading an item — most likely for things sitting in a bank or warbank you haven't opened recently — FlipQueue wrote "Unknown" as the name, with no quality and an item level of zero. That went into the file you upload to FlippingPal, which has no way to tell a placeholder from a real name. One export had it in 22 of the first 99 rows. FlipQueue now asks the game to load those details, exports again once they arrive, and leaves out anything it still can't name — with a note telling you how many and why, so you can open the bank holding them and export again.
+- **Pulling from the bank now sends one bagful at a time.** If you had more items to pull than free bag space — one player had 304 waiting and room for 164 — FlipQueue planned the whole lot, ran until your bags filled, and quietly dropped the rest with nothing on screen to explain it. It now pulls only what fits, and orders the batch so it works through one realm at a time instead of scattering items across all of them, which means you can actually finish that realm's posting before coming back for the next batch. The popup says "Pull tasks (164 of 304)" and tells you what's left; if your bags are completely full it says so rather than showing nothing at all.
+
 ## v0.13.1-alpha10
 
 **Another go at the crash when pasting a full FlippingPal export.** If you have been hitting the spinning cursor and a dead client, this is the build to test.
