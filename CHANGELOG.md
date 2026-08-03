@@ -2,7 +2,7 @@
 
 ## v0.13.1-alpha9
 
-Import-path reliability. Three defects, all found while root-causing the crash still live on #228, plus the specs finally running in CI. Embedded Cogworks-1.0 stays at **`v0.16.0`** (MINOR 31); `## Interface` stays at `120007`.
+Import-path reliability. Three defects, all found while root-causing the crash still live on #228, plus the specs finally running in CI. Embedded Cogworks-1.0 stays at **`v0.16.0`** (MINOR 31); `## Interface` stays at `120007`. **F8 (in-game smoke test) waived on maintainer direction** — shipped for tester coverage.
 
 ### FQ-242 (#242): connected-realm dedup was O(N²)
 
