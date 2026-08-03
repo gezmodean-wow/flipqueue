@@ -263,7 +263,10 @@ local function RunManualBankOp(spec)
         ns.UI:BeginBankExecution(#ops)
     end
 
-    ns.UI:ShowBankPopup({ [spec.payloadKey] = ops }, function()
+    local payload = { [spec.payloadKey] = ops }
+    -- Pull waves carry their planned total so the popup can say "N of M".
+    payload.pullsPlanned = spec.pullsPlanned
+    ns.UI:ShowBankPopup(payload, function()
         if ns.UI.BankOpProgress then ns.UI:BankOpProgress(0, 0, spec.phase) end
         RunOps()
     end)
@@ -272,11 +275,27 @@ end
 local function DoPull()
     if not Tracker then Tracker = ns.Tracker end
     if not Tracker then return end
-    local ops = Tracker:BuildPullOps()
-    if #ops == 0 then ns:Print("Nothing to pull.") return end
+    -- One bag-sized wave, ordered so it closes out whole realms (FQ-233).
+    -- "Nothing to pull" and "nowhere to put it" are different answers and the
+    -- player needs to be able to tell them apart.
+    local ops, planned = Tracker:BuildPullOps()
+    if #ops == 0 then
+        if (planned or 0) > 0 then
+            ns:Print(ns.COLORS.RED .. "Bags are full|r — " .. planned ..
+                " item(s) waiting. Post or deposit something first.")
+        else
+            ns:Print("Nothing to pull.")
+        end
+        return
+    end
+    if (planned or 0) > #ops then
+        ns:Print(ns.COLORS.YELLOW .. "Pulling " .. #ops .. " of " .. planned ..
+            " item(s)|r — " .. (planned - #ops) .. " left for the next batch.")
+    end
     RunManualBankOp({
         ops          = ops,
         payloadKey   = "pulls",
+        pullsPlanned = planned,
         processLabel = "Pulling...",
         phase        = "Pulling",
         successWord  = "Pulled",

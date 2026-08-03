@@ -325,7 +325,7 @@ function Tracker:ShowBankOpsPopup()
     local charKey = ns:GetCharKey()
 
     -- Collect pull operations (reuse AutoPullFromBank's logic but don't execute)
-    local pullOps = Tracker:BuildPullOps()
+    local pullOps, pullPlanned, pullFree = Tracker:BuildPullOps()
     local depositOps = Tracker:BuildDepositOps()
     -- Build exclude set from deposit ops so extras / reagents don't duplicate
     local depositSlots = {}
@@ -418,6 +418,21 @@ function Tracker:ShowBankOpsPopup()
 
     ns:PrintDebug("Bank popup: " .. #pullOps .. " pulls, " .. #depositOps .. " deposits, " ..
         #extraOps .. " extras, " .. #reagentOps .. " reagents, withdraw=" .. goldWithdraw .. " deposit=" .. goldDeposit)
+
+    -- Say it in chat as well as in the popup: when the bags are completely full
+    -- there is no pull section to carry the message, and when they are nearly
+    -- full the player is about to work a batch and needs to know another is
+    -- waiting (FQ-233).
+    if (pullPlanned or 0) > #pullOps then
+        if #pullOps == 0 then
+            ns:Print(ns.COLORS.RED .. "Bags are full|r — " .. pullPlanned ..
+                " item(s) waiting to be pulled. Post or deposit something, then reopen the bank.")
+        else
+            ns:Print(ns.COLORS.YELLOW .. "Pulling " .. #pullOps .. " of " .. pullPlanned ..
+                " item(s)|r — " .. (pullPlanned - #pullOps) ..
+                " left for the next batch (" .. (pullFree or 0) .. " free bag slot(s)).")
+        end
+    end
 
     if not hasPulls and not hasDeposits and not hasExtras and not hasReagents and not hasGold then
         ns:PrintDebug("Bank popup: nothing to do")
@@ -647,6 +662,11 @@ function Tracker:ShowBankOpsPopup()
 
     ns.UI:ShowBankPopup({
         pulls = pullOps,
+        -- What the to-do list wanted vs what the bags can take, so the popup
+        -- can say "164 of 304" instead of showing a wave that looks complete
+        -- and isn't (FQ-233).
+        pullsPlanned = pullPlanned,
+        pullsFreeSlots = pullFree,
         deposits = depositOps,
         reagents = reagentOps,
         extras = extraOps,
@@ -662,7 +682,13 @@ function Tracker:ShowBankOpsPopup()
 end
 
 -- Build pull operation list without executing.
--- Returns array of { op="pull", srcBag, srcSlot, name, icon, quantity } or empty table.
+--
+-- Returns (ops, planned, freeSlots): `ops` is the wave that fits in the bags
+-- right now, `planned` is how many pulls the to-do list actually wants, and
+-- `freeSlots` is what there was room for. Callers show the difference — a run
+-- that stops halfway with no warning is the bug (FQ-233).
+--
+-- Each op is { op="pull", srcBag, srcSlot, name, icon, quantity }.
 function Tracker:BuildPullOps()
     if not ns.db then return {} end
 
@@ -746,6 +772,10 @@ function Tracker:BuildPullOps()
                                         name = queueItem.name or "?",
                                         icon = info.iconFileID,
                                         quantity = info.stackCount or 1,
+                                        -- Kept for wave ordering below.
+                                        _realm = queueItem.targetRealm or "",
+                                        _char = queueItem.assignedChar or "",
+                                        _seq = #ops + 1,
                                     })
                                     needed[queueItem] = count - (info.stackCount or 1)
                                     break
@@ -758,7 +788,7 @@ function Tracker:BuildPullOps()
         end
     end
 
-    return ops
+    return ns:PlanPullWave(ops, ns:GetFreeBagSlots())
 end
 
 -- Build warbank deposit operation list without executing.

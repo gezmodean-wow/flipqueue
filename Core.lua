@@ -51,6 +51,66 @@ ns.ALL_PLAYER_BAGS = {0, 1, 2, 3, 4, 5}
 ns.BANK_TABS = {6, 7, 8, 9, 10, 11}
 ns.WARBANK_TABS = {12, 13, 14, 15, 16}
 
+-- Empty slots across the bags the player is carrying, i.e. how many items a
+-- pull can actually land. INVENTORY_BAGS only, matching where pulls are routed
+-- (the reagent bag rejects non-reagents).
+--
+-- Both pull planners need this number and each used to work it out for itself
+-- — except only one of them ever did. `AutoPullFromBank` counted and truncated;
+-- `Tracker:BuildPullOps`, the planner behind the bank popup and the manual Pull
+-- tool, had no check at all and would happily plan 304 pulls against 164 free
+-- slots (FQ-233). One helper, so the two cannot drift apart again.
+--
+-- Counts empty slots and nothing else: a stackable item merging into a partial
+-- stack costs no slot, so this under-counts real capacity. That is the right
+-- direction to be wrong in — a wave that fits is worth more than a wave that
+-- theoretically could have been larger.
+function ns:GetFreeBagSlots()
+    local free = 0
+    for _, bagIndex in ipairs(ns.INVENTORY_BAGS) do
+        local ok, numSlots = pcall(C_Container.GetContainerNumSlots, bagIndex)
+        if ok and numSlots then
+            for slot = 1, numSlots do
+                local ok2, info = pcall(C_Container.GetContainerItemInfo, bagIndex, slot)
+                if ok2 and not info then free = free + 1 end
+            end
+        end
+    end
+    return free
+end
+
+-- Turn a full pull plan into the one wave that fits, and say what was left.
+-- Returns (ops, planned, freeSlots) with `ops` truncated in place.
+--
+-- Ordering first, capping second, and the order is the half that matters. The
+-- planner emits in bank-scan order — bag index, then slot — which bears no
+-- relation to the to-do list, so a wave cut off at 164 of 304 is 164 slots of
+-- items scattered across every target realm and the player cannot finish a
+-- single realm's posting from it. Grouped by realm then character, a short wave
+-- closes out whole realms and the next one picks up where it left off.
+--
+-- `_seq` (the emission index) breaks ties: table.sort is not stable, so without
+-- it two ops with the same realm, character and name could swap between calls
+-- and the popup would reshuffle under the player between redraws.
+function ns:PlanPullWave(ops, freeSlots)
+    table.sort(ops, function(a, b)
+        local ar, br = a._realm or "", b._realm or ""
+        if ar ~= br then return ar < br end
+        local ac, bc = a._char or "", b._char or ""
+        if ac ~= bc then return ac < bc end
+        local an, bn = a.name or "", b.name or ""
+        if an ~= bn then return an < bn end
+        return (a._seq or 0) < (b._seq or 0)
+    end)
+
+    local planned = #ops
+    freeSlots = math.max(0, freeSlots or 0)
+    if planned > freeSlots then
+        for i = planned, freeSlots + 1, -1 do ops[i] = nil end
+    end
+    return ops, planned, freeSlots
+end
+
 -- Colors
 ns.COLORS = {
     YELLOW  = "|cffffff00",

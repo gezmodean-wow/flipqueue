@@ -117,19 +117,10 @@ function Tracker:AutoPullFromBank(onComplete, fromClick)
         return
     end
 
-    -- Check free bag space before pulling
-    local freeBagSlots = 0
-    for _, bagIndex in ipairs(ns.INVENTORY_BAGS) do
-        local ok, numSlots = pcall(C_Container.GetContainerNumSlots, bagIndex)
-        if ok and numSlots then
-            for slot = 1, numSlots do
-                local ok2, info = pcall(C_Container.GetContainerItemInfo, bagIndex, slot)
-                if ok2 and not info then
-                    freeBagSlots = freeBagSlots + 1
-                end
-            end
-        end
-    end
+    -- Check free bag space before pulling. Shared with Tracker:BuildPullOps
+    -- via ns:GetFreeBagSlots — this planner counted and that one did not,
+    -- which is FQ-233.
+    local freeBagSlots = ns:GetFreeBagSlots()
 
     if freeBagSlots == 0 then
         ns:Print(ns.COLORS.RED .. "Bags are full!|r Cannot pull " .. #moves .. " item(s) from bank.")

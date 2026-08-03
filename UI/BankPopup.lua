@@ -759,15 +759,37 @@ function UI:ShowBankPopup(ops, onExecute)
     if ops.goldWithdraw and ops.goldWithdraw > 0 then goldCount = goldCount + 1 end
     if ops.goldDeposit and ops.goldDeposit > 0 then goldCount = goldCount + 1 end
 
-    -- Pull section
+    -- Pull section. When the to-do list wants more than the bags can take, the
+    -- planner sends one bag-sized wave (FQ-233) — say so, rather than showing a
+    -- short list that looks like the whole job.
     if pullCount > 0 then
-        idx = AddSectionHeader(f, idx, "Pull tasks (" .. pullCount .. ")", "pulls")
+        local planned = ops.pullsPlanned or pullCount
+        local header = "Pull tasks (" .. pullCount .. ")"
+        if planned > pullCount then
+            header = ("Pull tasks (%d of %d)"):format(pullCount, planned)
+        end
+        idx = AddSectionHeader(f, idx, header, "pulls")
+        if planned > pullCount and not IsCollapsed("pulls") then
+            idx = AddItemRow(f, idx, "Interface\RaidFrame\ReadyCheck-Waiting", ns.COLORS.YELLOW
+                .. ("%d more won't fit — post or deposit, then reopen the bank"):format(planned - pullCount)
+                .. "|r", "")
+        end
         if not IsCollapsed("pulls") then
             for _, op in ipairs(ops.pulls) do
                 idx = AddItemRow(f, idx, op.icon, op.name, "x" .. (op.quantity or 1))
             end
         end
         totalOps = totalOps + pullCount
+    end
+
+    -- Bags with no room at all: the planner emitted nothing, so without this
+    -- the popup simply has no pull section and the player is left guessing.
+    if pullCount == 0 and (ops.pullsPlanned or 0) > 0 then
+        idx = AddSectionHeader(f, idx, "Pull tasks (0 of " .. ops.pullsPlanned .. ")", "pulls")
+        if not IsCollapsed("pulls") then
+            idx = AddItemRow(f, idx, "Interface\RaidFrame\ReadyCheck-NotReady", ns.COLORS.RED
+                .. "No free bag slots — nothing can be pulled yet.|r", "")
+        end
     end
 
     -- Deposit-tasks section (#155: renamed from "Deposit to warbank" — these
