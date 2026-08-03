@@ -378,6 +378,18 @@ local function cmdState()
     L("RT|pullIP=" .. V(tr._pullInProgress) .. "|depIP=" .. V(tr._depositInProgress)
         .. "|cancels=" .. V(tr._pendingCancels) .. "|ahOpen=" .. V(tr._isAHOpen))
 
+    -- Last paste captured this session. `events` vs `chunks` is how the client
+    -- delivered it (one insert or thousands), and `maxHeld` is the most the
+    -- EditBox ever had to lay out — the cost behind the import crash (FQ-228).
+    local ps = UI._lastPasteStats
+    if ps then
+        L("PASTE|bytes=" .. V(ps.bytes) .. "|events=" .. V(ps.events)
+            .. "|chunks=" .. V(ps.chunks) .. "|maxHeld=" .. V(ps.maxHeld)
+            .. "|inline=" .. V(ps.inline) .. "|stuck=" .. V(ps.stuck))
+    else
+        L("PASTE|none")
+    end
+
     end) -- pcall
 
     if not buildOk then

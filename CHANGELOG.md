@@ -1,5 +1,44 @@
 # Changelog
 
+## v0.13.1-alpha10
+
+FQ-228, the stage before every fix that came before it. The reporter answered the three-way diagnostic on #228 with the first branch — **the "Receiving paste... N KB" line never appears at all** — and attached a screenshot of the frozen client: alpha9, generator step 2, paste box **empty**, Windows' busy cursor over it, status bar still reading `0 deals imported`. Embedded Cogworks-1.0 stays at **`v0.16.0`** (MINOR 31); `## Interface` stays at `120007`. **F8 (in-game smoke test) waived on maintainer direction** — shipped for tester coverage.
+
+### What that answer rules out
+
+Capture, parse and import all run from `C_Timer.After(0, ...)` continuations. If any of them had been reached, the frame that scheduled them would have ended, and a frame that ends is a frame that draws — `onProgress` would have painted the KB line, or `HandleS2Text` would have painted "Parsing large paste...". Neither drew. The frozen screenshot is the pre-paste frame, which is the same conclusion from the other side: **the client never completed the frame the paste arrived in.** Everything shipped for #228 so far — the O(N²) dedup, the drain-loop fence, the paste gate — lives downstream of a frame boundary that is never reached. All real, none of them his crash.
+
+### FQ-228 (#228): the widget carried the whole export through the paste
+
+`UI:AttachPasteCapture` (`UI/Shared.lua:747`) drained the box from a `C_Timer.After(0, Drain)` continuation — i.e. **next frame**. A paste is delivered as a run of insert events that all land inside one frame, and no timer, `OnUpdate` or repaint can run until that frame ends. So for the entire duration of the paste the widget holds everything delivered so far, and the client re-lays-out a multiline `EditBox`'s full contents on every insert. That is C-side cost, quadratic in the paste, and on a 334 KB FlippingPal export (the attachment on this thread, truncated at that) it is a minute of frozen client and then death. The spec's own burst case (`test/pastecapture_spec.lua`, "the whole event storm inside ONE frame") proved the Lua side was clean and never asserted anything about what the widget was holding — 17,145 bytes, all of it, the entire time.
+
+Capture now takes the text **inside the input event**:
+
+- `OnChar` and `OnTextChanged` both route through one `OnInput`. The only per-event work is `GetNumLetters`, the one way to ask how much the widget holds without allocating the string to find out, so it is safe on every event.
+- Past `WIPE_THRESHOLD` (4096) the box is read and cleared then and there. The widget's high-water mark is now 4 KB rather than the whole export — for a 334 KB paste that is ~82× less for the client to lay out per insert, and it turns the client's cost from quadratic in the paste into linear.
+- A paste delivered whole in one event is cleared **before the frame it arrived in is ever drawn**, so the client never lays out or renders it at all. The spec asserts exactly that: `box._text == ""` before a single frame has run.
+- Clients without `GetNumLetters` fall back to the old frame-driven drain, which is unchanged and still covered.
+
+`Clear()` and `Take()` now factor out what `Drain` did inline. Clear verifies **every** clear rather than only the first — the confirming read is of an empty box when all is well, so it costs nothing, and it closes the hole where a widget that went un-drainable *mid*-burst (rather than at the start, which is all FQ-242 fenced) still looped forever. `Take` returns `stuck` **without** buffering, since the widget's copy is the authoritative one at that point; the caller appends it exactly once and finishes.
+
+New spec coverage in `test/pastecapture_spec.lua` (45 assertions): the widget's high-water mark on every streaming shape, in-event clearing for a whole-paste delivery, and the no-`GetNumLetters` fallback. The mock `EditBox` now tracks `maxHeld` and `bytesRead`, so the client-side cost is a measured invariant instead of an unstated assumption.
+
+### The progress line was 600px from where the player was told to look
+
+`s2.statusLabel` is anchored `LEFT, s2 BOTTOMLEFT, 8, 22` — bottom of the frame, beside the Back button. The paste box ends around 640px above it. "Watch the line just under the paste box" named a line that does not exist there. Both generator paste steps now have `pasteStatus`, anchored under `editBg`, carrying receive progress, parse progress and the too-large error; the preview below shifts down 15px. `statusLabel` keeps the outcome (counts, "click Import & Next").
+
+### Transform page had the same exposure
+
+`UI/TransformPage.lua`'s paste box had no input handler at all — no Lua cost, but the same widget cost, and it accepts the same FlippingPal exports. It now uses the shared capture, holding drained text in `pasteCaptured`; `GetSourceItems` prefers the box (small input, left untouched) and falls back to the capture.
+
+### Telemetry: `/fq state` now reports the last paste
+
+`PASTE|bytes=…|events=…|chunks=…|maxHeld=…|inline=…|stuck=…`. `events` against `chunks` is how the client delivered the paste — one insert or thousands — and `maxHeld` is the most the widget ever had to lay out. If this build still dies, that line off a *smaller successful* paste says which delivery mode the client uses, which is the one thing no amount of local reasoning can settle.
+
+### Residual risk, stated plainly
+
+Clearing the widget mid-paste assumes the client keeps inserting the remainder into the now-empty box. If it instead drops the rest, the failure mode changes from a crash to a short import — visible, not silent, but worth checking: the received-KB figure and the parsed deal count are both on screen, and FlippingPal states its own count. Not reproducible locally at this size; the reporter's next run is the test. And if the client dies *inside* its own atomic insert, before any event reaches Lua, nothing in Lua can help and the answer becomes splitting the export.
+
 ## v0.13.1-alpha9
 
 Import-path reliability. Three defects, all found while root-causing the crash still live on #228, plus the specs finally running in CI. Embedded Cogworks-1.0 stays at **`v0.16.0`** (MINOR 31); `## Interface` stays at `120007`. **F8 (in-game smoke test) waived on maintainer direction** — shipped for tester coverage.

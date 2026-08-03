@@ -49,12 +49,18 @@ end
 -- Mock EditBox
 --------------------------
 
-local function NewEditBox()
-    local box = { _text = "", getTextCalls = 0, scripts = {} }
+local function NewEditBox(noNumLetters)
+    local box = { _text = "", getTextCalls = 0, bytesRead = 0, maxHeld = 0, scripts = {} }
     function box:SetScript(kind, fn) self.scripts[kind] = fn end
     function box:GetText()
         self.getTextCalls = self.getTextCalls + 1
+        self.bytesRead = self.bytesRead + #self._text
         return self._text
+    end
+    -- The real widget can answer this without building the string, which is
+    -- why capture may call it on every input event.
+    if not noNumLetters then
+        function box:GetNumLetters() return #self._text end
     end
     function box:SetText(t)
         self._text = t or ""
@@ -62,9 +68,13 @@ local function NewEditBox()
         local fn = self.scripts.OnTextChanged
         if fn then fn(self, false) end
     end
-    -- Simulate the client appending text and firing input events.
+    -- Simulate the client appending text and firing input events. `maxHeld` is
+    -- the high-water mark of what the CLIENT has to lay out and render — the
+    -- cost that no amount of Lua bookkeeping can avoid, and the one that
+    -- killed the client on a full FlippingPal export.
     function box:Type(chunk, viaOnChar)
         self._text = self._text .. chunk
+        if #self._text > self.maxHeld then self.maxHeld = #self._text end
         if viaOnChar and self.scripts.OnChar then
             self.scripts.OnChar(self)
         elseif self.scripts.OnTextChanged then
@@ -119,19 +129,24 @@ local function streamTest(label, viaOnChar, chunkSize)
     check(label .. ": newlines preserved",
         got and select(2, got:gsub("\n", "\n")), 401)
     check(label .. ": box left empty", box._text, "")
-    -- The whole point: reads are bounded by frames, not by input events.
-    -- The whole point: reads are bounded by FRAMES, not by input events —
-    -- 17k events must not mean 17k full-text allocations. The +1 is the
-    -- single verification read taken when the drain first clears the box.
-    check(label .. ": <= 1 GetText per frame", box.getTextCalls <= frames + 1, true)
+    -- Two costs, two invariants. Lua side: reads are bounded by FRAMES, not
+    -- by input events — 17k events must not mean 17k full-text allocations.
+    -- (Two per frame while draining: the read that takes the text and the
+    -- read that confirms the widget let go of it, the second of an empty
+    -- box.) Client side: the widget never holds more than the threshold plus
+    -- one insert, so there is no growing string to re-lay-out (FQ-228).
+    check(label .. ": reads bounded by frames",
+        box.getTextCalls <= 2 * frames + 8, true)
+    check(label .. ": widget never holds the whole paste",
+        box.maxHeld <= 4096 + chunkSize, true)
     check(label .. ": progress reported", progressCalls > 0, true)
-    return box.getTextCalls, frames
+    return box.getTextCalls, frames, box.maxHeld
 end
 
 -- Per-character streaming, the delivery mode that crashed the client.
-local reads, frames = streamTest("OnChar stream", true, 1)
-print(string.format("    (%d GetText calls over %d frames for %d KB / %d events)",
-    reads, frames, math.floor(#FP_EXPORT / 1024), #FP_EXPORT))
+local reads, frames, held = streamTest("OnChar stream", true, 1)
+print(string.format("    (%d GetText calls over %d frames for %d KB / %d events, widget peak %d B)",
+    reads, frames, math.floor(#FP_EXPORT / 1024), #FP_EXPORT, held))
 
 -- Same paste delivered as OnTextChanged only — the case the previous
 -- OnChar-keyed guard could not arm on at all.
@@ -144,10 +159,12 @@ streamTest("chunked stream", false, 512)
 -- 1b. The actual crash shape: the whole event storm inside ONE frame
 --------------------------
 
--- This is what killed the client. The old handler called GetText per event,
--- so ~17,000 events in one frame batch meant ~17,000 allocations of an
--- ever-growing string. Capture must collapse that to a handful of reads
--- regardless of how many events arrive before the frame ends.
+-- This is what killed the client, and it is the case no frame-driven drain
+-- can help with: every event of the paste lands before the frame ends, so a
+-- timer scheduled by the first event does not run until the last event has
+-- already been delivered. Whatever the widget accumulates in between, the
+-- client lays out on every single insert. Capture must therefore take the
+-- text INSIDE the event, and the invariant is the widget's high-water mark.
 do
     local burstBox = NewEditBox()
     local burstGot
@@ -157,9 +174,27 @@ do
     end
     local settleFrames = RunFrames()
     check("burst: reconstructed exactly", burstGot, FP_EXPORT)
-    check("burst: reads stay in single digits", burstBox.getTextCalls < 10, true)
-    print(string.format("    (%d events in one frame -> %d GetText calls, %d frames)",
-        #FP_EXPORT, burstBox.getTextCalls, settleFrames))
+    check("burst: widget never holds the whole paste", burstBox.maxHeld <= 4096, true)
+    check("burst: bytes read stay linear", burstBox.bytesRead <= 2 * #FP_EXPORT, true)
+    print(string.format("    (%d events in one frame -> %d GetText calls, %d frames, widget peak %d B)",
+        #FP_EXPORT, burstBox.getTextCalls, settleFrames, burstBox.maxHeld))
+end
+
+-- The same burst on a client whose EditBox cannot report its length without
+-- building the string. Nothing can be taken mid-event there, so the widget
+-- does carry the paste — but the capture must still reconstruct it exactly
+-- and must still read it a bounded number of times.
+do
+    local legacyBox = NewEditBox(true)
+    local legacyGot
+    UI:AttachPasteCapture(legacyBox, { onText = function(t) legacyGot = t end })
+    for i = 1, #FP_EXPORT do
+        legacyBox:Type(FP_EXPORT:sub(i, i), true)
+    end
+    RunFrames()
+    check("no GetNumLetters: reconstructed exactly", legacyGot, FP_EXPORT)
+    check("no GetNumLetters: reads stay in single digits",
+        legacyBox.getTextCalls < 10, true)
 end
 
 --------------------------
@@ -170,9 +205,15 @@ local box = NewEditBox()
 local got
 UI:AttachPasteCapture(box, { onText = function(t) got = t end })
 box:Type(FP_EXPORT, false)
+-- Before a single frame has run: a paste delivered whole must already be out
+-- of the widget, or the client lays it out and draws it at the end of the
+-- frame it arrived in.
+check("single-shot: box drained inside the event", box._text, "")
 RunFrames()
 check("single-shot: reconstructed exactly", got, FP_EXPORT)
 check("single-shot: box drained", box._text, "")
+check("single-shot: capture stats recorded",
+    UI._lastPasteStats and UI._lastPasteStats.bytes, #FP_EXPORT)
 
 --------------------------
 -- 3. Typing must not be disturbed

@@ -917,9 +917,17 @@ function UI:RefreshGeneratorPage(pending)
         -- Click anywhere on the background to focus the EditBox
         s2.editBg:SetScript("OnMouseDown", function() s2.editBox:SetFocus() end)
 
+        -- Paste progress, directly under the box the player is looking at.
+        -- The page's statusLabel sits 600px away at the bottom of the frame,
+        -- which is no use for telling someone whether their paste landed.
+        s2.pasteStatus = s2:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+        s2.pasteStatus:SetPoint("TOPLEFT", s2.editBg, "BOTTOMLEFT", 2, -3)
+        s2.pasteStatus:SetJustifyH("LEFT")
+        s2.pasteStatus:SetText("")
+
         -- Grouped preview scroll (replaces flat table)
         s2.previewScroll = CreateFrame("ScrollFrame", "FlipQueueGenImportPreview", s2, "UIPanelScrollFrameTemplate")
-        s2.previewScroll:SetPoint("TOPLEFT", s2.editBg, "BOTTOMLEFT", 0, -4)
+        s2.previewScroll:SetPoint("TOPLEFT", s2.editBg, "BOTTOMLEFT", 0, -19)
         s2.previewScroll:SetPoint("BOTTOMRIGHT", s2, "BOTTOMRIGHT", -22, 40)
         s2.previewScroll:Hide()
 
@@ -975,6 +983,7 @@ function UI:RefreshGeneratorPage(pending)
         -- updates) so the sync and chunked paths can share it.
         local function HandleParsedS2(items)
             s2._busy = false
+            s2.pasteStatus:SetText("")
             if #items > 0 then
                     if s2.autoImportCheck:GetChecked() then
                         local total = #items
@@ -1208,11 +1217,11 @@ function UI:RefreshGeneratorPage(pending)
             if s2._lastLen < 10 and newLen > 50 and text:find("\n") then
                 if newLen > PARSE_CHUNK_THRESHOLD then
                     s2._busy = true
-                    s2.statusLabel:SetText(ns.COLORS.YELLOW
+                    s2.pasteStatus:SetText(ns.COLORS.YELLOW
                         .. "Parsing large paste... please wait.|r")
                     ns.Import:ParseChunked(text,
                         function(processed, total)
-                            s2.statusLabel:SetText(ns.COLORS.YELLOW
+                            s2.pasteStatus:SetText(ns.COLORS.YELLOW
                                 .. ("Parsing %d / %d items...|r"):format(processed, total))
                         end,
                         HandleParsedS2)
@@ -1230,12 +1239,12 @@ function UI:RefreshGeneratorPage(pending)
         UI:AttachPasteCapture(s2.editBox, {
             isBusy = function() return s2._busy end,
             onProgress = function(bytes)
-                s2.statusLabel:SetText(ns.COLORS.YELLOW
+                s2.pasteStatus:SetText(ns.COLORS.YELLOW
                     .. ("Receiving paste... %d KB|r"):format(math.floor(bytes / 1024)))
             end,
             onError = function(reason)
                 if reason == "too-large" then
-                    s2.statusLabel:SetText(ns.COLORS.RED
+                    s2.pasteStatus:SetText(ns.COLORS.RED
                         .. "That paste is too large to import in one go — "
                         .. "split the export and paste it in parts.|r")
                 end
@@ -1384,13 +1393,19 @@ function UI:RefreshGeneratorPage(pending)
 
         cr1.previewTable.headerFrame:SetParent(cr1)
         cr1.previewTable.headerFrame:ClearAllPoints()
-        cr1.previewTable.headerFrame:SetPoint("TOPLEFT", cr1.editBg, "BOTTOMLEFT", 0, -4)
-        cr1.previewTable.headerFrame:SetPoint("TOPRIGHT", cr1.editBg, "BOTTOMRIGHT", 0, -4)
+        cr1.previewTable.headerFrame:SetPoint("TOPLEFT", cr1.editBg, "BOTTOMLEFT", 0, -19)
+        cr1.previewTable.headerFrame:SetPoint("TOPRIGHT", cr1.editBg, "BOTTOMRIGHT", 0, -19)
 
         cr1.previewTable.scrollFrame:SetParent(cr1)
         cr1.previewTable.scrollFrame:ClearAllPoints()
         cr1.previewTable.scrollFrame:SetPoint("TOPLEFT", cr1.previewTable.headerFrame, "BOTTOMLEFT", 0, 0)
         cr1.previewTable.scrollFrame:SetPoint("BOTTOMRIGHT", cr1, "BOTTOMRIGHT", -22, 40)
+
+        -- Paste progress under the box, as on step 2.
+        cr1.pasteStatus = cr1:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+        cr1.pasteStatus:SetPoint("TOPLEFT", cr1.editBg, "BOTTOMLEFT", 2, -3)
+        cr1.pasteStatus:SetJustifyH("LEFT")
+        cr1.pasteStatus:SetText("")
 
         cr1.statusLabel = cr1:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
         cr1.statusLabel:SetPoint("LEFT", cr1, "BOTTOMLEFT", 8, 22)
@@ -1414,6 +1429,7 @@ function UI:RefreshGeneratorPage(pending)
 
         local function HandleParsedCR1(items)
             cr1._busy = false
+            cr1.pasteStatus:SetText("")
             if #items > 0 then
                     -- Filter to cross-realm deals only
                     local crossItems = {}
@@ -1521,11 +1537,11 @@ function UI:RefreshGeneratorPage(pending)
             if cr1._lastLen < 10 and newLen > 50 and text:find("\n") then
                 if newLen > CR_PARSE_CHUNK_THRESHOLD then
                     cr1._busy = true
-                    cr1.statusLabel:SetText(ns.COLORS.YELLOW
+                    cr1.pasteStatus:SetText(ns.COLORS.YELLOW
                         .. "Parsing large paste... please wait.|r")
                     ns.Import:ParseChunked(text,
                         function(processed, total)
-                            cr1.statusLabel:SetText(ns.COLORS.YELLOW
+                            cr1.pasteStatus:SetText(ns.COLORS.YELLOW
                                 .. ("Parsing %d / %d items...|r"):format(processed, total))
                         end,
                         HandleParsedCR1)
@@ -1541,12 +1557,12 @@ function UI:RefreshGeneratorPage(pending)
         UI:AttachPasteCapture(cr1.editBox, {
             isBusy = function() return cr1._busy end,
             onProgress = function(bytes)
-                cr1.statusLabel:SetText(ns.COLORS.YELLOW
+                cr1.pasteStatus:SetText(ns.COLORS.YELLOW
                     .. ("Receiving paste... %d KB|r"):format(math.floor(bytes / 1024)))
             end,
             onError = function(reason)
                 if reason == "too-large" then
-                    cr1.statusLabel:SetText(ns.COLORS.RED
+                    cr1.pasteStatus:SetText(ns.COLORS.RED
                         .. "That paste is too large to import in one go — "
                         .. "split the export and paste it in parts.|r")
                 end

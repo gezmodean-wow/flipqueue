@@ -303,6 +303,33 @@ srcStatus:SetPoint("TOPLEFT", configArea, "BOTTOMLEFT", 0, -2)
 srcStatus:SetTextColor(0.5, 0.5, 0.5)
 srcStatus:SetText("")
 
+-- A FlippingPal export pasted here is the same several hundred KB that killed
+-- the client on the generator's import step: the widget carries it while the
+-- client re-lays-out all of it on every insert (FQ-228). Capture drains the
+-- box and hands the text here instead. Small input is left in the box
+-- untouched, so typing and hand-edits behave exactly as before.
+local pasteCaptured = ""
+UI:AttachPasteCapture(pasteEdit, {
+    onText = function(text)
+        pasteCaptured = text or ""
+        if (pasteEdit:GetText() or "") == "" then
+            srcStatus:SetText(("Received %d KB — click Preview Source.")
+                :format(math.floor(#pasteCaptured / 1024)))
+        else
+            srcStatus:SetText("")
+        end
+    end,
+    onProgress = function(bytes)
+        srcStatus:SetText(("Receiving paste... %d KB"):format(math.floor(bytes / 1024)))
+    end,
+    onError = function(reason)
+        if reason == "too-large" then
+            srcStatus:SetText("That paste is too large to read in one go — "
+                .. "split it and paste it in parts.")
+        end
+    end,
+})
+
 -- ==========================================
 -- PREVIEW BUTTON + WARM CACHE BUTTON
 -- ==========================================
@@ -1029,7 +1056,10 @@ local function LoadItems()
     elseif sourceMode == "paste" then
         -- Parse fresh from the edit box text
         if ns.Import and ns.Import.Parse then
+            -- The box holds small input; anything large was drained out of the
+            -- widget by capture and lives in pasteCaptured instead.
             local text = pasteEdit:GetText()
+            if not text or text == "" then text = pasteCaptured end
             if text and text ~= "" then
                 pastedItems = ns.Import:Parse(text)
                 return pastedItems

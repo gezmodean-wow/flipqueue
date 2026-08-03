@@ -6,6 +6,17 @@ The engineering-detail companion lives in `CHANGELOG.md` (commit-readerese — f
 
 ---
 
+## v0.13.1-alpha10
+
+**Another go at the crash when pasting a full FlippingPal export.** If you have been hitting the spinning cursor and a dead client, this is the build to test.
+
+- **The paste no longer sits in the box while the game struggles with it.** WoW delivers a paste in one go, before anything else can run — and while that is happening, the game is re-drawing the entire pasted text every time another piece of it arrives. On a full multi-character export that is hundreds of thousands of characters, and the game dies before FlipQueue is ever given a turn. That is why nothing appeared on screen, not even the progress line we asked you to watch for. FlipQueue now takes the text out of the box the instant it arrives rather than waiting its turn, so the game never has to hold or draw more than a few lines of it.
+- **The progress line is now under the paste box, where you are actually looking.** It used to be at the very bottom of the window, next to the Back button, six hundred pixels from the box. Receiving, parsing and any "too large" message now appear directly beneath the box you pasted into.
+- **The Transform page's paste box got the same treatment.** It accepts the same exports and had the same problem waiting to happen.
+- **`/fq state` now records your last paste** — how big it was and how the game handed it over. If a paste still fails, running that afterwards on a *smaller* one that worked tells us something we cannot work out from here.
+
+One thing worth checking after a big paste: the number of deals FlipQueue reports should be close to what FlippingPal told you it found. If it comes up short, say so — that would be a different problem, and a much easier one.
+
 ## v0.13.1-alpha9
 
 **Importing a big FlippingPal export.** If you have been fighting the freeze-then-crash when pasting a full export, this is the build to test.

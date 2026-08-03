@@ -712,8 +712,8 @@ UI.BuildCurrentCharTasks = BuildCurrentCharTasks
 --
 -- AttachPasteCapture fixes both. It reads the box AT MOST ONCE PER FRAME
 -- regardless of how the paste is delivered, and once the text crosses
--- WIPE_THRESHOLD it drains the box every frame (GetText then SetText("")) so
--- the widget never holds more than one frame's worth. Draining the widget
+-- WIPE_THRESHOLD it drains the box (GetText then SetText("")) so the widget
+-- never holds more than WIPE_THRESHOLD bytes. Draining the widget
 -- rather than buffering OnChar's character argument is deliberate: OnChar
 -- never delivers newlines, and every FlippingPal format is line-based —
 -- GetText returns the literal contents, so table.concat reconstructs the
@@ -721,6 +721,22 @@ UI.BuildCurrentCharTasks = BuildCurrentCharTasks
 --
 -- Below the threshold nothing is drained at all, so ordinary typing keeps
 -- its text, its cursor and its selection.
+--
+-- The drain has to happen INSIDE the input event, not on the next frame
+-- (FQ-228 again). A paste is delivered as a run of insert events that all
+-- land in one frame, and no timer, OnUpdate or repaint can run until that
+-- frame ends — so "drain next frame" means the widget carries the entire
+-- export through every insert, and the client re-lays-out all of it each
+-- time. That C-side cost is quadratic in the paste and it is what kills the
+-- client on a full multi-character FlippingPal export: a spinning cursor, no
+-- error, and no progress line, because Lua never got a frame in which to draw
+-- one. Taking the text in the event itself keeps the widget at
+-- WIPE_THRESHOLD no matter how the paste arrives, and means a paste that is
+-- delivered whole is cleared before the frame it arrived in is ever drawn.
+--
+-- GetNumLetters is the gate for that: it is the one way to ask how much the
+-- widget is holding without allocating the string to find out, so it is safe
+-- to call on every event. Clients without it fall back to the frame drain.
 --
 -- The drain loop rests on one assumption: that SetText("") empties the box.
 -- If it ever doesn't — the widget refuses the clear, or the client re-inserts
@@ -746,6 +762,8 @@ local MAX_PASTE_BYTES = 8 * 1024 * 1024   -- ~20x the largest real FP export see
 
 function UI:AttachPasteCapture(editBox, opts)
     local buf, pending, wiping, total, lastLen, idle = {}, false, false, 0, -1, 0
+    local selfSet, stuck = false, false
+    local stats = {events = 0, chunks = 0, maxHeld = 0, bytes = 0, inline = false}
 
     local function Reset()
         pending, wiping, total, lastLen, idle = false, false, 0, -1, 0
@@ -753,8 +771,51 @@ function UI:AttachPasteCapture(editBox, opts)
     end
 
     local function Finish(text, wasPasted)
+        stats.bytes = text and #text or 0
+        UI._lastPasteStats = {
+            events = stats.events, chunks = stats.chunks, maxHeld = stats.maxHeld,
+            bytes = stats.bytes, inline = stats.inline, stuck = stuck,
+        }
         Reset()
         if text and text ~= "" and opts.onText then opts.onText(text, wasPasted) end
+    end
+
+    -- Clear the widget and confirm it actually cleared. The confirming read is
+    -- of an EMPTY box when all is well, so it costs nothing; when the widget
+    -- refuses the clear it is the only thing standing between us and a loop
+    -- that re-reads and re-appends the same text forever (FQ-242).
+    local function Clear()
+        selfSet = true
+        editBox:SetText("")
+        selfSet = false
+        if #(editBox:GetText() or "") > 0 then
+            stuck = true
+            return false
+        end
+        return true
+    end
+
+    -- Take what the widget is holding. Returns "ok", "over" (aborted, past the
+    -- cap) or "stuck" — the widget refused the clear, so the chunk is NOT
+    -- buffered: it is still in the box, that copy is the authoritative one,
+    -- and whoever holds it must finish the burst rather than read again.
+    local function Take(chunk)
+        local n = #chunk
+        if n > stats.maxHeld then stats.maxHeld = n end
+        if total + n > MAX_PASTE_BYTES then
+            Clear()
+            Reset()
+            if opts.onError then opts.onError("too-large") end
+            return "over"
+        end
+        if not Clear() then return "stuck" end
+        buf[#buf + 1] = chunk
+        total = total + n
+        wiping = true
+        idle = 0
+        stats.chunks = stats.chunks + 1
+        if opts.onProgress then opts.onProgress(total) end
+        return "ok"
     end
 
     local Drain
@@ -766,17 +827,15 @@ function UI:AttachPasteCapture(editBox, opts)
 
         if wiping then
             if n > 0 then
-                if total + n > MAX_PASTE_BYTES then
-                    editBox:SetText("")
-                    Reset()
-                    if opts.onError then opts.onError("too-large") end
+                local result = Take(chunk)
+                if result == "over" then return end
+                if result == "stuck" then
+                    -- The widget still holds this chunk and will hand it back
+                    -- on every read. Append it once, here, and stop.
+                    buf[#buf + 1] = chunk
+                    Finish(table.concat(buf), true)
                     return
                 end
-                buf[#buf + 1] = chunk
-                total = total + n
-                editBox:SetText("")
-                idle = 0
-                if opts.onProgress then opts.onProgress(total) end
             else
                 idle = idle + 1
             end
@@ -790,23 +849,15 @@ function UI:AttachPasteCapture(editBox, opts)
 
         if n >= WIPE_THRESHOLD then
             -- Crossed into paste territory: take what's there and start
-            -- draining so the widget stops carrying it.
-            buf[#buf + 1] = chunk
-            total = n
-            wiping = true
-            idle = 0
-            editBox:SetText("")
-
-            -- One verification read, only here. If the widget won't give the
-            -- text up we must not keep re-reading it — and we already hold
-            -- all of it, so the burst is complete.
-            local leftover = editBox:GetText() or ""
-            if #leftover > 0 then
+            -- draining so the widget stops carrying it. Only reachable on
+            -- clients without GetNumLetters; otherwise the input handler has
+            -- already taken it without waiting for this frame.
+            local result = Take(chunk)
+            if result == "over" then return end
+            if result == "stuck" then
                 Finish(chunk, true)
                 return
             end
-
-            if opts.onProgress then opts.onProgress(total) end
             C_Timer.After(0, Drain)
             return
         end
@@ -831,15 +882,31 @@ function UI:AttachPasteCapture(editBox, opts)
         if pending then return end
         if opts.isBusy and opts.isBusy() then return end
         pending, wiping, total, lastLen, idle = true, false, 0, -1, 0
+        stats.events, stats.chunks, stats.maxHeld, stats.bytes, stats.inline =
+            0, 0, 0, 0, false
         wipe(buf)
         C_Timer.After(0, Drain)
     end
 
-    -- Armed from both delivery paths. Neither handler reads the box: that is
-    -- the settle loop's job, exactly once per frame.
-    editBox:SetScript("OnChar", Arm)
+    -- Every input event, whichever way the client delivers the paste. The
+    -- only per-event work is GetNumLetters, which does not allocate; the box
+    -- is read in full only when it has crossed the threshold, and then it is
+    -- emptied on the spot rather than left for the next frame that may never
+    -- come.
+    local function OnInput()
+        if selfSet then return end
+        if opts.isBusy and opts.isBusy() then return end
+        Arm()
+        stats.events = stats.events + 1
+        if stuck or not editBox.GetNumLetters then return end
+        if editBox:GetNumLetters() < WIPE_THRESHOLD then return end
+        stats.inline = true
+        Take(editBox:GetText() or "")
+    end
+
+    editBox:SetScript("OnChar", OnInput)
     editBox:SetScript("OnTextChanged", function(_, userInput)
         if not userInput then return end   -- our own SetText calls land here
-        Arm()
+        OnInput()
     end)
 end
