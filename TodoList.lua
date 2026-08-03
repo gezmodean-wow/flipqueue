@@ -40,6 +40,20 @@ function TodoList:CommitList(preview, mode)
         table.insert(ns.db.todoLists.upcoming, preview)
     end
 
+    -- Stamp every task with when it entered the list, so "no progress for N
+    -- days" has a baseline before anything has happened to it (FQ-226). Done
+    -- here rather than in the generator so every path that commits a list --
+    -- generate, regenerate, append, queue -- is covered by construction.
+    local now = time()
+    local function StampNew(tasks)
+        for _, task in ipairs(tasks or {}) do
+            task.createdAt = task.createdAt or now
+            task.lastProgressAt = task.lastProgressAt or task.createdAt
+        end
+    end
+    StampNew(preview.tasks)
+    if ns.db.todoLists.active then StampNew(ns.db.todoLists.active.tasks) end
+
     -- Imports are ephemeral working state for the import → generate phase.
     -- Once a list has been committed they've served their purpose, and the
     -- to-do list itself becomes the source of truth for what's "active".
@@ -509,13 +523,13 @@ function TodoList:RegenerateList(sourceList, refreshMode, removedKeys, newName)
                     copy.buyRealm = task.buyRealm
                     copy.buyPrice = task.buyPrice
                     copy.dealType = "buy"
-                    copy._regenNote = "no inventory \xe2\x86\x92 buy"
+                    copy._regenNote = "no inventory → buy"
                 elseif lookup then
                     copy.action   = "buy"
                     copy.buyRealm = lookup.realm
                     copy.buyPrice = lookup.price
                     copy.dealType = "buy"
-                    copy._regenNote = "no inventory \xe2\x86\x92 buy"
+                    copy._regenNote = "no inventory → buy"
                 else
                     copy.status     = "skipped"
                     copy.failReason = "No inventory and no known buy source"
@@ -1021,6 +1035,7 @@ function TodoList:UpdateTaskStatus(taskIndex, status, reason)
     if item then
         item.status = status
         if reason then item.failReason = reason end
+        self:StampProgress(item)   -- (FQ-226) a status change is progress
     end
 
     if ns.Sync and ns.Sync.IsLinked and ns.Sync:IsLinked() and not ns.Sync._applying then
@@ -1175,6 +1190,7 @@ function TodoList:AdvanceStep(taskIndex)
 
     step.status = "completed"
     task.currentStep = task.currentStep + 1
+    self:StampProgress(task)   -- (FQ-226) a step advance is progress
 
     -- If past last step, task is done
     if task.currentStep > #task.steps then
@@ -1196,6 +1212,7 @@ function TodoList:AdvanceStep(taskIndex)
                     other.blockedBy = nil
                     other.depositFrom = nil
                     other.deferredAt = nil
+                    self:StampProgress(other)   -- being unblocked is progress
                     ns:PrintDebug("[buy-complete] unblocked sell task: " .. (other.name or "?"))
                 end
             end
@@ -1591,6 +1608,7 @@ function TodoList:RefreshTaskSteps()
                         task.currentStep = 2
                         task.source = "bags"
                         task.deferredAt = nil
+                        self:StampProgress(task)   -- (FQ-226) the item turned up again
                         changed = true
                         justAdvanced = true
                     end
@@ -1639,6 +1657,7 @@ function TodoList:RefreshTaskSteps()
                     end
                     if task.deferredAt then
                         task.deferredAt = nil
+                        self:StampProgress(task)   -- (FQ-226) the item turned up again
                         changed = true
                     end
                     if task.blockedBy then
@@ -1757,6 +1776,7 @@ function TodoList:RefreshTaskSteps()
                 end
                 if task.deferredAt then
                     task.deferredAt = nil
+                    self:StampProgress(task)   -- (FQ-226) the item turned up again
                     changed = true
                 end
                 if task.blockedBy then
@@ -1791,6 +1811,7 @@ function TodoList:RefreshTaskSteps()
                     end
                     if task.deferredAt then
                         task.deferredAt = nil
+                        self:StampProgress(task)   -- (FQ-226) the item turned up again
                         changed = true
                     end
                     if task.blockedBy then
@@ -2291,6 +2312,177 @@ function TodoList:ReassignUnassignedTasks()
     end
 
     return reassigned
+end
+
+--------------------------
+-- Cleanup: trapped and stale tasks (FQ-226)
+--------------------------
+
+-- A to-do list only ever grows. Tasks that can no longer resolve sit in it
+-- forever, and the pile is what players describe as the list "filling up with
+-- junk" — so the two states are separated by how certain we are:
+--
+--   trapped  a task that CANNOT resolve, whatever the player does. Purgeable,
+--            but only on an explicit command — nothing here ever deletes on
+--            login (decided during the #223 triage).
+--   stale    a task that simply hasn't moved in a long time. Flagged, never
+--            purged: "old" is not "dead", and a list left alone over a holiday
+--            is entirely legitimate.
+--
+-- Only `pending` tasks are considered. A posted task is waiting on the auction
+-- house, and a completed or skipped one is already out of the way.
+local STALE_DAYS_DEFAULT = 14
+
+-- Reasons are stable keys; the label is what the player sees.
+local TRAPPED_LABELS = {
+    ["no-character"] = "assigned character no longer exists",
+    ["item-gone"]    = "item is not on any character, bank or warbank",
+    ["buy-removed"]  = "the buy half of this flip was removed",
+}
+TodoList.TRAPPED_LABELS = TRAPPED_LABELS
+
+-- Stamp forward progress on a task. Anything that moves a task along calls
+-- this, so "stale" measures time since the task last did something rather than
+-- time since the list was built — otherwise every task in an old list reads as
+-- stale even while the player is actively working it.
+function TodoList:StampProgress(task)
+    if type(task) == "table" then task.lastProgressAt = time() end
+end
+
+-- Classify every task in the active list in one pass.
+--
+-- Returns a table:
+--   byIndex[i]      = { trapped = reason, stale = days } for flagged tasks
+--   trappedCount    number of trapped tasks
+--   staleCount      number of stale tasks
+--   byReason[key]   count per trapped reason
+--   unscannedChars  characters with no inventory data at all
+--
+-- `unscannedChars` is not decoration. "Item is nowhere on the account" is
+-- decided from stored inventory, so a character that has never been scanned
+-- looks empty and its items look missing. The count travels with the result so
+-- every surface can say so instead of asserting a deletion is safe when it
+-- might not be.
+function TodoList:ClassifyTasks()
+    local result = {
+        byIndex = {}, trappedCount = 0, staleCount = 0,
+        byReason = {}, unscannedChars = 0, total = 0,
+    }
+    local list = self:GetCurrentList()
+    if not list or not list.tasks then return result end
+
+    local staleDays = (ns.db and ns.db.settings and ns.db.settings.todoStaleDays)
+        or STALE_DAYS_DEFAULT
+    -- 0 disables the flag. Guarded explicitly because 0 is truthy in Lua and
+    -- a zero threshold would otherwise mark every task in the list stale.
+    local staleSeconds = (staleDays > 0) and (staleDays * 86400) or nil
+    local now = time()
+
+    -- Known characters, and how many of them we have no inventory for.
+    local charSet = {}
+    for ck, charData in pairs((ns.db and ns.db.characters) or {}) do
+        charSet[ck] = true
+        local items = charData.inventory and charData.inventory.items
+        if not items or not next(items) then
+            result.unscannedChars = result.unscannedChars + 1
+        end
+    end
+
+    -- Pending buy tasks, indexed the way DeleteTask's cascade matches them, so
+    -- "the buy was removed" means the same thing in both directions.
+    local buyKeys, buyNames = {}, {}
+    for _, task in ipairs(list.tasks) do
+        if task.action == "buy" and task.status == "pending" then
+            if task.itemKey and task.itemKey ~= "" then buyKeys[task.itemKey] = true end
+            if task.name and task.name ~= "" then buyNames[task.name:lower()] = true end
+        end
+    end
+
+    local acctIndex   -- built lazily: a list of buy tasks never needs it
+    local function AccountIndex()
+        if not acctIndex then acctIndex = BuildAccountIndex() end
+        return acctIndex
+    end
+
+    for i, task in ipairs(list.tasks) do
+        if task.status == "pending" then
+            result.total = result.total + 1
+            local reason
+
+            if task.assignedChar and task.assignedChar ~= ""
+                and not charSet[task.assignedChar] then
+                -- Deleted, renamed, or tombstoned. Nothing can act on it.
+                reason = "no-character"
+            elseif task.action ~= "buy" then
+                -- A buy task is *supposed* to be for an item you don't have
+                -- yet, so absence proves nothing there.
+                local itemKey = task.itemKey or ""
+                local numID = tonumber((tostring(itemKey):gsub(";.*", "")))
+                if not IsItemInAccountInventory(AccountIndex(), itemKey, numID) then
+                    if task.deferredAt then
+                        -- The tracker has already looked and failed to find it.
+                        reason = "item-gone"
+                    elseif task.dealType == "flip"
+                        and not (buyKeys[itemKey]
+                            or (task.name and buyNames[task.name:lower()])) then
+                        -- Orphaned half of a cross-realm flip: nothing will
+                        -- ever buy the item this sell is waiting for.
+                        reason = "buy-removed"
+                    end
+                end
+            end
+
+            if reason then
+                result.byIndex[i] = { trapped = reason }
+                result.trappedCount = result.trappedCount + 1
+                result.byReason[reason] = (result.byReason[reason] or 0) + 1
+            else
+                local last = task.lastProgressAt or task.createdAt or list.createdAt
+                if staleSeconds and last and (now - last) >= staleSeconds then
+                    result.byIndex[i] = { stale = math.floor((now - last) / 86400) }
+                    result.staleCount = result.staleCount + 1
+                end
+            end
+        end
+    end
+
+    return result
+end
+
+-- Remove every trapped task from the active list. Manual only — there is no
+-- caller on any automatic path, by design. Returns (removed, byReason).
+function TodoList:PurgeTrapped()
+    local list = self:GetCurrentList()
+    if not list or not list.tasks then return 0, {} end
+
+    local classified = self:ClassifyTasks()
+    if classified.trappedCount == 0 then return 0, {} end
+
+    -- Descending, so removals don't shift the indices still to come.
+    local indices = {}
+    for i, flags in pairs(classified.byIndex) do
+        if flags.trapped then indices[#indices + 1] = i end
+    end
+    table.sort(indices, function(a, b) return a > b end)
+
+    local removed = 0
+    for _, idx in ipairs(indices) do
+        local task = list.tasks[idx]
+        if task then
+            if task.importSource and task.importKey then
+                ns:ImportRemove(task.importSource, task.importKey)
+            end
+            if ns.Sync and ns.Sync.IsLinked and ns.Sync:IsLinked()
+                and not ns.Sync._applying and task.taskUUID then
+                ns.Sync:EmitDelta("TDDEL", { taskUUID = task.taskUUID })
+            end
+            table.remove(list.tasks, idx)
+            removed = removed + 1
+        end
+    end
+
+    self:CheckAutoComplete()
+    return removed, classified.byReason
 end
 
 --------------------------

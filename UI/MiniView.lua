@@ -614,6 +614,34 @@ function UI:RefreshMini()
     -- Pre-check for char tasks (Check Mail, Expiring, etc.)
     local preCharTasks = UI.BuildCurrentCharTasks and UI.BuildCurrentCharTasks() or {}
 
+    -- Trapped-task banner (FQ-226). A trapped task belongs to a character that
+    -- no longer exists, or waits on an item that is nowhere on the account, so
+    -- it never appears as one of this character's rows -- the pile grows
+    -- entirely out of sight. A banner is the only surface here that can say so,
+    -- and it is a notice, not an action: nothing is ever removed automatically.
+    local trappedCount = 0
+    if useTodoList and ns.TodoList and ns.TodoList.ClassifyTasks then
+        local ok, classified = pcall(function() return ns.TodoList:ClassifyTasks() end)
+        if ok and classified then trappedCount = classified.trappedCount or 0 end
+    end
+    if trappedCount > 0 then
+        rowIndex = rowIndex + 1
+        local banner = GetOrCreateMiniRow(rowIndex)
+        banner.icon:SetTexture(nil)
+        banner.tooltipItemKey, banner.tooltipItemID = nil, nil
+        banner.tooltipItemName = nil
+        banner.text:SetText(ns.COLORS.RED .. trappedCount .. " trapped task(s)"
+            .. ns.COLORS.RESET .. ns.COLORS.GRAY .. "  /fq cleanup trapped"
+            .. ns.COLORS.RESET)
+        -- Rows are pooled: whatever this one was last time may still carry a
+        -- task's hover handlers and action buttons.
+        banner:SetScript("OnEnter", nil)
+        banner:SetScript("OnLeave", nil)
+        if banner._taskActionBtns then UI.HideTaskActionBtns(banner) end
+        banner:Show()
+        personalRowEnd = rowIndex
+    end
+
     if #tasks == 0 then
         local todoPending = useTodoList and ns.TodoList:GetPendingCount() or 0
         if #preCharTasks > 0 then

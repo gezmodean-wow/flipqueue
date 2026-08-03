@@ -293,6 +293,11 @@ function UI:RefreshTodoPage()
 
     local currentTodoList = ns.TodoList and ns.TodoList:GetCurrentList()
     local totalTodoTasks = currentTodoList and ns.TodoList:GetPendingCount() or 0
+    -- Trapped / stale classification, once per refresh rather than per row
+    -- (FQ-226). Keyed by index into the active list's tasks, which is exactly
+    -- what each row already carries as `_taskIndex`.
+    local taskFlags = (currentTodoList and ns.TodoList and ns.TodoList.ClassifyTasks)
+        and ns.TodoList:ClassifyTasks() or nil
     local thisCharTasks = #data
     local nextData = UI.BuildNextStepsData()
     local myTasks = UI.BuildCurrentCharTasks()
@@ -382,7 +387,18 @@ function UI:RefreshTodoPage()
         local activeName = currentTodoList and (currentTodoList.name or "Unnamed") or "(no active list)"
         local pendingStr = totalTodoTasks > 0 and ("  " .. ns.COLORS.GREEN .. totalTodoTasks .. " tasks|r") or ""
         local queueStr = #queued > 0 and ("  " .. ns.COLORS.GRAY .. "+" .. #queued .. " queued|r") or ""
-        bar.label:SetText(ns.COLORS.YELLOW .. activeName .. "|r" .. pendingStr .. queueStr)
+        -- List-level counts, so a pile-up is visible without scrolling the
+        -- whole list looking for tags (FQ-226).
+        local flagStr = ""
+        if taskFlags then
+            if taskFlags.trappedCount > 0 then
+                flagStr = flagStr .. "  " .. ns.COLORS.RED .. taskFlags.trappedCount .. " trapped|r"
+            end
+            if taskFlags.staleCount > 0 then
+                flagStr = flagStr .. "  " .. ns.COLORS.YELLOW .. taskFlags.staleCount .. " stale|r"
+            end
+        end
+        bar.label:SetText(ns.COLORS.YELLOW .. activeName .. "|r" .. pendingStr .. queueStr .. flagStr)
 
         -- Populate dropdown rows
         for _, r in ipairs(bar.dropdown.rows) do r:Hide() end
@@ -1027,6 +1043,23 @@ function UI:RefreshTodoPage()
                         if item.tsmRejectedFrom then
                             local fromName = item.tsmRejectedFrom:match("^(.-)%-") or item.tsmRejectedFrom
                             sourceTag = sourceTag .. ns.COLORS.ORANGE .. " [TSM skip " .. fromName .. "]" .. "|r"
+                        end
+                    end
+
+                    -- Trapped / stale tag (FQ-226). Inline textures rather than
+                    -- font glyphs: the addon renders in whatever font the
+                    -- player's UI supplies and a missing glyph shows as a box.
+                    local flags = taskFlags and item._taskIndex
+                        and taskFlags.byIndex[item._taskIndex]
+                    if flags then
+                        if flags.trapped then
+                            sourceTag = sourceTag .. "  "
+                                .. "|TInterface\\Buttons\\UI-GroupLoot-Pass-Up:12:12:0:0|t"
+                                .. ns.COLORS.RED .. "[trapped]|r"
+                        elseif flags.stale then
+                            sourceTag = sourceTag .. "  "
+                                .. "|TInterface\\Icons\\INV_Misc_PocketWatch_01:12:12:0:0|t"
+                                .. ns.COLORS.YELLOW .. "[stale " .. flags.stale .. "d]|r"
                         end
                     end
                     row.rightText:SetText(priceStr .. sourceTag)

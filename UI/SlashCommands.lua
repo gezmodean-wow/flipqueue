@@ -60,7 +60,70 @@ local function cmdGBank()
     ns:Print(ns.COLORS.YELLOW .. "Guild bank scanning is disabled.|r Blizzard's API returns unreliable item data (wrong IDs, missing ilvl, pets as Pet Cage).")
 end
 
-local function cmdCleanup()
+-- Print the trapped/stale breakdown for the active list (FQ-226). Shared by
+-- the bare `/fq cleanup` summary and the `trapped` preview.
+local function PrintTaskCleanupReport(classified, verbose)
+    local TL = ns.TodoList
+    if not TL then return end
+    if classified.trappedCount == 0 and classified.staleCount == 0 then
+        if verbose then
+            ns:Print(ns.COLORS.GREEN .. "No trapped or stale tasks.|r")
+        end
+        return
+    end
+    if classified.trappedCount > 0 then
+        ns:Print(ns.COLORS.RED .. classified.trappedCount .. " trapped task(s)|r"
+            .. " — these cannot resolve on their own:")
+        for reason, count in pairs(classified.byReason) do
+            ns:Print("   " .. count .. " × " ..
+                (TL.TRAPPED_LABELS[reason] or reason))
+        end
+        -- Absence of an item is decided from *stored* inventory, so an
+        -- unscanned character can make a perfectly fine task look dead. Say so
+        -- before the player deletes anything.
+        if classified.unscannedChars > 0 then
+            ns:Print(ns.COLORS.YELLOW .. "   Note: " .. classified.unscannedChars ..
+                " character(s) have no inventory data yet — log into them first "
+                .. "if you expect an item to be there.|r")
+        end
+    end
+    if classified.staleCount > 0 then
+        ns:Print(ns.COLORS.YELLOW .. classified.staleCount .. " stale task(s)|r"
+            .. " — no progress in a while. These are only flagged, never removed.")
+    end
+end
+
+local function cmdCleanup(args)
+    args = strtrim(args or ""):lower()
+
+    -- Task cleanup (FQ-226). Deleting a player's tasks is not undoable, so the
+    -- bare form only ever previews and the confirm word is required to remove.
+    if args:find("^trapped") then
+        local TL = ns.TodoList
+        if not TL or not TL.ClassifyTasks then return end
+        local classified = TL:ClassifyTasks()
+        if classified.trappedCount == 0 then
+            ns:Print(ns.COLORS.GREEN .. "No trapped tasks to remove.|r")
+            return
+        end
+        if args:find("confirm") then
+            local removed, byReason = TL:PurgeTrapped()
+            local parts = {}
+            for reason, count in pairs(byReason) do
+                parts[#parts + 1] = count .. " × " .. (TL.TRAPPED_LABELS[reason] or reason)
+            end
+            ns:Print(ns.COLORS.GREEN .. "Removed " .. removed .. " trapped task(s)|r"
+                .. (#parts > 0 and (": " .. table.concat(parts, ", ")) or ""))
+            UI:Refresh()
+            if UI.RefreshMini then UI:RefreshMini() end
+        else
+            PrintTaskCleanupReport(classified, true)
+            ns:Print("Run " .. ns.COLORS.YELLOW .. "/fq cleanup trapped confirm|r"
+                .. " to remove them. Stale tasks are never removed.")
+        end
+        return
+    end
+
     if not ns.db then return end
     ns.db._cleanupVersion = nil  -- force re-run
     ns:CleanupLegacyData()
@@ -69,6 +132,9 @@ local function cmdCleanup()
         ns.db._cleanupSummary = nil
     else
         ns:Print(ns.COLORS.GREEN .. "Data cleanup complete — no issues found.|r")
+    end
+    if ns.TodoList and ns.TodoList.ClassifyTasks then
+        PrintTaskCleanupReport(ns.TodoList:ClassifyTasks(), false)
     end
     UI:Refresh()
 end
@@ -1910,7 +1976,7 @@ ns.cw:RegisterSlashCommands("FlipQueue", {
         { name = "scan",                                                   help = "Rescan current character's bags",                                          run = cmdScan },
         { name = "bank",                                                   help = "Scan bank + warbank (must be at bank)",                                    run = cmdBank },
         { name = "gbank",                                                  help = "(Disabled — Blizzard's guild bank API is unreliable)",                     run = cmdGBank },
-        { name = "cleanup",                                                help = "Clean up legacy data and normalize saved variables",                       run = cmdCleanup },
+        { name = "cleanup",                                        args = "[trapped [confirm]]", help = "Clean up legacy data; `trapped` previews to-do tasks that can never resolve, `trapped confirm` removes them", run = cmdCleanup },
         { name = "export",                                                 help = "Open export page (CSV/AAA formats)",                                       run = cmdExport },
         { name = "sort",                                                   help = "Toggle sort mode (realm/name)",                                            run = cmdSort },
         { name = "clear",                                          args = "[log]",       help = "Clear imported deals (or 'log' for the posted items log)",   run = cmdClear },

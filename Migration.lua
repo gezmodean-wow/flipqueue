@@ -7,7 +7,7 @@ local addonName, ns = ...
 --------------------------
 
 -- Current schema version
-local CURRENT_SCHEMA = 12
+local CURRENT_SCHEMA = 13
 
 -- Schema history:
 -- nil/0  = v0.5.0 (stable release): queue array, separate inventory/characters/hiddenCharacters
@@ -42,6 +42,8 @@ local CURRENT_SCHEMA = 12
 --          from FQ-195 compares against player-level-scaled AH browse ilvls
 --          and hid most gear listings on low-level buyer alts. One-shot;
 --          players can re-enable from the Auctionator settings page.
+-- 13     = #226: per-task createdAt / lastProgressAt so "no progress in N days"
+--          can be measured. Backfilled from the owning list's createdAt.
 
 local function RunMigrations(db)
     db.schemaVersion = db.schemaVersion or 0
@@ -545,6 +547,34 @@ local function RunMigrations(db)
         end
         db.schemaVersion = 12
     end  -- migration 12
+
+    -- 13: #226 stale-task flagging needs a per-task clock. Tasks carried no
+    -- timestamps of their own — only the list did — so without a backfill every
+    -- pre-existing task would have read as "no progress ever" and flagged stale
+    -- the moment the feature shipped. Seed both stamps from the list's own
+    -- createdAt: it is the earliest moment the task provably existed, so a task
+    -- that has in fact been worked recently is at worst flagged one cycle early
+    -- and clears itself on its next real progress event.
+    if db.schemaVersion < 13 then
+        local seeded = 0
+        local function SeedList(list)
+            if not list or not list.tasks then return end
+            local base = list.createdAt or time()
+            for _, task in ipairs(list.tasks) do
+                if not task.createdAt then task.createdAt = base end
+                if not task.lastProgressAt then task.lastProgressAt = task.createdAt end
+                seeded = seeded + 1
+            end
+        end
+        if db.todoLists then
+            SeedList(db.todoLists.active)
+            for _, queued in ipairs(db.todoLists.upcoming or {}) do SeedList(queued) end
+        end
+        if seeded > 0 then
+            ns:PrintDebug("[migration] seeded timestamps on " .. seeded .. " task(s)")
+        end
+        db.schemaVersion = 13
+    end  -- migration 13
 end  -- RunMigrations
 
 -- Expose for DB.lua

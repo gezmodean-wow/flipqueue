@@ -197,6 +197,11 @@ function ns:InitDB()
     -- flows into task expectedPrice during /fq generate. See
     -- ns:ResolveFPPrice in Import.lua. "listing" preserves prior behavior.
     if db.settings.fpPriceSource == nil then db.settings.fpPriceSource = "listing" end
+    -- To-do staleness threshold in days (FQ-226). A pending task that has not
+    -- moved in this long is *flagged*, never removed — 14 days is long enough
+    -- that a normal posting cycle never trips it, short enough to notice a
+    -- pile-up. 0 disables the flag entirely.
+    if db.settings.todoStaleDays == nil then db.settings.todoStaleDays = 14 end
     -- Sales-log retention (FQ-214). Logging is on by default (backward
     -- compatible). salesRetentionDays mirrors the previous hardcoded 30-day
     -- prune; 0 means "never prune by age". salesRetentionCount is an optional
