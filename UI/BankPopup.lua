@@ -770,7 +770,7 @@ function UI:ShowBankPopup(ops, onExecute)
         end
         idx = AddSectionHeader(f, idx, header, "pulls")
         if planned > pullCount and not IsCollapsed("pulls") then
-            idx = AddItemRow(f, idx, "Interface\RaidFrame\ReadyCheck-Waiting", ns.COLORS.YELLOW
+            idx = AddItemRow(f, idx, "Interface\\RaidFrame\\ReadyCheck-Waiting", ns.COLORS.YELLOW
                 .. ("%d more won't fit — post or deposit, then reopen the bank"):format(planned - pullCount)
                 .. "|r", "")
         end
@@ -787,7 +787,7 @@ function UI:ShowBankPopup(ops, onExecute)
     if pullCount == 0 and (ops.pullsPlanned or 0) > 0 then
         idx = AddSectionHeader(f, idx, "Pull tasks (0 of " .. ops.pullsPlanned .. ")", "pulls")
         if not IsCollapsed("pulls") then
-            idx = AddItemRow(f, idx, "Interface\RaidFrame\ReadyCheck-NotReady", ns.COLORS.RED
+            idx = AddItemRow(f, idx, "Interface\\RaidFrame\\ReadyCheck-NotReady", ns.COLORS.RED
                 .. "No free bag slots — nothing can be pulled yet.|r", "")
         end
     end
