@@ -722,12 +722,27 @@ UI.BuildCurrentCharTasks = BuildCurrentCharTasks
 -- Below the threshold nothing is drained at all, so ordinary typing keeps
 -- its text, its cursor and its selection.
 --
+-- The drain loop rests on one assumption: that SetText("") empties the box.
+-- If it ever doesn't — the widget refuses the clear, or the client re-inserts
+-- while the paste is still arriving — the loop appends the SAME text again
+-- every frame, forever. `total` climbs, the buffer grows without bound, and
+-- the client dies with a busy cursor and no error to show for it. That is
+-- unbounded by construction, so both failure modes are fenced (FQ-242):
+--
+--   * the very first clear is verified with one extra read. A widget that
+--     won't drain won't start draining later, and we already hold the whole
+--     text at that point, so the burst is simply finished on the spot.
+--   * a burst past MAX_PASTE_BYTES is not a paste we can do anything useful
+--     with; report it instead of accumulating until the client runs out.
+--
 -- opts:
 --   isBusy():  optional; true suspends capture while a parse is running
 --   onText(text, wasPasted):  complete snapshot, fired once per burst
 --   onProgress(bytes):  optional; called while a large paste streams in
+--   onError(reason):  optional; "too-large" when the burst exceeds the cap
 local WIPE_THRESHOLD = 4096   -- nobody types this much; a paste crosses it at once
 local SETTLE_FRAMES = 2       -- consecutive quiet frames that end a burst
+local MAX_PASTE_BYTES = 8 * 1024 * 1024   -- ~20x the largest real FP export seen
 
 function UI:AttachPasteCapture(editBox, opts)
     local buf, pending, wiping, total, lastLen, idle = {}, false, false, 0, -1, 0
@@ -751,6 +766,12 @@ function UI:AttachPasteCapture(editBox, opts)
 
         if wiping then
             if n > 0 then
+                if total + n > MAX_PASTE_BYTES then
+                    editBox:SetText("")
+                    Reset()
+                    if opts.onError then opts.onError("too-large") end
+                    return
+                end
                 buf[#buf + 1] = chunk
                 total = total + n
                 editBox:SetText("")
@@ -775,6 +796,16 @@ function UI:AttachPasteCapture(editBox, opts)
             wiping = true
             idle = 0
             editBox:SetText("")
+
+            -- One verification read, only here. If the widget won't give the
+            -- text up we must not keep re-reading it — and we already hold
+            -- all of it, so the burst is complete.
+            local leftover = editBox:GetText() or ""
+            if #leftover > 0 then
+                Finish(chunk, true)
+                return
+            end
+
             if opts.onProgress then opts.onProgress(total) end
             C_Timer.After(0, Drain)
             return

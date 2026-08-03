@@ -1017,7 +1017,12 @@ function UI:RefreshGeneratorPage(pending)
                             s2._previewResults = nil
                             s2.previewScroll:Hide()
                             for _, r in ipairs(s2.previewRows) do r:Hide() end
-                            s2._lastLen = newLen
+                            -- Keep the gate armed, as the chunked branch does.
+                            -- This used to read `newLen`, which is a local of
+                            -- HandleS2Text and resolves to a nil global here —
+                            -- so the next paste threw on `nil < 10` and the box
+                            -- went dead until a reload (FQ-244).
+                            s2._lastLen = 0
                             UI:Refresh()
                             return
                         end
@@ -1228,6 +1233,13 @@ function UI:RefreshGeneratorPage(pending)
                 s2.statusLabel:SetText(ns.COLORS.YELLOW
                     .. ("Receiving paste... %d KB|r"):format(math.floor(bytes / 1024)))
             end,
+            onError = function(reason)
+                if reason == "too-large" then
+                    s2.statusLabel:SetText(ns.COLORS.RED
+                        .. "That paste is too large to import in one go — "
+                        .. "split the export and paste it in parts.|r")
+                end
+            end,
             onText = HandleS2Text,
         })
         s2.editBox:SetScript("OnEscapePressed", function() s2.editBox:ClearFocus() end)
@@ -1426,7 +1438,9 @@ function UI:RefreshGeneratorPage(pending)
                         cr1.previewTable:SetData({})
                         cr1.previewTable.headerFrame:Hide()
                         cr1.previewTable.scrollFrame:Hide()
-                        cr1._lastLen = newLen
+                        -- See FQ-244 — `newLen` is not in scope here, so this
+                        -- was setting the gate to nil and killing the next paste.
+                        cr1._lastLen = 0
                         UI:Refresh()
                         return
                     end
@@ -1529,6 +1543,13 @@ function UI:RefreshGeneratorPage(pending)
             onProgress = function(bytes)
                 cr1.statusLabel:SetText(ns.COLORS.YELLOW
                     .. ("Receiving paste... %d KB|r"):format(math.floor(bytes / 1024)))
+            end,
+            onError = function(reason)
+                if reason == "too-large" then
+                    cr1.statusLabel:SetText(ns.COLORS.RED
+                        .. "That paste is too large to import in one go — "
+                        .. "split the export and paste it in parts.|r")
+                end
             end,
             onText = HandleCR1Text,
         })

@@ -1,0 +1,32 @@
+name: tests
+
+# The headless specs under test/ have been run by hand until now, which is how
+# FQ-240 shipped in four consecutive alphas: a call site that Lua 5.1 could not
+# fail loudly on, guarded by a spec nobody ran. Run them on every push.
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  specs:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Lua 5.1
+        run: sudo apt-get update && sudo apt-get install -y lua5.1
+
+      - name: Run specs
+        run: |
+          status=0
+          for spec in test/*_spec.lua; do
+            echo "::group::$spec"
+            if ! lua5.1 "$spec"; then
+              echo "::error file=$spec::spec failed"
+              status=1
+            fi
+            echo "::endgroup::"
+          done
+          exit $status

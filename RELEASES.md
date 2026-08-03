@@ -6,6 +6,15 @@ The engineering-detail companion lives in `CHANGELOG.md` (commit-readerese — f
 
 ---
 
+## v0.13.1-alpha9
+
+**Importing a big FlippingPal export.** If you have been fighting the freeze-then-crash when pasting a full export, this is the build to test.
+
+- **Importing a large export is dramatically faster.** Every deal coming in was being checked against every deal already imported, one at a time, to spot the same item offered on connected realms. That check gets slower and slower as the import grows — four times slower each time the export doubles in size — so a small paste finished fine while a full multi-character export ground the game to a halt. FlipQueue now looks only at the deals that could actually be a match. On a 4,000-deal export the work dropped by roughly 35 times, and it no longer gets disproportionately worse as your export grows.
+- **A paste that can't be read no longer takes the game down with it.** The import reads your pasted text in small pieces and clears the box as it goes. If the box ever refused to clear, FlipQueue would read the same text over and over, forever, filling memory until the client died — with a spinning cursor and no error message. It now checks that the box actually cleared, and stops safely if it didn't. A paste beyond any sane size now tells you to split it up instead of quietly trying.
+- **Pasting a second large export in the same session works.** After a big paste, the box was left in a broken state and every later paste silently did nothing until you reloaded. If you have been reloading between attempts without knowing why, this was it.
+- **Auctionator and PBS shopping lists import in full.** Items from those lists arrive without an item ID, and FlipQueue was treating "no ID" as "the same item" — so a 30-item list would import as two or three deals and the rest vanished with no warning. Each item is now kept on its own.
+
 ## v0.13.1-alpha8
 
 **If your bank stopped doing anything, this is the build.** One bug, and it was a bad one.

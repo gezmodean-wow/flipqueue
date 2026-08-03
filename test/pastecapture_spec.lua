@@ -120,7 +120,10 @@ local function streamTest(label, viaOnChar, chunkSize)
         got and select(2, got:gsub("\n", "\n")), 401)
     check(label .. ": box left empty", box._text, "")
     -- The whole point: reads are bounded by frames, not by input events.
-    check(label .. ": <= 1 GetText per frame", box.getTextCalls <= frames, true)
+    -- The whole point: reads are bounded by FRAMES, not by input events —
+    -- 17k events must not mean 17k full-text allocations. The +1 is the
+    -- single verification read taken when the drain first clears the box.
+    check(label .. ": <= 1 GetText per frame", box.getTextCalls <= frames + 1, true)
     check(label .. ": progress reported", progressCalls > 0, true)
     return box.getTextCalls, frames
 end
@@ -217,6 +220,68 @@ box:SetText("some text set by the addon")
 local frameCount = RunFrames()
 check("SetText: no capture armed", calls, 0)
 check("SetText: no frames scheduled", frameCount, 0)
+
+--------------------------
+-- 6. A box that refuses to drain must not loop forever (FQ-242)
+--------------------------
+
+-- The whole drain loop assumes SetText("") empties the widget. If it ever
+-- doesn't, the old loop re-read the same text every frame, appended it again,
+-- and grew the buffer without bound — a busy cursor, climbing memory, and a
+-- dead client with no error to show for it.
+box = NewEditBox()
+function box:SetText(t)
+    -- Accept the addon's clear only for non-empty writes; swallow the wipe.
+    if t ~= "" then self._text = t end
+    local fn = self.scripts.OnTextChanged
+    if fn then fn(self, false) end
+end
+
+local stuckText = nil
+UI:AttachPasteCapture(box, { onText = function(t) stuckText = t end })
+box:Type(FP_EXPORT, false)
+local stuckFrames = RunFrames()
+
+check("stuck box: loop terminates", #queue, 0)
+check("stuck box: gives up on the first frame", stuckFrames <= 1, true)
+check("stuck box: text delivered once, not duplicated",
+    stuckText == FP_EXPORT, true)
+
+--------------------------
+-- 7. An absurd burst is reported, not accumulated (FQ-242)
+--------------------------
+
+box = NewEditBox()
+local overflowText, overflowReason = nil, nil
+UI:AttachPasteCapture(box, {
+    onText = function(t) overflowText = t end,
+    onError = function(reason) overflowReason = reason end,
+})
+
+-- ~1 MB of DIFFERENT text per frame, so this is a genuinely growing burst
+-- rather than the un-drainable box of case 6, until the 8 MB cap trips.
+for i = 1, 12 do
+    if overflowReason then break end   -- stop feeding once the cap has tripped
+    box._text = ("chunk%02d:"):format(i) .. string.rep("x", 1024 * 1024)
+    if box.scripts.OnTextChanged then box.scripts.OnTextChanged(box, true) end
+    local batch = queue
+    queue = {}
+    for _, fn in ipairs(batch) do fn() end
+end
+RunFrames()
+
+check("overflow: reported", overflowReason, "too-large")
+check("overflow: no partial text handed downstream", overflowText == nil, true)
+check("overflow: capture reset", #queue, 0)
+
+-- The cap must not wedge the box permanently.
+box = NewEditBox()
+local afterText = nil
+UI:AttachPasteCapture(box, { onText = function(t) afterText = t end })
+box:Type(FP_EXPORT, false)
+RunFrames()
+check("overflow: a normal paste after it still lands",
+    afterText == FP_EXPORT, true)
 
 --------------------------
 

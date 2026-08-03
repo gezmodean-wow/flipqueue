@@ -201,7 +201,14 @@ end
 -- ilvl is included so that same-item variants with different ilvls (different
 -- bonus tiers) are treated as independent deals when FP doesn't export bonusIDs.
 function ns:MakeImportKey(itemKey, itemName, targetRealm, ilvl)
-    local base = itemKey or itemName or ""
+    -- An empty itemKey is not a key (FQ-243). `"" or itemName` yields "" in
+    -- Lua, so the name fall-back this line was written for never happened:
+    -- every keyless deal at the same ilvl and realm derived the SAME key and
+    -- Save's exact-key branch merged them into one. ParsePBS emits itemKey ""
+    -- for every row, so an Auctionator/PBS list collapsed to about one deal
+    -- per distinct item level.
+    local base = itemKey
+    if base == nil or base == "" then base = itemName or "" end
     local realm = ns:NormalizeRealmKey(targetRealm or "")
     local ilvlSuffix = (ilvl and ilvl > 0) and (":i" .. ilvl) or ""
     return base:lower() .. ilvlSuffix .. "|" .. realm
@@ -285,9 +292,31 @@ local ACCENT_MAP = {
 
 -- Normalize a string for accent-insensitive comparison
 -- Strips diacritics and lowercases
+--
+-- Memoized (FQ-242). This is a pure string -> string map, and it sits at the
+-- bottom of the realm-comparison hot path: a large FlippingPal import calls it
+-- tens of thousands of times over a few hundred distinct realm names, paying a
+-- gsub plus a lower every time. The cache is bounded by the number of distinct
+-- strings ever normalized; ACCENT_CACHE_MAX exists only so a caller that feeds
+-- it unbounded input (item names, say) can't grow it without limit.
+local accentCache = {}
+local accentCacheN = 0
+local ACCENT_CACHE_MAX = 4096
+
 function ns:NormalizeAccents(str)
     if not str then return "" end
-    return str:gsub("[\195-\197][\128-\191]", ACCENT_MAP):lower()
+    local hit = accentCache[str]
+    if hit then return hit end
+
+    local norm = str:gsub("[\195-\197][\128-\191]", ACCENT_MAP):lower()
+
+    if accentCacheN >= ACCENT_CACHE_MAX then
+        wipe(accentCache)
+        accentCacheN = 0
+    end
+    accentCache[str] = norm
+    accentCacheN = accentCacheN + 1
+    return norm
 end
 
 -- Check if a target realm string matches a given realm name
@@ -319,6 +348,57 @@ function ns:RealmMatches(targetRealm, realmName)
     return false
 end
 
+-- Split a (possibly comma-separated) realm string into its normalized names
+-- and connected-realm group IDs, and remember the result (FQ-242).
+--
+-- RealmsOverlap used to re-split and re-normalize BOTH sides on every call,
+-- allocating two tables and normalizing every name each time. A FlippingPal
+-- cluster string carries up to a dozen realms, so one overlap test cost ~20
+-- allocations — and an import runs tens of thousands of tests over the same
+-- few hundred distinct cluster strings.
+--
+-- The cache is keyed on the raw string and holds derived data only. Group IDs
+-- come from ns.REALM_LOOKUP, which RealmData.lua swaps when the region is
+-- resolved, so entries are dropped whenever that table identity changes.
+local realmSetCache = {}
+local realmSetCacheN = 0
+local realmSetLookup = nil
+local REALM_SET_CACHE_MAX = 2048
+
+local function RealmNameSet(realmStr)
+    if realmSetLookup ~= ns.REALM_LOOKUP then
+        wipe(realmSetCache)
+        realmSetCacheN = 0
+        realmSetLookup = ns.REALM_LOOKUP
+    end
+
+    local hit = realmSetCache[realmStr]
+    if hit then return hit end
+
+    local names, groups, count = {}, {}, 0
+    for name in realmStr:gmatch("([^,]+)") do
+        name = strtrim(name)
+        if #name >= 3 and not name:find("^%.+$") then
+            local norm = ns:NormalizeRealmKey(name)
+            names[norm] = true
+            count = count + 1
+            if ns.REALM_LOOKUP then
+                local gid = ns.REALM_LOOKUP[norm]
+                if gid then groups[gid] = true end
+            end
+        end
+    end
+
+    local entry = { names = names, groups = groups, count = count }
+    if realmSetCacheN >= REALM_SET_CACHE_MAX then
+        wipe(realmSetCache)
+        realmSetCacheN = 0
+    end
+    realmSetCache[realmStr] = entry
+    realmSetCacheN = realmSetCacheN + 1
+    return entry
+end
+
 -- Check if two realm strings refer to the same connected AH
 -- e.g., "Kalecgos, Lightninghoof, Maelstrom" overlaps with "Lightninghoof"
 -- Uses connected realm group table for exact matching
@@ -328,34 +408,22 @@ function ns:RealmsOverlap(realm1, realm2)
     if r1 == "" and r2 == "" then return true end
     if r1 == "" or r2 == "" then return false end
 
-    -- Split r2 into individual names and collect their group IDs
-    local r2names = {} -- normalized name -> true
-    local r2groups = {} -- groupID -> true
-    for name in r2:gmatch("([^,]+)") do
-        name = strtrim(name)
-        if #name >= 3 and not name:find("^%.+$") then
-            local norm = ns:NormalizeRealmKey(name)
-            r2names[norm] = true
-            if ns.REALM_LOOKUP then
-                local gid = ns.REALM_LOOKUP[norm]
-                if gid then r2groups[gid] = true end
-            end
-        end
-    end
+    local s1 = RealmNameSet(r1)
 
-    -- Check each name in r1 against r2's names and groups
-    for name in r1:gmatch("([^,]+)") do
-        name = strtrim(name)
-        if #name >= 3 and not name:find("^%.+$") then
-            local norm = ns:NormalizeRealmKey(name)
-            -- Exact name match
-            if r2names[norm] then return true end
-            -- Group match
-            if ns.REALM_LOOKUP then
-                local gid = ns.REALM_LOOKUP[norm]
-                if gid and r2groups[gid] then return true end
-            end
-        end
+    -- Identical strings overlap iff they contain at least one usable name —
+    -- a string of only too-short or dotted fragments matches nothing, itself
+    -- included, which is what the split-and-compare form below yields.
+    if r1 == r2 then return s1.count > 0 end
+
+    local s2 = RealmNameSet(r2)
+
+    -- Exact name match
+    for norm in pairs(s1.names) do
+        if s2.names[norm] then return true end
+    end
+    -- Connected realm group match (same AH)
+    for gid in pairs(s1.groups) do
+        if s2.groups[gid] then return true end
     end
 
     return false

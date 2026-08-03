@@ -1,5 +1,65 @@
 # Changelog
 
+## v0.13.1-alpha9
+
+Import-path reliability. Three defects, all found while root-causing the crash still live on #228, plus the specs finally running in CI. Embedded Cogworks-1.0 stays at **`v0.16.0`** (MINOR 31); `## Interface` stays at `120007`.
+
+### FQ-242 (#242): connected-realm dedup was O(N²)
+
+`Import:Save` (`Import.lua:1597`), `Import:SaveChunked`, `Import:PreviewAdd` and `Import:PreviewAddChunked` each carried their own copy of the same dedup loop, and every copy compared each incoming deal against **every deal accumulated so far** via a full `pairs()` walk — with an `existItem.name:lower()` allocation on each pair.
+
+FlippingPal exports are the worst possible input for it: the same item repeated across dozens of realms is exactly what arms the `nameMatch` arm. `SaveChunked` spread the work over frames at 100 items/frame, which converted "script ran too long" into a long silent freeze without reducing the total work or the churn.
+
+`ns:RealmsOverlap` (`Core.lua:325`) was the expensive half of each comparison: it re-split both realm strings and ran `NormalizeAccents` (a `gsub` plus a `lower`) over every realm name on both sides, per call, unmemoized. A nine-realm cluster string cost ~18 normalizations per test, over a few hundred distinct cluster strings that recur across the whole export.
+
+Fixed in three parts:
+
+- **A shared `DedupIndex`** (`Import.lua`) buckets stored entries by `itemKey` and by lowered name. An entry can only satisfy `keyMatch or nameMatch` if it is in one of those two buckets, so the candidate set is exactly the old match set — no semantic change, just no scanning of entries that could never match.
+- **`NormalizeAccents` is memoized** and **`RealmsOverlap` caches the parsed name/group set per realm string**, keyed on the raw string, dropped when `ns.REALM_LOOKUP` identity changes (RealmData.lua swaps it once the region resolves). Both caches are size-capped.
+- **Four copies collapsed to two shared helpers**, `SaveOne` and `PreviewOne`, over a shared `PrepareItems`. Four divergent copies of one algorithm is how FQ-240 happened.
+
+Measured on a FlippingPal-shaped fixture (real cluster strings from the reporter's export) under stock Lua 5.1:
+
+| rows | before | after | |
+|---|---|---|---|
+| 500 | 0.027s | 0.008s | 3× |
+| 1000 | 0.112s | 0.016s | 7× |
+| 2000 | 0.465s | 0.043s | 11× |
+| 4000 | 2.201s | 0.062s | 35× |
+
+The before column quadruples per doubling; the after column roughly doubles.
+
+One behavioural note: the old loop returned the first match in `pairs` order, which is arbitrary. The index returns the first match in insertion order, key bucket before name bucket. That only decides *which* existing entry absorbs a merge when several qualify — counts and the resulting deal set are unchanged, and the outcome is now deterministic where it was not.
+
+`test/import_dedup_spec.lua` (62 assertions) reproduces the pre-fix loop verbatim as an oracle and asserts the index classifies identically, then measures both. The cost guard is non-vacuous by construction — the oracle's own numbers in the same run are the comparison: 800 rows go from 321,200 string comparisons to 4,400.
+
+### FQ-243 (#243): an empty `itemKey` collapsed unrelated deals
+
+Two places treated `""` as a real key, both because Lua considers the empty string truthy.
+
+`ns:MakeImportKey` (`Core.lua:203`) read `local base = itemKey or itemName or ""`. `"" or itemName` is `""`, so the name fall-back never happened and every keyless deal at a given ilvl and realm derived the **same** key — `"|"`, or `":i50|"` — which `Save`'s exact-key branch then merged. Separately, `existItem.itemKey == item.itemKey` counted `"" == ""` and `nil == nil` as "same item", so two unrelated keyless deals on overlapping realms merged and one was lost.
+
+`Import:ParsePBS` (`Import.lua:1196`) emits `itemKey = ""` for **every** row — the "filled by Enrich via name lookup" comment doesn't hold on this path, since `Transformer:Enrich` only runs on the Transform page and even there can only populate the key when the ID resolves. PBS rows also carry no `targetRealm`, and `RealmsOverlap("", "")` is true, so every row looked like every other row. A 30-item Auctionator/PBS list imported as 2 deals; the spec pins that number against the old loop and 30 against the new.
+
+Fixed by falling back to the item name when the key is nil **or** empty, and by keeping keyless entries out of the index's key buckets so they match on name alone.
+
+### FQ-244 (#244): the second large paste of a session silently did nothing
+
+`UI/GeneratorPage.lua:1020` and `:1430` set `s2._lastLen = newLen` / `cr1._lastLen = newLen` from inside the parsed-continuation functions (`HandleParsedS2` at :976, `HandleParsedCR1` at :1403). `newLen` is a local of `HandleS2Text` (:1202) / `HandleCR1Text` (:1506) — a different function — so it resolved as a nil global and the gate was set to nil. The next paste hit `if s2._lastLen < 10`, threw `attempt to compare nil with number`, and died before the parse started. Only the preview-skipped branch is affected, so it takes a paste of `LARGE_THRESHOLD` (500) deals or more to arm — i.e. every full FlippingPal export. Set to `0`, matching the chunked branch directly above it.
+
+### FQ-242 (#242), second part: the drain loop could not terminate
+
+`UI:AttachPasteCapture` (`UI/Shared.lua`) assumes `SetText("")` empties the box. Nothing verified it. If the widget ever refused the clear, `Drain` re-read the same text every frame, appended it again, and grew `buf` without bound — a busy cursor, climbing memory, no error, and eventually a dead client. That matches the reporter's current symptom ("loading cursor then after a minute-ish it crashes") closely enough to be worth fencing whether or not it is his cause.
+
+Two bounds, both in `Drain`:
+
+- **The first clear is verified** with one extra `GetText`, taken only at the point the drain starts. A widget that won't drain won't start later, and the full text is already in hand at that moment, so the burst is finished on the spot instead of looping. Costs exactly one extra read per burst; `test/pastecapture_spec.lua`'s "reads bounded by frames, not events" invariant is now `frames + 1` for that reason (17,145 input events still produce 17,148 reads, not 17,145 allocations of the whole text).
+- **`MAX_PASTE_BYTES` (8 MB)** caps a burst. Over it, capture resets and `opts.onError("too-large")` fires; both generator paste boxes now render a plain-language message instead of the player seeing nothing.
+
+### CI
+
+`.github/workflows/tests.yml` runs every `test/*_spec.lua` under Lua 5.1 on push and PR. The specs existed and passed; nobody ran them, which is precisely how FQ-240 shipped in four consecutive alphas behind a spec that would have caught it.
+
 ## v0.13.1-alpha8
 
 Root cause found for #240 — bank operations have been dead for everyone with a cross-realm to-do list since v0.13.1-alpha1. Embedded Cogworks-1.0 stays at **`v0.16.0`** (MINOR 31); `## Interface` stays at `120007`. **F8 (in-game smoke test) waived on maintainer direction** — shipped for tester coverage.

@@ -1474,46 +1474,153 @@ end
 -- Import Management (replaces Queue operations)
 --------------------------
 
+-- Connected-realm dedup index (FQ-242)
+--
+-- Two deals merge when they name the same item (by key OR by name), don't
+-- disagree on item level, and their realm strings touch the same connected
+-- AH. Preview and Save both used to answer that by walking EVERY entry
+-- accumulated so far — O(N^2) over the batch, with a `name:lower()`
+-- allocation on each pair and a RealmsOverlap call on each name collision.
+-- A FlippingPal export is the worst possible input for it: the same item
+-- repeated across dozens of realms is precisely what makes the name arm
+-- fire. At ~2000 deals that is millions of comparisons and enough string
+-- churn to take the client down mid-import.
+--
+-- The candidates are knowable up front. An entry can only satisfy
+-- `keyMatch or nameMatch` if it shares this item's itemKey or its lowered
+-- name, so bucketing by both reduces each lookup to the handful of entries
+-- that could actually match — normally one per realm cluster for that item.
+--
+-- One behavioural note: the old loop returned the first match in `pairs`
+-- order, which is arbitrary. This returns the first match in insertion
+-- order, key bucket before name bucket. That only decides WHICH existing
+-- entry absorbs a merge when several qualify; the merge itself, the counts,
+-- and the resulting set of stored deals are unchanged. Deterministic where
+-- the old order was not.
+--
+-- The one deliberate divergence is FQ-243: a missing itemKey is not evidence
+-- that two deals are the same item. Both `nil == nil` and `"" == ""` read as
+-- a key match in the old loop, so two unrelated keyless deals on overlapping
+-- realms merged and one was silently lost — and ParsePBS emits an empty key
+-- for every row it produces. Keyless entries stay out of the key buckets
+-- entirely and are matched on name alone.
+
+local function HasItemKey(itemKey)
+    return itemKey ~= nil and itemKey ~= ""
+end
+
+local DedupIndex = {}
+DedupIndex.__index = DedupIndex
+
+local function NewDedupIndex()
+    return setmetatable({ byKey = {}, byName = {} }, DedupIndex)
+end
+
+function DedupIndex:Add(entry)
+    local itemKey = entry.itemKey
+    if HasItemKey(itemKey) then
+        local byKey = self.byKey[itemKey]
+        if not byKey then byKey = {}; self.byKey[itemKey] = byKey end
+        byKey[#byKey + 1] = entry
+    end
+
+    local name = entry.name
+    if name and name ~= "" then
+        local lowered = name:lower()
+        local byName = self.byName[lowered]
+        if not byName then byName = {}; self.byName[lowered] = byName end
+        byName[#byName + 1] = entry
+    end
+end
+
+-- Same test the old inline loop applied, minus the key/name arm — membership
+-- in the bucket is what proves that half.
+local function EntryAbsorbs(existItem, ilvl, targetRealm)
+    local existIlvl = existItem.ilvl or 0
+    -- Different ilvl = different variant, not a duplicate
+    if ilvl > 0 and existIlvl > 0 and ilvl ~= existIlvl then return false end
+    return ns:RealmsOverlap(existItem.targetRealm, targetRealm)
+end
+
+-- The stored entry `item` should merge into, or nil if it is genuinely new.
+function DedupIndex:FindMatch(item)
+    local itemKey = item.itemKey
+    local ilvl = item.ilvl or 0
+    local targetRealm = item.targetRealm
+
+    local hasKey = HasItemKey(itemKey)
+    if hasKey then
+        local keyBucket = self.byKey[itemKey]
+        if keyBucket then
+            for i = 1, #keyBucket do
+                local existItem = keyBucket[i]
+                if EntryAbsorbs(existItem, ilvl, targetRealm) then return existItem end
+            end
+        end
+    end
+
+    local itemName = (item.name or ""):lower()
+    if itemName == "" then return nil end
+    local nameBucket = self.byName[itemName]
+    if nameBucket then
+        for i = 1, #nameBucket do
+            local existItem = nameBucket[i]
+            -- Entries sharing this item's key were already tried above
+            if not (hasKey and existItem.itemKey == itemKey)
+                and EntryAbsorbs(existItem, ilvl, targetRealm) then
+                return existItem
+            end
+        end
+    end
+
+    return nil
+end
+
+-- Fold `item` into the deal it duplicates: freshest price wins, and the
+-- longest realm string wins because it names the most of the cluster.
+local function MergeDuplicate(existItem, item)
+    if item.expectedPrice and item.expectedPrice ~= "" then
+        existItem.expectedPrice = item.expectedPrice
+    end
+    if #(item.targetRealm or "") > #(existItem.targetRealm or "") then
+        existItem.targetRealm = item.targetRealm
+    end
+end
+
 -- Preview what ImportSave would do without modifying the imports.
 -- Save() replaces the entire source, so we only check for duplicates
 -- within the current paste batch — not against previously saved data.
 -- Returns items annotated with _importStatus: "new", "duplicate"
+-- One item's classification, shared by the sync and chunked preview paths so
+-- the two can't drift apart. Mutates batchMap/index when the item is new.
+local function PreviewOne(batchMap, index, item)
+    local key = ns:MakeImportKey(item.itemKey, item.name, item.targetRealm, item.ilvl)
+
+    -- Exact key match within this batch
+    if batchMap[key] then
+        return "duplicate", "same item & realm in paste"
+    end
+
+    -- Connected realm match within this batch
+    local existItem = index:FindMatch(item)
+    if existItem then
+        return "duplicate", "connected realm: " .. (existItem.targetRealm or "?")
+    end
+
+    batchMap[key] = item
+    index:Add(item)
+    return "new", nil
+end
+
 function Import:PreviewAdd(items, source)
     if not ns.db or not ns.db.imports then return {} end
 
     local results = {}
     local batchMap = {} -- normalized key -> item (simulates Save's dedup)
+    local index = NewDedupIndex()
 
     for _, item in ipairs(items) do
-        local status = "new"
-        local dupeReason = nil
-        local key = ns:MakeImportKey(item.itemKey, item.name, item.targetRealm, item.ilvl)
-
-        -- Exact key match within this batch
-        if batchMap[key] then
-            status = "duplicate"
-            dupeReason = "same item & realm in paste"
-        else
-            -- Connected realm match within this batch
-            local itemName = (item.name or ""):lower()
-            for existKey, existItem in pairs(batchMap) do
-                local keyMatch = existItem.itemKey == item.itemKey
-                local nameMatch = itemName ~= "" and existItem.name
-                    and existItem.name:lower() == itemName
-                local ilvlConflict = (item.ilvl or 0) > 0 and (existItem.ilvl or 0) > 0
-                    and item.ilvl ~= existItem.ilvl
-                if (keyMatch or nameMatch) and not ilvlConflict and ns:RealmsOverlap(existItem.targetRealm, item.targetRealm) then
-                    status = "duplicate"
-                    dupeReason = "connected realm: " .. (existItem.targetRealm or "?")
-                    break
-                end
-            end
-        end
-
-        if status == "new" then
-            batchMap[key] = item
-        end
-
+        local status, dupeReason = PreviewOne(batchMap, index, item)
         table.insert(results, {
             item = item,
             _importStatus = status,
@@ -1538,39 +1645,14 @@ function Import:PreviewAddChunked(items, source, chunkSize, onProgress, onComple
     local total = #items
     local results = {}
     local batchMap = {}
+    local index = NewDedupIndex()
     local idx = 1
 
     local function ProcessChunk()
         local chunkEnd = math.min(idx + chunkSize - 1, total)
         for i = idx, chunkEnd do
             local item = items[i]
-            local status = "new"
-            local dupeReason = nil
-            local key = ns:MakeImportKey(item.itemKey, item.name, item.targetRealm, item.ilvl)
-
-            if batchMap[key] then
-                status = "duplicate"
-                dupeReason = "same item & realm in paste"
-            else
-                local itemName = (item.name or ""):lower()
-                for existKey, existItem in pairs(batchMap) do
-                    local keyMatch = existItem.itemKey == item.itemKey
-                    local nameMatch = itemName ~= "" and existItem.name
-                        and existItem.name:lower() == itemName
-                    local ilvlConflict = (item.ilvl or 0) > 0 and (existItem.ilvl or 0) > 0
-                        and item.ilvl ~= existItem.ilvl
-                    if (keyMatch or nameMatch) and not ilvlConflict and ns:RealmsOverlap(existItem.targetRealm, item.targetRealm) then
-                        status = "duplicate"
-                        dupeReason = "connected realm: " .. (existItem.targetRealm or "?")
-                        break
-                    end
-                end
-            end
-
-            if status == "new" then
-                batchMap[key] = item
-            end
-
+            local status, dupeReason = PreviewOne(batchMap, index, item)
             results[#results + 1] = {
                 item = item,
                 _importStatus = status,
@@ -1591,14 +1673,11 @@ function Import:PreviewAddChunked(items, source, chunkSize, onProgress, onComple
     ProcessChunk()
 end
 
--- Save parsed items to the imports map. Always replaces existing imports
--- for this source — deals are ephemeral and only persist via to-do lists.
--- Returns count of items saved.
-function Import:Save(items, source)
-    if not ns.db or not ns.db.imports then return 0 end
-
-    source = source or "fpScanner"
-
+-- Shared prep for both save paths: normalize realm strings, then expand any
+-- single-realm entry to the full cluster name if this batch names that cluster
+-- anywhere. Cheap, O(n), and must run before dedup so the realm comparisons
+-- see the widest string available.
+local function PrepareItems(items)
     -- Clean realm strings: strip "..." truncation from FP website
     for _, item in ipairs(items) do
         item.targetRealm = CleanRealmString(item.targetRealm or "")
@@ -1638,78 +1717,78 @@ function Import:Save(items, source)
     if expanded > 0 then
         ns:PrintDebug("Expanded " .. expanded .. " single-realm entries to full cluster names.")
     end
+end
+
+-- One item's insert-or-merge, shared by the sync and chunked save paths.
+-- Returns true when a new deal was stored, false when it merged into one.
+local function SaveOne(srcMap, index, item)
+    local key = ns:MakeImportKey(item.itemKey, item.name, item.targetRealm, item.ilvl)
+    local existing = srcMap[key]
+
+    -- Same key already in this batch — update price, keep longer realm
+    if existing then
+        MergeDuplicate(existing, item)
+        return false
+    end
+
+    -- Check connected realm dedup within this batch
+    local existItem = index:FindMatch(item)
+    if existItem then
+        MergeDuplicate(existItem, item)
+        return false
+    end
+
+    local entry = {
+        itemKey       = item.itemKey,
+        itemID        = item.itemID or "",
+        name          = item.name or "",
+        quality       = item.quality or "",
+        ilvl          = item.ilvl or 0,
+        bonusIDs      = item.bonusIDs or "",
+        modifiers     = item.modifiers or "",
+        quantity      = item.quantity or 1,
+        category      = item.category,
+        expansion     = item.expansion,
+        sellRate      = item.sellRate,
+        targetRealm   = item.targetRealm,
+        expectedPrice = item.expectedPrice,
+        noCompetition = item.noCompetition,
+        importedAt    = time(),
+        -- Cross-realm flip fields
+        dealType      = item.dealType,
+        buyRealm      = item.buyRealm,
+        buyPrice      = item.buyPrice,
+        profitAmount  = item.profitAmount,
+        profitPct     = item.profitPct,
+        saleAvg       = item.saleAvg,
+    }
+    srcMap[key] = entry
+    index:Add(entry)
+    return true
+end
+
+-- Save parsed items to the imports map. Always replaces existing imports
+-- for this source — deals are ephemeral and only persist via to-do lists.
+-- Returns count of items saved.
+function Import:Save(items, source)
+    if not ns.db or not ns.db.imports then return 0 end
+
+    source = source or "fpScanner"
+    PrepareItems(items)
 
     -- Clear existing imports for this source — each import is a full replacement
     ns.db.imports[source] = {}
     local srcMap = ns.db.imports[source]
+    local index = NewDedupIndex()
 
     local added = 0
     local deduped = 0
 
     for _, item in ipairs(items) do
-        local key = ns:MakeImportKey(item.itemKey, item.name, item.targetRealm, item.ilvl)
-        local existing = srcMap[key]
-
-        if existing then
-            -- Same key already in this batch — update price, keep longer realm
-            if item.expectedPrice and item.expectedPrice ~= "" then
-                existing.expectedPrice = item.expectedPrice
-            end
-            if #(item.targetRealm or "") > #(existing.targetRealm or "") then
-                existing.targetRealm = item.targetRealm
-            end
-            deduped = deduped + 1
+        if SaveOne(srcMap, index, item) then
+            added = added + 1
         else
-            -- Check connected realm dedup within this batch
-            local isDuplicate = false
-            local itemName = (item.name or ""):lower()
-            for existKey, existItem in pairs(srcMap) do
-                local keyMatch = existItem.itemKey == item.itemKey
-                local nameMatch = itemName ~= "" and existItem.name
-                    and existItem.name:lower() == itemName
-                -- Different ilvl = different variant, not a duplicate
-                local ilvlConflict = (item.ilvl or 0) > 0 and (existItem.ilvl or 0) > 0
-                    and item.ilvl ~= existItem.ilvl
-                if (keyMatch or nameMatch) and not ilvlConflict and ns:RealmsOverlap(existItem.targetRealm, item.targetRealm) then
-                    if item.expectedPrice and item.expectedPrice ~= "" then
-                        existItem.expectedPrice = item.expectedPrice
-                    end
-                    if #(item.targetRealm or "") > #(existItem.targetRealm or "") then
-                        existItem.targetRealm = item.targetRealm
-                    end
-                    isDuplicate = true
-                    deduped = deduped + 1
-                    break
-                end
-            end
-
-            if not isDuplicate then
-                srcMap[key] = {
-                    itemKey       = item.itemKey,
-                    itemID        = item.itemID or "",
-                    name          = item.name or "",
-                    quality       = item.quality or "",
-                    ilvl          = item.ilvl or 0,
-                    bonusIDs      = item.bonusIDs or "",
-                    modifiers     = item.modifiers or "",
-                    quantity      = item.quantity or 1,
-                    category      = item.category,
-                    expansion     = item.expansion,
-                    sellRate      = item.sellRate,
-                    targetRealm   = item.targetRealm,
-                    expectedPrice = item.expectedPrice,
-                    noCompetition = item.noCompetition,
-                    importedAt    = time(),
-                    -- Cross-realm flip fields
-                    dealType      = item.dealType,
-                    buyRealm      = item.buyRealm,
-                    buyPrice      = item.buyPrice,
-                    profitAmount  = item.profitAmount,
-                    profitPct     = item.profitPct,
-                    saleAvg       = item.saleAvg,
-                }
-                added = added + 1
-            end
+            deduped = deduped + 1
         end
     end
 
@@ -1738,37 +1817,12 @@ function Import:SaveChunked(items, source, chunkSize, onProgress, onComplete)
     chunkSize = chunkSize or 50
 
     -- Phase 1: synchronous prep (fast, O(n))
-    for _, item in ipairs(items) do
-        item.targetRealm = CleanRealmString(item.targetRealm or "")
-    end
-
-    local clusterMap = {}
-    for _, item in ipairs(items) do
-        local realm = item.targetRealm
-        if realm and realm:find(",") then
-            for name in realm:gmatch("([^,]+)") do
-                name = strtrim(name)
-                if name ~= "" and #name >= 3 then
-                    local key = name:lower()
-                    if not clusterMap[key] or #realm > #clusterMap[key] then
-                        clusterMap[key] = realm
-                    end
-                end
-            end
-        end
-    end
-
-    for _, item in ipairs(items) do
-        local realm = item.targetRealm
-        if realm and realm ~= "" and not realm:find(",") then
-            local full = clusterMap[realm:lower()]
-            if full then item.targetRealm = full end
-        end
-    end
+    PrepareItems(items)
 
     -- Clear existing imports and start chunked insert
     ns.db.imports[source] = {}
     local srcMap = ns.db.imports[source]
+    local index = NewDedupIndex()
 
     local idx = 1
     local added = 0
@@ -1778,66 +1832,10 @@ function Import:SaveChunked(items, source, chunkSize, onProgress, onComplete)
     local function ProcessChunk()
         local chunkEnd = math.min(idx + chunkSize - 1, total)
         for i = idx, chunkEnd do
-            local item = items[i]
-            local key = ns:MakeImportKey(item.itemKey, item.name, item.targetRealm, item.ilvl)
-            local existing = srcMap[key]
-
-            if existing then
-                if item.expectedPrice and item.expectedPrice ~= "" then
-                    existing.expectedPrice = item.expectedPrice
-                end
-                if #(item.targetRealm or "") > #(existing.targetRealm or "") then
-                    existing.targetRealm = item.targetRealm
-                end
-                deduped = deduped + 1
+            if SaveOne(srcMap, index, items[i]) then
+                added = added + 1
             else
-                local isDuplicate = false
-                local itemName = (item.name or ""):lower()
-                for existKey, existItem in pairs(srcMap) do
-                    local keyMatch = existItem.itemKey == item.itemKey
-                    local nameMatch = itemName ~= "" and existItem.name
-                        and existItem.name:lower() == itemName
-                    local ilvlConflict = (item.ilvl or 0) > 0 and (existItem.ilvl or 0) > 0
-                        and item.ilvl ~= existItem.ilvl
-                    if (keyMatch or nameMatch) and not ilvlConflict and ns:RealmsOverlap(existItem.targetRealm, item.targetRealm) then
-                        if item.expectedPrice and item.expectedPrice ~= "" then
-                            existItem.expectedPrice = item.expectedPrice
-                        end
-                        if #(item.targetRealm or "") > #(existItem.targetRealm or "") then
-                            existItem.targetRealm = item.targetRealm
-                        end
-                        isDuplicate = true
-                        deduped = deduped + 1
-                        break
-                    end
-                end
-
-                if not isDuplicate then
-                    srcMap[key] = {
-                        itemKey       = item.itemKey,
-                        itemID        = item.itemID or "",
-                        name          = item.name or "",
-                        quality       = item.quality or "",
-                        ilvl          = item.ilvl or 0,
-                        bonusIDs      = item.bonusIDs or "",
-                        modifiers     = item.modifiers or "",
-                        quantity      = item.quantity or 1,
-                        category      = item.category,
-                        expansion     = item.expansion,
-                        sellRate      = item.sellRate,
-                        targetRealm   = item.targetRealm,
-                        expectedPrice = item.expectedPrice,
-                        noCompetition = item.noCompetition,
-                        importedAt    = time(),
-                        dealType      = item.dealType,
-                        buyRealm      = item.buyRealm,
-                        buyPrice      = item.buyPrice,
-                        profitAmount  = item.profitAmount,
-                        profitPct     = item.profitPct,
-                        saleAvg       = item.saleAvg,
-                    }
-                    added = added + 1
-                end
+                deduped = deduped + 1
             end
         end
 
