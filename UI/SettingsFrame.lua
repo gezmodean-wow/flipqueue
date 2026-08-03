@@ -1741,9 +1741,27 @@ function UI:CreateSettingsPanel(parent)
 
     local secData = CreateCollapsibleSection(content, y, "data",
         "Data Management",
-        "Clear inventory, imports, logs, do-not-track")
+        "To-do cleanup, clear inventory, imports, logs, do-not-track")
     sc = secData.content
     sy = 0
+
+    -- To-do staleness (FQ-226). Flag only — nothing here removes a task, and
+    -- the trapped-task purge stays behind /fq cleanup trapped confirm.
+    local staleDayOpts = {
+        {value = 7,  label = "7 days"},
+        {value = 14, label = "14 days"},
+        {value = 30, label = "30 days"},
+        {value = 60, label = "60 days"},
+        {value = 0,  label = "Never flag"},
+    }
+    settingsWidgets.todoStaleDays, h = CreateSettingsDropdown(sc, sy,
+        "Flag to-do tasks with no progress after",
+        "Tasks that haven't moved in this long are marked [stale] in the to-do "
+        .. "list. Flagged only — nothing is ever removed. Tasks that can never "
+        .. "resolve are marked [trapped] instead; clear those with "
+        .. "/fq cleanup trapped.",
+        "todoStaleDays", staleDayOpts)
+    sy = sy - h - ITEM_SPACING
 
     settingsWidgets.clearInv, h = CreateSettingsButton(sc, sy,
         "Clear Inventory Data", "Wipe all saved bag/bank/warbank data. You'll need to rescan each character.", 180, function()
@@ -2459,6 +2477,13 @@ function UI:RefreshSettings()
     end
     if settingsWidgets.salesRetentionCount then
         settingsWidgets.salesRetentionCount:SetValue(ns.db.settings.salesRetentionCount)
+    end
+    -- To-do staleness (FQ-226). 0 is a real value ("never flag"), so the
+    -- fallback has to test for nil rather than falsiness.
+    if settingsWidgets.todoStaleDays then
+        local d = ns.db.settings.todoStaleDays
+        if d == nil then d = 14 end
+        settingsWidgets.todoStaleDays:SetValue(d)
     end
     -- Batch size slider
     if settingsWidgets.batchSizeSlider then

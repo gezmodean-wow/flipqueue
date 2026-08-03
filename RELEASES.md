@@ -6,6 +6,14 @@ The engineering-detail companion lives in `CHANGELOG.md` (commit-readerese — f
 
 ---
 
+## v0.13.1-alpha12
+
+Cleaning up the to-do list.
+
+- **Tasks that can never be completed are now flagged, and you can clear them out.** A to-do list only grows, and some of what accumulates in it is genuinely stuck: a task assigned to a character you've since deleted, one waiting on an item that isn't on any of your characters, or the sell half of a cross-realm flip whose buy you removed. Those are marked **[trapped]**, counted next to the list name, and shown as a banner in the mini window — trapped tasks never show up as one of your current character's rows, so the pile builds up out of sight. `/fq cleanup trapped` shows you what it found and why; `/fq cleanup trapped confirm` removes it. Nothing is ever deleted automatically.
+- **Tasks that simply haven't moved in a while are marked [stale].** Two weeks by default. These are only ever flagged, never removed — an old task isn't a dead one, and a list you left alone over a holiday is perfectly fine. You can change the threshold, or switch the flag off, in the settings.
+- **Fixed two small display bugs.** The "won't fit in your bags" rows added in the last build were drawing without their icon, and a note on the regenerate screen was showing `xe2x86x92` where it meant to show an arrow.
+
 ## v0.13.1-alpha11
 
 Two fixes from the list of things players have asked for.

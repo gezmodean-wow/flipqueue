@@ -1,5 +1,36 @@
 # Changelog
 
+## v0.13.1-alpha12
+
+To-do cleanup, plus a source lint prompted by a defect this session shipped. Embedded Cogworks-1.0 stays at **`v0.16.0`** (MINOR 31); `## Interface` stays at `120007`. **Schema bumps to 13.** **F8 (in-game smoke test) waived on maintainer direction.**
+
+### FQ-226 (#226): trapped and stale to-do tasks
+
+A to-do list only ever grows. Two tiers, separated by how certain we are:
+
+- **trapped** — cannot resolve whatever the player does. Three reasons: `no-character` (assigned to a character that no longer exists), `item-gone` (deferred *and* the item is nowhere on the account), `buy-removed` (the orphaned sell half of a flip whose buy is gone). Purgeable, manually.
+- **stale** — hasn't moved in `todoStaleDays` (default 14). Flagged only, never removed. "Old" is not "dead"; a list left alone over a holiday is entirely legitimate.
+
+`TodoList:ClassifyTasks` is one O(n) pass sharing a character set, a buy index built the way `DeleteTask`'s cascade correlates flips, and a lazily-built `BuildAccountIndex` (a list of buy tasks never pays for it). Only `pending` tasks are considered. **Buy tasks are never trapped by absence** — a buy is *for* an item you don't own, so absence proves nothing there, and the opposite rule would purge the buy half of every cross-realm flip.
+
+The result carries `unscannedChars`, which is load-bearing rather than decorative: "nowhere on the account" is decided from *stored* inventory, so a character that has never been scanned looks empty and its items look missing. Every surface reports the count instead of asserting a deletion is safe when it might not be.
+
+Staleness needs a per-task clock. Tasks gain `createdAt` / `lastProgressAt`; `CommitList` stamps every path that commits a list (generate, regenerate, append, queue) rather than the generator, so coverage is by construction. `TodoList:StampProgress` fires on status change, step advance, buy-completion unblock, and each site in `RefreshTaskSteps` where a deferred item turns up again. **Migration 13** backfills both from the owning list's `createdAt` — without it every pre-existing task would have read as "no progress ever" and flagged stale the moment this shipped.
+
+`TodoList:PurgeTrapped` removes descending, clears import links and emits `TDDEL` deltas exactly as `DeleteTask` does. `/fq cleanup trapped` previews with a per-reason breakdown; `/fq cleanup trapped confirm` removes. Nothing deletes on login (decided during the #223 triage) and the confirm word is required because task deletion has no undo. Bare `/fq cleanup` keeps its legacy-data behaviour and now appends the counts.
+
+Surfaces: per-task `[trapped]` / `[stale Nd]` tags with inline `|T...|t` textures plus list-level counts in `UI/TodoPage.lua`, and a banner row in `UI/MiniView.lua` — a trapped task never appears as a current-character row there, so without a banner the pile grows entirely out of sight. `todoStaleDays = 0` disables the flag, guarded explicitly because `0` is truthy in Lua and a zero threshold would otherwise mark every task stale.
+
+`test/cleanup_spec.lua` (33 assertions) is written from the false-positive side first — a missed trapped task is a row that stays in a list; a wrong one is a task the player deletes on our word. Covers the six "must never be trapped" shapes, name-as-well-as-key flip correlation, stale measured from progress rather than list age, and descending removal proven at a size where an index shift cannot hide.
+
+### Invalid escape sequences — one shipped in alpha11
+
+Two texture paths went out in v0.13.1-alpha11 as `"Interface\RaidFrame\..."` with single separators. **Lua 5.1 does not reject an unknown escape**: the lexer keeps the character and drops the backslash, so the string evaluates to `"InterfaceRaidFrameReadyCheck-Waiting"`. No error, no warning, `luac -p` passes, and a review reads it as correct because in nearly any other language it would be. The two FQ-233 note rows in the bank popup have been drawing with no icon since alpha11 — cosmetic, shipped, and ours.
+
+The same hole swallowed `"\xe2\x86\x92"` (hex escapes are 5.2+), which has been rendering a player-visible regenerate note as `no inventory xe2x86x92 buy` since FQ-187. Fixed to a literal arrow.
+
+`test/escapes_spec.lua` re-implements enough of the 5.1 string lexer to find these across every file the `.toc` loads. It tests itself first so a broken lint cannot pass vacuously — single-backslash paths and `\x` escapes must be caught, `\n` `\t` `\"` `\\` and decimal escapes must not, comments are ignored — and was verified non-vacuous against a deliberately broken file. Every WoW texture path in this addon needs doubled backslashes, so the mistake is one keystroke away and invisible once made.
+
 ## v0.13.1-alpha11
 
 Two improvement-backlog items, plus a board correction. Embedded Cogworks-1.0 stays at **`v0.16.0`** (MINOR 31); `## Interface` stays at `120007`. **F8 (in-game smoke test) waived on maintainer direction.**
