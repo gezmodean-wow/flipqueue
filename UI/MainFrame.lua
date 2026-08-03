@@ -587,9 +587,32 @@ mainFrame.actionBtns.auctBuyList = CreateActionBtn("Buy List", "Refresh the Auct
 end)
 
 
--- Helper: perform export with current filter and format settings
-local function DoFilteredExport(getItemsFn, source)
-    local csv, count = getItemsFn()
+-- Helper: perform export with current filter and format settings.
+--
+-- Rows whose item the client has not cached are left out of the file rather
+-- than written as "Unknown" (FQ-238). Before rendering, ask the client for
+-- that data once and run the export again — the second pass usually picks up
+-- everything, and whatever is still missing is reported rather than silently
+-- absent.
+local DoFilteredExport
+DoFilteredExport = function(getItemsFn, source, isRetry)
+    local csv, count, skipped, unresolved = getItemsFn()
+
+    if not isRetry and unresolved and #unresolved > 0 then
+        local requested = ns.Export:RequestItemData(unresolved)
+        UI._exportStatus:SetText(ns.COLORS.YELLOW
+            .. "Loading " .. requested .. " missing item names...|r")
+        UI._exportEdit:SetText("")
+        C_Timer.After(1.5, function() DoFilteredExport(getItemsFn, source, true) end)
+        return
+    end
+
+    local skippedNote = ""
+    if skipped and skipped > 0 then
+        skippedNote = ns.COLORS.YELLOW .. "  — " .. skipped
+            .. " item(s) left out: the game has not loaded their details. "
+            .. "Open the bank holding them, or export again in a moment.|r"
+    end
 
     -- If format is AAA JSON, re-export as AAA
     if ns.Export:GetFormat() == "aaa" then
@@ -597,7 +620,11 @@ local function DoFilteredExport(getItemsFn, source)
         -- Instead, use ExportSaved which returns aggregated data
         -- For live scans, we need the raw data — export CSV then re-parse
         -- Simpler: use ExportSaved for AAA mode
-        local savedCsv, savedCount = ns.Export:ExportSaved("all")
+        local savedCsv, savedCount, savedSkipped = ns.Export:ExportSaved("all")
+        if (savedSkipped or 0) > 0 and skippedNote == "" then
+            skippedNote = ns.COLORS.YELLOW .. "  — " .. savedSkipped
+                .. " item(s) left out: the game has not loaded their details.|r"
+        end
 
         -- Parse CSV into item data list
         local itemDataList = {}
@@ -626,10 +653,12 @@ local function DoFilteredExport(getItemsFn, source)
 
         local output = "// Items:\n" .. result.items .. "\n\n// Pets:\n" .. result.pets
         UI._exportEdit:SetText(output)
-        UI._exportStatus:SetText(ns.COLORS.GREEN .. ic .. " items, " .. pc .. " pets|r — AAA JSON from " .. source)
+        UI._exportStatus:SetText(ns.COLORS.GREEN .. ic .. " items, " .. pc
+            .. " pets|r — AAA JSON from " .. source .. skippedNote)
     else
         UI._exportEdit:SetText(csv)
-        UI._exportStatus:SetText(ns.COLORS.GREEN .. count .. " items|r from " .. source)
+        UI._exportStatus:SetText(ns.COLORS.GREEN .. count .. " items|r from "
+            .. source .. skippedNote)
     end
 
     UI._exportEdit:HighlightText()

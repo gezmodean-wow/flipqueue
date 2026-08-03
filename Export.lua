@@ -248,27 +248,67 @@ end
 -- Export from Saved Data
 --------------------------
 
+-- The saved projection stores the literal string "Unknown" as the name of any
+-- item the client had not cached when the scan ran (`Scanner.lua:145`, via
+-- `ItemLookup:GetItemMeta`). Those rows used to go straight into the CSV the
+-- player uploads to FlippingPal, where a placeholder is indistinguishable from
+-- a real name — it is not missing data, it is wrong data (FQ-238). Warbank and
+-- alt-bank contents are both the population most likely to be cold and the
+-- population an inventory export exists for.
+--
+-- So: resolve from the client if it has since cached the item, and otherwise
+-- keep the row OUT of the file and hand the caller the IDs to request. Quality
+-- and item level come from the same call, so an unresolved row would have been
+-- wrong in three columns, and `maxStack` is what identifies a commodity — an
+-- uncached commodity used to slip through the skip below for the same reason.
+local UNRESOLVED_NAME = "Unknown"
+
+-- Returns (csv, count, skipped, unresolvedIDs). `unresolvedIDs` is what to feed
+-- C_Item.RequestLoadItemDataByID before exporting again; `skipped` is how many
+-- rows were left out and is what the player needs told.
 function Export:ExportSaved(mode)
-    if not ns.db then return CSV_HEADER .. "\n", 0 end
+    if not ns.db then return CSV_HEADER .. "\n", 0, 0, {} end
 
     mode = mode or "all"
     local charKey = ns:GetCharKey()
     local charEntry = ns.db.characters[charKey]
     local charData = charEntry and charEntry.inventory
     local itemDataList = {}
+    local skipped = 0
+    local unresolvedSet, unresolvedIDs = {}, {}
+
+    local function MarkUnresolved(numID)
+        skipped = skipped + 1
+        if numID and numID > 0 and not unresolvedSet[numID] then
+            unresolvedSet[numID] = true
+            unresolvedIDs[#unresolvedIDs + 1] = numID
+        end
+    end
 
     local function processItem(itemData, qty)
         if UNTRADEABLE_BIND[itemData.bindType or 0] then return end
         if itemData.isBound then return end
 
         local itemID = itemData.itemID
-        local itemName = itemData.name or "Unknown"
+        local itemName = itemData.name
+        if itemName == UNRESOLVED_NAME or itemName == "" then itemName = nil end
         local quality = "Unknown"
         local ilvl = 0
 
         -- Battle pets
         local speciesID = tostring(itemID):match("^pet:(%d+)$")
         if speciesID then
+            -- C_Item.GetItemInfo answers "Pet Cage" for these, so the journal
+            -- is the only way back to a species name once the stored one is a
+            -- placeholder.
+            if not itemName and C_PetJournal and C_PetJournal.GetPetInfoBySpeciesID then
+                local okPet, petName = pcall(C_PetJournal.GetPetInfoBySpeciesID, tonumber(speciesID))
+                if okPet then itemName = petName end
+            end
+            if not itemName then
+                skipped = skipped + 1   -- no ID to request a load for
+                return
+            end
             local petQuality = (itemData.bonusIDs or ""):match("q(%d+)")
             table.insert(itemDataList, {
                 itemID    = "pet:" .. speciesID,
@@ -282,16 +322,21 @@ function Export:ExportSaved(mode)
             return
         end
 
-        -- Regular items: look up quality/ilvl/stackability
+        -- Regular items: name/quality/ilvl/stackability all come from one call.
         local numID = tonumber(itemID)
-        if numID and numID > 0 then
-            local ok, name, _, itemQuality, itemLevel, _, _, _, maxStack = pcall(C_Item.GetItemInfo, numID)
-            if ok then
-                if maxStack and maxStack > 1 then return end -- skip commodities
-                if itemQuality then quality = QUALITY_NAMES[itemQuality] or "Unknown" end
-                ilvl = itemLevel or 0
-            end
+        if not numID or numID <= 0 then
+            skipped = skipped + 1
+            return
         end
+        local ok, name, _, itemQuality, itemLevel, _, _, _, maxStack = pcall(C_Item.GetItemInfo, numID)
+        if not (ok and name) then
+            MarkUnresolved(numID)
+            return
+        end
+        if maxStack and maxStack > 1 then return end -- skip commodities
+        itemName = itemName or name
+        if itemQuality then quality = QUALITY_NAMES[itemQuality] or "Unknown" end
+        ilvl = itemLevel or 0
 
         table.insert(itemDataList, {
             itemID    = itemID,
@@ -343,7 +388,22 @@ function Export:ExportSaved(mode)
     for _, data in ipairs(aggregated) do
         table.insert(lines, FormatCSVLine(data))
     end
-    return table.concat(lines, "\n"), #aggregated
+    return table.concat(lines, "\n"), #aggregated, skipped, unresolvedIDs
+end
+
+-- Ask the client to load item data for rows the export had to leave out.
+-- Capped: a request per item is cheap, but an export is not a reason to queue
+-- an unbounded number of them. Returns how many were requested.
+local MAX_LOAD_REQUESTS = 500
+function Export:RequestItemData(itemIDs)
+    if not itemIDs or not C_Item or not C_Item.RequestLoadItemDataByID then return 0 end
+    local n = 0
+    for _, id in ipairs(itemIDs) do
+        if n >= MAX_LOAD_REQUESTS then break end
+        pcall(C_Item.RequestLoadItemDataByID, id)
+        n = n + 1
+    end
+    return n
 end
 
 --------------------------
