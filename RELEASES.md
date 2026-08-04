@@ -6,6 +6,11 @@ The engineering-detail companion lives in `CHANGELOG.md` (commit-readerese — f
 
 ---
 
+## v0.13.1-alpha13
+
+- **The generator now shows you where every imported deal went.** If FlippingPal gives you two thousand deals and FlipQueue makes ninety tasks, that gap needs explaining — and until now nothing explained it. The most common reasons a deal doesn't become a task are that you have no character on the realm it wants you to sell on, or that you don't own the item, or that you own it but a better-priced deal already claimed your stock. All of those were happening silently. Step 3 of the generator now reads something like "2,088 deals imported → 94 tasks; 1,600 no character on that realm, 300 item not in your inventory, 94 stock already claimed", so the arithmetic is yours to check. The realms you're missing a character on are recorded too, which is exactly the list you need when deciding where to roll one.
+- **`/fq state` records the same breakdown**, so if the numbers still look wrong we can see where they went without asking you to reproduce anything.
+
 ## v0.13.1-alpha12
 
 Cleaning up the to-do list.

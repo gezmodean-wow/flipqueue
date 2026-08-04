@@ -1,5 +1,26 @@
 # Changelog
 
+## v0.13.1-alpha13
+
+The paste lands now — this is the next question it exposed. Embedded Cogworks-1.0 stays at **`v0.16.0`** (MINOR 31); `## Interface` stays at `120007`. **F8 (in-game smoke test) waived on maintainer direction.**
+
+### FQ-228 follow-up (#228): where did 2,000 deals go?
+
+The reporter's export imports without crashing on alpha10+, and he immediately asked the obvious next thing: FlippingPal gave him 2,000+ deals, the generator produced 94 tasks. Nothing in FlipQueue could answer it, and that is the defect — most deals leave the generator through exits that were counted nowhere at all.
+
+Two specific gaps:
+
+- **No character on the target realm.** `FindBestAssignment` returns nil when `#realmChars == 0`, and with `skipUnassigned` set the caller's `else` branch drops the deal outright. No counter, no preview row, one debug print. For a player whose import spans more realms than they have characters — which is every cross-realm setup — this is easily the largest bucket, and it was invisible.
+- **`overflow` conflated two different answers.** `FindPoolMatch` returns nil both when the player doesn't own the item and when they do but every unit is already claimed by a higher-priced deal. Those are the two most common answers to "where did my deal go", and they were the same bucket.
+
+`preview.accounting` now records each deal's exit — `tasks`, `deposits`, `unassigned`, `noCharacter` (plus `noCharacterRealms`, a per-realm breakdown that feeds directly into the "should I roll a character here" decision), `notOwned`, `noStock`, `tsmRejected`, `warbankFull`, `noQuantity`, `flipSkipped`. `other` is computed as `total - sum(named)` to close the arithmetic, so a branch added later that forgets to count gets absorbed honestly instead of making the figures quietly not add up.
+
+`FindPoolMatch` now returns `(idx, exhausted)`. The exhaustion scan is a second pass that runs **only** for a deal that already produced no match, and **only** over pool entries with nothing left — the numeric `poolRemaining[idx] > 0` test still short-circuits every comparison on the common path, so FQ-223's hot loop is untouched.
+
+Shown at step 3 of the generator, where the question is actually asked, and as a `GEN|` line in `/fq state`: imports are cleared on commit (`CommitList` → `ImportClearAll`), so after the fact that dump is the only surviving record of how many deals produced how few tasks. `GENR|` carries the per-realm breakdown.
+
+`test/generator_accounting_spec.lua` (24 assertions) asserts the arithmetic invariant on every case — the buckets sum to the deals that came in — alongside the specific behaviours: the realm bucket counted whether the setting drops the deal or turns it into a create-a-character task, not-owned distinguished from stock-claimed, and the accounting surviving the `listMode = "separate"` split.
+
 ## v0.13.1-alpha12
 
 To-do cleanup, plus a source lint prompted by a defect this session shipped. Embedded Cogworks-1.0 stays at **`v0.16.0`** (MINOR 31); `## Interface` stays at `120007`. **Schema bumps to 13.** **F8 (in-game smoke test) waived on maintainer direction.**
