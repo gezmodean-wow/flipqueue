@@ -1314,6 +1314,13 @@ function UI:RefreshGeneratorPage(pending)
         -- Status label
         s3.statusLabel = s3:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
 
+        -- Where the imported deals went. The counts above say what came out;
+        -- this says what happened to everything that didn't, which is the
+        -- question a player asks when a 2,000-deal import produces 94 tasks.
+        s3.dealAccounting = s3:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+        s3.dealAccounting:SetJustifyH("LEFT")
+        s3.dealAccounting:SetText("")
+
         -- Divider between controls and generated list
         s3.listDivider = s3:CreateTexture(nil, "ARTWORK")
         s3.listDivider:SetHeight(1)
@@ -2984,6 +2991,42 @@ function UI:RefreshGeneratorPage(pending)
                 ns.COLORS.GRAY .. "Import deals to generate a preview|r")
         end
         rightY = rightY - 14
+
+        -- Deal accounting: every imported deal, and which door it left by.
+        -- Only the non-zero buckets are listed, worst-first, so a healthy
+        -- generation stays a single short line.
+        s3.dealAccounting:ClearAllPoints()
+        s3.dealAccounting:SetPoint("TOPLEFT", s3, "TOPLEFT", 6, rightY)
+        local acct = previewSource and previewSource.accounting
+        if acct and (acct.total or 0) > 0 then
+            local bits = {}
+            local function Add(count, label, color)
+                if (count or 0) > 0 then
+                    bits[#bits + 1] = (color or ns.COLORS.GRAY) .. count .. " " .. label .. "|r"
+                end
+            end
+            Add(acct.noCharacter, "no character on that realm", ns.COLORS.ORANGE)
+            Add(acct.unassigned, "awaiting a new character", ns.COLORS.YELLOW)
+            Add(acct.notOwned, "item not in your inventory")
+            Add(acct.noStock, "stock already claimed")
+            Add(acct.noQuantity, "nothing left to post")
+            Add(acct.flipSkipped, "flips skipped (one side unassigned)", ns.COLORS.ORANGE)
+            Add(acct.warbankFull, "held (warbank full)", ns.COLORS.ORANGE)
+            Add(acct.tsmRejected, "below your TSM minimum", ns.COLORS.ORANGE)
+            Add(acct.other, "other")
+            local made = (acct.tasks or 0) + (acct.deposits or 0)
+            local line = ns.COLORS.GRAY .. acct.total .. " deals imported -> |r"
+                .. ns.COLORS.GREEN .. made .. " tasks|r"
+            if #bits > 0 then
+                line = line .. ns.COLORS.GRAY .. ";  |r" .. table.concat(bits, ns.COLORS.GRAY .. ",  |r")
+            end
+            s3.dealAccounting:SetText(line)
+            s3.dealAccounting:Show()
+            rightY = rightY - 14
+        else
+            s3.dealAccounting:SetText("")
+            s3.dealAccounting:Hide()
+        end
 
         -- Divider
         s3.listDivider:ClearAllPoints()

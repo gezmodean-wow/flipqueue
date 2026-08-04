@@ -345,6 +345,13 @@ function TodoList:CountInventoryForDeal(deal)
 end
 
 -- Find pool item matching a deal. Returns pool index or nil.
+-- Returns (poolIdx, exhausted). `exhausted` distinguishes the two very
+-- different reasons a deal finds no inventory: the player does not own the item
+-- at all, or they do and every unit is already claimed by a higher-priority
+-- deal. Both used to land in one bucket labelled "overflow", which made the
+-- generator's arithmetic unexplainable to anyone asking why 2,000 deals became
+-- 94 tasks. Checking the exhausted entries costs a comparison only against pool
+-- items already allocated, and stops at the first hit.
 local function FindPoolMatch(pool, deal, poolRemaining)
     local resolvedID = ns:ResolveItemID(deal)
 
@@ -357,7 +364,20 @@ local function FindPoolMatch(pool, deal, poolRemaining)
             end
         end
     end
-    return nil
+
+    -- Nothing available for this deal. Second pass over the entries the first
+    -- pass skipped, to tell the two reasons apart. This runs only for a deal
+    -- that already produced nothing, and only against pool items that are
+    -- already fully claimed, so the common path is untouched — the numeric
+    -- `> 0` test above still short-circuits every comparison it used to.
+    for idx, poolItem in ipairs(pool) do
+        if poolRemaining[idx] <= 0 then
+            local matched = ns:ItemsMatch(
+                poolItem.itemKey, poolItem.name, deal, resolvedID or false)
+            if matched then return nil, true end
+        end
+    end
+    return nil, false
 end
 
 -- Find best character + source to post an item on a target realm.
@@ -784,6 +804,19 @@ function TodoList:GenerateTodoList(source, allocationOrder, opts)
         overflow  = {},  -- deals that exceeded available stock (more deals than items)
         noDeals   = {},  -- inventory items that had zero matching deals
         warbankFull = {}, -- cross-realm buys held back because warbank has no free slots
+        -- Where every imported deal ended up. A player looking at "2,000 deals
+        -- in, 94 tasks out" cannot tell a bug from a filter doing its job, and
+        -- FlipQueue never said which — the deals that leave through the quiet
+        -- exits (no character on that realm, item not owned, stock already
+        -- claimed) were counted nowhere at all. Buckets are disjoint and the
+        -- `other` figure below closes the sum, so the readout is complete even
+        -- where an exit isn't separately named (FQ-228 follow-up).
+        accounting = {
+            total = 0, tasks = 0, deposits = 0, unassigned = 0,
+            noCharacter = 0, notOwned = 0, noStock = 0, tsmRejected = 0,
+            warbankFull = 0, noQuantity = 0, flipSkipped = 0, other = 0,
+            noCharacterRealms = {},
+        },
     }
 
     -- Warbank free-slot budget for cross-realm buy tasks.
@@ -921,6 +954,9 @@ function TodoList:GenerateTodoList(source, allocationOrder, opts)
         return below, ahMin, threshold, opName
     end
 
+    local acct = preview.accounting
+    acct.total = #deals
+
     local debugGen = ns.db.settings.debugMessages
     if debugGen then
         ns:PrintDebug("Generate: " .. #deals .. " deals, " .. #pool .. " pool items, source=" .. source)
@@ -970,7 +1006,7 @@ function TodoList:GenerateTodoList(source, allocationOrder, opts)
             }
         end
 
-        local poolIdx = FindPoolMatch(pool, deal, poolRemaining)
+        local poolIdx, poolExhausted = FindPoolMatch(pool, deal, poolRemaining)
 
         if not poolIdx and debugGen then
             ns:PrintDebug("  NO POOL MATCH: " .. (deal.name or "?") ..
@@ -1003,9 +1039,12 @@ function TodoList:GenerateTodoList(source, allocationOrder, opts)
                 end
                 qty = math.min(qty, poolRemaining[poolIdx])
 
-                if qty <= 0 and debugGen then
-                    ns:PrintDebug("  POOL EXHAUSTED: " .. (deal.name or "?") ..
-                        " on " .. (deal.targetRealm or "?") .. " (no stock remaining)")
+                if qty <= 0 then
+                    acct.noQuantity = acct.noQuantity + 1
+                    if debugGen then
+                        ns:PrintDebug("  POOL EXHAUSTED: " .. (deal.name or "?") ..
+                            " on " .. (deal.targetRealm or "?") .. " (no stock remaining)")
+                    end
                 end
                 if qty > 0 then
                     -- Check TSM threshold for this deal
@@ -1095,8 +1134,10 @@ function TodoList:GenerateTodoList(source, allocationOrder, opts)
                     if itemStatus == "skipped" then
                         -- TSM-rejected at generation: goes to rejected list,
                         -- does not consume inventory
+                        acct.tsmRejected = acct.tsmRejected + 1
                         table.insert(preview.rejected, taskEntry)
                     else
+                        acct.tasks = acct.tasks + 1
                         -- Pending task (may still have failReason as a warning
                         -- if tsmSkipOnGenerate is off but TSM flagged it)
                         table.insert(preview.items, taskEntry)
@@ -1115,7 +1156,9 @@ function TodoList:GenerateTodoList(source, allocationOrder, opts)
                 local depositQty = math.min(
                     math.max(deal.quantity or 1, defaultQty),
                     poolRemaining[poolIdx])
+                if depositQty <= 0 then acct.noQuantity = acct.noQuantity + 1 end
                 if depositQty > 0 then
+                    acct.deposits = acct.deposits + 1
                     -- Cross-realm: item in inventory but not on sell realm
                     local taskCrossFields = {}
                     if isCrossRealmFlip then
@@ -1167,6 +1210,18 @@ function TodoList:GenerateTodoList(source, allocationOrder, opts)
             else
                 -- No character on target realm at all
                 -- Cross-realm: item in inventory but no char on sell realm
+                local realmLabel = deal.targetRealm or "?"
+                acct.noCharacterRealms[realmLabel] =
+                    (acct.noCharacterRealms[realmLabel] or 0) + 1
+                if ns.db.settings.skipUnassigned then
+                    -- Dropped outright by the "skip deals with no character"
+                    -- setting. This is the quietest exit of the lot and, for a
+                    -- player whose import spans more realms than they have
+                    -- characters, easily the largest.
+                    acct.noCharacter = acct.noCharacter + 1
+                else
+                    acct.unassigned = acct.unassigned + 1
+                end
                 if not ns.db.settings.skipUnassigned then
                     local taskCrossFields = {}
                     if isCrossRealmFlip then
@@ -1245,6 +1300,7 @@ function TodoList:GenerateTodoList(source, allocationOrder, opts)
                 local warbankHold = false
                 if not skipFlip and warbankBudget ~= nil and warbankBudget < 1 then
                     warbankHold = true
+                    acct.warbankFull = acct.warbankFull + 1
                     table.insert(preview.warbankFull, {
                         itemKey       = deal.itemKey,
                         itemID        = deal.itemID,
@@ -1265,7 +1321,11 @@ function TodoList:GenerateTodoList(source, allocationOrder, opts)
                     end
                 end
 
+                if skipFlip then acct.flipSkipped = acct.flipSkipped + 1 end
                 if not skipFlip and not warbankHold then
+                -- One deal, two tasks (buy + the sell it unblocks). Counted as
+                -- one deal so the buckets still sum to the deals that came in.
+                acct.tasks = acct.tasks + 1
                 if warbankBudget ~= nil then warbankBudget = warbankBudget - 1 end
                 local dealQty = math.max(deal.quantity or 1, defaultQty)
                 table.insert(preview.items, {
@@ -1345,8 +1405,13 @@ function TodoList:GenerateTodoList(source, allocationOrder, opts)
                 })
                 end -- not skipFlip and not warbankHold
             else
-                -- No pool match: all inventory for this item is allocated to
-                -- higher-priority deals. Track as overflow for transparency.
+                -- No pool match: either the player does not own the item, or
+                -- every unit is already claimed by a higher-priority deal.
+                if poolExhausted then
+                    acct.noStock = acct.noStock + 1
+                else
+                    acct.notOwned = acct.notOwned + 1
+                end
                 table.insert(preview.overflow, {
                     itemKey       = deal.itemKey,
                     itemID        = deal.itemID,
@@ -1360,6 +1425,14 @@ function TodoList:GenerateTodoList(source, allocationOrder, opts)
             end
         end
     end
+
+    -- Close the sum. Any exit not separately named lands here rather than
+    -- quietly making the figures not add up — a readout that claims to account
+    -- for every deal has to actually do so, including for branches added later.
+    acct.other = acct.total - (acct.tasks + acct.deposits + acct.unassigned
+        + acct.noCharacter + acct.notOwned + acct.noStock + acct.tsmRejected
+        + acct.warbankFull + acct.noQuantity + acct.flipSkipped)
+    if acct.other < 0 then acct.other = 0 end
 
     -- Detect inventory items that had zero matching deals.
     -- Track which pool indices were touched by any deal (allocated, skipped, or
@@ -1402,12 +1475,15 @@ function TodoList:GenerateTodoList(source, allocationOrder, opts)
             end
         end
 
+        -- Both halves carry the same accounting: it describes the one
+        -- generation run that produced them, not either list on its own.
         local buyPreview = {
             name      = preview.name .. " (Buy)",
             createdAt = preview.createdAt,
             source    = preview.source,
             importType = preview.importType,
             items     = buyItems,
+            accounting = preview.accounting,
         }
         local sellPreview = {
             name      = preview.name .. " (Sell)",
@@ -1415,6 +1491,7 @@ function TodoList:GenerateTodoList(source, allocationOrder, opts)
             source    = preview.source,
             importType = preview.importType,
             items     = sellItems,
+            accounting = preview.accounting,
         }
         return { buy = buyPreview, sell = sellPreview }
     elseif opts.listMode == "integrated" then

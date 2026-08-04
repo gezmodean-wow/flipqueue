@@ -444,6 +444,30 @@ local function cmdState()
     L("RT|pullIP=" .. V(tr._pullInProgress) .. "|depIP=" .. V(tr._depositInProgress)
         .. "|cancels=" .. V(tr._pendingCancels) .. "|ahOpen=" .. V(tr._isAHOpen))
 
+    -- Where the deals went when the active list was generated (FQ-228
+    -- follow-up). Imports are cleared on commit, so after the fact this is the
+    -- only record of how many deals produced how few tasks, and why.
+    local activeList = ns.db.todoLists and ns.db.todoLists.active
+    local ga = activeList and activeList.accounting
+    if ga then
+        local realms = {}
+        for realm, n in pairs(ga.noCharacterRealms or {}) do
+            realms[#realms + 1] = realm .. "=" .. n
+        end
+        table.sort(realms)
+        L("GEN|deals=" .. V(ga.total) .. "|tasks=" .. V(ga.tasks)
+            .. "|dep=" .. V(ga.deposits) .. "|unassigned=" .. V(ga.unassigned)
+            .. "|noChar=" .. V(ga.noCharacter) .. "|notOwned=" .. V(ga.notOwned)
+            .. "|noStock=" .. V(ga.noStock) .. "|tsmRej=" .. V(ga.tsmRejected)
+            .. "|wbFull=" .. V(ga.warbankFull) .. "|noQty=" .. V(ga.noQuantity)
+            .. "|flipSkip=" .. V(ga.flipSkipped) .. "|other=" .. V(ga.other))
+        if #realms > 0 then
+            L("GENR|" .. table.concat(realms, "|"))
+        end
+    else
+        L("GEN|none")
+    end
+
     -- Last paste captured this session. `events` vs `chunks` is how the client
     -- delivered it (one insert or thousands), and `maxHeld` is the most the
     -- EditBox ever had to lay out — the cost behind the import crash (FQ-228).
