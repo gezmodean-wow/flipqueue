@@ -397,8 +397,27 @@ avoidPostedChk:SetScript("OnClick", function(self)
     if ns.db then ns.db.settings.dfAvoidPostedRealms = self:GetChecked() end
 end)
 
+local hideCommodityChk = CreateFrame("CheckButton", nil, rightCol, "UICheckButtonTemplate")
+hideCommodityChk:SetSize(22, 22); hideCommodityChk:SetPoint("TOPLEFT", avoidPostedChk, "BOTTOMLEFT", 0, -2)
+local hideCommodityLbl = rightCol:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+hideCommodityLbl:SetPoint("LEFT", hideCommodityChk, "RIGHT", 2, 0)
+hideCommodityLbl:SetText("Hide region-wide items (materials, potions, ore)")
+hideCommodityChk:SetScript("OnEnter", function(self)
+    GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+    GameTooltip:AddLine("Hide region-wide items")
+    GameTooltip:AddLine("Stackable goods trade on a single region-wide auction house,", 1, 1, 1, true)
+    GameTooltip:AddLine("so their price is identical on every realm and there is no", 1, 1, 1, true)
+    GameTooltip:AddLine("cross-realm profit to be had. Turn this off to scan them anyway.", 1, 1, 1, true)
+    GameTooltip:Show()
+end)
+hideCommodityChk:SetScript("OnLeave", function() GameTooltip:Hide() end)
+hideCommodityChk:SetScript("OnClick", function(self)
+    if ns.db then ns.db.settings.dfExcludeCommodities = self:GetChecked() end
+    if RefreshInventoryPreview then RefreshInventoryPreview() end
+end)
+
 local abbrevPctChk = CreateFrame("CheckButton", nil, rightCol, "UICheckButtonTemplate")
-abbrevPctChk:SetSize(22, 22); abbrevPctChk:SetPoint("TOPLEFT", avoidPostedChk, "BOTTOMLEFT", 0, -2)
+abbrevPctChk:SetSize(22, 22); abbrevPctChk:SetPoint("TOPLEFT", hideCommodityChk, "BOTTOMLEFT", 0, -2)
 local abbrevPctLbl = rightCol:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
 abbrevPctLbl:SetPoint("LEFT", abbrevPctChk, "RIGHT", 2, 0)
 abbrevPctLbl:SetText("Abbreviate large profit % (1.5k%, 25M%)")
@@ -418,10 +437,18 @@ RefreshInventoryPreview = function()
     local ok, pool = pcall(function() return ns.TodoList:GetFilteredItemPool(filterMode, filterValue) end)
     if not ok or not pool then pool = {} end
     pool = FilterPoolByLocation(pool, locationFilter)
+    local hiddenCommodities = 0
+    if ns.db and ns.db.settings.dfExcludeCommodities ~= false then
+        pool, hiddenCommodities = ns:FilterPoolCommodities(pool)
+    end
 
     local totalQty = 0
     for _, item in ipairs(pool) do totalQty = totalQty + (item.totalQuantity or 0) end
-    invCount:SetText("|cffaaaaaa" .. #pool .. " items  ·  " .. totalQty .. " total qty|r")
+    local countText = "|cffaaaaaa" .. #pool .. " items  ·  " .. totalQty .. " total qty"
+    if hiddenCommodities > 0 then
+        countText = countText .. "  ·  " .. hiddenCommodities .. " region-wide hidden"
+    end
+    invCount:SetText(countText .. "|r")
 
     for _, r in ipairs(invRows) do r:Hide() end
 
@@ -864,8 +891,23 @@ scanBtn:SetScript("OnClick", function()
 
     local pool = ns.TodoList:GetFilteredItemPool(filterMode, filterValue)
     pool = FilterPoolByLocation(pool, locationFilter)
+    local hiddenCommodities = 0
+    if ns.db and ns.db.settings.dfExcludeCommodities ~= false then
+        pool, hiddenCommodities = ns:FilterPoolCommodities(pool)
+    end
     if not pool or #pool == 0 then
-        ns:Print("No tradeable items" .. (filterMode ~= "all" and " (try All)" or "")); return
+        -- Distinguish "you own nothing tradeable" from "everything you own is
+        -- region-wide" — the second reads as a broken scan unless it's said.
+        if hiddenCommodities > 0 then
+            ns:Print(hiddenCommodities .. " region-wide item(s) skipped — commodities have the same "
+                .. "price on every realm. Uncheck \"Hide region-wide items\" to scan them anyway.")
+        else
+            ns:Print("No tradeable items" .. (filterMode ~= "all" and " (try All)" or ""))
+        end
+        return
+    end
+    if hiddenCommodities > 0 then
+        ns:PrintDebug("DealFinder: " .. hiddenCommodities .. " commodity item(s) excluded from the scan pool")
     end
 
     itemGroups = nil; currentIdx = 0; previewMode = false; dfPreview = nil
@@ -991,6 +1033,7 @@ function UI:RefreshDealFinderPage()
             outlierBox:SetText(tostring(ns.db.settings.dfOutlierMultiplier or 1.5))
             ignoreOutlierChk:SetChecked(ns.db.settings.dfIgnoreOutliers or false)
             avoidPostedChk:SetChecked(ns.db.settings.dfAvoidPostedRealms ~= false)
+            hideCommodityChk:SetChecked(ns.db.settings.dfExcludeCommodities ~= false)
             abbrevPctChk:SetChecked(ns.db.settings.dfAbbreviatePct or false)
         end
         local ready = ns.DealFinder and ns.DealFinder:IsReady()
