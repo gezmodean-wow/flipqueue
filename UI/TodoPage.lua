@@ -175,6 +175,24 @@ local function BuildTodoData()
             -- Price display: buy tasks show buy price
             local priceDisplay = isBuyTask and item.buyPrice or item.expectedPrice or ""
 
+            -- Flag a sell price that has run away from TSM's market data
+            -- (FQ-177). The price itself isn't a bug — it's FlippingPal's
+            -- Listing column, which is aggressive by design and can run two
+            -- orders of magnitude over on thin items. What was missing is any
+            -- connection between the number on this row and the setting that
+            -- changes it, so the row carries both the flag and the route.
+            local inflationTip
+            if not isBuyTask and ns.FPPriceInflation then
+                local ratio, tsmGold = ns:FPPriceInflation(item.itemKey, item.expectedPrice)
+                if ratio and ratio > (ns.FP_PRICE_INFLATION_THRESHOLD or 10) then
+                    priceDisplay = priceDisplay .. " " .. ns.COLORS.ORANGE .. "!|r"
+                    inflationTip = string.format(
+                        "%.0fx TSM's regional average (%s)\nFlippingPal's Listing price. "
+                        .. "Settings -> Imports -> FlippingPal price source",
+                        ratio, ns:FormatGold(math.floor(tsmGold * 10000)))
+                end
+            end
+
             -- Tooltip
             local tooltipExtra
             if isBuyTask then
@@ -185,6 +203,10 @@ local function BuildTodoData()
             else
                 tooltipExtra = (item.targetRealm and item.targetRealm ~= ""
                     and ("Sell on: " .. item.targetRealm .. "  @  " .. (item.expectedPrice or "?")) or nil)
+            end
+            if inflationTip then
+                tooltipExtra = (tooltipExtra and (tooltipExtra .. "\n") or "")
+                    .. ns.COLORS.ORANGE .. inflationTip .. "|r"
             end
 
             -- Buy-task name prefix tracks the lifecycle step so the row

@@ -1162,7 +1162,16 @@ function UI:CreateSettingsPanel(parent)
 
     settingsWidgets.fpPriceSource, h = CreateSettingsDropdown(sc, sy,
         "FlippingPal price source",
-        "Which FP column flows into expectedPrice when /fq generate builds a task. Listing = aggressive recommendation; Sale Avg = conservative historical median; Auto = Listing unless it's >10x TSM region market, then Sale Avg. Applies on next generate; existing tasks keep their stored price.",
+        "Which FlippingPal column becomes a task's expected price.\n\n"
+            .. "Listing price - what FP suggests posting AT. Aggressive by design, and on a thin or "
+            .. "volatile item it can land 50-150x above what the realm actually pays. This is the "
+            .. "source of tasks priced far above TSM's data, and of the TSM-skip noise that follows.\n"
+            .. "Sale Avg - FP's historical median. Conservative; sells rather than sits.\n"
+            .. "Auto (TSM-clamped) - the Listing price unless it exceeds 10x TSM's regional average, "
+            .. "in which case Sale Avg. Falls back to Listing whenever the data to make that call is "
+            .. "missing.\n\n"
+            .. "Applies to the next list you generate. Existing tasks keep the price they were "
+            .. "created with - regenerate a list to reprice it.",
         "fpPriceSource",
         {
             { label = "Listing price",  value = "listing" },
