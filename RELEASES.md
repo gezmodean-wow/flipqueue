@@ -6,6 +6,70 @@ The engineering-detail companion lives in `CHANGELOG.md` (commit-readerese — f
 
 ---
 
+## v0.13.1
+
+A stability release — everything in it is a fix. Large accounts froze, a full FlippingPal export crashed the client, bank operations quietly stopped planning, and Deal Finder showed the same price on every realm. All four are fixed, along with a long tail of smaller things. Everything below is new since v0.13.0.
+
+### Large accounts don't freeze any more
+
+If you run a lot of characters and import big cross-realm lists, FlipQueue could lock the game up — sometimes badly enough to need a restart. Four separate causes, all fixed:
+
+- **Building a to-do list runs in the background** with a progress bar now, however you start it: the automatic generate-after-import, the **Generate** button, a filter change, or reordering your priorities.
+- **Full auction house scans** no longer stall the client. If you run Auctionator, its full scan made FlipQueue read the entire auction house in one go — seconds at a time on a busy realm.
+- **Opening the auction house is smooth.** FlipQueue cross-checks your sales against TradeSkillMaster shortly after you open the AH; on big TSM setups that check froze the client, once per character switch.
+- **Checking mail and posting is faster.** Refreshing your to-do steps no longer re-scans your whole account's inventory for every task on every bag change.
+
+FlipQueue also stops growing without limit over a long session. Its record of scanned auction prices is now capped as you play — one reported session had reached over 400 MB — and **Max entries kept** for your sales log defaults to 10,000 instead of unlimited. Your existing history is untouched, and you can set it back to Unlimited in Settings → Sales Log.
+
+### Pasting a full FlippingPal export works
+
+The crash that hit anyone importing a full multi-character export is gone. It took several attempts to find, because it wasn't one bug:
+
+- **The game was dying before FlipQueue got a turn.** WoW hands a paste over in one uninterrupted burst, and while that's happening it re-draws everything pasted so far every time another piece arrives. On a few-hundred-KB export that's a colossal amount of work in a fraction of a second, which is why nothing appeared on screen — not even a progress line. FlipQueue now takes the text out of the box the instant it arrives, so the game never has to hold or draw more than a few lines of it.
+- **The import got slower the further it got.** Every incoming deal was checked against every deal already imported, to spot the same item offered on connected realms — work that grows with the *square* of the export. On a 4,000-deal export that work is now roughly 35 times less, and it no longer gets disproportionately worse as your export grows.
+- **A paste that couldn't be read no longer takes the client down.** If the box ever failed to clear, FlipQueue re-read the same text every frame, forever, filling memory until the game died. It now checks, and stops safely if something's wrong. A paste beyond any sane size tells you to split it up.
+- **Pasting a second large export in the same session works** — previously the box was left in a state where every later paste silently did nothing until you reloaded.
+- **The progress line is under the paste box**, where you're actually looking, rather than six hundred pixels away at the bottom of the window. The Transform page's paste box got the same treatment.
+
+### Bank operations work again
+
+Since the first v0.13.1 test build, opening your bank quietly did nothing at all for anyone with a cross-realm to-do list — nothing pulled, nothing deposited, no gold withdrawn, and no window ever opened. Because WoW hides addon errors unless you turn them on, there was nothing on screen to explain it. The same fault also stopped the "N items ready to post!" message at the auction house. Nothing about your to-do lists, settings or inventory was damaged; the work simply wasn't being done. Open your bank once after updating and it picks up where it left off.
+
+### Deal Finder shows real per-realm prices for gear
+
+Gear gets listed at many different item levels, and FlipQueue could only recognise your item at one exact item level. When that didn't line up with what TradeSkillMaster had recorded — which is most of the time, because the auction house reports item levels scaled to whoever is looking — FlipQueue quietly fell back to a single region-wide average, so every realm showed the same number. Plain items like recipes and pets were never affected, which is why a handful of items looked fine while hundreds didn't.
+
+FlipQueue now uses the closest item level TSM actually has for that item, then the base item, and only falls back to a region-wide average when the item is genuinely missing from that realm's data. Prices matched approximately are marked with a `~` and the item level they came from, so you can see how solid each number is.
+
+### Pulling from the bank, one bagful at a time
+
+If you had more to pull than free bag space — one player had 304 waiting and room for 164 — FlipQueue planned the whole lot, ran until your bags filled, and quietly dropped the rest with nothing on screen to explain it. It now pulls only what fits, and orders the batch so it works through one realm at a time instead of scattering items across all of them, so you can finish that realm's posting before coming back for the next load. The popup says "Pull tasks (164 of 304)" and tells you what's left; if your bags are completely full it says so rather than showing nothing.
+
+### Your imports and exports arrive whole
+
+- **Auctionator and PBS shopping lists import in full.** Items from those lists arrive without an item ID, and FlipQueue treated "no ID" as "the same item" — so a 30-item list could import as two or three deals with the rest vanishing silently.
+- **Your inventory export no longer contains items called "Unknown".** When the game hadn't finished loading an item — most likely something in a bank or warbank you haven't opened recently — FlipQueue wrote "Unknown" as the name, with no quality and an item level of zero, straight into the file you upload to FlippingPal. One export had it in 22 of the first 99 rows. FlipQueue now waits for those details, exports again once they arrive, and leaves out anything it still can't name, with a note telling you how many and why.
+- **Your shopping lists find deals again.** v0.13.0 turned on "Match exact item level" for everyone, and because the auction house shows item levels scaled to your character's level, that quietly hid almost every armor and weapon listing. It's now off by default; turn it back on in Settings → Auctionator if you snipe specific gear variants on a max-level character.
+
+### Clearing out to-do tasks that can never finish
+
+A to-do list only ever grows, and some of what accumulates in it is genuinely stuck: a task assigned to a character you've since deleted, one waiting on an item that isn't on any of your characters, or the sell half of a cross-realm flip whose buy you removed. Those are now marked **[trapped]**, counted next to the list name, and shown as a banner in the mini window — trapped tasks never appear as one of your current character's rows, so the pile builds up out of sight. `/fq cleanup trapped` shows you what it found and why; `/fq cleanup trapped confirm` removes it. Nothing is ever deleted automatically.
+
+Tasks that simply haven't moved in a while are marked **[stale]** — two weeks by default, flagged only, never removed. An old task isn't a dead one. You can change the threshold or switch the flag off in the settings.
+
+### Where every imported deal went
+
+If FlippingPal gives you two thousand deals and FlipQueue makes ninety tasks, that gap needs explaining. The most common reasons a deal doesn't become a task are that you have no character on the realm it wants you to sell on, that you don't own the item, or that you own it but a better-priced deal already claimed your stock — and all of those were happening silently. Step 3 of the generator now reads something like "2,088 deals imported → 94 tasks; 1,600 no character on that realm, 300 item not in your inventory, 94 stock already claimed", so the arithmetic is yours to check. The realms you're missing a character on are recorded too, which is exactly the list you need when deciding where to roll one.
+
+### Smaller fixes
+
+- **"Skip deals with no character" stays checked.** The setting was always saved and always obeyed, but the checkbox drew itself unchecked on every login — so clicking it to "turn it back on" was actually turning it off.
+- **Posting one version of an item no longer clears a to-do for a different version** of the same item.
+- **Right-clicking items in the Inventory tab always responds.** Items already assigned to your queue ignored the right-click completely, which felt like "I can't add anything to Do Not Track" — especially right after an import, when almost everything is assigned. Assigned items now open a small menu, posted items explain that the live auction has to be collected or cancelled first, and an action with nothing to act on tells you so.
+- **The Log Out button in the tools drawer works** instead of throwing a blocked-action error.
+- **`/fq state` shows your FlipQueue version on its first line**, and records your last paste and the generator's breakdown — so when something still looks wrong, we can usually see why without asking you to reproduce it.
+- **`/fq debug realms` and `/fq debug pricing`** open a copyable box instead of printing into chat, list your sell realms and whether each has real per-realm pricing behind it, and say up front when an item is a commodity — those trade on a region-wide auction house, so there is one price everywhere and no cross-realm profit to be had.
+
 ## v0.13.1-alpha13
 
 - **The generator now shows you where every imported deal went.** If FlippingPal gives you two thousand deals and FlipQueue makes ninety tasks, that gap needs explaining — and until now nothing explained it. The most common reasons a deal doesn't become a task are that you have no character on the realm it wants you to sell on, or that you don't own the item, or that you own it but a better-priced deal already claimed your stock. All of those were happening silently. Step 3 of the generator now reads something like "2,088 deals imported → 94 tasks; 1,600 no character on that realm, 300 item not in your inventory, 94 stock already claimed", so the arithmetic is yours to check. The realms you're missing a character on are recorded too, which is exactly the list you need when deciding where to roll one.

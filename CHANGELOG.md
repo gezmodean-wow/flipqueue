@@ -1,5 +1,24 @@
 # Changelog
 
+## v0.13.1
+
+Public stable release. **Same code as `v0.13.1-alpha13`** — this promotion is the docs finalization plus the release tag, per the channel-semantics convention (promotion by re-tagging, a channel change is not new code). Embedded Cogworks-1.0 is `v0.16.0` (MINOR 31); `## Interface` is `120007` (WoW 12.0.7). **Schema 13.**
+
+Since v0.13.0 this line shipped across alpha1–alpha13, all of it corrective:
+
+- **Performance on large accounts (FQ-223, alpha1–alpha2)** — to-do generation moved onto a yielding coroutine and *every* call site rewired to it, the `RefreshTaskSteps` account-inventory walk hoisted into a prebuilt index, `AuctionScanCache` bounded in-session, TSM reconcile and full AH replicate scans made async, sales-log count cap defaulted to 10,000.
+- **The FlippingPal paste crash (FQ-228, alpha3 → alpha10, five builds)** — in order: editbox drain (alpha3), streamed-paste coalescing (alpha4), the fixes landing in a file the client never loads (alpha6, PR #237), and finally the real mechanism — the client re-lays-out the whole editbox on every insert *inside* the paste burst, so the drain has to happen in `OnChar`/`OnTextChanged` gated on `GetNumLetters()`, never on the next frame (alpha10). Plus FQ-242 (connected-realm dedup was O(N²)), FQ-243 (empty `itemKey` collapsed unrelated deals), FQ-244 (second large paste of a session silently did nothing), and the non-terminating drain loop (alpha9).
+- **FQ-240 (alpha8)** — a missed call site from the FQ-223 signature change killed `RefreshTaskSteps`, taking the entire bank chain (pulls, deposits, gold, the popup itself) and the AH-open notice with it, silently, for anyone with a cross-realm list.
+- **FQ-230 (alpha6, PR #236)** — variant gear priced region-wide on every realm: exact-ilvl TSM lookups missed, fell back to region average. Now nearest-ilvl → base item → region average, with `~` provenance marking.
+- **FQ-233 (alpha11)** — bank pulls planned against bag space they did not have; now one bag-sized wave, realm-ordered so a realm finishes.
+- **FQ-238 (alpha11)** — uncached items exported to FlippingPal as `Unknown` with ilvl 0.
+- **FQ-226 (alpha12)** — trapped / stale to-do classification, `/fq cleanup trapped`, schema 13 with a `createdAt` / `lastProgressAt` backfill migration.
+- **FQ-228 follow-up (alpha13)** — generator deal accounting: every imported deal now exits through a counted bucket, shown at generator step 3 and in `/fq state`.
+- **Smaller (alpha3–alpha7)** — FQ-227 (exact-ilvl Auctionator bounds hid real listings; now default off), FQ-229 (sibling variants cleared variant-pinned sell tasks), FQ-221 (Log Out threw `ADDON_ACTION_FORBIDDEN`), FQ-241 (the "Skip deals with no character" checkbox rendered unchecked after every reload), silent inventory right-clicks, copyable `/fq debug realms` / `/fq debug pricing` with commodity detection.
+- **Process** — specs now run in CI on push and PR (Lua 5.1); `test/escapes_spec.lua` catches Lua 5.1's silent invalid-escape drop; nine issues carrying already-shipped fixes were closed off a changelog cross-reference.
+
+F8 was waived by the maintainer on several alphas for tester coverage; the line has since had live tester exposure on alpha8–alpha13. Full engineering detail in the per-alpha sections below.
+
 ## v0.13.1-alpha13
 
 The paste lands now — this is the next question it exposed. Embedded Cogworks-1.0 stays at **`v0.16.0`** (MINOR 31); `## Interface` stays at `120007`. **F8 (in-game smoke test) waived on maintainer direction.**
