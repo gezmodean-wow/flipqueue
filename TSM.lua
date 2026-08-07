@@ -310,14 +310,58 @@ function TSM:GetActiveProfile()
     return ok and profile or nil
 end
 
--- Get the profile name to use (selected or active)
+-- Which profile FlipQueue reads, and why (FQ-217). Returns a table:
+--   effective — the profile actually used for groups / operations (may be nil)
+--   pinned    — the profile the player pinned in settings, "" / nil for "follow TSM"
+--   active    — TSM's own active profile
+--   stale     — the pin names a profile TSM no longer has
+--   diverged  — a live pin that isn't what TSM is currently using
+--
+-- A pin is a deliberate choice and is honoured, but it survives the profile
+-- being renamed or deleted in TSM, at which point every group lookup silently
+-- reads a table that isn't there and the group tree renders empty. That looked
+-- like "FlipQueue shows the wrong profile" because from the outside it is.
+--
+-- Staleness is only concluded from a *non-empty* profile list: TradeSkillMasterDB
+-- isn't populated at every point FQ asks, and treating "TSM told us nothing yet"
+-- as "your profile is gone" would drop a good pin on a load-order accident.
+function TSM:GetProfileState()
+    local pinned = ns.db and ns.db.settings and ns.db.settings.tsmProfile
+    if pinned == "" then pinned = nil end
+    local active = self:GetActiveProfile()
+
+    local stale = false
+    if pinned then
+        local profiles = self:GetProfiles()
+        if #profiles > 0 then
+            stale = true
+            for _, name in ipairs(profiles) do
+                if name == pinned then stale = false break end
+            end
+        end
+    end
+
+    local effective = (pinned and not stale) and pinned or active
+    return {
+        effective = effective,
+        pinned    = pinned,
+        active    = active,
+        stale     = stale,
+        diverged  = (pinned ~= nil) and not stale and (active ~= nil) and (pinned ~= active),
+    }
+end
+
+-- Get the profile name to use (pinned or TSM's active one)
 function TSM:GetSelectedProfile()
     if not self:IsEnabled() then return nil end
-    local selected = ns.db.settings.tsmProfile
-    if selected and selected ~= "" then
-        return selected
+    local state = self:GetProfileState()
+    if state.stale and not self._warnedStaleProfile then
+        self._warnedStaleProfile = true
+        ns:Print((ns.COLORS.YELLOW or "") .. "TSM profile \"" .. tostring(state.pinned)
+            .. "\" no longer exists — using TSM's active profile ("
+            .. (state.active or "none") .. "). Pick a profile again in Settings → TSM.|r")
     end
-    return self:GetActiveProfile()
+    return state.effective
 end
 
 -- Read operations table from TradeSkillMasterDB for a profile

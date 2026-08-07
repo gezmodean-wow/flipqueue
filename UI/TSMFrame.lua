@@ -578,9 +578,10 @@ function UI:RefreshTSMPage()
     -- Profile dropdown
     if tsmWidgets.profileDropdown and ns.TSM:IsAvailable() then
         local profiles = ns.TSM:GetProfiles()
-        local activeProfile = ns.TSM:GetActiveProfile()
+        local state = ns.TSM:GetProfileState()
+        local activeProfile = state.active
         local selectedProfile = ns.db.settings.tsmProfile
-        local effectiveProfile = (selectedProfile and selectedProfile ~= "") and selectedProfile or activeProfile
+        local effectiveProfile = state.effective
 
         local items = {
             {value = "", label = "(Use active profile)"},
@@ -602,9 +603,21 @@ function UI:RefreshTSMPage()
             tsmWidgets.profileDropdown.text:SetText("(Use active profile)")
         end
 
-        -- Profile note
+        -- Profile note. A pin that TSM no longer has is the interesting case
+        -- (FQ-217): FlipQueue falls back to the active profile, and saying so
+        -- here is the difference between "wrong groups" and "your pin is dead".
         if tsmWidgets.profileNote then
-            tsmWidgets.profileNote:SetText("Using: |cffffffff" .. (effectiveProfile or "none") .. "|r")
+            if state.stale then
+                tsmWidgets.profileNote:SetText("|cffff8800\"" .. tostring(state.pinned)
+                    .. "\" no longer exists in TSM — using |cffffffff"
+                    .. (effectiveProfile or "none") .. "|r|cffff8800. Pick a profile again.|r")
+            elseif state.diverged then
+                tsmWidgets.profileNote:SetText("Using: |cffffffff" .. (effectiveProfile or "none")
+                    .. "|r  |cffffff00(pinned — TSM's active profile is "
+                    .. tostring(activeProfile) .. ")|r")
+            else
+                tsmWidgets.profileNote:SetText("Using: |cffffffff" .. (effectiveProfile or "none") .. "|r")
+            end
         end
     end
 
