@@ -54,6 +54,16 @@ Open with the requester: whether a storage character should also be excluded fro
 
 `test/storagerole_spec.lua` (13 assertions) pins both sides at the generator, including the Hidden case as the bug this exists to fix and a control run with the same vault trading normally.
 
+### FQ-248 (#248): "no character on that realm" for realms you have characters on
+
+Second reporter on #228, same symptom (thousands of deals, almost no tasks), different cause — and this time the alpha13 accounting line pointed him confidently in the wrong direction. His `/fq state` shows 17 of 18 characters on `role=buy`, so `FindBestAssignment`'s `realmChars` comes back empty on every realm and every sell deal exits as `noCharacter` / `unassigned`. He has a character on all of them.
+
+`FindBestAssignment` now returns `(nil, reason)` — `"noSeller"` when non-hidden characters exist on the realm but none may sell, `"noCharacter"` otherwise. **Hidden characters deliberately do not count as presence**: the player has said to ignore them, so "no character" is the honest answer there.
+
+`accounting.noSeller` / `noSellerRealms` are a **breakdown, not a bucket** — they re-describe deals the sum already counts, and are excluded from the sum invariant on purpose. `test/storagerole_spec.lua` asserts exactly that, so nobody "completes" the bucket list later and quietly makes the arithmetic lie. The generator prints a second line naming the realms and the actual fix; `/fq state` carries `noSeller=` and a `GENS|` line.
+
+Note the interaction with FQ-245: a storage character is also a non-seller, so the same line fires for a realm whose only character is a vault — which is correct, and is the readout that tells a player their storage-only realm needs a seller.
+
 ### Board
 
 `#151` closed on verification (FQ-223's async sweep covers the auto-generate path it was filed against); `#215` closed as not-actionable (expired attachment, no error text, June test build). Player updates requesting confirmation on the now-stable fixes went to `#228`, `#240`, `#106`, `#210`, `#158`.
