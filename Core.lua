@@ -111,6 +111,80 @@ function ns:PlanPullWave(ops, freeSlots)
     return ops, planned, freeSlots
 end
 
+--------------------------
+-- Commodity Detection
+--------------------------
+
+-- Retail's commodity auction house is REGION-wide: every realm quotes the same
+-- price for a commodity by construction, so a cross-realm "deal" on one can
+-- never carry an edge (FQ-235). TSM ships commodity pricing under
+-- `AUCTIONDB_COMMODITY_DATA` keyed "US"/"EU" rather than per realm, which is
+-- why every realm row for a commodity comes back on the regional-average
+-- fallback — FQ-230's fallback doing its job on an item that can never leave it.
+--
+-- `C_AuctionHouse.GetItemCommodityStatus` is the authority, but it answers
+-- Unknown until the client has loaded that item's AH data at least once, which
+-- for a player who hasn't opened the auction house this session is every item.
+-- Max stack size is the standing proxy: in retail, stackable and commodity are
+-- the same set. Answers are cached per item ID for the session, and an API
+-- answer overwrites a stack-derived one but never the reverse — a wrong guess
+-- must be correctable the moment the client knows better.
+local commodityCache = {}   -- [itemID] = { commodity = bool, fromAPI = bool }
+
+function ns:IsCommodity(itemID)
+    local numID = tonumber(itemID)
+    if not numID then return false end
+
+    local cached = commodityCache[numID]
+    if cached and cached.fromAPI then return cached.commodity end
+
+    if C_AuctionHouse and C_AuctionHouse.GetItemCommodityStatus and Enum and Enum.ItemCommodityStatus then
+        local ok, status = pcall(C_AuctionHouse.GetItemCommodityStatus, numID)
+        if ok and status == Enum.ItemCommodityStatus.Commodity then
+            commodityCache[numID] = { commodity = true, fromAPI = true }
+            return true
+        elseif ok and status == Enum.ItemCommodityStatus.Item then
+            commodityCache[numID] = { commodity = false, fromAPI = true }
+            return false
+        end
+    end
+
+    if cached then return cached.commodity end
+
+    if C_Item and C_Item.GetItemMaxStackSizeByID then
+        local ok2, maxStack = pcall(C_Item.GetItemMaxStackSizeByID, numID)
+        if ok2 and maxStack then
+            local guess = maxStack > 1
+            commodityCache[numID] = { commodity = guess, fromAPI = false }
+            return guess
+        end
+    end
+
+    -- Nothing knows yet. Deliberately not cached: an item the client hasn't
+    -- loaded will answer properly on a later call, and caching "false" here
+    -- would pin the wrong answer for the session.
+    return false
+end
+
+-- Split a Deal Finder item pool into the items worth scanning cross-realm and
+-- the commodities that can't be. Returns (kept, hidden) — `hidden` is a count,
+-- because the only thing the player needs from it is "N region-wide items were
+-- left out", and a silent filter is how a player concludes their items vanished.
+function ns:FilterPoolCommodities(pool)
+    if not pool then return pool, 0 end
+    local kept, hidden = {}, 0
+    for _, item in ipairs(pool) do
+        local numID = tonumber(item.itemID)
+            or (item.itemKey and tonumber(item.itemKey:match("^(%d+)")))
+        if numID and ns:IsCommodity(numID) then
+            hidden = hidden + 1
+        else
+            kept[#kept + 1] = item
+        end
+    end
+    return kept, hidden
+end
+
 -- Colors
 ns.COLORS = {
     YELLOW  = "|cffffff00",

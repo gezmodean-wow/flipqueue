@@ -192,29 +192,12 @@ local DURATION_HOURS = { [1] = 12, [2] = 24, [3] = 48 }
 -- Commodity Detection
 --------------------------
 
+-- Delegates to ns:IsCommodity (Core.lua). Same API-then-stack-size logic this
+-- function has always used, now shared with the Deal Finder commodity filter
+-- (FQ-235) and cached per item ID, so posting and deal-finding can't disagree
+-- about what a commodity is.
 function AuctionPost:IsCommodity(itemID)
-    local numID = tonumber(itemID)
-    if not numID then return false end
-
-    -- Primary: use the AH API
-    if C_AuctionHouse and C_AuctionHouse.GetItemCommodityStatus then
-        local ok, status = pcall(C_AuctionHouse.GetItemCommodityStatus, numID)
-        if ok and status == Enum.ItemCommodityStatus.Commodity then
-            return true
-        elseif ok and status == Enum.ItemCommodityStatus.Item then
-            return false
-        end
-    end
-
-    -- Fallback for Unknown status: check if item is stackable (max stack > 1)
-    if C_Item and C_Item.GetItemMaxStackSizeByID then
-        local ok2, maxStack = pcall(C_Item.GetItemMaxStackSizeByID, numID)
-        if ok2 and maxStack and maxStack > 1 then
-            return true
-        end
-    end
-
-    return false
+    return ns:IsCommodity(itemID)
 end
 
 --------------------------

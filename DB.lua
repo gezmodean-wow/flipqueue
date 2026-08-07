@@ -307,6 +307,11 @@ function ns:InitDB()
     -- (demote the posted realm so a clean one wins; #205). Default on: matches
     -- the behavior players already expect from the inventory analysis.
     if db.settings.dfAvoidPostedRealms == nil then db.settings.dfAvoidPostedRealms = true end
+    -- Keep commodities out of the cross-realm scan (FQ-235). They trade on a
+    -- region-wide auction house, so every realm quotes the same price and no
+    -- cross-realm edge exists. Default on: an item that cannot pay is noise in
+    -- a list whose entire purpose is items that can.
+    if db.settings.dfExcludeCommodities == nil then db.settings.dfExcludeCommodities = true end
     db.settings.dfPriorityOrder = db.settings.dfPriorityOrder or {"profit", "noCompetition", "previousSales"}
     -- Skip deals that have no matching character (suppress "create character" tasks)
     if db.settings.skipUnassigned == nil then db.settings.skipUnassigned = false end
