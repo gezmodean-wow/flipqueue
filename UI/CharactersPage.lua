@@ -11,7 +11,10 @@ local RefreshCharactersTable
 -- CHARACTER ROLE HELPERS
 -- ==========================================
 
-local ROLE_CYCLE = { both = "sell", sell = "buy", buy = "none", none = "both" }
+-- Storage sits between "buy" and "none" in the cycle deliberately (FQ-245):
+-- it is the last stop before hiding a character, and it is what most people
+-- reaching for "Hidden" actually wanted — no work, but still my stuff.
+local ROLE_CYCLE = { both = "sell", sell = "buy", buy = "storage", storage = "none", none = "both" }
 
 local function CycleRole(current)
     return ROLE_CYCLE[current] or "both"
@@ -20,6 +23,7 @@ end
 local function FormatRoleLabel(role)
     if role == "sell" then return "|cffffaa00Sell Only|r"
     elseif role == "buy" then return "|cff00aaffBuy Only|r"
+    elseif role == "storage" then return "|cffcc88ffStorage|r"
     elseif role == "none" then return "|cff666666Hidden|r"
     else return "|cff00ff00Both|r"
     end
@@ -28,6 +32,7 @@ end
 local function FormatRoleDesc(role)
     if role == "sell" then return "Sell and deposit tasks only"
     elseif role == "buy" then return "Buy and deposit tasks only"
+    elseif role == "storage" then return "Holds stock; never posts or buys"
     elseif role == "none" then return "Skipped for task routing"
     else return "Buy, sell, and deposit tasks"
     end
@@ -305,6 +310,8 @@ local function BuildCharactersData()
             table.insert(statusParts, "|cffffaa00Sell|r")
         elseif charRole == "buy" then
             table.insert(statusParts, "|cff00aaffBuy|r")
+        elseif charRole == "storage" then
+            table.insert(statusParts, "|cffcc88ffStorage|r")
         else
             table.insert(statusParts, "|cff00ff00Both|r")
         end
@@ -360,7 +367,10 @@ local function BuildCharactersData()
             _tooltipExtra = string.format(
                 "Gold: %s\nRole: %s\n%d queue tasks%s\nStatus: %s%s\n\nClick to configure\nShift+Right-click: move up\nCtrl+Right-click: move down",
                 goldStr,
-                charRole == "sell" and "Sell Only" or (charRole == "buy" and "Buy Only" or (isHidden and "Hidden" or "Both")),
+                charRole == "sell" and "Sell Only"
+                    or (charRole == "buy" and "Buy Only"
+                    or (charRole == "storage" and "Storage (holds stock, no tasks)"
+                    or (isHidden and "Hidden" or "Both"))),
                 #tasks,
                 auctionInfo and ("\n" .. auctionInfo.active .. " active, " .. auctionInfo.done .. " done auction(s)") or "",
                 isHidden and "Hidden" or (charCluster[charKey] and "Shared AH" or "Active"),
@@ -901,7 +911,11 @@ local function ShowConfigPanel(charKey)
         configWidgets.roleBtn.text:SetText(FormatRoleLabel(newRole))
         configWidgets.roleDesc:SetText(FormatRoleDesc(newRole))
         if newRole == "none" then
-            ns:Print("Hidden character: " .. charKey .. " (will be skipped for task routing)")
+            ns:Print("Hidden character: " .. charKey .. " (skipped for task routing, "
+                .. "and its items no longer count as stock you own)")
+        elseif newRole == "storage" then
+            ns:Print("Storage character: " .. charKey .. " (holds stock and can hand it over, "
+                .. "but is never given a posting or buying task)")
         else
             local roleNames = { both = "Both", sell = "Sell Only", buy = "Buy Only" }
             ns:Print("Set role for " .. charKey .. ": " .. (roleNames[newRole] or newRole))

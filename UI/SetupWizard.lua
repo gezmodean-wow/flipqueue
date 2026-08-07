@@ -247,8 +247,9 @@ local function BuildSteps()
                         "\194\183 Set a character role — " ..
                         ns.COLORS.WHITE .. "Both|r (buy and sell), " ..
                         ns.COLORS.YELLOW .. "Sell Only|r, " ..
-                        ns.COLORS.BLUE .. "Buy Only|r, or " ..
-                        ns.COLORS.GRAY .. "Hidden|r (skipped)\n" ..
+                        ns.COLORS.BLUE .. "Buy Only|r, " ..
+                        "|cffcc88ffStorage|r (holds your stock, never gets tasks), or " ..
+                        ns.COLORS.GRAY .. "Hidden|r (skipped entirely)\n" ..
                         "\194\183 Choose which bank tabs FlipQueue should use",
             },
         },

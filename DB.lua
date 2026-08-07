@@ -774,7 +774,20 @@ end
 -- Character Roles
 --------------------------
 
--- Role values: "both" (default), "sell", "buy", "none" (hidden)
+-- Role values: "both" (default), "sell", "buy", "storage", "none" (hidden)
+--
+-- "storage" (FQ-245) is the character that holds stock and never trades: its
+-- inventory counts towards what the account owns, it can be the source of a
+-- pull and the character asked to hand something over, but it is never given a
+-- posting or buying task of its own. Before it existed the only way to say
+-- "don't give this character work" was "none", which also removed its bags and
+-- bank from the account's inventory — so FlipQueue would report an item as
+-- nowhere on the account while it sat in the storage character's bank.
+--
+-- Every gate in the codebase is written as either `role ~= "none"` (does this
+-- character's inventory count) or `role == "both" or role == "sell"` (may this
+-- character be given work). Storage falls out of both correctly by
+-- construction; the helpers below are the ones that name it.
 
 function ns:GetCharRole(charKey)
     local charData = ns.db and ns.db.characters and ns.db.characters[charKey]
@@ -798,6 +811,18 @@ end
 function ns:CharCanBuy(charKey)
     local role = self:GetCharRole(charKey)
     return role == "both" or role == "buy"
+end
+
+-- Does this character's inventory count as part of the account's stock? True
+-- for everything except "none" — including storage characters, which is the
+-- entire point of them.
+function ns:CharHoldsStock(charKey)
+    return self:GetCharRole(charKey) ~= "none"
+end
+
+-- Storage characters hold and hand over; they are never given trading work.
+function ns:CharIsStorage(charKey)
+    return self:GetCharRole(charKey) == "storage"
 end
 
 function ns:IsCharHidden(charKey)
