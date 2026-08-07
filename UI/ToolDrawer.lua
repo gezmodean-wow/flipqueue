@@ -410,7 +410,7 @@ local function OpenRollout(tool, anchorBtn)
 
         -- Secure dispatch -- cannot be set during combat lockdown.
         if not (InCombatLockdown and InCombatLockdown()) then
-            TR:ApplySecureDispatch(row, e.dispatchKind, e.dispatchName)
+            TR:ApplySecureDispatch(row, e.dispatchKind, e.dispatchValue or e.dispatchName)
         end
 
         row:Show()
@@ -791,7 +791,7 @@ function UI:RefreshToolDrawer()
                 TR:ApplySecureDispatch(btn, "macrotext", tool.macrotext)
             elseif tool.type == "service"
                    and (res.state == "ready" or res.state == "cooldown") then
-                TR:ApplySecureDispatch(btn, res.dispatchKind, res.dispatchName)
+                TR:ApplySecureDispatch(btn, res.dispatchKind, res.dispatchValue or res.dispatchName)
             else
                 TR:ApplySecureDispatch(btn, nil, nil)
             end
