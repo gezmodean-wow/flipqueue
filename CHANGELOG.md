@@ -1,5 +1,63 @@
 # Changelog
 
+## v0.13.2-alpha1
+
+First alpha on the v0.13.2 line. Four fixes and one feature off the improvement backlog, opened straight after promoting v0.13.1 to stable. Embedded Cogworks-1.0 stays at **`v0.16.0`** (MINOR 31); `## Interface` stays at `120007`. **Schema stays at 13** — no migration.
+
+### FQ-235 (#235): commodities offered as cross-realm deals
+
+Commodities trade on a region-wide auction house, so every realm quotes the same price by construction and a cross-realm "deal" on one is an invitation to mail ore across the account for nothing. TSM ships commodity pricing under `AUCTIONDB_COMMODITY_DATA` keyed `"US"` / `"EU"` rather than per realm, so `TSMRealms` never has a per-realm hit for one and every realm row came back on the FQ-230 regional-average fallback — the fallback working exactly as designed on an item that can never leave it.
+
+`ns:IsCommodity` (`Core.lua`) is now the one answer: `C_AuctionHouse.GetItemCommodityStatus` first, max stack size as the proxy for the Unknown it returns until the client has loaded that item's AH data, cached per item ID. An API answer overwrites a stack-derived one and never the reverse, and **an Unknown is deliberately not cached** — pinning ignorance would hide real deals for the rest of the session, which is the same defect inverted. `AuctionPost:IsCommodity` (four call sites) now delegates, so posting and deal-finding cannot disagree about what a commodity is.
+
+`ns:FilterPoolCommodities` returns `(kept, hidden)`. The Deal Finder applies it at both pool-build sites behind `dfExcludeCommodities` (default on), shows the hidden count in the inventory preview line, and prints an explanation rather than "No tradeable items" when the pool empties *because* all of it was region-wide.
+
+Out of scope, deliberately: the buy side reads imported FlippingPal deals rather than this pool, and dropping a player's own imported data is a different decision from filtering our own suggestions.
+
+`test/commodity_spec.lua` (26 assertions).
+
+### FQ-217 (#217): the pinned TSM profile was never revalidated
+
+`GetSelectedProfile` returned `db.settings.tsmProfile` whenever it was non-empty and nothing ever checked it still existed. A profile renamed or deleted inside TSM left every `GetGroupsDB` / `GetItemsDB` lookup reading a key that isn't there, and `TSMGroupTree:Refresh` returned silently on the nil — an empty tree, with nothing on screen naming the profile it had tried.
+
+`TSM:GetProfileState` is the new single answer: `effective` / `pinned` / `active` / `stale` / `diverged`. **Staleness is only concluded from a non-empty profile list** — `TradeSkillMasterDB` is not populated at every point FQ asks, and reading silence as "your profile is gone" would drop a good pin on a load-order accident. `GetSelectedProfile` falls back to active on a dead pin and says so once per session.
+
+The group tree gained a header naming the profile it rendered (and flagging a live pin that isn't what TSM is using), plus an explicit `Profile "X" has no TSM groups` state. The settings note distinguishes the dead pin from the deliberate divergence.
+
+`test/tsmprofile_spec.lua` (23 assertions).
+
+### FQ-219 (#219): toys were dispatched as bag items
+
+A toy summon method was armed as `type = "item"` with the toy's name, which the secure handler resolves against your bags. A learned toy lives in the toy box, so the click resolved to nothing. The only visible response was the rollout the *hover* had already opened — hence "clicking opens the method menu instead of triggering the action". The menu was never the response; it was the absence of one.
+
+`ApplySecureDispatch` grows a `"toy"` kind (`type = toy` + the numeric toy ID, the pattern retail addons use) and now clears the `toy` attribute on every call, so a pooled button can't fire the previous method. `EvalMethod` separates `dispatchValue` (what the secure attribute receives — an ID for toys, a name otherwise) from `dispatchName` (what the player is shown), which also keeps the localized toy name on the rollout row where a German client needs it.
+
+`test/tooldispatch_spec.lua` (28 assertions).
+
+### FQ-177 (#177): the price source is now pointed at from where the wrong price shows
+
+Maintainer decision this round: **leave the default on Listing** rather than move every existing install, and close the gap that actually hurt — nothing on screen connected the inflated number to the setting that changes it.
+
+`ns:FPPriceInflation(itemKey, priceStr)` compares against `DBRegionMarketAvg` at the same 10× threshold the `auto` source clamps at, so "why is this flagged" and "what would the setting do" have one answer. `ns:CountInflatedTasks` runs it over a list and keeps the worst as the example.
+
+**Counted over tasks, never over imported deals.** A big import is thousands of deals and one TSM lookup each would land straight back on the hot generation path FQ-223 spent a release clearing; the surviving tasks are the only prices the player is ever shown. Surfaced at generator step 3 under the accounting line, as an orange marker plus tooltip on the to-do row, and in a settings description that explains each source instead of naming it.
+
+`test/priceinflation_spec.lua` (21 assertions), most of them on the cases where the helper must decline to have an opinion.
+
+### FQ-245 (#245): storage-only characters
+
+The only way to say "never give this character work" was Hidden, which also removed its bags and bank from the account inventory — so FlipQueue would report an item as nowhere on the account while it sat in a storage character's bank.
+
+**No gate needed rewriting.** Every role check is already one of two shapes — `role ~= "none"` (does this stock count) or `role == "both" or role == "sell"` (may this character be given work) — so `storage` falls out correctly on both sides by construction. What landed is the value, `ns:CharHoldsStock` / `ns:CharIsStorage`, and the surfaces: role cycle, status column, row tooltip, confirmation line, setup wizard. Storage sits between Buy Only and Hidden in the cycle deliberately — it is what most people reaching for Hidden actually wanted.
+
+Open with the requester: whether a storage character should also be excluded from deposit-to-warbank work. It is included today, which is what makes the stock reachable.
+
+`test/storagerole_spec.lua` (13 assertions) pins both sides at the generator, including the Hidden case as the bug this exists to fix and a control run with the same vault trading normally.
+
+### Board
+
+`#151` closed on verification (FQ-223's async sweep covers the auto-generate path it was filed against); `#215` closed as not-actionable (expired attachment, no error text, June test build). Player updates requesting confirmation on the now-stable fixes went to `#228`, `#240`, `#106`, `#210`, `#158`.
+
 ## v0.13.1
 
 Public stable release. **Same code as `v0.13.1-alpha13`** — this promotion is the docs finalization plus the release tag, per the channel-semantics convention (promotion by re-tagging, a channel change is not new code). Embedded Cogworks-1.0 is `v0.16.0` (MINOR 31); `## Interface` is `120007` (WoW 12.0.7). **Schema 13.**
