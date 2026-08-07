@@ -2,7 +2,7 @@
 
 ## v0.13.2-alpha1
 
-First alpha on the v0.13.2 line. Four fixes and one feature off the improvement backlog, opened straight after promoting v0.13.1 to stable. Embedded Cogworks-1.0 stays at **`v0.16.0`** (MINOR 31); `## Interface` stays at `120007`. **Schema stays at 13** — no migration.
+First alpha on the v0.13.2 line. Four fixes and one feature off the improvement backlog, opened straight after promoting v0.13.1 to stable, plus one defect (FQ-248) filed from a reporter's dump the same day. Embedded Cogworks-1.0 stays at **`v0.16.0`** (MINOR 31); `## Interface` stays at `120007`. **Schema stays at 13** — no migration. **F8 (in-game smoke test) waived on maintainer direction** — shipped for tester coverage, on the strength of six spec files and 133 new assertions.
 
 ### FQ-235 (#235): commodities offered as cross-realm deals
 
