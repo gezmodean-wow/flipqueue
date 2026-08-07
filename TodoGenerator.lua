@@ -381,25 +381,42 @@ local function FindPoolMatch(pool, deal, poolRemaining)
 end
 
 -- Find best character + source to post an item on a target realm.
--- Returns { charKey, location, quantity } or nil.
+-- Returns { charKey, location, quantity }, or nil plus a reason:
+--   "noCharacter" — nothing of yours is on that realm at all
+--   "noSeller"    — you have characters there, but none of them may sell
+--
+-- The two used to be one answer, and telling a player "no character on that
+-- realm" about a realm they are standing on is worse than saying nothing: it
+-- reads as a broken addon rather than a role that needs changing. A player
+-- whose bank alts are all set to Buy Only gets that answer for every deal they
+-- import (FQ-248).
 local function FindBestAssignment(poolItem, targetRealm, inventory)
-    if not targetRealm or targetRealm == "" then return nil end
+    if not targetRealm or targetRealm == "" then return nil, "noCharacter" end
 
     local PRIORITY = { bags = 1, reagent = 2, bank = 3, warbank = 4, guildbank = 5 }
 
     -- Characters on the target realm with sell capability
     local realmChars = {}
+    local anyCharOnRealm = false
     for charKey, charData in pairs(inventory or {}) do
         local charRealm = charKey:match("%-(.+)$")
         if charRealm and ns:RealmMatches(targetRealm, charRealm) then
             local role = type(charData) == "table" and (charData.role or "both") or "both"
-            if (role == "both" or role == "sell") and not ns:IsPhantomChar(charKey) then
-                table.insert(realmChars, charKey)
+            if not ns:IsPhantomChar(charKey) then
+                -- Hidden characters don't count as "you have someone there":
+                -- the player has said to ignore them, so the honest answer for
+                -- a realm with nothing but hidden characters is "no character".
+                if role ~= "none" then anyCharOnRealm = true end
+                if role == "both" or role == "sell" then
+                    table.insert(realmChars, charKey)
+                end
             end
         end
     end
 
-    if #realmChars == 0 then return nil end
+    if #realmChars == 0 then
+        return nil, (anyCharOnRealm and "noSeller" or "noCharacter")
+    end
     table.sort(realmChars) -- deterministic ordering
 
     -- Collect candidates
@@ -816,6 +833,12 @@ function TodoList:GenerateTodoList(source, allocationOrder, opts)
             noCharacter = 0, notOwned = 0, noStock = 0, tsmRejected = 0,
             warbankFull = 0, noQuantity = 0, flipSkipped = 0, other = 0,
             noCharacterRealms = {},
+            -- BREAKDOWN, not a bucket: `noSeller` re-describes deals already
+            -- counted under noCharacter/unassigned — the realm has characters
+            -- of yours on it, but none of them may sell (FQ-248). It is
+            -- deliberately left out of the sum invariant; adding it there would
+            -- double-count the same deal and make the arithmetic lie.
+            noSeller = 0, noSellerRealms = {},
         },
     }
 
@@ -1015,12 +1038,13 @@ function TodoList:GenerateTodoList(source, allocationOrder, opts)
 
         if poolIdx then
             local poolItem = pool[poolIdx]
-            local assignment = FindBestAssignment(
+            local assignment, noAssignReason = FindBestAssignment(
                 poolItem, deal.targetRealm, ns.db.characters)
 
             if debugGen and not assignment then
                 ns:PrintDebug("  NO ASSIGNMENT: " .. (deal.name or "?") ..
-                    " realm=" .. (deal.targetRealm or "?") .. " (no chars on realm)")
+                    " realm=" .. (deal.targetRealm or "?") ..
+                    " (" .. (noAssignReason or "no chars on realm") .. ")")
             end
 
             if assignment and assignment.location then
@@ -1213,6 +1237,14 @@ function TodoList:GenerateTodoList(source, allocationOrder, opts)
                 local realmLabel = deal.targetRealm or "?"
                 acct.noCharacterRealms[realmLabel] =
                     (acct.noCharacterRealms[realmLabel] or 0) + 1
+                -- Counted separately from the realms you have nobody on: this
+                -- one is a role away from working, and the fix is a click on
+                -- the Characters page rather than a new character (FQ-248).
+                if noAssignReason == "noSeller" then
+                    acct.noSeller = acct.noSeller + 1
+                    acct.noSellerRealms[realmLabel] =
+                        (acct.noSellerRealms[realmLabel] or 0) + 1
+                end
                 if ns.db.settings.skipUnassigned then
                     -- Dropped outright by the "skip deals with no character"
                     -- setting. This is the quietest exit of the lot and, for a

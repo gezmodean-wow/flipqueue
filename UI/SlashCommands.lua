@@ -460,9 +460,21 @@ local function cmdState()
             .. "|noChar=" .. V(ga.noCharacter) .. "|notOwned=" .. V(ga.notOwned)
             .. "|noStock=" .. V(ga.noStock) .. "|tsmRej=" .. V(ga.tsmRejected)
             .. "|wbFull=" .. V(ga.warbankFull) .. "|noQty=" .. V(ga.noQuantity)
-            .. "|flipSkip=" .. V(ga.flipSkipped) .. "|other=" .. V(ga.other))
+            .. "|flipSkip=" .. V(ga.flipSkipped) .. "|other=" .. V(ga.other)
+            .. "|noSeller=" .. V(ga.noSeller))
         if #realms > 0 then
             L("GENR|" .. table.concat(realms, "|"))
+        end
+        -- Realms the player HAS a character on that still can't take the sale
+        -- (FQ-248). Separate line: it re-describes deals GENR already lists, and
+        -- it is the one that points at a role rather than a missing character.
+        local nsRealms = {}
+        for realm, n in pairs(ga.noSellerRealms or {}) do
+            nsRealms[#nsRealms + 1] = realm .. "=" .. n
+        end
+        table.sort(nsRealms)
+        if #nsRealms > 0 then
+            L("GENS|" .. table.concat(nsRealms, "|"))
         end
     else
         L("GEN|none")

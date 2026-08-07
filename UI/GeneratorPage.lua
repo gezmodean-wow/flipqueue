@@ -3012,6 +3012,9 @@ function UI:RefreshGeneratorPage(pending)
                     bits[#bits + 1] = (color or ns.COLORS.GRAY) .. count .. " " .. label .. "|r"
                 end
             end
+            -- noSeller re-describes deals already counted in the two lines
+            -- below, so it is shown as its own sentence rather than as a
+            -- bucket in the list — see the accounting table's comment.
             Add(acct.noCharacter, "no character on that realm", ns.COLORS.ORANGE)
             Add(acct.unassigned, "awaiting a new character", ns.COLORS.YELLOW)
             Add(acct.notOwned, "item not in your inventory")
@@ -3027,9 +3030,23 @@ function UI:RefreshGeneratorPage(pending)
             if #bits > 0 then
                 line = line .. ns.COLORS.GRAY .. ";  |r" .. table.concat(bits, ns.COLORS.GRAY .. ",  |r")
             end
+            if (acct.noSeller or 0) > 0 then
+                local realms, n = {}, 0
+                for realm in pairs(acct.noSellerRealms or {}) do
+                    n = n + 1
+                    if n <= 3 then realms[#realms + 1] = realm end
+                end
+                local realmBit = table.concat(realms, ", ")
+                if n > 3 then realmBit = realmBit .. " and " .. (n - 3) .. " more" end
+                line = line .. "\n" .. ns.COLORS.ORANGE .. "! " .. acct.noSeller
+                    .. " of those are realms you DO have a character on, but none set to sell"
+                    .. (realmBit ~= "" and (" (" .. realmBit .. ")") or "")
+                    .. " — set the role to Sell or Both on the Characters page|r"
+            end
             s3.dealAccounting:SetText(line)
             s3.dealAccounting:Show()
             rightY = rightY - 14
+            if (acct.noSeller or 0) > 0 then rightY = rightY - 14 end
         else
             s3.dealAccounting:SetText("")
             s3.dealAccounting:Hide()
