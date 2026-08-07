@@ -146,6 +146,35 @@ local _, drBuy = Generate({ D(1001, "Thorium Helm", "Draenor") }, "buy")
 check("a buy-only character is not given a sell task", drBuy.tasks, 0)
 
 --------------------------
+-- "No character there" vs "nobody there may sell" (FQ-248)
+--------------------------
+
+-- A player whose bank alts are all Buy Only gets no tasks at all, and the only
+-- explanation FlipQueue had was "no character on that realm" — about realms he
+-- is standing on. That reads as a broken addon rather than a role to change.
+
+local _, buyOnly = Generate({ D(1001, "Thorium Helm", "Draenor") }, "buy")
+check("a buy-only character on the realm is flagged as noSeller", buyOnly.noSeller, 1)
+check("...and the realm is named", buyOnly.noSellerRealms["Draenor"], 1)
+
+local _, storageOnly = Generate({ D(1001, "Thorium Helm", "Draenor") }, "storage")
+check("a storage character counts as noSeller too", storageOnly.noSeller, 1)
+
+-- Hidden is different: the player has said to ignore that character, so
+-- "no character on that realm" is the honest answer and noSeller must stay 0.
+local _, hidden = Generate({ D(1001, "Thorium Helm", "Draenor") }, "none")
+check("a hidden character does not make it a role problem", hidden.noSeller, 0)
+
+-- A realm with nobody on it at all is likewise not a role problem.
+local _, elsewhere = Generate({ D(1001, "Thorium Helm", "Ravencrest") }, "storage")
+check("an unknown realm is not noSeller", elsewhere.noSeller, 0)
+check("...and no realm is named", next(elsewhere.noSellerRealms), nil)
+
+-- And a seller on the realm produces no flag at all.
+local _, seller = Generate({ D(1001, "Thorium Helm", "Draenor") }, "both")
+check("a seller on the realm clears the flag", seller.noSeller, 0)
+
+--------------------------
 -- Arithmetic still closes
 --------------------------
 
@@ -162,6 +191,16 @@ local _, mixed = Generate({
 }, "storage")
 check("every deal is accounted for", SumBuckets(mixed), mixed.total)
 check("three deals in", mixed.total, 3)
+
+-- noSeller re-describes deals the sum already counts, so it must NOT be added
+-- to it. This is the assertion that stops someone "completing" the bucket list
+-- later and quietly making the arithmetic lie.
+local _, roleMixed = Generate({
+    D(1001, "Thorium Helm", "Sargeras"),
+    D(1001, "Thorium Helm", "Draenor"),
+}, "buy")
+check("noSeller is a breakdown, not a bucket", SumBuckets(roleMixed), roleMixed.total)
+check("...and it still counted the role case", roleMixed.noSeller, 1)
 
 print(string.format("storagerole_spec: %d passed, %d failed", passed, failed))
 if failed > 0 then os.exit(1) end
