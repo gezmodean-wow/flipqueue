@@ -1321,6 +1321,13 @@ function UI:RefreshGeneratorPage(pending)
         s3.dealAccounting:SetJustifyH("LEFT")
         s3.dealAccounting:SetText("")
 
+        -- Prices that run away from TSM's market data (FQ-177). The setting
+        -- that fixes it has existed since v0.13.0 and nothing ever pointed at
+        -- it from the screen where the wrong number appears.
+        s3.priceWarning = s3:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+        s3.priceWarning:SetJustifyH("LEFT")
+        s3.priceWarning:SetText("")
+
         -- Divider between controls and generated list
         s3.listDivider = s3:CreateTexture(nil, "ARTWORK")
         s3.listDivider:SetHeight(1)
@@ -3026,6 +3033,34 @@ function UI:RefreshGeneratorPage(pending)
         else
             s3.dealAccounting:SetText("")
             s3.dealAccounting:Hide()
+        end
+
+        -- Price-inflation notice. Counted over the generated tasks rather than
+        -- the imported deals: a big import is thousands of deals and one TSM
+        -- lookup each would sit on the hot path, while these are the only
+        -- prices the player is ever shown.
+        s3.priceWarning:ClearAllPoints()
+        s3.priceWarning:SetPoint("TOPLEFT", s3, "TOPLEFT", 6, rightY)
+        local inflated, worst = 0, nil
+        if previewSource and previewSource.items and ns.CountInflatedTasks then
+            inflated, worst = ns:CountInflatedTasks(previewSource.items)
+        end
+        if inflated > 0 then
+            local line = ns.COLORS.ORANGE .. "! " .. inflated .. " task(s) priced more than "
+                .. ns.FP_PRICE_INFLATION_THRESHOLD .. "x above TSM's regional average|r"
+            if worst and worst.name then
+                line = line .. ns.COLORS.GRAY .. " — e.g. " .. worst.name .. " at "
+                    .. (worst.price or "?") .. " vs " .. ns:FormatGold(math.floor(worst.tsmGold * 10000))
+                    .. "|r"
+            end
+            line = line .. ns.COLORS.GRAY
+                .. "   Settings -> Imports -> FlippingPal price source|r"
+            s3.priceWarning:SetText(line)
+            s3.priceWarning:Show()
+            rightY = rightY - 14
+        else
+            s3.priceWarning:SetText("")
+            s3.priceWarning:Hide()
         end
 
         -- Divider

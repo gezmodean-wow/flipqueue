@@ -1869,6 +1869,56 @@ end
 -- price string to feed into the task's expectedPrice based on the user's
 -- fpPriceSource setting (Settings → Imports). Falls back to Listing whenever
 -- the chosen path is missing data so tasks are never priceless.
+-- How far above TSM's regional market a price sits (FQ-177). Returns
+-- (ratio, tsmGold) or nil when there is nothing to compare against — no TSM,
+-- no data for the item, or an unparseable price.
+--
+-- Same 10× threshold the "auto" price source clamps at, deliberately: the
+-- number the player is shown here is the number that setting would have acted
+-- on, so "why is this flagged" and "what would the setting do" have one answer.
+--
+-- This runs over TASKS, not over imported deals. A big import is thousands of
+-- deals and one TSM lookup each would land on the hot generation path FQ-223
+-- spent a release clearing; the tasks that survive are a couple of hundred at
+-- worst, and they are the only prices the player is ever shown.
+ns.FP_PRICE_INFLATION_THRESHOLD = 10
+
+function ns:FPPriceInflation(itemKey, priceStr)
+    if not itemKey or itemKey == "" or not priceStr or priceStr == "" then return nil end
+    if not (ns.TSM and ns.TSM.IsEnabled and ns.TSM:IsEnabled() and ns.TSM.GetPrice) then
+        return nil
+    end
+    local gold = ns:ParseGoldValue(priceStr)
+    if not gold or gold <= 0 then return nil end
+    local tsmCopper = ns.TSM:GetPrice(itemKey, "DBRegionMarketAvg")
+    if not tsmCopper or tsmCopper <= 0 then return nil end
+    local tsmGold = tsmCopper / 10000
+    return gold / tsmGold, tsmGold
+end
+
+-- Count the tasks in a list whose price runs away from TSM's data, and keep the
+-- worst one as the example — an abstract count moves nobody, "113,190g against
+-- a 551g regional average" is the whole argument for changing the setting.
+-- Accepts either shape the codebase carries: a committed list's tasks (each a
+-- { item = {...} } wrapper) or a generator preview's flat item entries.
+function ns:CountInflatedTasks(tasks)
+    local count, worst = 0, nil
+    for _, t in ipairs(tasks or {}) do
+        local it = t.item or t
+        if it.action ~= "buy" then
+            local ratio, tsmGold = ns:FPPriceInflation(it.itemKey, it.expectedPrice)
+            if ratio and ratio > ns.FP_PRICE_INFLATION_THRESHOLD then
+                count = count + 1
+                if not worst or ratio > worst.ratio then
+                    worst = { ratio = ratio, tsmGold = tsmGold,
+                              name = it.name, price = it.expectedPrice }
+                end
+            end
+        end
+    end
+    return count, worst
+end
+
 function ns:ResolveFPPrice(deal)
     if not deal then return "" end
     local listing = deal.expectedPrice or ""
