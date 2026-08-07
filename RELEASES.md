@@ -6,6 +6,16 @@ The engineering-detail companion lives in `CHANGELOG.md` (commit-readerese — f
 
 ---
 
+## v0.13.2-alpha1
+
+The first build after v0.13.1 went stable — four fixes and one new setting, all from things players asked for.
+
+- **Deal Finder no longer offers you crafting materials as cross-realm deals.** Materials, potions, ore, herbs and anything else that stacks trade on a single *region-wide* auction house, so the price is identical on every realm and there is no profit in moving them. They were filling the scan with items that could never pay, and every realm row for them showed the same number — which looked like a pricing bug and wasn't. They're now left out, the inventory preview tells you how many were skipped, and there's a **"Hide region-wide items"** checkbox in the Deal Finder options if you want to scan them anyway.
+- **A mailbox toy in the Tools drawer works when you click it.** With a toy chosen as the summon method, clicking the tool did nothing at all — the only thing that appeared was the method menu the hover had already opened, which is why it looked like the click was opening a menu. Toys were being used as if they were sitting in your bags; a learned toy lives in the toy box, so nothing happened.
+- **FlipQueue notices when your pinned TSM profile no longer exists.** If you picked a TSM profile in FlipQueue's settings and later renamed or deleted it in TSM, FlipQueue kept asking for the old one — so the group tree came up empty with nothing to explain why. It now falls back to whichever profile TSM is actually using and tells you once. The group list also names the profile it's showing you at the top, and says so plainly when that profile simply has no groups in it.
+- **Wildly inflated expected prices now point you at the setting that fixes them.** FlippingPal's "Listing" column is an aggressive recommendation and on thin items it can land a hundred times over what the item really fetches. There has been a setting to use a more conservative column since v0.13.0 — but nothing on screen connected the silly number to it. To-do rows whose price is more than 10× TSM's regional average now carry an orange **!** with the comparison in the tooltip, the generator says how many tasks are affected with the worst one as an example, and both point at **Settings → Imports → FlippingPal price source**. Nothing about your prices changed in this build; what changed is that FlipQueue now tells you when they look wrong and what to do about it.
+- **New: storage-only characters.** Set a character's role to **Storage** on the Characters page and it holds your stock without ever being given a posting or buying task. Its bags and bank still count as items you own, and it can still be asked to hand something over to the character that's selling it. Previously the only way to keep a character out of your to-do lists was **Hidden**, which also hid its inventory — so FlipQueue would tell you an item was nowhere on your account while it sat in that character's bank.
+
 ## v0.13.1
 
 A stability release — everything in it is a fix. Large accounts froze, a full FlippingPal export crashed the client, bank operations quietly stopped planning, and Deal Finder showed the same price on every realm. All four are fixed, along with a long tail of smaller things. Everything below is new since v0.13.0.
