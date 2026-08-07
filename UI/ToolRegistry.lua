@@ -582,14 +582,17 @@ local function EvalSpell(spellID)
              remaining = remaining, cdStart = cdStart, cdDur = cdDur, usable = true }
 end
 
--- Evaluate one method. The returned table also carries `dispatchKind`
--- ("item"|"spell") and `dispatchName` -- toys dispatch like items, mounts
--- like spells, so the secure button only ever sees "item" vs "spell".
+-- Evaluate one method. The returned table also carries the three fields the
+-- secure button and the row labels need:
+--   dispatchKind  -- "item" | "toy" | "spell" (mounts dispatch like spells)
+--   dispatchValue -- what the secure attribute is set to: a name, except for
+--                    toys, which take their numeric item ID
+--   dispatchName  -- what the player is shown; never used for dispatch
 function TR:EvalMethod(method)
     local e
     if method.kind == "toy" then
         e = EvalToy(method.id)
-        e.dispatchKind = "item"
+        e.dispatchKind = "toy"
     elseif method.kind == "mount" then
         e = EvalMount(method.id)
         e.dispatchKind = "spell"
@@ -601,6 +604,7 @@ function TR:EvalMethod(method)
         e.dispatchKind = "item"
     end
     e.dispatchName = e.name or method.name
+    e.dispatchValue = (method.kind == "toy") and method.id or e.dispatchName
     e.method = method
     return e
 end
@@ -616,16 +620,28 @@ function TR:ClassifyEval(e)
 end
 
 -- Apply (or clear) a button's secure click attributes. `kind` is
--- "item" | "spell" | "macro" | "macrotext"; pass nil to clear. The caller
--- must guard against combat lockdown -- SetAttribute is protected mid-combat.
+-- "item" | "toy" | "spell" | "macro" | "macrotext"; pass nil to clear. `value`
+-- is the name for every kind except "toy", which takes the numeric toy item ID.
+-- The caller must guard against combat lockdown -- SetAttribute is protected
+-- mid-combat.
+--
+-- Toys need their own type (FQ-219). They were dispatched as `type = "item"`,
+-- which resolves the name against your bags -- and a learned toy lives in the
+-- toy box, not in a bag, so the click resolved to nothing and did nothing. From
+-- the player's side the only thing that happened on click was the rollout that
+-- the hover had already opened, which reads as "clicking opens the menu".
 function TR:ApplySecureDispatch(button, kind, name)
     button:SetAttribute("type", nil)
     button:SetAttribute("item", nil)
+    button:SetAttribute("toy", nil)
     button:SetAttribute("spell", nil)
     button:SetAttribute("macro", nil)
     button:SetAttribute("macrotext", nil)
     if not (kind and name) then return end
-    if kind == "spell" then
+    if kind == "toy" then
+        button:SetAttribute("type", "toy")
+        button:SetAttribute("toy", tonumber(name) or name)
+    elseif kind == "spell" then
         button:SetAttribute("type", "spell")
         button:SetAttribute("spell", name)
     elseif kind == "macro" then
@@ -687,6 +703,7 @@ function TR:ResolveTool(tool)
         return {
             state = state, icon = e.icon or fallback,
             dispatchKind = e.dispatchKind, dispatchName = e.dispatchName,
+            dispatchValue = e.dispatchValue,
             methodLabel = e.method.name,
             cdStart = e.cdStart, cdDur = e.cdDur,
         }
