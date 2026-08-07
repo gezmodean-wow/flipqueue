@@ -19,9 +19,21 @@ function UI:CreateGroupTree(parent, onSelect)
     local tree = CreateFrame("Frame", nil, parent)
     tree:SetAllPoints()
 
+    -- Which profile these groups came from (FQ-217). The tree used to render
+    -- whatever profile it was handed with nothing on screen naming it, so a
+    -- pinned profile that had been renamed in TSM — or simply wasn't the one
+    -- TSM was using — showed up as an empty or unfamiliar group list with no
+    -- way to tell why.
+    local header = tree:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+    header:SetPoint("TOPLEFT", tree, "TOPLEFT", 4, -2)
+    header:SetPoint("RIGHT", tree, "RIGHT", -4, 0)
+    header:SetJustifyH("LEFT")
+    header:SetWordWrap(false)
+    tree.header = header
+
     -- Scroll container
     local scroll = CreateFrame("ScrollFrame", nil, tree, "UIPanelScrollFrameTemplate")
-    scroll:SetPoint("TOPLEFT", tree, "TOPLEFT", 0, 0)
+    scroll:SetPoint("TOPLEFT", tree, "TOPLEFT", 0, -16)
     scroll:SetPoint("BOTTOMRIGHT", tree, "BOTTOMRIGHT", -22, 0)
 
     local content = CreateFrame("Frame", nil, scroll)
@@ -136,11 +148,19 @@ function UI:CreateGroupTree(parent, onSelect)
 
         local profile = self._profile
         if not profile or not ns.TSM then
+            self:SetHeaderText(nil)
             return
         end
 
+        self:SetHeaderText(profile)
+
         local groupsDB = ns.TSM:GetGroupsDB(profile)
-        if not groupsDB then return end
+        if not groupsDB or not next(groupsDB) then
+            -- An empty render is indistinguishable from a broken one. Say which
+            -- profile came back empty so the player can act on it.
+            self.header:SetText("|cffff8800Profile \"" .. profile .. "\" has no TSM groups|r")
+            return
+        end
 
         local itemsDB = ns.TSM:GetItemsDB(profile)
         local nodes, roots = BuildTreeData(groupsDB, itemsDB)
@@ -245,6 +265,23 @@ function UI:CreateGroupTree(parent, onSelect)
         end
 
         content:SetHeight(math.max(1, y))
+    end
+
+    -- Name the profile these groups came from, and flag the one case the player
+    -- can't otherwise see: a pinned profile that isn't the one TSM is using.
+    -- The pin is honoured either way — this only stops it being invisible.
+    function tree:SetHeaderText(profile)
+        if not profile then
+            self.header:SetText("")
+            return
+        end
+        local state = ns.TSM and ns.TSM.GetProfileState and ns.TSM:GetProfileState()
+        if state and state.diverged then
+            self.header:SetText("|cffffff00Profile: " .. profile
+                .. "  (pinned — TSM is using " .. tostring(state.active) .. ")|r")
+        else
+            self.header:SetText("Profile: |cffffffff" .. profile .. "|r")
+        end
     end
 
     -- API
