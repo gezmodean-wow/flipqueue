@@ -17,7 +17,7 @@ Since v0.13.0 this line shipped across alpha1–alpha13, all of it corrective:
 - **Smaller (alpha3–alpha7)** — FQ-227 (exact-ilvl Auctionator bounds hid real listings; now default off), FQ-229 (sibling variants cleared variant-pinned sell tasks), FQ-221 (Log Out threw `ADDON_ACTION_FORBIDDEN`), FQ-241 (the "Skip deals with no character" checkbox rendered unchecked after every reload), silent inventory right-clicks, copyable `/fq debug realms` / `/fq debug pricing` with commodity detection.
 - **Process** — specs now run in CI on push and PR (Lua 5.1); `test/escapes_spec.lua` catches Lua 5.1's silent invalid-escape drop; nine issues carrying already-shipped fixes were closed off a changelog cross-reference.
 
-F8 was waived by the maintainer on several alphas for tester coverage; the line has since had live tester exposure on alpha8–alpha13. Full engineering detail in the per-alpha sections below.
+F8 was waived by the maintainer on several alphas for tester coverage; the line has since had live tester exposure on alpha8–alpha13, and **F8 is confirmed for this stable tag**. Full engineering detail in the per-alpha sections below.
 
 ## v0.13.1-alpha13
 
