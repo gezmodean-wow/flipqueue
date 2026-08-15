@@ -306,6 +306,47 @@ function ns:SetTooltipItem(tooltip, itemKey, itemID)
     return false
 end
 
+-- Resolve a real, clickable item link for an itemKey. Prefers the
+-- bonus-ID-decorated itemString so the link carries the actual ilvl variant
+-- rather than the base item — the same reason SetTooltipItem above prefers
+-- it. Returns nil when the item isn't cached yet or the key is a pet.
+function ns:GetItemLinkFromKey(itemKey, fallbackItemID)
+    if itemKey and itemKey ~= "" and not itemKey:find("^pet:") then
+        local itemString = ns:ItemKeyToItemString(itemKey)
+        if itemString then
+            local ok, _, link = pcall(C_Item.GetItemInfo, itemString)
+            if ok and link then return link end
+        end
+    end
+    local n = tonumber(fallbackItemID)
+    if n and n > 0 then
+        local ok, _, link = pcall(C_Item.GetItemInfo, n)
+        if ok and link then return link end
+    end
+    return nil
+end
+
+-- Insert an item's link into the chat edit box, opening one if none is
+-- focused. This is the shift-click affordance every Blizzard item frame has
+-- and FlipQueue's tables did not (FQ-250): without it there is no way to get
+-- an item out of FlipQueue and into a /fq debug command, which made every
+-- price investigation depend on the player already owning the item and
+-- knowing its exact name.
+--
+-- Returns true when a link was inserted. A false return means the item isn't
+-- in the client's cache yet, which callers should surface rather than
+-- swallow — a silently dead shift-click is exactly the failure this fixes.
+function ns:InsertItemLinkToChat(itemKey, fallbackItemID)
+    local link = ns:GetItemLinkFromKey(itemKey, fallbackItemID)
+    if not link then return false end
+    -- ChatEdit_InsertLink only succeeds when an edit box is already focused;
+    -- ChatFrame_OpenChat opens one seeded with the link when it isn't.
+    if not ChatEdit_InsertLink(link) then
+        ChatFrame_OpenChat(link)
+    end
+    return true
+end
+
 -- Resolve an item's actual ilvl, preferring the bonus-ID-decorated variant
 -- value over the base item's ilvl. Returns 0 when nothing resolves yet
 -- (item not loaded, or no info available).

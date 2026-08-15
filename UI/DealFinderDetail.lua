@@ -160,6 +160,18 @@ function UI:RenderDealFinderHeader(headerFrame, group)
         if BattlePetTooltip and BattlePetTooltip.Hide then BattlePetTooltip:Hide() end
     end)
 
+    -- Shift+left-click the pinned item to drop its link in chat (FQ-250).
+    -- This is the header a player is staring at when a realm price looks
+    -- wrong, so it is the shortest path from "this number is off" to
+    -- "/fq debug pricing <link>". Pets have no item link to insert.
+    headerFrame:SetScript("OnMouseDown", function(_, button)
+        if button ~= "LeftButton" or not IsShiftKeyDown() then return end
+        if isPet then return end
+        if not ns:InsertItemLinkToChat(group.itemKey, numID) then
+            ns:Print("Item not loaded yet — hover it once, then shift-click again.")
+        end
+    end)
+
     -- Denied badge
     local badge = Lbl(headerFrame, "badge", "GameFontNormal")
     badge:SetPoint("LEFT", nameLbl, "RIGHT", 12, 0)

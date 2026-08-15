@@ -679,14 +679,34 @@ function ScrollTableMixin:Render()
             end
         end
 
-        -- Click handler
-        if self.onRowClick then
+        -- Click handler. Attached even without an onRowClick so that the
+        -- shift-click link affordance below works on read-only tables too
+        -- (Deal Finder research, sales log) — those are exactly the tables a
+        -- player needs to pull an item out of for a /fq debug command.
+        do
             local capturedData = rowData
             local capturedIndex = i
             -- The row frame rides along as a 4th arg so handlers can anchor
             -- context menus to the clicked row (UI/InventoryPage.lua).
             row:SetScript("OnMouseDown", function(_, button)
-                self.onRowClick(capturedData, button, capturedIndex, row)
+                -- Shift+LEFT inserts the item link, matching every Blizzard
+                -- item frame. Deliberately not shift+right: TodoPage and
+                -- InventoryPage bind shift+RIGHT to skip-task and
+                -- do-not-track, so stealing that would silently mutate the
+                -- player's list when they only wanted a link (FQ-250).
+                if button == "LeftButton" and IsShiftKeyDown() then
+                    local key = capturedData._itemKey or capturedData.itemKey
+                    local id  = capturedData._itemID  or capturedData.itemID
+                    if key or id then
+                        if not ns:InsertItemLinkToChat(key, id) then
+                            ns:Print("Item not loaded yet — hover it once, then shift-click again.")
+                        end
+                        return
+                    end
+                end
+                if self.onRowClick then
+                    self.onRowClick(capturedData, button, capturedIndex, row)
+                end
             end)
         end
 
