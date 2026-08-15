@@ -1,5 +1,55 @@
 # Changelog
 
+## v0.13.2-alpha2
+
+Patch-day build. WoW 12.1.0 and TSM v4.14.75 landed, and two live reports came in with them: prices disagreeing with TSM on roughly half of gear (FQ-249) and about a quarter of one account's inventory never refreshing (FQ-251). Both are root-caused and fixed here. Embedded Cogworks-1.0 stays at **`v0.16.0`** (MINOR 31); **`## Interface` moves `120007` → `120100`** for the 12.1.0 client. **Schema stays at 13** — no migration. **F8 (in-game smoke test) not yet run** — cut for tester coverage tonight.
+
+### FQ-249 (#249): FlipQueue and TSM disagreeing on gear prices
+
+Two stacked defects, both on variant gear, which is why plain items and commodities looked fine while gear looked wrong about half the time.
+
+`TSMRealms.ToLevelForm` rebuilt a WoW item string by splicing TSM's item string into WoW's field positions. The orderings do not agree. For the reporter's polearm — key `170112;6655:40:1678;9=50`, TSM string `i:170112::4:1:40:50:1678` — it produced `numBonusIDs=4` with bonuses `1/40/50/1678`: bonus `1` invented, the modifier *value* `50` promoted to a bonus ID, and the real bonus `6655` — the scaling bonus that sets the item level — dropped entirely. `GetDetailedItemLevelInfo` answered **19** for an item nearer 74.
+
+The nearest-ilvl rung then made that error expensive. It had **no distance bound**, so a derived 19 matched a recorded bucket at 45 and reported that bucket's price as this item's: 119.4k on Illidan against a true value near 14k. Different realms hold different buckets, which is why one item quoted 450g on Dalaran and 119.4k on Illidan — those were never one item.
+
+The reporter's dump carried the contradiction that confirmed it: on Illidan, TSM's `DBMinBuyout` said 14.2k while our per-realm lookup said 119.4k. Same realm, same item, two buckets.
+
+- `ToLevelForm` now takes the `fqKey` and derives the level from a correctly built item string. The splice survives only for callers with no key to offer, documented as last-resort.
+- `FindItemInRaw`, `GetAllRealmPricing` and `GetBatchPricing` thread the key through; `DealFinder`, `ItemResearch` and `/fq debug pricing` pass it.
+- Nearest-ilvl is bounded by `NEAREST_ILVL_TOLERANCE = 10` in both the batch and single-item paths — enough to absorb scanner drift, not enough to answer with a different variant. Past the bound the coarser base-item rung answers.
+- `/fq debug pricing` now names the matched bucket (`via=nearestIlvl@ilvl45`); the old output said only `via=nearestIlvl`, which never revealed the substitution.
+
+**Shared-library defect underneath it.** Cogworks-1.0's `ItemKeyToItemString` (`Libs/Cogworks-1.0/Items.lua:97`) lays the bonus block one field early: its parts table stops at 12 entries, omitting `itemContext`, so the bonus *count* lands in `itemContext` (13) and the first real bonus lands in `numBonusIDs` (14). Its own layout comment lists 13 fields and is missing `itemContext` — written against a pre-Legion layout. `.pkgmeta` pulls Cogworks from pinned tag `v0.16.0` at package time, so a local library edit would not ship; `Core.lua` therefore carries a marked local override with a `ROLLBACK:` block naming the one-line delegation to restore. `test/itemstring_spec.lua` pins the layout and is the acceptance test for the upstream fix. **The off-by-one is verified arithmetically against the documented item-string layout but not yet in-client** — confirm before handing it upstream.
+
+### FQ-251 (#251): a quarter of an account's inventory never refreshing
+
+Syndicator keys characters by normalized realm (`Jimmy-EarthenRing`); FlipQueue keys by display realm (`Jimmy-Earthen Ring`). The only bridge was `ns.db.realmAliases`, which `RecordRealmAlias` populates with the realm the player is *currently* logged into and nothing else. A character on a realm not visited since that feature shipped had no alias, so `BulkProjectKnownAlts` skipped it — permanently, for as long as the player never logged in there.
+
+`TranslateSyndicatorKey` now falls back to the characters FlipQueue already holds: an existing record tells us the display realm without needing a login. Matching folds accents, lowercases and strips non-alphanumerics on both sides, so `Earthen Ring`/`EarthenRing` and `Confrérie du Thorium`/`ConfrerieduThorium` compare equal. A successful resolve writes the alias back so the map heals and other characters on that realm take the fast path.
+
+Genuinely unresolvable characters are still skipped rather than guessed — a guessed key splits that character's data across two records — but no longer in silence, which is the half that kept this hidden:
+
+- the skip count and the skipped keys are always logged now, not only when the pass projected nothing (`Scanner.lua`);
+- the Characters page banner reports `(N skipped)` instead of counting only the work it planned and showing a tidy `30 / 30` (`UI/CharactersPage.lua`).
+
+New `/fq debug alts`: the alias map, every character on file with item count and last update, and every Syndicator character marked OK or SKIP. None of this was observable before, which is why the report had nowhere to go.
+
+### FQ-250 (#250): no way to get an item link out of FlipQueue
+
+Surfaced while gathering FQ-249 diagnostics — the reporter could see a wrong price but could not produce an item link for `/fq debug pricing`. No FlipQueue table inserted a link on shift-click (`DealFinderPage` had no hyperlink handling; `ScrollTable` bound shift to horizontal scrolling), and shift-click elsewhere is bound to *mutating* actions (`TodoPage` skips the task, `InventoryPage` marks do-not-track), so reaching for the standard affordance could silently change the player's list.
+
+`ns:GetItemLinkFromKey` / `ns:InsertItemLinkToChat` in `Core.lua` sit beside `SetTooltipItem` and reuse the same itemKey→itemString path, so the link carries the actual ilvl variant. Wired into `ScrollTable` (any row carrying an item identity — its `OnMouseDown` is now attached unconditionally so read-only tables get it too) and the Deal Finder pinned item header. Bound to shift+**left** so the existing shift+right bindings are untouched. Uncached items print a hint rather than failing silently.
+
+### Patch-day maintenance
+
+`## Interface` moves `120007` → `120100` for WoW 12.1.0; Syndicator (276), Auctionator (334) and TSM (v4.14.75) all list it, so FlipQueue was the only cog in the suite still loading out-of-date.
+
+TSM posting logic re-audited against **v4.14.75** (was v4.14.69). `MakePostDecision` still starts at line 417 and `IsAuctionFiltered` at 269 in `LibTSMSystem/Source/Operation/AuctioningOperation.lua`, with every branch identical to the v4.14.69 reading: no-competition normal, the three invalid-seller/blacklist early returns, the below-min `priceReset` tree, `isPlayer`/`matchWhitelist` matching, whitelist no-post, the `aboveMax` tree, plain undercut, and the reason-gated `max(buyout, minPrice)` clamp the blacklist branch bypasses. `AuctioningOperation.Load` registers no new setting `MakePostDecision` reads, and every name in `EXPECTED_OP_FIELDS` is still present. `matchWhitelist` remains schema-defaulted true (`Schema.lua:270`) and still keyed `global/auctioningOptions/matchWhitelist`, so `ReadMatchWhitelist` holds. `TSM_AUDITED_VERSION` bumped; no behaviour change.
+
+### Specs
+
+`test/itemstring_spec.lua` (24 checks, new) pins the item-string field layout. `test/altkeys_spec.lua` (17 checks, new) pins Syndicator key translation, the alias heal, and the cases that must still refuse to resolve. `test/tsmrealms_spec.lua` grows to 39 with five new checks on the ilvl bound. 17 spec files, all passing.
+
 ## v0.13.2-alpha1
 
 First alpha on the v0.13.2 line. Four fixes and one feature off the improvement backlog, opened straight after promoting v0.13.1 to stable, plus one defect (FQ-248) filed from a reporter's dump the same day. Embedded Cogworks-1.0 stays at **`v0.16.0`** (MINOR 31); `## Interface` stays at `120007`. **Schema stays at 13** — no migration. **F8 (in-game smoke test) waived on maintainer direction** — shipped for tester coverage, on the strength of six spec files and 133 new assertions.

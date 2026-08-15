@@ -6,6 +6,24 @@ The engineering-detail companion lives in `CHANGELOG.md` (commit-readerese — f
 
 ---
 
+## v0.13.2-alpha2
+
+The first build for the new patch, and it fixes two problems players reported the day it landed.
+
+- **Prices on gear match TradeSkillMaster again.** When a piece of gear exists at several item levels, FlipQueue was working out the wrong item level for the one you actually have. It then went looking for that item in the price data, couldn't find it, and quietly settled for the closest thing it could find — often a completely different version of the item — and showed you that one's price. One reported polearm read 119k on a realm where the real figure was nearer 14k. Plain items and anything that stacks were never affected, which is why it looked like roughly half your list was wrong. FlipQueue now works out the item level correctly, and when it still can't find an exact match it will only accept a nearby item level rather than one fifty levels away. Past that it tells you it has no price for that realm instead of confidently showing you the wrong one.
+- **Characters whose inventory never updated now update.** If you have characters spread across a lot of realms, some of them could sit there with stale bags forever — FlipQueue only recognised a realm after you had logged into it, so characters parked on realms you rarely visit were quietly skipped every single time. They're now recognised from the character records FlipQueue already has, no login required. If a character genuinely can't be matched it's still left alone rather than guessed at, but the loading bar now says how many were skipped instead of reporting a tidy "30 / 30" while dropping a quarter of them.
+- **Shift-click an item anywhere in FlipQueue to put its link in chat.** This didn't work before — shift-clicking a row did nothing, or in a couple of places did something else entirely. It now behaves the way every other item in the game does. Shift-clicking with the right mouse button still does what it always did on the to-do list and inventory pages.
+- **Updated for the new game version**, and re-checked against the latest TradeSkillMaster so posting prices continue to follow your Auctioning operations exactly.
+
+### If you're helping test this
+
+Two commands are worth knowing:
+
+- `/fq debug pricing` followed by a shift-clicked item shows exactly how FlipQueue priced it on every realm, including which item level it matched.
+- `/fq debug alts` is new. It lists every character FlipQueue knows about, when each one's bags were last read, and flags any that can't be matched up — the thing that was invisible before.
+
+Both open a window you can copy out of with Ctrl+A, Ctrl+C.
+
 ## v0.13.2-alpha1
 
 The first build after v0.13.1 went stable — four fixes and one new setting, all from things players asked for.
