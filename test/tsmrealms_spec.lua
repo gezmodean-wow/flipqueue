@@ -57,8 +57,14 @@ end
 -- Alpha:   item 222 recorded at ilvl 100 AND 120, plus a base entry
 -- Bravo:   item 222 recorded at ilvl 110 only, plus a base entry
 -- Charlie: item 222 has a base entry only (no level form at all)
+--
+-- Item 333 (Alpha only) is the FQ-249 spread fixture: recorded at ilvl 100
+-- for 10 and ilvl 200 for 200, a 20x spread — an item whose price plainly
+-- does move with item level. Item 222 on Alpha spans 10 to 20, exactly 2x,
+-- the boundary of the default "prices the same" threshold.
 local FIXTURES = {
-    { "Alpha",   AppData('{111,A,2,K},{"i:222::i100",A,1,A},{"i:222::i120",K,1,K},{222,U,3,U},{"p:1965",A,1,A}') },
+    { "Alpha",   AppData('{111,A,2,K},{"i:222::i100",A,1,A},{"i:222::i120",K,1,K},{222,U,3,U},{"p:1965",A,1,A}'
+                     .. ',{"i:333::i100",A,1,A},{"i:333::i200",68,1,68},{333,A,3,A}') },
     { "Bravo",   AppData('{111,K,2,K},{"i:222::i110",U,1,U},{222,A,3,A}') },
     { "Charlie", AppData('{111,U,2,U},{222,K,3,K}') },
 }
@@ -199,6 +205,97 @@ local levels = TSMRealms:GetRecordedItemLevels("222")
 check("recorded ilvls count", #levels, 3)
 check("recorded ilvls sorted", table.concat(levels, ","), "100,110,120")
 check("plain item has no recorded ilvls", #TSMRealms:GetRecordedItemLevels("111"), 0)
+
+--------------------------
+-- Item-level spread (FQ-249)
+--
+-- The reporter's argument for matching any item level was that most gear
+-- prices the same whatever its level. Measured against the live 40-realm
+-- dataset that holds for about a third of multi-level gear and fails badly
+-- for the rest, so the ladder stays bounded and the SPREAD decides whether a
+-- borrowed price is presented as sound or flagged as approximate. These pin
+-- the discriminator, its configurability, and the per-item evidence the
+-- player can open.
+--------------------------
+
+local function spreadOf(res, key, realm)
+    local e = res[key] and res[key][realm]
+    return e and e.ilvlSpread or nil
+end
+
+-- Buckets for one item on one realm, with prices — the readout behind the
+-- Deal Finder tooltip and /fq debug pricing.
+local buckets, stats = TSMRealms:GetIlvlBuckets("333", "Alpha")
+check("buckets/count", #buckets, 2)
+check("buckets/sorted ascending", buckets[1].ilvl .. "," .. buckets[2].ilvl, "100,200")
+check("buckets/price is what we'd quote", buckets[1].price, 10)
+check("buckets/stats spread", stats and stats.spread, 20)
+check("buckets/stats low", stats and stats.priceLow, 10)
+check("buckets/stats high", stats and stats.priceHigh, 200)
+check("buckets/accepts i: form", #select(1, TSMRealms:GetIlvlBuckets("i:333", "Alpha")), 2)
+
+-- One bucket is nothing to compare, so no spread opinion is offered.
+local _, bravoStats = TSMRealms:GetIlvlBuckets("222", "Bravo")
+check("buckets/single bucket has no stats", bravoStats, nil)
+check("buckets/unknown realm is empty", #TSMRealms:GetIlvlBuckets("333", "Nowhere"), 0)
+
+-- Spread rides on every rung, including exact — an exact match on a widely
+-- spread item still tells the player the neighbouring levels aren't
+-- interchangeable.
+stubIlvl = 100
+r = batch({ "i:333::2:1670" })
+check("spread/exact match still reports spread", src(r, "i:333::2:1670", "Alpha"), "exact")
+check("spread/exact spread value", spreadOf(r, "i:333::2:1670", "Alpha"), 20)
+
+-- Wide item, borrowed level: ilvl 110 is 10 from the recorded 100, inside the
+-- bound, so the price resolves — but the item's own levels range 20x, so the
+-- match stays flagged.
+stubIlvl = 110
+r = batch({ "i:333::2:1671" })
+check("spread/wide borrows within bound", src(r, "i:333::2:1671", "Alpha"), "nearestIlvl")
+check("spread/wide verdict", TSMRealms:SpreadVerdict(r["i:333::2:1671"].Alpha), "wide")
+
+-- Tight item: 222 on Alpha spans exactly 2x, the default threshold, and the
+-- comparison is inclusive — so a borrowed level here is treated as sound.
+stubIlvl = 115
+r = batch({ "i:222::2:1672" })
+check("spread/tight borrows", src(r, "i:222::2:1672", "Alpha"), "nearestIlvl")
+check("spread/tight spread value", spreadOf(r, "i:222::2:1672", "Alpha"), 2)
+check("spread/tight verdict", TSMRealms:SpreadVerdict(r["i:222::2:1672"].Alpha), "tight")
+
+-- Nothing to compare -> no verdict, which callers must read as "flag it",
+-- never as "it's fine".
+check("spread/no spread data yields no verdict",
+    TSMRealms:SpreadVerdict({ source = "nearestIlvl" }), nil)
+
+-- Configurable: the threshold moves the tight/wide line...
+ns.db = { settings = { ilvlSpreadThreshold = 30 } }
+check("spread/threshold read from settings", TSMRealms:SpreadThreshold(), 30)
+check("spread/wide becomes tight at 30x",
+    TSMRealms:SpreadVerdict(r["i:333::2:1671"] and r["i:333::2:1671"].Alpha
+        or { ilvlSpread = 20 }), "tight")
+
+-- ...and the whole check can be switched off, which withholds the verdict so
+-- every borrowed price is flagged again.
+ns.db = { settings = { ilvlSpreadCheck = false } }
+check("spread/disabled reports disabled", TSMRealms:SpreadCheckEnabled(), false)
+check("spread/disabled yields no verdict",
+    TSMRealms:SpreadVerdict({ ilvlSpread = 1.1 }), nil)
+
+-- A nonsense threshold falls back to the default rather than making every
+-- item tight (a stored 0 or 1 would classify everything as interchangeable).
+ns.db = { settings = { ilvlSpreadThreshold = 0 } }
+check("spread/bad threshold falls back", TSMRealms:SpreadThreshold(), 2)
+ns.db = nil
+check("spread/no db defaults to enabled", TSMRealms:SpreadCheckEnabled(), true)
+
+-- The single-item path carries the same evidence as the batch path.
+stubIlvl = 110
+TSMRealms:InvalidateCache()
+all = TSMRealms:GetAllRealmPricing("i:333::2:1673")
+check("spread/single-item path source", all.Alpha and all.Alpha.source, "nearestIlvl")
+check("spread/single-item path spread", all.Alpha and all.Alpha.ilvlSpread, 20)
+check("spread/single-item path bucket count", all.Alpha and all.Alpha.ilvlBucketCount, 2)
 
 --------------------------
 

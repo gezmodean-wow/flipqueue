@@ -420,7 +420,9 @@ function UI:RenderDealFinderRealmTable(parent, group, numCols, onToggle)
             end
             local srcLabel = "Regional Fallback"
             if ref.dataQuality == "perRealm" then
-                srcLabel = "Per-Realm TSM"
+                srcLabel = ref.spreadTight
+                    and "Per-Realm TSM (close item level)"
+                    or "Per-Realm TSM"
             elseif ref.dataQuality == "perRealmApprox" then
                 srcLabel = (ref.approxSource == "baseItem")
                     and "Per-Realm TSM (base item)"
@@ -433,6 +435,48 @@ function UI:RenderDealFinderRealmTable(parent, group, numCols, onToggle)
                     GameTooltip:AddLine("(matched at item level " .. ref.approxIlvl .. ")", 0.8, 0.7, 0.4)
                 else
                     GameTooltip:AddLine("rather than this exact item level.", 0.8, 0.7, 0.4)
+                end
+            elseif ref.spreadTight then
+                -- Borrowed a neighbouring item level, but this item's own
+                -- levels price alike on this realm, so the borrow is sound
+                -- (FQ-249). Say so rather than staying silent — the player
+                -- asked for the evidence, not just the verdict.
+                GameTooltip:AddLine("Borrowed from item level " ..
+                    (ref.approxIlvl or "?") .. ", which prices the same here.", 0.5, 0.8, 0.5)
+            end
+            -- The known item-level spread for THIS item on THIS realm. Shown
+            -- whatever the rung: an exact match on a widely-spread item is
+            -- still worth seeing, since it says the neighbouring levels are
+            -- not interchangeable.
+            if ref.ilvlSpread and ref.ilvlBuckets then
+                local tight = ref.ilvlSpread <= (ns.TSMRealms and ns.TSMRealms.SpreadThreshold
+                    and ns.TSMRealms:SpreadThreshold() or 2)
+                GameTooltip:AddDoubleLine("Item Level Spread",
+                    string.format("%.1fx across %d levels", ref.ilvlSpread, ref.ilvlBuckets),
+                    0.7,0.7,0.7,
+                    tight and 0.5 or 0.9, tight and 0.8 or 0.7, tight and 0.5 or 0.4)
+                if ref.ilvlPriceLow and ref.ilvlPriceHigh then
+                    GameTooltip:AddLine("  " .. G(ref.ilvlPriceLow) .. "  to  " .. G(ref.ilvlPriceHigh),
+                        0.6, 0.6, 0.6)
+                end
+                -- Per-level breakdown, so "the known spread" is inspectable
+                -- rather than a single ratio to take on trust.
+                local baseID = group.itemKey and tostring(group.itemKey):match("^(%d+)")
+                if baseID and ns.TSMRealms and ns.TSMRealms.GetIlvlBuckets then
+                    local buckets = ns.TSMRealms:GetIlvlBuckets(baseID, ref.realmName)
+                    local shown = 0
+                    for _, b in ipairs(buckets or {}) do
+                        if b.price and shown < 8 then
+                            shown = shown + 1
+                            local mark = (ref.approxIlvl and b.ilvl == ref.approxIlvl) and " <" or ""
+                            GameTooltip:AddDoubleLine("  ilvl " .. b.ilvl,
+                                G(b.price) .. " (" .. (b.numAuctions or 0) .. ")" .. mark,
+                                0.55,0.55,0.55, 0.7,0.7,0.7)
+                        end
+                    end
+                    if buckets and #buckets > shown then
+                        GameTooltip:AddLine("  ... and " .. (#buckets - shown) .. " more", 0.5, 0.5, 0.5)
+                    end
                 end
             end
             if ref.isOutlier then
@@ -607,7 +651,12 @@ function UI:RenderDealFinderResearch(parent, group)
         TblRow({
             name = rn, tsm = G(realm.tsmPrice), blend = G(realm.blendedPrice),
             ah = tostring(realm.numAuctions or 0), sold = soldStr,
-            src = (realm.dataQuality == "perRealm") and "Realm"
+            -- Colour rather than a glyph: the default WoW font renders most
+            -- symbol codepoints as boxes. Muted "Realm" = borrowed from a
+            -- neighbouring item level that prices the same here (FQ-249);
+            -- amber "Realm~" = borrowed and the levels do price apart.
+            src = (realm.dataQuality == "perRealm")
+                    and (realm.spreadTight and "|cff88aa88Realm|r" or "Realm")
                 or (realm.dataQuality == "perRealmApprox") and "|cffccaa55Realm~|r"
                 or "|cffaa6666Rgn|r",
             spread = spreadStr,

@@ -396,7 +396,10 @@ end
 --------------------------
 
 -- Section ordering for reflow
-local sectionOrder = { "automation", "imports", "items", "gold", "auctionhouse", "notifications", "miniview", "toolbox", "saleslog", "data", "deletedchars", "multiaccount" }
+-- Layout order for the collapsible sections. A section missing from this list
+-- is created but never positioned, so it renders nowhere — add new sections
+-- here as well as building them below.
+local sectionOrder = { "automation", "imports", "pricing", "items", "gold", "auctionhouse", "notifications", "miniview", "toolbox", "saleslog", "data", "deletedchars", "multiaccount" }
 
 -- Rebuild the pooled row list inside the "Deleted Characters" section.
 -- Keeps the section height in sync with how many tombstones exist. Called
@@ -1181,6 +1184,52 @@ function UI:CreateSettingsPanel(parent)
     sy = sy - h - SECTION_SPACING
 
     secImports.contentHeight = math.abs(sy)
+
+    ------------------------------------------------
+    -- Section: Pricing (FQ-249)
+    ------------------------------------------------
+    local secPricing = CreateCollapsibleSection(content, y, "pricing",
+        "Pricing",
+        "How FlipQueue prices gear it can't match exactly")
+    sc = secPricing.content
+    sy = 0
+
+    settingsWidgets.ilvlSpreadCheck, h = CreateSettingsCheckbox(sc, sy,
+        "Trust close item-level matches when price doesn't vary by item level",
+        "Gear can exist at several item levels, and TSM records each one separately. " ..
+        "When FlipQueue can't find your exact item level on a realm it borrows the closest " ..
+        "one it has and marks the price approximate.\n\n" ..
+        "For a lot of gear that warning is noise — most world-drop and transmog pieces sell " ..
+        "for much the same whatever their item level. With this on, FlipQueue looks at what " ..
+        "the item's other item levels are actually selling for on that realm: if they're all " ..
+        "close together, item level clearly isn't driving the price and the approximate mark " ..
+        "is dropped. If they're far apart, the mark stays.\n\n" ..
+        "|cffaaaaaaThis only changes the warning, never the price itself. Turn it off to see " ..
+        "every borrowed price marked approximate.|r",
+        "ilvlSpreadCheck")
+    sy = sy - h - SECTION_SPACING
+
+    settingsWidgets.ilvlSpreadThreshold, h = CreateSettingsDropdown(sc, sy,
+        "How close counts as \"doesn't vary\"",
+        "How tightly an item's item levels have to be priced before FlipQueue treats them " ..
+        "as interchangeable.\n\n" ..
+        "Within 1.5x - strict. Fewer prices trusted, fewer surprises.\n" ..
+        "Within 2x - the default. Covers about a third of multi-level gear.\n" ..
+        "Within 3x - lenient.\n" ..
+        "Within 10x - very lenient; close to trusting any item level, which is what you want " ..
+        "if you'd rather have a rough price on every realm than a gap.\n\n" ..
+        "Only applies while the setting above is on. You can always see the actual spread for " ..
+        "an item in the Deal Finder detail view.",
+        "ilvlSpreadThreshold",
+        {
+            { label = "Within 1.5x", value = 1.5 },
+            { label = "Within 2x",   value = 2 },
+            { label = "Within 3x",   value = 3 },
+            { label = "Within 10x",  value = 10 },
+        })
+    sy = sy - h - SECTION_SPACING
+
+    secPricing.contentHeight = math.abs(sy)
 
     ------------------------------------------------
     -- Section: Item Management (#148 master + item-related settings)
@@ -2474,6 +2523,13 @@ function UI:RefreshSettings()
     end
     if settingsWidgets.fpPriceSource then
         settingsWidgets.fpPriceSource:SetValue(ns.db.settings.fpPriceSource or "listing")
+    end
+    -- Pricing / item-level spread (FQ-249)
+    if settingsWidgets.ilvlSpreadCheck then
+        settingsWidgets.ilvlSpreadCheck:SetChecked(ns.db.settings.ilvlSpreadCheck ~= false)
+    end
+    if settingsWidgets.ilvlSpreadThreshold then
+        settingsWidgets.ilvlSpreadThreshold:SetValue(ns.db.settings.ilvlSpreadThreshold or 2)
     end
     -- Sales Log (FQ-214)
     if settingsWidgets.salesLoggingEnabled then

@@ -284,17 +284,42 @@ function DealFinder:ScanChunked(pool, onProgress, onComplete)
                 local pricing = FindRealmPricing(allRealmPrices, targetRealm)
 
                 local tsmPrice, numAuctions, dataQuality, approxSource, approxIlvl
+                local ilvlSpread, ilvlBuckets, ilvlLow, ilvlHigh, spreadTight
 
                 if pricing then
                     tsmPrice = pricing.marketValueRecent or pricing.minBuyout
                     numAuctions = pricing.numAuctions
+                    -- Spread evidence travels with every rung so the detail
+                    -- view can show it whether or not the match was exact.
+                    ilvlSpread  = pricing.ilvlSpread
+                    ilvlBuckets = pricing.ilvlBucketCount
+                    ilvlLow     = pricing.ilvlPriceLow
+                    ilvlHigh    = pricing.ilvlPriceHigh
                     -- "nearestIlvl"/"baseItem" are this realm's own pricing but
                     -- for a neighbouring variant, so they carry realm-to-realm
                     -- signal while still being approximate — worth showing, and
                     -- worth labelling. See TSMRealms:GetBatchPricing.
                     if pricing.source == "nearestIlvl" or pricing.source == "baseItem" then
-                        dataQuality = "perRealmApprox"
                         approxSource = pricing.source
+                        -- matchedIlvl was already carried on the pricing entry
+                        -- but never copied here, so the detail tooltip's
+                        -- "matched at item level N" line could not fire.
+                        approxIlvl = pricing.matchedIlvl
+                        -- Spread discrimination (FQ-249). When this item's own
+                        -- recorded levels price within the threshold of each
+                        -- other on this realm, item level demonstrably does not
+                        -- move its price, so a neighbouring-level match is as
+                        -- good as an exact one and the warning would be noise.
+                        -- Returns nil when the player has the check off, or
+                        -- when there is only one bucket to judge from — both
+                        -- fall through to flagging, the cautious reading.
+                        if ns.TSMRealms and ns.TSMRealms.SpreadVerdict
+                            and ns.TSMRealms:SpreadVerdict(pricing) == "tight" then
+                            spreadTight = true
+                            dataQuality = "perRealm"
+                        else
+                            dataQuality = "perRealmApprox"
+                        end
                     else
                         dataQuality = "perRealm"
                     end
@@ -344,6 +369,11 @@ function DealFinder:ScanChunked(pool, onProgress, onComplete)
                             dataQuality   = dataQuality or "perRealm",
                             approxSource  = approxSource,
                             approxIlvl    = approxIlvl,
+                            ilvlSpread    = ilvlSpread,
+                            ilvlBuckets   = ilvlBuckets,
+                            ilvlPriceLow  = ilvlLow,
+                            ilvlPriceHigh = ilvlHigh,
+                            spreadTight   = spreadTight,
                             score         = 0,  -- set by ApplyPriority
                         })
                     end

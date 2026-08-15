@@ -23,6 +23,11 @@ local isLoaded = false
 local queryCache = {}
 local QUERY_CACHE_TTL = 60   -- seconds
 
+-- Item-level bucket cache: bucketCache["baseID\0realm"] = { buckets, stats }
+-- Keyed on data that only changes when AppData reloads, so it is cleared with
+-- the query cache rather than aged out (FQ-249).
+local bucketCache = {}
+
 --------------------------
 -- Base-32 Decoding
 -- (matches TSM's private.UnpackData encoding)
@@ -87,6 +92,9 @@ local function ProcessPendingData()
     end
     table.sort(realmList)
     wipe(pendingData)
+    -- Realm strings just changed underneath the derived caches (FQ-249).
+    wipe(queryCache)
+    wipe(bucketCache)
     isLoaded = true
 end
 
@@ -184,16 +192,57 @@ end)
 --
 -- How far the nearest-ilvl rung may reach, in item levels (FQ-249).
 --
--- This rung exists to absorb small drift between the ilvl our client computes
--- and the ilvl the scanning client recorded — a few levels at most. It was
--- previously UNBOUNDED, so an item whose computed ilvl was 19 happily matched
--- a recorded bucket at 45 and reported that bucket's price as this item's.
--- On the FQ-249 reporter's polearm that produced 119.4k on Illidan against a
--- true value near 14k: not a stale price, a different item.
+-- This rung exists to absorb drift between the ilvl our client computes and
+-- the ilvl the scanning client recorded. It was previously UNBOUNDED, so an
+-- item whose computed ilvl was 19 happily matched a recorded bucket at 45 and
+-- reported that bucket's price as this item's. On the FQ-249 reporter's
+-- polearm that produced 119.4k on Illidan against a true value near 14k: not
+-- a stale price, a different item.
 --
--- Beyond this bound we would rather report no per-realm data and let the
--- caller fall back than answer confidently with another variant's price.
-local NEAREST_ILVL_TOLERANCE = 10
+-- Sized from the live 40-realm AppData: the gap between adjacent recorded
+-- buckets of one item is a median of 10 ilvls, and only 51% of adjacent gaps
+-- are within 10 — so a bound of 10 declined about half of genuine neighbours.
+-- The p90 gap is 53, comfortably clear of 20, so 20 picks up real drift
+-- without letting a distinctly different variant answer.
+--
+-- Past this bound the coarser base-item rung answers instead. That rung is
+-- never empty: every variant item in the live dataset also carries a plain
+-- base-item entry (verified 16,928/16,928), and that entry equals the
+-- CHEAPEST recorded bucket 76.8% of the time — the conservative end, which is
+-- the right bias for a sell-side estimate.
+local NEAREST_ILVL_TOLERANCE = 20
+
+-- Spread discrimination (FQ-249 follow-up).
+--
+-- The reporter's case for matching any item level at all: "most items no
+-- matter the ilvl usually cost the same… only specific items that change look
+-- or colour vary in price". Measured across all 16,928 multi-bucket
+-- item-realms in the live dataset that holds for about a third of gear —
+-- 35% price within 2x across their own buckets — while the median item spans
+-- 4.4x and 36% span more than 10x. So the intuition is right for a real slice
+-- of items and badly wrong for the rest.
+--
+-- Rather than guess which items have appearance-linked pricing, measure it:
+-- an item whose own recorded buckets on a realm cluster tightly is one where
+-- item level demonstrably does not move the price, so an approximate match is
+-- as good as an exact one and needs no warning. An item whose buckets diverge
+-- keeps the approximate flag.
+--
+-- This changes CONFIDENCE ONLY. Which price is chosen is unaffected — the
+-- ladder is unchanged — so a player who turns the check off sees the same
+-- numbers, just labelled approximate more often.
+local DEFAULT_SPREAD_THRESHOLD = 2.0
+
+-- Reads the player's setting; safe before the DB exists (and under the
+-- headless spec harness, which supplies no ns.db at all).
+local function SpreadConfig()
+    local s = ns.db and ns.db.settings
+    if not s then return true, DEFAULT_SPREAD_THRESHOLD end
+    local enabled = (s.ilvlSpreadCheck ~= false)
+    local threshold = tonumber(s.ilvlSpreadThreshold)
+    if not threshold or threshold <= 1 then threshold = DEFAULT_SPREAD_THRESHOLD end
+    return enabled, threshold
+end
 
 -- Cache to avoid repeated GetDetailedItemLevelInfo calls.
 local levelFormCache = {}
@@ -390,6 +439,102 @@ function TSMRealms:GetRecordedItemLevels(baseID)
     return out
 end
 
+-- Every recorded item-level bucket of one base item on ONE realm, with the
+-- prices attached (FQ-249). This is the evidence behind spread discrimination
+-- and behind the per-item spread readout the player can open — "the known
+-- spread for this item", not a global statistic.
+--
+-- Returns buckets sorted ascending by item level:
+--   { { ilvl, minBuyout, numAuctions, marketValueRecent, price }, ... }
+-- plus a stats table, or nil stats when there is nothing to compare:
+--   { count, priceLow, priceHigh, spread, ilvlLow, ilvlHigh }
+-- `price` mirrors what DealFinder actually quotes (marketValueRecent, else
+-- minBuyout), so the spread reported is the spread in the numbers the player
+-- is shown rather than in a column they never see.
+function TSMRealms:GetIlvlBuckets(baseID, realmName)
+    local out = {}
+    if not isLoaded or not baseID or not realmName then return out, nil end
+    baseID = tostring(baseID):match("^i:(%d+)") or tostring(baseID):match("^(%d+)")
+    if not baseID then return out, nil end
+    local rawEntry = realmRaw[realmName]
+    if not (rawEntry and rawEntry.str) then return out, nil end
+
+    -- Memoised: this walks a multi-megabyte realm string, and the tooltip
+    -- that shows the buckets re-asks on every mouseover. Cleared with the
+    -- query cache when AppData reloads.
+    local memoKey = baseID .. "\0" .. realmName
+    local memo = bucketCache[memoKey]
+    if memo then return memo.buckets, memo.stats end
+
+    local fl = rawEntry.fieldLookup
+    for ilvlStr, values in rawEntry.str:gmatch('{"i:' .. baseID .. '::i(%d+)",([^}]+)}') do
+        local ilvl = tonumber(ilvlStr)
+        if ilvl then
+            local parts = { strsplit(",", values) }
+            local function F(name)
+                local idx = fl[name]
+                local v = idx and parts[idx] and DecodeValue(parts[idx])
+                return (v and v > 0) and v or nil
+            end
+            local minBuyout, recent = F("minBuyout"), F("marketValueRecent")
+            out[#out + 1] = {
+                ilvl = ilvl,
+                minBuyout = minBuyout,
+                numAuctions = F("numAuctions"),
+                marketValueRecent = recent,
+                price = recent or minBuyout,
+            }
+        end
+    end
+    table.sort(out, function(a, b) return a.ilvl < b.ilvl end)
+
+    local lo, hi, priced = nil, nil, 0
+    for _, b in ipairs(out) do
+        if b.price then
+            priced = priced + 1
+            if not lo or b.price < lo then lo = b.price end
+            if not hi or b.price > hi then hi = b.price end
+        end
+    end
+    local stats
+    if priced >= 2 and lo and lo > 0 then
+        stats = {
+            count = priced,
+            priceLow = lo,
+            priceHigh = hi,
+            spread = hi / lo,
+            ilvlLow = out[1] and out[1].ilvl,
+            ilvlHigh = out[#out] and out[#out].ilvl,
+        }
+    end
+    bucketCache[memoKey] = { buckets = out, stats = stats }
+    return out, stats
+end
+
+-- Is the spread check switched on? Exposed so UI copy can explain which
+-- reading of an approximate match the player is currently seeing.
+function TSMRealms:SpreadCheckEnabled()
+    local enabled = SpreadConfig()
+    return enabled
+end
+
+function TSMRealms:SpreadThreshold()
+    local _, threshold = SpreadConfig()
+    return threshold
+end
+
+-- Verdict on one per-realm pricing entry: "tight" when this item's own
+-- recorded buckets on that realm price within the threshold of each other
+-- (item level does not move the price, so an approximate match is sound),
+-- "wide" when they diverge, nil when there is nothing to compare or the
+-- player has turned the check off.
+function TSMRealms:SpreadVerdict(pricing)
+    if not (pricing and pricing.ilvlSpread) then return nil end
+    local enabled, threshold = SpreadConfig()
+    if not enabled then return nil end
+    return pricing.ilvlSpread <= threshold and "tight" or "wide"
+end
+
 function TSMRealms:GetRealmUpdateTime(realmName)
     local r = realmRaw[realmName]
     return r and r.downloadTime
@@ -417,7 +562,7 @@ function TSMRealms:GetAllRealmPricing(itemString, fqKey)
             local recent = fl.marketValueRecent and values[fl.marketValueRecent]
 
             if (minBuyout and minBuyout > 0) or (recent and recent > 0) then
-                result[realm] = {
+                local entry = {
                     minBuyout = (minBuyout and minBuyout > 0) and minBuyout or nil,
                     numAuctions = (numAuctions and numAuctions > 0) and numAuctions or nil,
                     marketValueRecent = (recent and recent > 0) and recent or nil,
@@ -425,6 +570,21 @@ function TSMRealms:GetAllRealmPricing(itemString, fqKey)
                     source = source,
                     matchedIlvl = matchedIlvl,
                 }
+                -- Spread across this item's own recorded item levels on this
+                -- realm (FQ-249). Attached whatever the rung — an exact match
+                -- still benefits from the player being able to see that the
+                -- item spans several levels at wildly different prices.
+                local baseID = itemString:match("^i:(%d+)")
+                if baseID then
+                    local _, stats = self:GetIlvlBuckets(baseID, realm)
+                    if stats then
+                        entry.ilvlSpread = stats.spread
+                        entry.ilvlBucketCount = stats.count
+                        entry.ilvlPriceLow = stats.priceLow
+                        entry.ilvlPriceHigh = stats.priceHigh
+                    end
+                end
+                result[realm] = entry
             end
         end
     end
@@ -436,6 +596,7 @@ end
 
 function TSMRealms:InvalidateCache()
     wipe(queryCache)
+    wipe(bucketCache)
 end
 
 -- Collect every unique numeric itemID referenced in any realm's raw
@@ -484,11 +645,18 @@ end
 --   at every item match).
 --
 -- Returns: { [tsmItemString] = { [realmName] = { minBuyout, numAuctions,
---             marketValueRecent, updateTime, source } } }
+--             marketValueRecent, updateTime, source, matchedIlvl,
+--             ilvlSpread, ilvlBucketCount, ilvlPriceLow, ilvlPriceHigh } } }
 --
 -- `source` records which rung of the resolution ladder produced the price:
 -- "exact" (the variant we asked for), "nearestIlvl" (another recorded item
 -- level of the same item) or "baseItem" (the base item's own listings).
+--
+-- The `ilvl*` fields describe how far this item's own recorded item levels
+-- price apart on that realm, and are present on every rung when the item has
+-- more than one priced bucket there. `SpreadVerdict` turns them into the
+-- tight/wide call that decides whether an approximate rung is flagged; the
+-- UI shows the same numbers so the player can check the call themselves.
 --
 -- The ladder exists because TSM's per-realm AuctionDB stores variant gear
 -- ONLY in level form ("i:258955::i171") — there is not a single bonus-form
@@ -575,6 +743,11 @@ function TSMRealms:GetBatchPricing(itemStrings, keyByString)
             -- walked before the best candidate is known.
             local lvlMin, lvlNum, lvlRecent, lvlDelta, lvlAt = {}, {}, {}, {}, {}
             local baseMin, baseNum, baseRecent = {}, {}, {}
+            -- Spread accumulators, keyed by base item ID: how far apart this
+            -- item's own recorded item levels price on THIS realm (FQ-249).
+            -- Collected during the same single walk, so the discriminator
+            -- costs no extra pass over the realm string.
+            local sprLo, sprHi, sprN = {}, {}, {}
 
             -- Walk every item entry in the realm string exactly once.
             -- Format is `{itemPart,values}` where itemPart is either a numeric
@@ -586,9 +759,18 @@ function TSMRealms:GetBatchPricing(itemStrings, keyByString)
                     -- bonus form and the level form back to the caller's key.
                     local stripped = itemPart:sub(2, -2)
                     local key = wantedQuoted[stripped]
-                    if key then
+                    -- A level-form bucket of an item we want feeds the spread
+                    -- accumulators whether or not it is also the exact match,
+                    -- so the exact rung still reports how far this item's
+                    -- levels range (FQ-249).
+                    local bid, ilvlStr
+                    if anyVariant then
+                        bid, ilvlStr = stripped:match("^i:(%d+)::i(%d+)$")
+                        if bid and not wantedBase[bid] then bid = nil end
+                    end
+                    if key or bid then
                         local minBuyout, numAuctions, recent = Decode(valuesPart)
-                        if minBuyout or recent then
+                        if key and (minBuyout or recent) then
                             local entry = result[key]
                             if not entry then
                                 entry = {}
@@ -602,15 +784,21 @@ function TSMRealms:GetBatchPricing(itemStrings, keyByString)
                                 source = "exact",
                             }
                         end
-                    elseif anyVariant then
-                        -- Not the exact key we computed, but possibly another
-                        -- recorded item level of an item we want.
-                        local bid, ilvlStr = stripped:match("^i:(%d+)::i(%d+)$")
-                        local wanters = bid and wantedBase[bid]
-                        if wanters then
+                        if bid and (minBuyout or recent) then
                             local ilvl = tonumber(ilvlStr)
-                            local minBuyout, numAuctions, recent = Decode(valuesPart)
-                            if ilvl and (minBuyout or recent) then
+                            -- Same price the caller would be quoted, so the
+                            -- spread is the spread in the shown numbers.
+                            local price = (recent and recent > 0) and recent
+                                or ((minBuyout and minBuyout > 0) and minBuyout or nil)
+                            if price then
+                                if not sprLo[bid] or price < sprLo[bid] then sprLo[bid] = price end
+                                if not sprHi[bid] or price > sprHi[bid] then sprHi[bid] = price end
+                                sprN[bid] = (sprN[bid] or 0) + 1
+                            end
+                            -- Nearest-ilvl candidate. Skipped when this bucket
+                            -- IS the exact key — that already wrote through.
+                            if not key and ilvl then
+                                local wanters = wantedBase[bid]
                                 for i = 1, #wanters do
                                     local k = wanters[i]
                                     local want = targetIlvl[k]
@@ -668,7 +856,17 @@ function TSMRealms:GetBatchPricing(itemStrings, keyByString)
             -- average, which is what made every realm show one price.
             for key, baseID in pairs(variantBase) do
                 local entry = result[key]
-                if not (entry and entry[realm]) then
+                if entry and entry[realm] then
+                    -- Exact hit: nothing to resolve, but still record how far
+                    -- this item's own levels range on this realm.
+                    if (sprN[baseID] or 0) > 1 and sprLo[baseID] and sprLo[baseID] > 0 then
+                        local e = entry[realm]
+                        e.ilvlSpread = sprHi[baseID] / sprLo[baseID]
+                        e.ilvlBucketCount = sprN[baseID]
+                        e.ilvlPriceLow = sprLo[baseID]
+                        e.ilvlPriceHigh = sprHi[baseID]
+                    end
+                else
                     local minBuyout, numAuctions, recent, source, matchedIlvl
                     if lvlDelta[key] ~= nil then
                         minBuyout, numAuctions, recent = lvlMin[key], lvlNum[key], lvlRecent[key]
@@ -691,6 +889,16 @@ function TSMRealms:GetBatchPricing(itemStrings, keyByString)
                             source = source,
                             matchedIlvl = matchedIlvl,
                         }
+                        -- Spread evidence for the approximate rungs — this is
+                        -- what decides whether the match gets flagged or
+                        -- accepted, and what the player can open and read.
+                        if (sprN[baseID] or 0) > 1 and sprLo[baseID] and sprLo[baseID] > 0 then
+                            local e = entry[realm]
+                            e.ilvlSpread = sprHi[baseID] / sprLo[baseID]
+                            e.ilvlBucketCount = sprN[baseID]
+                            e.ilvlPriceLow = sprLo[baseID]
+                            e.ilvlPriceHigh = sprHi[baseID]
+                        end
                     end
                 end
             end

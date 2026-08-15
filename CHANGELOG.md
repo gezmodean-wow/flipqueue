@@ -1,5 +1,56 @@
 # Changelog
 
+## v0.13.2-alpha3
+
+Follow-up to the two alpha2 reports, both of which came back with more information. The FQ-249 reporter pushed back on the item-level bound; the FQ-251 reporter's `/fq debug alts` dump turned out to be partly fiction. Embedded Cogworks-1.0 stays at **`v0.16.0`** (MINOR 31). **Schema stays at 13** — no migration. **F8 not yet run.**
+
+### FQ-249 (#249): the item-level bound was too tight, and the fallback was misdescribed
+
+The reporter's objection, verbatim: *"most items no matter the ilvl, usually cost the same, like glorious legplates… but only specific items with ilvl, that either change its look or color / design will vary in price… for now the best solution is to match ANY Ilvl to the item, not just a few ilvls away."*
+
+Measured against the live 40-realm `AppData.lua` (16,928 item-realm pairs holding more than one level-form bucket, price taken as `marketValueRecent or minBuyout` — what we actually quote):
+
+| | |
+|---|---|
+| Spread across one item's own buckets on one realm, median | **4.4x** |
+| Within 2x | **35.2%** |
+| Beyond 10x | **36.0%** |
+| Liquid pairs (both buckets ≥2 auctions), median relative error from substituting | **94%** |
+| …restricted to gaps >10 ilvls | **97%** median, 4522% p90 |
+| Pairs off by both >50% and >100g | **73.6%** |
+
+So the premise is right for about a third of gear and badly wrong for the rest. Matching any item level unconditionally reintroduces the 119k-vs-14k class of error that alpha2 fixed. **The bound stays.** Three changes instead.
+
+**1. The "no price for that realm" claim was wrong, and the alpha2 player update repeated it.** Every variant item in the dataset also carries a plain base-item entry — 16,928 of 16,928 — so past the bound rung 3 always answers with that realm's own pricing. It is not a gap. That entry equals the *cheapest* recorded bucket 76.8% of the time and sits at the 9th percentile of the bucket range on average, which is the conservative end and the right bias for a sell-side estimate. What the reporter is actually seeing is a price labelled `Realm~` with no explanation of what it was borrowed from.
+
+**2. `NEAREST_ILVL_TOLERANCE` 10 → 20.** Sized from the same dataset: the gap between adjacent recorded buckets of one item is a median of 10 ilvls and only 51.3% of adjacent gaps are within 10, so a bound of 10 declined about half of genuine neighbours. The p90 gap is 53, well clear of 20. Simulated over every bucket-as-target: the nearest-ilvl rung answers **58.5% → 77.4%** of variant misses, with base-item taking the remaining 22.6%.
+
+**3. Spread discrimination.** Rather than guess which items have appearance-linked pricing, measure it. An item whose own recorded buckets on a realm cluster within a threshold is one where item level demonstrably does not move the price, so an approximate match needs no warning; one whose buckets diverge keeps the flag.
+
+- `GetBatchPricing` accumulates per-base-ID min/max/count during the *existing* single walk — no extra pass. Attached to every rung, exact included, as `ilvlSpread` / `ilvlBucketCount` / `ilvlPriceLow` / `ilvlPriceHigh`.
+- `GetAllRealmPricing` carries the same fields via the new `GetIlvlBuckets`.
+- `TSMRealms:SpreadVerdict(pricing)` → `"tight"` / `"wide"` / `nil`. **`nil` must be read as "flag it"** — it is returned both when the check is off and when there is only one bucket to judge from.
+- **Confidence only.** The ladder is untouched, so which price is chosen never changes; turning the check off shows the same numbers with the flag always on. `DealFinder` maps `tight` → `dataQuality = "perRealm"` with a new `spreadTight` marker, everything else → `perRealmApprox` as before. Of the nearest-ilvl matches at tolerance 20, **26.2%** clear the 2x check.
+- Settings → **Pricing** (new section): `ilvlSpreadCheck` (default on) and `ilvlSpreadThreshold` (1.5x / 2x / 3x / 10x, default 2). A stored threshold ≤1 falls back to the default rather than classifying everything as interchangeable. New sections must also be added to `sectionOrder` in `UI/SettingsFrame.lua` or they are built and never positioned.
+
+**Per-item evidence, not just a verdict.** `GetIlvlBuckets(baseID, realm)` returns every recorded level with its price and auction count, memoised per base+realm (it walks a multi-megabyte realm string and the tooltip re-asks on every mouseover; cleared with `queryCache`, including on AppData reload, which `ProcessPendingData` previously did not do). Surfaced in the Deal Finder detail tooltip — spread ratio, price range, per-level breakdown with the borrowed level marked — and in `/fq debug pricing` as `spread=20.0x/2/wide` per realm plus a per-level line and the current setting state.
+
+**Also fixed:** `approxIlvl` was declared in `DealFinder` and passed to the UI but never assigned, so the detail tooltip's "matched at item level N" line — added in alpha2 specifically to make substitution visible — could not fire. The value was on the pricing entry as `matchedIlvl` the whole time.
+
+Row label uses colour rather than a glyph (muted `Realm` for a sound borrow, amber `Realm~` for a flagged one): the default WoW font renders most symbol codepoints as boxes.
+
+`test/tsmrealms_spec.lua` 39 → 65 assertions.
+
+### FQ-251 (#251): the diagnostic was lying
+
+The reporter's alpha2 dump showed all 13 Syndicator characters resolving (0 skipped — the alias fallback works) while every character on file read `updated never`.
+
+`/fq debug alts` read `inventory.lastUpdate`. Nothing in the addon writes that field; the projection writer stamps `inventory.lastScan` (`Scanner.lua:395`). Every character reported "never" regardless of how recently it had been projected, which made healthy alts look dead and sent the investigation at a phantom.
+
+The dump also showed 13 Syndicator characters against 10 FlipQueue records — Codophy-Area 52, Eveena-Kargath and Snipermoong-Moon Guard resolve cleanly and contribute nothing. Resolving is not the same as being projected: `WriteProjectedInventory` silently returns for a tombstoned character (`Scanner.lua:385`), and one that has never been walked has no record either. Both printed a clean `OK`. Three of thirteen is 23%, which is the reporter's "about 25% the items it missed".
+
+`/fq debug alts` now marks a resolved character `DELETED — tombstoned in FlipQueue, projection skipped` or `NO RECORD — resolves, but has never been projected`, and totals both under the resolve count. Same class of defect as the alpha2 fix — a skip that was real but invisible — one level further in.
+
 ## v0.13.2-alpha2
 
 Patch-day build. WoW 12.1.0 and TSM v4.14.75 landed, and two live reports came in with them: prices disagreeing with TSM on roughly half of gear (FQ-249) and about a quarter of one account's inventory never refreshing (FQ-251). Both are root-caused and fixed here. Embedded Cogworks-1.0 stays at **`v0.16.0`** (MINOR 31); **`## Interface` moves `120007` → `120100`** for the 12.1.0 client. **Schema stays at 13** — no migration. **F8 (in-game smoke test) not yet run** — cut for tester coverage tonight.

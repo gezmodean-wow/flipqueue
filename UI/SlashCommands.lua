@@ -1324,6 +1324,15 @@ local function debugPricing(rawQuery)
                 -- failure, and "via=nearestIlvl" alone never said which.
                 local via = p.source or "exact"
                 if p.matchedIlvl then via = via .. "@ilvl" .. p.matchedIlvl end
+                -- How far this item's own recorded levels price apart on this
+                -- realm, and the verdict that spread produces (FQ-249). This
+                -- is the evidence for whether a borrowed level is trustworthy.
+                if p.ilvlSpread then
+                    local verdict = ns.TSMRealms.SpreadVerdict
+                        and ns.TSMRealms:SpreadVerdict(p) or nil
+                    via = via .. string.format(" spread=%.1fx/%d%s", p.ilvlSpread,
+                        p.ilvlBucketCount or 0, verdict and ("/" .. verdict) or "")
+                end
                 L(string.format("  HIT  %-20s minBuyout=%s recent=%s n=%s via=%s",
                     realmName, mb, mvr, tostring(p.numAuctions), via))
             else
@@ -1332,6 +1341,39 @@ local function debugPricing(rawQuery)
             end
         end
         L(string.format("  %d hit(s), %d miss(es) across %d realms", hits, misses, #realms))
+
+        -- Per-realm item-level breakdown (FQ-249). The spread ratio on each
+        -- HIT line says how far this item's levels price apart; this says
+        -- which levels, at what price, so a borrowed price can be checked
+        -- against the bucket it came from rather than taken on trust.
+        if ns.TSMRealms.GetIlvlBuckets then
+            local enabled = ns.TSMRealms.SpreadCheckEnabled
+                and ns.TSMRealms:SpreadCheckEnabled()
+            local threshold = ns.TSMRealms.SpreadThreshold
+                and ns.TSMRealms:SpreadThreshold() or 2
+            L(string.format("  spread check: %s (threshold %.1fx)",
+                enabled and "on" or "off", threshold))
+            local baseID = tsmStr:match("^i:(%d+)")
+            local shownRealms = 0
+            for _, realmName in ipairs(realms) do
+                local p = pricing[realmName]
+                if baseID and p and p.ilvlSpread and shownRealms < 6 then
+                    shownRealms = shownRealms + 1
+                    local buckets = ns.TSMRealms:GetIlvlBuckets(baseID, realmName)
+                    local parts = {}
+                    for _, b in ipairs(buckets or {}) do
+                        if b.price then
+                            parts[#parts + 1] = string.format("i%d=%s(%d)",
+                                b.ilvl, ns:FormatGold(b.price), b.numAuctions or 0)
+                        end
+                    end
+                    L(string.format("    %-20s %s", realmName, table.concat(parts, " ")))
+                end
+            end
+            if shownRealms == 0 then
+                L("    (no realm records this item at more than one item level)")
+            end
+        end
 
         -- Replay DealFinder's own realm resolution for this item: for each
         -- sell realm, does FindRealmPricing land on per-realm data or drop
@@ -1673,8 +1715,13 @@ local function debugAlts()
         local inv = c and c.inventory
         local n = 0
         if inv and inv.items then for _ in pairs(inv.items) do n = n + 1 end end
-        local age = (inv and inv.lastUpdate and ns.FormatRelativeTime)
-            and ns:FormatRelativeTime(inv.lastUpdate) or "never"
+        -- inventory.lastScan is the field the projection writer actually
+        -- stamps (Scanner.lua:395). This read used to name a `lastUpdate`
+        -- field that nothing in the addon writes, so every character reported
+        -- "updated never" no matter how recently it had been projected —
+        -- a dump that made healthy alts look dead (FQ-251).
+        local age = (inv and inv.lastScan and ns.FormatRelativeTime)
+            and ns:FormatRelativeTime(inv.lastScan) or "never"
         L(string.format("  %-30s %4d item(s)  updated %s%s", k, n, age,
             (c and c.syndicatorBacked) and "" or "  (not Syndicator-backed)"))
     end
@@ -1693,14 +1740,29 @@ local function debugAlts()
         return
     end
 
-    local resolved, skippedN = 0, 0
+    local resolved, skippedN, tombstoned, absent = 0, 0, 0, 0
     table.sort(allChars)
     for _, synKey in ipairs(allChars) do
         local fqKey = ns.Scanner and ns.Scanner.TranslateKeyForDebug
             and ns.Scanner:TranslateKeyForDebug(synKey) or nil
         if fqKey then
             resolved = resolved + 1
-            L(string.format("  OK   %-30s -> %s", synKey, fqKey))
+            -- Resolving is not the same as being projected. A tombstoned
+            -- character is silently skipped by WriteProjectedInventory
+            -- (Scanner.lua:385), and one that has simply never been walked has
+            -- no record either — both used to print a clean "OK" while
+            -- contributing nothing to the shared inventory, which is the shape
+            -- of the reporter's "25% of items missing" (FQ-251).
+            local note = ""
+            if ns.IsCharDeleted and ns:IsCharDeleted(fqKey) then
+                tombstoned = tombstoned + 1
+                note = "  DELETED — tombstoned in FlipQueue, projection skipped;"
+                    .. " restore it from Settings > Deleted Characters"
+            elseif not (ns.db and ns.db.characters and ns.db.characters[fqKey]) then
+                absent = absent + 1
+                note = "  NO RECORD — resolves, but has never been projected"
+            end
+            L(string.format("  OK   %-30s -> %s%s", synKey, fqKey, note))
         else
             skippedN = skippedN + 1
             L(string.format("  SKIP %-30s realm cannot be resolved — this "
@@ -1709,6 +1771,11 @@ local function debugAlts()
     end
     L(string.format("  %d resolved, %d skipped, of %d Syndicator character(s)",
         resolved, skippedN, #allChars))
+    if tombstoned > 0 or absent > 0 then
+        L(string.format("  of the resolved: %d tombstoned, %d with no record "
+            .. "— these contribute NO items to shared inventory",
+            tombstoned, absent))
+    end
 
     local lastSkipped = ns.Scanner and ns.Scanner._lastSkippedKeys
     if lastSkipped and #lastSkipped > 0 then
