@@ -199,11 +199,18 @@ function DealFinder:ScanChunked(pool, onProgress, onComplete)
     local batchPricing = nil
     if hasRealmData then
         local itemStrings = {}
+        -- Item keys ride along so TSMRealms can compute each item's level form
+        -- from the real bonus IDs rather than from TSM's reordered item string
+        -- (FQ-249). Without them every variant resolves to a wrong ilvl.
+        local keyByString = {}
         for _, poolItem in ipairs(pool) do
             local s = ns.TSM:ItemKeyToTSMString(poolItem.itemKey)
-            if s then itemStrings[#itemStrings + 1] = s end
+            if s then
+                itemStrings[#itemStrings + 1] = s
+                keyByString[s] = poolItem.itemKey
+            end
         end
-        batchPricing = ns.TSMRealms:GetBatchPricing(itemStrings)
+        batchPricing = ns.TSMRealms:GetBatchPricing(itemStrings, keyByString)
     end
 
     local itemGroups = {}
@@ -238,7 +245,7 @@ function DealFinder:ScanChunked(pool, onProgress, onComplete)
             if batchPricing then
                 allRealmPrices = batchPricing[tsmStr] or {}
             elseif hasRealmData then
-                allRealmPrices = ns.TSMRealms:GetAllRealmPricing(tsmStr) or {}
+                allRealmPrices = ns.TSMRealms:GetAllRealmPricing(tsmStr, itemKey) or {}
             else
                 allRealmPrices = {}
             end

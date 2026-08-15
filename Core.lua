@@ -272,8 +272,78 @@ function ns:MakeItemKey(itemID, bonusIDs, modifiers)
     return ns.cw:MakeItemKey(itemID, bonusIDs, modifiers)
 end
 
+-- ===========================================================================
+-- TEMPORARY LOCAL OVERRIDE of ns.cw:ItemKeyToItemString (FQ-249).
+--
+-- Cogworks-1.0's builder (Libs/Cogworks-1.0/Items.lua:97) lays the bonus-ID
+-- block ONE FIELD EARLY. Its parts table holds 12 entries before the bonus
+-- count, but WoW's item string is:
+--
+--   item : itemID : enchant : gem1 : gem2 : gem3 : gem4 : suffix : uniqueID
+--        : linkLevel : specID : modifiersMask : itemContext : numBonusIDs : ...
+--     1       2         3        4      5      6      7        8        9
+--                          10         11          12             13         14
+--
+-- so numBonusIDs belongs at field 14, not 13. Cogworks' own layout comment
+-- lists only 13 fields — it is missing itemContext, i.e. written against a
+-- pre-Legion layout. The result for key "170112;6655:40:1678;9=50":
+--
+--   Cogworks: item:170112:::::::::::3:6655:40:1678:1:9:50
+--                                   ^ count lands in itemContext
+--                                     ^ first real bonus lands in numBonusIDs
+--
+-- Everything downstream that resolves an item level from a key inherits the
+-- error, which is one half of the FQ-249 wrong-price report.
+--
+-- ROLLBACK: once Cogworks-1.0 ships the corrected builder, delete this
+-- function body and restore the one-line delegation:
+--     function ns:ItemKeyToItemString(itemKey) return ns.cw:ItemKeyToItemString(itemKey) end
+-- The layout is pinned by test/itemstring_spec.lua, which will fail against a
+-- still-broken library and pass against a fixed one.
+-- ===========================================================================
 function ns:ItemKeyToItemString(itemKey)
-    return ns.cw:ItemKeyToItemString(itemKey)
+    if not itemKey or itemKey == "" then return nil end
+    if itemKey:find("^pet:") then return nil end
+
+    local idStr, bonusStr, modStr = strsplit(";", itemKey)
+    local numID = tonumber(idStr)
+    if not numID or numID <= 0 then return nil end
+
+    -- 13 leading fields: "item", itemID, then 11 empties through itemContext.
+    local parts = { "item", idStr, "", "", "", "", "", "", "", "", "", "", "" }
+
+    if bonusStr and bonusStr ~= "" then
+        local bonuses = { strsplit(":", bonusStr) }
+        parts[#parts + 1] = tostring(#bonuses)
+        for _, b in ipairs(bonuses) do
+            parts[#parts + 1] = b
+        end
+    else
+        parts[#parts + 1] = "0"
+    end
+
+    -- Modifier block: count first, then type/value pairs. Counted from the
+    -- pairs that actually parse, so a malformed entry cannot desync the
+    -- count from the values that follow it.
+    if modStr and modStr ~= "" then
+        local types, values = {}, {}
+        for _, m in ipairs({ strsplit(":", modStr) }) do
+            local k, v = m:match("^(%d+)=(%d+)$")
+            if k and v then
+                types[#types + 1] = k
+                values[#values + 1] = v
+            end
+        end
+        if #types > 0 then
+            parts[#parts + 1] = tostring(#types)
+            for i = 1, #types do
+                parts[#parts + 1] = types[i]
+                parts[#parts + 1] = values[i]
+            end
+        end
+    end
+
+    return table.concat(parts, ":")
 end
 
 -- Set up GameTooltip for an item, preferring the bonus-ID-decorated

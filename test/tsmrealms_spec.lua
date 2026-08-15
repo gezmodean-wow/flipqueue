@@ -134,6 +134,25 @@ check("no-ilvl/Alpha resolves", src(r, "i:222::2:1665", "Alpha"), "nearestIlvl")
 check("no-ilvl/Bravo resolves", src(r, "i:222::2:1665", "Bravo"), "nearestIlvl")
 check("no-ilvl/Charlie resolves", src(r, "i:222::2:1665", "Charlie"), "baseItem")
 
+-- 4b. FQ-249: a derived item level far from every recorded bucket must NOT
+--     borrow that bucket's price. Item 222 is recorded at ilvl 100/120 on
+--     Alpha and 110 on Bravo; a derived 19 is a different item entirely, and
+--     answering with the ilvl-100 price is how the reporter's polearm showed
+--     119.4k against a true value near 14k. The nearest-ilvl rung must decline
+--     and let the coarser base-item rung answer instead.
+stubIlvl = 19
+r = batch({ "i:222::2:1668" })
+check("far-ilvl/Alpha declines nearestIlvl", src(r, "i:222::2:1668", "Alpha"), "baseItem")
+check("far-ilvl/Bravo declines nearestIlvl", src(r, "i:222::2:1668", "Bravo"), "baseItem")
+check("far-ilvl/Alpha uses base price", minBuyout(r, "i:222::2:1668", "Alpha"), 30)
+
+-- 4c. Just inside the bound still resolves, so the guard is a tolerance and
+--     not a blanket disabling of the rung. Bravo records ilvl 110 only.
+stubIlvl = 118
+r = batch({ "i:222::2:1669" })
+check("near-ilvl/Bravo still matches", src(r, "i:222::2:1669", "Bravo"), "nearestIlvl")
+check("near-ilvl/Bravo uses ilvl 110", minBuyout(r, "i:222::2:1669", "Bravo"), 30)
+
 -- 5. Pets carry no base ID: exact match only, no fallback invented.
 stubIlvl = 100
 r = batch({ "p:1965" })

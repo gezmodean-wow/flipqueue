@@ -182,11 +182,49 @@ end)
 -- and DealFinder falls back to region-wide pricing, producing identical
 -- prices across realms for variant gear.
 --
+-- How far the nearest-ilvl rung may reach, in item levels (FQ-249).
+--
+-- This rung exists to absorb small drift between the ilvl our client computes
+-- and the ilvl the scanning client recorded — a few levels at most. It was
+-- previously UNBOUNDED, so an item whose computed ilvl was 19 happily matched
+-- a recorded bucket at 45 and reported that bucket's price as this item's.
+-- On the FQ-249 reporter's polearm that produced 119.4k on Illidan against a
+-- true value near 14k: not a stale price, a different item.
+--
+-- Beyond this bound we would rather report no per-realm data and let the
+-- caller fall back than answer confidently with another variant's price.
+local NEAREST_ILVL_TOLERANCE = 10
+
 -- Cache to avoid repeated GetDetailedItemLevelInfo calls.
 local levelFormCache = {}
 
-local function ToLevelForm(tsmItemStr)
+-- fqKey is optional but strongly preferred (FQ-249). Given one, the item level
+-- is computed from a correctly-built WoW item string. Without one we fall back
+-- to splicing the TSM string, which is wrong for any item whose bonus IDs and
+-- modifiers do not survive TSM's own reordering — see the block below.
+local function ToLevelForm(tsmItemStr, fqKey)
     if not tsmItemStr then return nil end
+
+    local cacheKey = fqKey and (tsmItemStr .. "\0" .. fqKey) or tsmItemStr
+    if levelFormCache[cacheKey] then return levelFormCache[cacheKey] end
+
+    -- Preferred path: derive the ilvl from the item key we were given. This
+    -- goes through ns:ItemKeyToItemString, which places bonus IDs and
+    -- modifiers where WoW actually reads them, so GetDetailedItemLevelInfo
+    -- sees the real variant.
+    if fqKey and fqKey ~= "" and not fqKey:find("^pet:") and GetDetailedItemLevelInfo then
+        local baseID = fqKey:match("^(%d+)")
+        local wowStr = ns.ItemKeyToItemString and ns:ItemKeyToItemString(fqKey)
+        if baseID and wowStr then
+            local ok, ilvl = pcall(GetDetailedItemLevelInfo, wowStr)
+            if ok and ilvl and ilvl > 0 then
+                local levelStr = "i:" .. baseID .. "::i" .. ilvl
+                levelFormCache[cacheKey] = levelStr
+                return levelStr
+            end
+        end
+    end
+
     if levelFormCache[tsmItemStr] then return levelFormCache[tsmItemStr] end
 
     -- Already a level form: i:NNNN::iLEVEL
@@ -207,9 +245,17 @@ local function ToLevelForm(tsmItemStr)
     local rest = tsmItemStr:match("^i:%d+::?(.*)$") or ""
     if rest == "" then return nil end
 
-    -- Build "item:NNNN:::::::::::::numBonus:b1:b2:..." (12 empty fields
-    -- between itemID and numBonusIDs — matches Core.lua's ItemKeyToItemString
-    -- format that TSM_API.ToItemString accepts).
+    -- LAST RESORT (FQ-249). This splices TSM's field order straight into WoW's
+    -- item-string positions, and the two do not agree: for the reporter's
+    -- polearm, TSM's "i:170112::4:1:40:50:1678" became numBonusIDs=4 with
+    -- bonuses 1/40/50/1678, inventing bonus 1, promoting the modifier VALUE 50
+    -- to a bonus ID, and dropping the real bonus 6655 — the scaling bonus that
+    -- sets the item level. GetDetailedItemLevelInfo then answered 19 for an
+    -- item nearer 74.
+    --
+    -- It is kept only for callers that have no fqKey to offer. Anything that
+    -- can pass one takes the correct path at the top of this function; prefer
+    -- fixing the caller over trusting this result.
     local wowStr = "item:" .. baseID .. string.rep(":", 12) .. rest
 
     if not GetDetailedItemLevelInfo then return nil end
@@ -231,7 +277,7 @@ end
 -- item level, then the base item — see the resolution ladder documented on
 -- GetBatchPricing.
 -- Returns decoded field values plus the match source, or nil.
-local function FindItemInRaw(rawEntry, tsmItemStr)
+local function FindItemInRaw(rawEntry, tsmItemStr, fqKey)
     if not rawEntry or not rawEntry.str then return nil end
 
     -- Items stored as: {itemID,val1,val2,...} or {"i:itemID::...",val1,val2,...}
@@ -254,7 +300,7 @@ local function FindItemInRaw(rawEntry, tsmItemStr)
     local wantIlvl, matchedIlvl
     if not otherData then
         -- Try the level form before giving up.
-        local levelStr = ToLevelForm(tsmItemStr)
+        local levelStr = ToLevelForm(tsmItemStr, fqKey)
         if levelStr and levelStr ~= tsmItemStr then
             wantIlvl = tonumber(levelStr:match("::i(%d+)$"))
             local escapedLevel = levelStr:gsub("([%.%+%-%*%?%[%]%^%$%(%)%%])", "%%%1")
@@ -272,7 +318,9 @@ local function FindItemInRaw(rawEntry, tsmItemStr)
             local ilvl = tonumber(ilvlStr)
             if ilvl then
                 local delta = wantIlvl and math.abs(ilvl - wantIlvl) or 0
-                if not bestDelta or delta < bestDelta then
+                -- Bounded: a distant bucket is a different item, not a
+                -- stale price for this one (FQ-249).
+                if delta <= NEAREST_ILVL_TOLERANCE and (not bestDelta or delta < bestDelta) then
                     bestDelta = delta
                     otherData = values
                     matchedIlvl = ilvl
@@ -309,8 +357,8 @@ end
 -- Public accessor for the level-form converter so /fq debug pricing can
 -- display what variant key we'd use for AuctionDB matching alongside the
 -- bonus-form input. Returns nil if conversion isn't possible.
-function TSMRealms:ToLevelForm(tsmItemStr)
-    return ToLevelForm(tsmItemStr)
+function TSMRealms:ToLevelForm(tsmItemStr, fqKey)
+    return ToLevelForm(tsmItemStr, fqKey)
 end
 
 function TSMRealms:GetRealmList()
@@ -349,7 +397,7 @@ end
 
 -- Get all pricing for an item across all realms.
 -- Returns: { realmName = { minBuyout, numAuctions, marketValueRecent, updateTime } }
-function TSMRealms:GetAllRealmPricing(itemString)
+function TSMRealms:GetAllRealmPricing(itemString, fqKey)
     if not isLoaded then return {} end
 
     -- Check cache
@@ -361,7 +409,7 @@ function TSMRealms:GetAllRealmPricing(itemString)
     local result = {}
     for _, realm in ipairs(realmList) do
         local rawEntry = realmRaw[realm]
-        local values, source, matchedIlvl = FindItemInRaw(rawEntry, itemString)
+        local values, source, matchedIlvl = FindItemInRaw(rawEntry, itemString, fqKey)
         if values then
             local fl = rawEntry.fieldLookup
             local minBuyout = fl.minBuyout and values[fl.minBuyout]
@@ -454,7 +502,7 @@ end
 -- which is exactly the "same price on all realms" report in FQ-230.
 -- Measured on a live 40-realm AppData: every gear item that appears in level
 -- form also has a plain base-item entry, so rung 3 always has something.
-function TSMRealms:GetBatchPricing(itemStrings)
+function TSMRealms:GetBatchPricing(itemStrings, keyByString)
     local result = {}
     if not isLoaded or not itemStrings or #itemStrings == 0 then return result end
 
@@ -476,7 +524,7 @@ function TSMRealms:GetBatchPricing(itemStrings)
                 wantedIDs[id] = str
             else
                 wantedQuoted[str] = str
-                local levelStr = ToLevelForm(str)
+                local levelStr = ToLevelForm(str, keyByString and keyByString[str])
                 if levelStr and levelStr ~= str then
                     wantedQuoted[levelStr] = str
                     targetIlvl[str] = tonumber(levelStr:match("::i(%d+)$"))
@@ -567,7 +615,9 @@ function TSMRealms:GetBatchPricing(itemStrings)
                                     local k = wanters[i]
                                     local want = targetIlvl[k]
                                     local delta = want and math.abs(ilvl - want) or 0
-                                    if lvlDelta[k] == nil or delta < lvlDelta[k] then
+                                    -- Bounded, same as FindItemInRaw (FQ-249).
+                                    if delta <= NEAREST_ILVL_TOLERANCE
+                                        and (lvlDelta[k] == nil or delta < lvlDelta[k]) then
                                         lvlDelta[k] = delta
                                         lvlMin[k] = minBuyout
                                         lvlNum[k] = numAuctions

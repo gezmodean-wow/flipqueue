@@ -536,7 +536,7 @@ function ItemResearch:GetItemResearch(itemKey, itemName, skipCache)
     if ns.TSMRealms and ns.TSMRealms:IsLoaded() and itemKey then
         local tsmStr = ns.TSM and ns.TSM:ItemKeyToTSMString(itemKey)
         if tsmStr then
-            record.tsmRealms = ns.TSMRealms:GetAllRealmPricing(tsmStr)
+            record.tsmRealms = ns.TSMRealms:GetAllRealmPricing(tsmStr, itemKey)
         end
     end
 

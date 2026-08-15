@@ -1283,7 +1283,7 @@ local function debugPricing(rawQuery)
         -- TSM's per-realm AuctionDB. If different from tsmStr, that's
         -- the key actually used for the match.
         if tsmStr and ns.TSMRealms and ns.TSMRealms.ToLevelForm then
-            local levelStr = ns.TSMRealms:ToLevelForm(tsmStr)
+            local levelStr = ns.TSMRealms:ToLevelForm(tsmStr, itemKey)
             if levelStr and levelStr ~= tsmStr then
                 L("level form:    " .. levelStr)
             elseif levelStr == tsmStr then
@@ -1310,7 +1310,7 @@ local function debugPricing(rawQuery)
                 L("recorded ilvls: (none — this item is stored by plain ID only)")
             end
         end
-        local pricing = ns.TSMRealms:GetAllRealmPricing(tsmStr) or {}
+        local pricing = ns.TSMRealms:GetAllRealmPricing(tsmStr, itemKey) or {}
         local hits, misses = 0, 0
         local realms = ns.TSMRealms:GetRealmList() or {}
         for _, realmName in ipairs(realms) do
@@ -1319,8 +1319,13 @@ local function debugPricing(rawQuery)
                 hits = hits + 1
                 local mb = p.minBuyout and ns:FormatGold(p.minBuyout) or "?"
                 local mvr = p.marketValueRecent and ns:FormatGold(p.marketValueRecent) or "?"
+                -- Name the bucket a nearestIlvl match actually came from: a
+                -- price borrowed from a different item level is the FQ-249
+                -- failure, and "via=nearestIlvl" alone never said which.
+                local via = p.source or "exact"
+                if p.matchedIlvl then via = via .. "@ilvl" .. p.matchedIlvl end
                 L(string.format("  HIT  %-20s minBuyout=%s recent=%s n=%s via=%s",
-                    realmName, mb, mvr, tostring(p.numAuctions), p.source or "exact"))
+                    realmName, mb, mvr, tostring(p.numAuctions), via))
             else
                 misses = misses + 1
                 L(string.format("  miss %s", realmName))
