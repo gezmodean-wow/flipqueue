@@ -1623,6 +1623,104 @@ local function debugRealms()
     UI:ShowExportPopup(table.concat(lines, "\n"), "Ctrl+A, Ctrl+C to copy")
 end
 
+local function debugAlts()
+    -- /fq debug alts
+    -- Why some characters' inventories never refresh (FQ-251).
+    --
+    -- Alt inventories are projected from Syndicator, whose character keys use
+    -- a normalized realm ("Jimmy-EarthenRing") while FlipQueue keys on the
+    -- display realm ("Jimmy-Earthen Ring"). Translating between them needs the
+    -- display name, and the realm alias map only ever learns the realm the
+    -- player is logged into. A character on a realm never visited since that
+    -- feature shipped was skipped by the bulk projection, silently.
+    --
+    -- This dump shows, per Syndicator character, whether the key resolves — so
+    -- a stale inventory reads as a SKIP line rather than as data that never
+    -- arrives for no stated reason.
+    local lines = {}
+    local function L(s) lines[#lines + 1] = s or "" end
+
+    L(DumpHeader("/fq debug alts"))
+    L("captured: " .. date("%Y-%m-%d %H:%M:%S"))
+
+    local aliases = ns.db and ns.db.realmAliases or nil
+    local aliasN = 0
+    if aliases then for _ in pairs(aliases) do aliasN = aliasN + 1 end end
+    L("")
+    L("--- realm alias map (normalized -> display) ---")
+    L("realms this account has logged into: " .. aliasN)
+    if aliasN == 0 then
+        L("  (empty — every alt must resolve via the character fallback)")
+    else
+        local keys = {}
+        for k in pairs(aliases) do keys[#keys + 1] = k end
+        table.sort(keys)
+        for _, k in ipairs(keys) do
+            L(string.format("  %-24s -> %s", k, tostring(aliases[k])))
+        end
+    end
+
+    L("")
+    L("--- FlipQueue characters on file ---")
+    local fqKeys = {}
+    if ns.db and ns.db.characters then
+        for k in pairs(ns.db.characters) do fqKeys[#fqKeys + 1] = k end
+    end
+    table.sort(fqKeys)
+    L("count: " .. #fqKeys)
+    for _, k in ipairs(fqKeys) do
+        local c = ns.db.characters[k]
+        local inv = c and c.inventory
+        local n = 0
+        if inv and inv.items then for _ in pairs(inv.items) do n = n + 1 end end
+        local age = (inv and inv.lastUpdate and ns.FormatRelativeTime)
+            and ns:FormatRelativeTime(inv.lastUpdate) or "never"
+        L(string.format("  %-30s %4d item(s)  updated %s%s", k, n, age,
+            (c and c.syndicatorBacked) and "" or "  (not Syndicator-backed)"))
+    end
+
+    L("")
+    L("--- Syndicator characters and how each resolves ---")
+    if not (Syndicator and Syndicator.API and Syndicator.API.GetAllCharacters) then
+        L("  (Syndicator API unavailable — nothing can be projected)")
+        UI:ShowExportPopup(table.concat(lines, "\n"), "Ctrl+A, Ctrl+C to copy")
+        return
+    end
+    local ok, allChars = pcall(Syndicator.API.GetAllCharacters)
+    if not ok or type(allChars) ~= "table" then
+        L("  (GetAllCharacters failed)")
+        UI:ShowExportPopup(table.concat(lines, "\n"), "Ctrl+A, Ctrl+C to copy")
+        return
+    end
+
+    local resolved, skippedN = 0, 0
+    table.sort(allChars)
+    for _, synKey in ipairs(allChars) do
+        local fqKey = ns.Scanner and ns.Scanner.TranslateKeyForDebug
+            and ns.Scanner:TranslateKeyForDebug(synKey) or nil
+        if fqKey then
+            resolved = resolved + 1
+            L(string.format("  OK   %-30s -> %s", synKey, fqKey))
+        else
+            skippedN = skippedN + 1
+            L(string.format("  SKIP %-30s realm cannot be resolved — this "
+                .. "character's inventory never updates", synKey))
+        end
+    end
+    L(string.format("  %d resolved, %d skipped, of %d Syndicator character(s)",
+        resolved, skippedN, #allChars))
+
+    local lastSkipped = ns.Scanner and ns.Scanner._lastSkippedKeys
+    if lastSkipped and #lastSkipped > 0 then
+        L("")
+        L("--- skipped on the most recent bulk projection ---")
+        for _, k in ipairs(lastSkipped) do L("  " .. k) end
+    end
+
+    UI:ShowExportPopup(table.concat(lines, "\n"), "Ctrl+A, Ctrl+C to copy")
+end
+
+
 local function debugExpired(rest)
     -- /fq debug expired         — list uncollected expired/cancelled entries.
     -- /fq debug expired clear   — also finalize them as collected (no
@@ -1980,6 +2078,8 @@ local function cmdDebug(args)
         debugPriceSource(rest)
     elseif sub == "realms" then
         debugRealms()
+    elseif sub == "alts" then
+        debugAlts()
     elseif sub == "expired" then
         debugExpired(rest)
     elseif sub == "scan" then
@@ -2034,6 +2134,6 @@ ns.cw:RegisterSlashCommands("FlipQueue", {
         { name = "sync",                                                   help = "Force full re-sync with linked account",                                   run = cmdSync },
         { name = "reconcile",                                      args = "[reset]",     help = "Upgrade expired/cancelled log entries to sold using TSM data", run = cmdReconcile },
         { name = "testpost",                                               help = "Run the AuctionPost self-test",                                            run = cmdTestpost },
-        { name = "debug",                                          args = "[subcommand]", help = "Diagnostics — try /fq debug for the console, or /fq debug <toggle|log|perf|bankpopup|bagprices|parsegold|pulls|gold|pricing|pricesource|realms|expired|scan|post>", run = cmdDebug },
+        { name = "debug",                                          args = "[subcommand]", help = "Diagnostics — try /fq debug for the console, or /fq debug <toggle|log|perf|bankpopup|bagprices|parsegold|pulls|gold|pricing|pricesource|realms|alts|expired|scan|post>", run = cmdDebug },
     },
 })

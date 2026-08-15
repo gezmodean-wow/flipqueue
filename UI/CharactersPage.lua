@@ -1251,8 +1251,17 @@ local function RefreshLoadingBanner()
     loadingBanner:Show()
     local frac = status.done / status.total
     if frac < 0 then frac = 0 elseif frac > 1 then frac = 1 end
-    loadingBannerLabel:SetFormattedText("Loading inventory data: %d / %d characters",
-        status.done, status.total)
+    -- Name the skipped characters in the banner (FQ-251). Counting only the
+    -- work we planned to do reported a clean "30 / 30" while characters were
+    -- being dropped, which is how stale inventory went unnoticed.
+    if status.skipped and status.skipped > 0 then
+        loadingBannerLabel:SetFormattedText(
+            "Loading inventory data: %d / %d characters  |cffffa500(%d skipped)|r",
+            status.done, status.total, status.skipped)
+    else
+        loadingBannerLabel:SetFormattedText("Loading inventory data: %d / %d characters",
+            status.done, status.total)
+    end
     local barInner = loadingBannerBar:GetWidth() - 2
     if barInner < 0 then barInner = 0 end
     loadingBannerBarFill:SetWidth(barInner * frac)

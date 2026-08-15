@@ -278,18 +278,87 @@ local function RecordRealmAlias()
     end
 end
 
+-- Collapse a realm name to the shape Syndicator's keys use: accents folded,
+-- lowercased, and every non-alphanumeric character removed. Applied to both
+-- sides of a comparison it makes "Earthen Ring" and "EarthenRing" — or
+-- "Confrérie du Thorium" and "ConfrerieduThorium" — compare equal.
+local function SyndicatorRealmForm(realm)
+    if not realm or realm == "" then return nil end
+    local folded = ns.NormalizeRealmKey and ns:NormalizeRealmKey(realm) or realm:lower()
+    local stripped = folded:gsub("%W", "")
+    return stripped ~= "" and stripped or nil
+end
+
+-- Reverse index over the characters FlipQueue already knows about:
+--   "name-syndicatorrealmform" -> the character's real FlipQueue key
+--
+-- Rebuilt whenever the character table's size changes, which is cheap and
+-- catches the only case that matters (a character appearing).
+local charIndex, charIndexN = nil, -1
+
+local function RebuildCharIndex()
+    charIndex = {}
+    charIndexN = 0
+    if not (ns.db and ns.db.characters) then return end
+    for fqKey in pairs(ns.db.characters) do
+        charIndexN = charIndexN + 1
+        local name, display = fqKey:match("^(.-)%-(.+)$")
+        local realmForm = display and SyndicatorRealmForm(display)
+        if name and realmForm then
+            charIndex[name:lower() .. "-" .. realmForm] = fqKey
+        end
+    end
+end
+
 -- Given a Syndicator-format key "Name-NormalizedRealm", return the
--- FlipQueue-format key "Name-DisplayRealm" if the realm is in our alias
--- map. Returns nil when the realm is unknown — caller should skip the
--- char rather than guessing, since writing to the wrong key would split
--- the character's data across two records.
+-- FlipQueue-format key "Name-DisplayRealm".
+--
+-- Two resolution paths (FQ-251):
+--   1. The realm alias map, recorded when the player logs into a realm.
+--   2. The characters FlipQueue already has on file.
+--
+-- Path 2 exists because path 1 only ever learns the realm you are CURRENTLY
+-- logged into (see RecordRealmAlias). A player whose characters span a dozen
+-- realms therefore had an alias only for the realms visited since the feature
+-- shipped, and every character on an unvisited realm was skipped by the bulk
+-- projection — silently, forever. That is the "some of my inventory never
+-- updates" report. If FlipQueue already holds a record for the character we
+-- know its display realm without needing a login, so use it, and record the
+-- alias so the map heals itself for next time.
+--
+-- Still returns nil for a character we have never seen on a realm we cannot
+-- name: writing to a guessed key would split that character's data across two
+-- records, which is worse than skipping. Callers must report such skips
+-- rather than swallow them.
 local function TranslateSyndicatorKey(synKey)
-    if not synKey or not ns.db or not ns.db.realmAliases then return nil end
+    if not synKey or not ns.db then return nil end
     local name, normalized = synKey:match("^(.-)%-(.+)$")
     if not name or not normalized then return nil end
-    local display = ns.db.realmAliases[normalized]
-    if not display then return nil end
-    return name .. "-" .. display
+
+    local aliases = ns.db.realmAliases
+    local display = aliases and aliases[normalized]
+    if display then return name .. "-" .. display end
+
+    local realmForm = SyndicatorRealmForm(normalized)
+    if not realmForm then return nil end
+
+    local count = 0
+    if ns.db.characters then
+        for _ in pairs(ns.db.characters) do count = count + 1 end
+    end
+    if not charIndex or count ~= charIndexN then RebuildCharIndex() end
+
+    local fqKey = charIndex[name:lower() .. "-" .. realmForm]
+    if not fqKey then return nil end
+
+    -- Heal the alias map so the next lookup takes the fast path, and so any
+    -- other character on this realm resolves without needing its own record.
+    local _, resolvedDisplay = fqKey:match("^(.-)%-(.+)$")
+    if resolvedDisplay then
+        ns.db.realmAliases = ns.db.realmAliases or {}
+        ns.db.realmAliases[normalized] = resolvedDisplay
+    end
+    return fqKey
 end
 
 -- Core projection writer: projects Syndicator's charData into
@@ -398,6 +467,7 @@ local function BulkProjectKnownAlts()
     local currentSyn = CurrentSyndicatorKey()
     local todo = {}
     local skipped = 0
+    local skippedKeys = {}
     for _, synKey in ipairs(allChars) do
         if synKey ~= currentSyn then
             local fqKey = TranslateSyndicatorKey(synKey)
@@ -405,17 +475,29 @@ local function BulkProjectKnownAlts()
                 todo[#todo + 1] = { synKey = synKey, fqKey = fqKey }
             else
                 skipped = skipped + 1
+                skippedKeys[#skippedKeys + 1] = synKey
             end
         end
     end
 
+    -- Always report skips, not only when nothing projected (FQ-251). A
+    -- partial skip used to be invisible: the count was stored and never
+    -- shown, and the loading banner counted only the work it planned to do,
+    -- so a player whose alts were being dropped saw a tidy "30 / 30" and no
+    -- reason to doubt it.
+    if skipped > 0 then
+        ns:PrintDebug("Bulk-project: " .. skipped .. " character(s) skipped, "
+            .. "realm could not be resolved: " .. table.concat(skippedKeys, ", "))
+    end
+
     if #todo == 0 then
         if skipped > 0 then
-            ns:PrintDebug("Bulk-project: 0 alt(s) refreshed, " .. skipped
-                .. " skipped (realm not in alias map)")
+            Scanner._lastSkippedKeys = skippedKeys
+            Scanner._bulkProjectStatus.skipped = skipped
         end
         return
     end
+    Scanner._lastSkippedKeys = skippedKeys
 
     local status = Scanner._bulkProjectStatus
     status.active  = true
@@ -466,6 +548,14 @@ local function BulkProjectKnownAlts()
         ns.UI:RefreshCharactersLoadingBanner()
     end
     C_Timer.After(0, ProjectNext)
+end
+
+-- Expose the Syndicator-key translation for /fq debug alts (FQ-251). Read-only
+-- from the caller's point of view — it resolves exactly as the bulk projection
+-- does, so the dump reports what actually happens rather than a re-derivation
+-- that could disagree with it.
+function Scanner:TranslateKeyForDebug(synKey)
+    return TranslateSyndicatorKey(synKey)
 end
 
 -- Public accessor. UI listens for the Cogworks InventoryChanged event
