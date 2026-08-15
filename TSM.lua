@@ -60,7 +60,17 @@ local OP_CACHE_TTL = 300 -- 5 min for operations (they rarely change mid-session
 -- and IsAuctionFiltered (269-285) are unchanged from v4.14.66 — identical line
 -- numbers and branch structure, no new required operation fields in Load. The
 -- local port in AuctionPost:ResolvePostPrice remains accurate (FQ-215).
-local TSM_AUDITED_VERSION = "v4.14.69"
+--
+-- Re-audited 2026-08-14 against TSM v4.14.75 (11.2 / Interface 120100):
+-- MakePostDecision still starts at line 417 and IsAuctionFiltered at 269, with
+-- every branch identical to the v4.14.69 reading — no-competition normal, the
+-- three invalid-seller/blacklist early returns, the below-min priceReset tree,
+-- isPlayer/matchWhitelist match, whitelist no-post, the aboveMax tree, plain
+-- undercut, and the reason-gated `max(buyout, minPrice)` clamp that the
+-- blacklist branch bypasses. AuctioningOperation.Load registers no new setting
+-- that MakePostDecision reads; every name in EXPECTED_OP_FIELDS is still
+-- present. The local port in AuctionPost:ResolvePostPrice remains accurate.
+local TSM_AUDITED_VERSION = "v4.14.75"
 
 -- Fields we expect every Auctioning operation record to expose. If TSM
 -- renames one, GetItemAuctioningOp returns nil for it and ResolvePostPrice

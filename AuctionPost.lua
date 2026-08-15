@@ -289,7 +289,7 @@ local function GetLowestFromListings(listings, op, opCtx)
     return nil
 end
 
--- AuctioningOperation.MakePostDecision (LibTSMSystem v4.14.69:417-512) port.
+-- AuctioningOperation.MakePostDecision (LibTSMSystem v4.14.75:417-506) port.
 -- Returns: { reason, buyoutCopper, seller, belowThreshold, aboveMaxSkip,
 --            invalidReason, skipWhitelist }
 local function MakePostDecision(itemKey, lowest, ctx)
@@ -374,7 +374,9 @@ local function MakePostDecision(itemKey, lowest, ctx)
     return result
 end
 
--- Read TSM's global "match whitelist" toggle. Defaults true in v4.14.66.
+-- Read TSM's global "match whitelist" toggle. Still schema-defaulted true in
+-- v4.14.75 (LibTSMSystem/Source/AddonSettings/Schema.lua:270), and still keyed
+-- global/auctioningOptions/matchWhitelist, so the saved-var name below holds.
 local function ReadMatchWhitelist()
     if type(TradeSkillMasterDB) ~= "table" then return true end
     local v = TradeSkillMasterDB["g@ @auctioningOptions@matchWhitelist"]
@@ -384,7 +386,7 @@ end
 
 -- Resolve the actual posting buyout for an item by mirroring TSM's
 -- AuctioningOperation.MakePostDecision (LibTSMSystem/Source/Operation/
--- AuctioningOperation.lua:417). Last audited 2026-06-27 against TSM v4.14.69
+-- AuctioningOperation.lua:417). Last audited 2026-08-14 against TSM v4.14.75
 -- (decision tree unchanged since v4.14.66). Decision data:
 --   - normal/min/max prices via TSM's AuctioningOpNormal/Min/Max sources
 --     (TSM resolves the assigned op AND evaluates the expression in one
