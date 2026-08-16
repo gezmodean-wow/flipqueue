@@ -13,7 +13,10 @@
 -- shared so the realm cards and the realm comparison table say exactly the
 -- same thing about the same number.
 local addonName, ns = ...
-local UI = ns.UI
+-- Same idiom as UI/ScrollTable.lua: don't depend on load order for the table's
+-- existence, only on it being the same table everyone else got.
+local UI = ns.UI or {}
+ns.UI = UI
 
 local function G(c) return (not c or c <= 0) and "-" or ns:FormatGold(c) end
 
