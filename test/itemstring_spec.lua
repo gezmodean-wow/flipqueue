@@ -89,5 +89,58 @@ check("malformed modifier drops from count", field(badMod, 16), "1")
 check("malformed modifier keeps type",       field(badMod, 17), "9")
 check("malformed modifier keeps value",      field(badMod, 18), "50")
 
+--------------------------
+-- Round trip against real, client-authored item strings
+--
+-- Everything above pins the layout against a reading of the spec. These are
+-- item strings WoW itself wrote, harvested from Syndicator's SavedVariables,
+-- so they are the layout rather than a description of it. Each is parsed into
+-- a FlipQueue item key and rebuilt; the bonus and modifier blocks must come
+-- back byte-identical.
+--
+-- This is the evidence behind cogworks#83 (verified over 494 real strings:
+-- this builder 494/494, the Cogworks builder 0/494). A sample is kept here so
+-- the claim stays checkable without the SavedVariables file, and so the fix,
+-- when it lands upstream, has a ground-truth acceptance test rather than a
+-- self-consistent one.
+--------------------------
+
+local function parseReal(link)
+    local f = {}
+    for part in (link .. ":"):gmatch("([^:]*):") do f[#f + 1] = part end
+    local itemID = f[2]
+    local nBonus = tonumber(f[14]) or 0
+    local bonuses = {}
+    for i = 1, nBonus do bonuses[i] = f[14 + i] end
+    local modStart = 14 + nBonus + 1
+    local nMod = tonumber(f[modStart]) or 0
+    local mods = {}
+    for i = 1, nMod do
+        local t, v = f[modStart + (i - 1) * 2 + 1], f[modStart + (i - 1) * 2 + 2]
+        if t and v and t ~= "" and v ~= "" then mods[#mods + 1] = t .. "=" .. v end
+    end
+    return itemID, table.concat(bonuses, ":"), table.concat(mods, ":")
+end
+
+-- Real strings from a live account, chosen to cover: modifiers with no
+-- bonuses, bonuses with no modifiers, both together, and a long bonus run.
+local REAL = {
+    "item:117361::::::::81:65:::1:12380:2:9:31:28:181:::::",
+    "item:120137::::::::10:1449::::1:28:46:::::",
+    "item:120978::::::::90:66::105:1:737::::::",
+    "item:122362::::::::14:1449:::1:582::::::",
+    "item:6948::::::::15:1468::75:::::::",
+}
+
+for _, link in ipairs(REAL) do
+    local itemID, bonusStr, modStr = parseReal(link)
+    local key = itemID .. ";" .. bonusStr .. ";" .. modStr
+    local rebuilt = ns:ItemKeyToItemString(key)
+    local gotID, gotBonus, gotMod = parseReal(rebuilt or "")
+    check("real/" .. itemID .. " itemID",    gotID,    itemID)
+    check("real/" .. itemID .. " bonuses",   gotBonus, bonusStr)
+    check("real/" .. itemID .. " modifiers", gotMod,   modStr)
+end
+
 print(string.format("\n%d passed, %d failed", passed, failed))
 os.exit(failed == 0 and 0 or 1)
