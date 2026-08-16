@@ -418,69 +418,12 @@ function UI:RenderDealFinderRealmTable(parent, group, numCols, onToggle)
                     G(rp) .. " (" .. ((ref.realProfitPct or 0) >= 0 and "+" or "") .. ns:FormatPctNum(ref.realProfitPct or 0) .. "%)",
                     0.7,0.7,0.7, rp > 0 and 0.3 or 1, rp > 0 and 1 or 0.3, 0.3)
             end
-            local srcLabel = "Regional Fallback"
-            if ref.dataQuality == "perRealm" then
-                srcLabel = ref.spreadTight
-                    and "Per-Realm TSM (close item level)"
-                    or "Per-Realm TSM"
-            elseif ref.dataQuality == "perRealmApprox" then
-                srcLabel = (ref.approxSource == "baseItem")
-                    and "Per-Realm TSM (base item)"
-                    or "Per-Realm TSM (nearest item level)"
-            end
-            GameTooltip:AddDoubleLine("Data Source", srcLabel, 0.7,0.7,0.7, 0.6,0.6,0.6)
-            if ref.dataQuality == "perRealmApprox" then
-                GameTooltip:AddLine("This realm's own pricing, but for a close variant", 0.8, 0.7, 0.4)
-                if ref.approxIlvl then
-                    GameTooltip:AddLine("(matched at item level " .. ref.approxIlvl .. ")", 0.8, 0.7, 0.4)
-                else
-                    GameTooltip:AddLine("rather than this exact item level.", 0.8, 0.7, 0.4)
-                end
-            elseif ref.spreadTight then
-                -- Borrowed a neighbouring item level, but this item's own
-                -- levels price alike on this realm, so the borrow is sound
-                -- (FQ-249). Say so rather than staying silent — the player
-                -- asked for the evidence, not just the verdict.
-                GameTooltip:AddLine("Borrowed from item level " ..
-                    (ref.approxIlvl or "?") .. ", which prices the same here.", 0.5, 0.8, 0.5)
-            end
-            -- The known item-level spread for THIS item on THIS realm. Shown
-            -- whatever the rung: an exact match on a widely-spread item is
-            -- still worth seeing, since it says the neighbouring levels are
-            -- not interchangeable.
-            if ref.ilvlSpread and ref.ilvlBuckets then
-                local tight = ref.ilvlSpread <= (ns.TSMRealms and ns.TSMRealms.SpreadThreshold
-                    and ns.TSMRealms:SpreadThreshold() or 2)
-                GameTooltip:AddDoubleLine("Item Level Spread",
-                    string.format("%.1fx across %d levels", ref.ilvlSpread, ref.ilvlBuckets),
-                    0.7,0.7,0.7,
-                    tight and 0.5 or 0.9, tight and 0.8 or 0.7, tight and 0.5 or 0.4)
-                if ref.ilvlPriceLow and ref.ilvlPriceHigh then
-                    GameTooltip:AddLine("  " .. G(ref.ilvlPriceLow) .. "  to  " .. G(ref.ilvlPriceHigh),
-                        0.6, 0.6, 0.6)
-                end
-                -- Per-level breakdown, so "the known spread" is inspectable
-                -- rather than a single ratio to take on trust.
-                local baseID = group.itemKey and tostring(group.itemKey):match("^(%d+)")
-                if baseID and ns.TSMRealms and ns.TSMRealms.GetIlvlBuckets then
-                    local buckets = ns.TSMRealms:GetIlvlBuckets(baseID, ref.realmName)
-                    local shown = 0
-                    for _, b in ipairs(buckets or {}) do
-                        if b.price and shown < 8 then
-                            shown = shown + 1
-                            local mark = (ref.approxIlvl and b.ilvl == ref.approxIlvl) and " <" or ""
-                            GameTooltip:AddDoubleLine("  ilvl " .. b.ilvl,
-                                G(b.price) .. " (" .. (b.numAuctions or 0) .. ")" .. mark,
-                                0.55,0.55,0.55, 0.7,0.7,0.7)
-                        end
-                    end
-                    if buckets and #buckets > shown then
-                        GameTooltip:AddLine("  ... and " .. (#buckets - shown) .. " more", 0.5, 0.5, 0.5)
-                    end
-                end
-            end
-            if ref.isOutlier then
-                GameTooltip:AddLine("OUTLIER - Price exceeds regional threshold", 1, 0.3, 0.3)
+            -- Full provenance chain — source, which TSM column, data age,
+            -- item-level substitution and spread, personal-sales blend
+            -- (UI/PriceTooltip.lua). Shared with the realm comparison table so
+            -- both say the same thing about the same number.
+            if UI.AddPriceProvenance then
+                UI:AddPriceProvenance(GameTooltip, ref, group)
             end
             if ref.noCompetition then
                 GameTooltip:AddLine("No competition on AH", 0.3, 1, 0.3)
@@ -552,8 +495,11 @@ function UI:RenderDealFinderResearch(parent, group)
         y = y - 20
     end
 
-    -- Helper: table row with positioned columns
-    local function TblRow(data, font, bgCol)
+    -- Helper: table row with positioned columns.
+    -- `realmRef`, when given, is the realm option this row is showing; the row
+    -- then explains its own price on hover instead of leaving the player to
+    -- guess what "Realm~" or a surprising number means.
+    local function TblRow(data, font, bgCol, realmRef)
         local f = Acquire(parent)
         f:SetHeight(INFO_H); f:SetPoint("TOPLEFT", parent, "TOPLEFT", 8, y)
         f:SetPoint("RIGHT", parent, "RIGHT", -8, 0)
@@ -564,6 +510,21 @@ function UI:RenderDealFinderResearch(parent, group)
             l:SetPoint("LEFT", f, "LEFT", col.x, 0); l:SetWidth(col.w)
             l:SetJustifyH(col.align); l:SetWordWrap(false)
             l:SetText(data[col.k] or "")
+        end
+        if realmRef then
+            local ref = realmRef
+            f:EnableMouse(true)
+            f:SetScript("OnEnter", function(s)
+                GameTooltip:SetOwner(s, "ANCHOR_RIGHT")
+                GameTooltip:AddLine(ref.realmName or "", 1, 1, 1)
+                GameTooltip:AddDoubleLine("Shown price", G(ref.blendedPrice),
+                    0.7, 0.7, 0.7, 1, 1, 1)
+                if UI.AddPriceProvenance then
+                    UI:AddPriceProvenance(GameTooltip, ref, group)
+                end
+                GameTooltip:Show()
+            end)
+            f:SetScript("OnLeave", function() GameTooltip:Hide() end)
         end
         y = y - INFO_H
     end
@@ -660,7 +621,7 @@ function UI:RenderDealFinderResearch(parent, group)
                 or (realm.dataQuality == "perRealmApprox") and "|cffccaa55Realm~|r"
                 or "|cffaa6666Rgn|r",
             spread = spreadStr,
-        }, nil, ri % 2 == 0 and {0.06, 0.06, 0.08, 0.3} or nil)
+        }, nil, ri % 2 == 0 and {0.06, 0.06, 0.08, 0.3} or nil, realm)
     end
     y = y - 4
 

@@ -188,6 +188,13 @@ local function CreateAboutPanel(parent)
     local thanks = inner:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
     thanks:SetPoint("TOP", inner, "TOP", 0, y)
     thanks:SetText("FlippingPal  |  TradeSkillMaster  |  Auctionator  |  Epos")
+    y = y - 16
+
+    -- Testers, kept on their own line: the line above is projects FlipQueue
+    -- builds on, and people who chase bugs for us have earned their own.
+    local testers = inner:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    testers:SetPoint("TOP", inner, "TOP", 0, y)
+    testers:SetText("Shylynce")
     y = y - 24
 
     -- Links section

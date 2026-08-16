@@ -41,6 +41,43 @@ Row label uses colour rather than a glyph (muted `Realm` for a sound borrow, amb
 
 `test/tsmrealms_spec.lua` 39 → 65 assertions.
 
+### FQ-252 (#252): Deal Finder ignored the priority order
+
+Reported by Shylynce: prioritized "no competition", got recommended a realm with competition.
+
+`ScoreRealm` sums one term per priority level with `weight` starting at `1000000` and falling 100× per level. That only orders the criteria if each term is bounded similarly — and only `noCompetition` was. `profit` contributed gold, `population` an auction count, `previousSales` a sale count, all unbounded. With `{noCompetition, profit}` the flag is worth `1e6` at tier 1 while profit is worth `gold × 1e4` at tier 2, so **101g of profit overturned it**. Reproduced against the exact source before touching anything:
+
+```
+  Quiet realm  noComp=true  profit=  200g  score= 3000000
+  Busy realm   noComp=false profit= 5000g  score=50000000   -> BUSY wins
+  competing realm at 100g profit beats the no-comp realm? false
+  competing realm at 101g profit beats the no-comp realm? true
+```
+
+Only the shipped default `{profit, noCompetition, previousSales}` escapes, and only because profit leads and dominates regardless — which is why this survived. Every player who reordered the list got a broken ranking.
+
+New `DealFinder:BuildScoreNorms(realms)` returns per-item ranges; `ScoreRealm` normalizes every criterion to `[0,1]` before weighting. Normalized spread ≤ 1.0 per tier against a combined lower-tier maximum of 0.0102 ⇒ strictly lexicographic. Ranges are per item — a 200g item and a 50k item share no scale.
+
+- `population` uses `(1 + n) / (1 + max)`, preserving the original intent that a nil count (regional fallback, listings unknown) sorts *below* a realm known to have zero.
+- `profit` uses min-max, so an all-losses item still ranks its least-bad realm first. Documented consequence: with a continuous criterion on top, min-max stretches the observed range across the full 0–1, so even a small edge settles it. That is the correct reading of "rank by profit".
+- All terms are now ≥ 0, which incidentally repairs the `score = -1` outlier exclusion — it was not reliably below every real score once a nil population could drive a tier-1 term negative.
+
+`test/dealfinderpriority_spec.lua`, 22 assertions.
+
+### Deal Finder price provenance on hover
+
+Requested as a usability improvement: a price should explain itself. Everything needed already existed and most of it never reached the UI.
+
+New `UI/PriceTooltip.lua` — `UI:AddPriceProvenance(tt, ref, group)` renders the whole chain behind one number: which pool answered (this realm / close variant / regional), **which TSM column it is** (`marketValueRecent` vs `minBuyout`, shown side by side so a wide gap reads as "thinly traded"), listings on that realm, **how old TSM's download is** (coloured, with an explicit warning past 24h — the commonest reason a price disagrees with what's on screen in game), the item-level substitution and the per-level breakdown with the borrowed level marked, and the personal-sales blend broken out into TSM figure → your average → blended.
+
+`DealFinder` now threads `priceField`, `rawMinBuyout`, `rawRecent`, `updateTime` and `tsmPriceRaw` onto each realm option; `updateTime` was on the pricing entry all along and was never copied.
+
+Wired into both surfaces so they can't drift: the realm cards (replacing the inline block added earlier this build) and the Realm Comparison table, whose rows previously had no tooltip at all. Registered in `flipqueue.toc` — see FQ-228 for what happens when that step is missed.
+
+### Credits
+
+Shylynce added to Special thanks on the About page, on their own line — the existing line is projects FlipQueue builds on.
+
 ### FQ-177 (#177): FlippingPal price source defaults to Auto
 
 The mechanism shipped in v0.13.0-alpha2 — `fpPriceSource` with Listing / Sale Avg / Auto, implemented in `ns:ResolveFPPrice` (`Import.lua:1922`). The issue stayed open because the default was still `"listing"`, which is the aggressive column the issue is *about*, so out of the box the reported symptom was unchanged. Maintainer decision taken this session: flip it.

@@ -69,6 +69,7 @@ UI/LogPage.lua
 UI/ExportPage.lua
 UI/TransformPage.lua
 UI/AllocWidget.lua
+UI/PriceTooltip.lua
 UI/DealFinderPage.lua
 UI/DealFinderDetail.lua
 UI/ResearchPage.lua

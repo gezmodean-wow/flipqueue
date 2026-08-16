@@ -98,28 +98,91 @@ end
 -- Priority Scoring
 --------------------------
 
--- Score a realm option based on priority order.
--- Higher score = better. Returns numeric score.
-function DealFinder:ScoreRealm(realmOpt, priorityOrder)
+-- Range of each criterion across ONE item's realm options, so every criterion
+-- can be scored on a common 0-1 scale (FQ-252).
+--
+-- Without this the tiers do not work. The weights fall by 100 per priority
+-- level, which only orders the criteria if each contributes a comparable
+-- amount — and only `noCompetition` ever did. `profit` contributed gold and
+-- `population` contributed an auction count, both unbounded, so a criterion
+-- ranked SECOND routinely outscored a binary flag ranked FIRST. With
+-- "no competition" first and profit second, any competing realm with more
+-- than 101g of profit beat a realm with no competition at all: 101 × 10,000
+-- exceeds the 1,000,000 the flag was worth. That is the reported symptom.
+function DealFinder:BuildScoreNorms(realms)
+    local norms = {
+        profitMin = math.huge, profitMax = -math.huge,
+        auctions = 0, sales = 0,
+    }
+    for _, o in ipairs(realms or {}) do
+        local p = o.profit or 0
+        if p < norms.profitMin then norms.profitMin = p end
+        if p > norms.profitMax then norms.profitMax = p end
+        if (o.numAuctions or 0) > norms.auctions then norms.auctions = o.numAuctions end
+        if (o.personalCount or 0) > norms.sales then norms.sales = o.personalCount end
+    end
+    if norms.profitMin == math.huge then norms.profitMin, norms.profitMax = 0, 0 end
+    return norms
+end
+
+-- Score a realm option against the priority order. Higher is better.
+--
+-- Every criterion is normalized to [0,1] across the item's own realm set, then
+-- multiplied by a weight that falls 100x per level. Because the normalized
+-- spread of any criterion is at most 1.0 and every lower tier combined can
+-- contribute at most 0.0102, the result is strictly lexicographic: the first
+-- priority decides, and a lower priority only speaks when the ones above it
+-- are exactly tied. That is what an ordered priority list should mean, and it
+-- is what the reported bug violated.
+--
+-- Note the flip side, which is intended: with a continuous criterion at the
+-- top, min-max normalization stretches whatever range the realms happen to
+-- occupy across the full 0-1, so even a small profit difference settles it.
+-- Rank by profit and you get the most profitable realm, not "roughly the most
+-- profitable, adjusted by competition" — put competition first if that is
+-- what you want.
+--
+-- `norms` comes from BuildScoreNorms. It is optional so a lone call still
+-- works, but scoring one realm in isolation has no range to normalize against
+-- and every criterion collapses to its best value; ApplyPriority always
+-- passes it.
+function DealFinder:ScoreRealm(realmOpt, priorityOrder, norms)
+    norms = norms or self:BuildScoreNorms({ realmOpt })
     local score = 0
     local weight = 1000000  -- decreasing weight per priority level
 
     for _, key in ipairs(priorityOrder or {"profit"}) do
+        local v = 0
         if key == "profit" then
-            score = score + (realmOpt.profit or 0) / 10000 * weight  -- normalize copper
+            -- Min-max normalized, so an all-losses item still ranks its
+            -- least-bad realm highest rather than flattening to a tie.
+            local p = realmOpt.profit or 0
+            if norms.profitMax > norms.profitMin then
+                v = (p - norms.profitMin) / (norms.profitMax - norms.profitMin)
+            else
+                v = p > 0 and 1 or 0
+            end
         elseif key == "noCompetition" then
-            score = score + (realmOpt.noCompetition and weight or 0)
+            v = realmOpt.noCompetition and 1 or 0
         elseif key == "previousSales" then
-            score = score + (realmOpt.personalCount or 0) * weight
+            v = norms.sales > 0 and ((realmOpt.personalCount or 0) / norms.sales) or 0
         elseif key == "population" then
-            -- More auctions = higher population/demand (proxy)
-            -- nil numAuctions (regional fallback) sorts last: use -1 so unknown < 0-auction realms
-            score = score + (realmOpt.numAuctions or -1) * weight
+            -- More auctions = higher population/demand (proxy). A nil count is
+            -- the regional fallback — we don't know this realm's listings —
+            -- and must sort below a realm we know has zero, hence the +1 shift
+            -- rather than a plain ratio: unknown scores 0, a known zero scores
+            -- a little above it.
+            local n = realmOpt.numAuctions
+            if n ~= nil then
+                v = (1 + n) / (1 + norms.auctions)
+            end
         end
+        score = score + v * weight
         weight = weight / 100  -- each subsequent priority has 100x less impact
     end
 
-    -- Penalize or exclude outliers based on setting
+    -- Penalize or exclude outliers based on setting. Every term above is >= 0,
+    -- so -1 is reliably below any real score.
     if realmOpt.isOutlier then
         local ignore = ns.db and ns.db.settings.dfIgnoreOutliers
         if ignore then
@@ -144,10 +207,14 @@ function DealFinder:ApplyPriority(itemGroups, priorityOrder)
             -- When avoidPosted is on we prefer the clean pick and only fall back
             -- to a posted realm when every candidate is already posted, so a deal
             -- is demoted (not dropped) and the player can still override it.
+            -- Ranges are per item: "best profit for THIS item" is the only
+            -- meaningful yardstick, since a 200g item and a 50k item share no
+            -- scale (FQ-252).
+            local norms = self:BuildScoreNorms(group.realms)
             local bestIdx, bestScore = 1, -1
             local cleanIdx, cleanScore = nil, -1
             for i, realmOpt in ipairs(group.realms) do
-                realmOpt.score = self:ScoreRealm(realmOpt, priorityOrder)
+                realmOpt.score = self:ScoreRealm(realmOpt, priorityOrder, norms)
                 realmOpt._selected = false
                 if realmOpt.score > bestScore then
                     bestScore = realmOpt.score
@@ -285,10 +352,22 @@ function DealFinder:ScanChunked(pool, onProgress, onComplete)
 
                 local tsmPrice, numAuctions, dataQuality, approxSource, approxIlvl
                 local ilvlSpread, ilvlBuckets, ilvlLow, ilvlHigh, spreadTight
+                -- Provenance for the price tooltip: which TSM column the number
+                -- came from, both raw columns so the tooltip can show the one it
+                -- did NOT use, and when TSM last downloaded this realm.
+                local priceField, rawMinBuyout, rawRecent, updateTime
 
                 if pricing then
                     tsmPrice = pricing.marketValueRecent or pricing.minBuyout
                     numAuctions = pricing.numAuctions
+                    rawMinBuyout = pricing.minBuyout
+                    rawRecent    = pricing.marketValueRecent
+                    updateTime   = pricing.updateTime
+                    -- marketValueRecent is TSM's recent-market figure; minBuyout
+                    -- is the cheapest thing actually listed right now. They can
+                    -- disagree by a lot on a thin item, and which one answered
+                    -- is usually the explanation for a surprising number.
+                    priceField = pricing.marketValueRecent and "marketValueRecent" or "minBuyout"
                     -- Spread evidence travels with every rung so the detail
                     -- view can show it whether or not the match was exact.
                     ilvlSpread  = pricing.ilvlSpread
@@ -326,6 +405,7 @@ function DealFinder:ScanChunked(pool, onProgress, onComplete)
                 elseif regionMarketAvg and regionMarketAvg > 0 then
                     tsmPrice = regionMarketAvg
                     dataQuality = "regional"
+                    priceField = "DBRegionMarketAvg"
                 end
 
                 if tsmPrice and tsmPrice > 0 then
@@ -374,6 +454,14 @@ function DealFinder:ScanChunked(pool, onProgress, onComplete)
                             ilvlPriceLow  = ilvlLow,
                             ilvlPriceHigh = ilvlHigh,
                             spreadTight   = spreadTight,
+                            priceField    = priceField,
+                            rawMinBuyout  = rawMinBuyout,
+                            rawRecent     = rawRecent,
+                            updateTime    = updateTime,
+                            -- The pre-blend figure, so the tooltip can show what
+                            -- personal sales did to it rather than only the
+                            -- result. blendedPrice above is the number shown.
+                            tsmPriceRaw   = tsmPrice,
                             score         = 0,  -- set by ApplyPriority
                         })
                     end
