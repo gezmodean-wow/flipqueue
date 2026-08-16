@@ -14,7 +14,13 @@ Note the interaction with FQ-249: variant gear that misses on a realm lands on t
 
 Removed a stray global on the way: `ApplyQuantitySelection = ApplyQuantitySelectionFn` had exactly one reader — the inline copy now deleted — and was leaking a global into the WoW namespace.
 
-**Open with the reporter:** whether "no competition" should treat unknown as empty. It currently does not, deliberately — a realm TSM has no data for is not a realm known to be quiet, and "no data" can mean nobody trades that item there at all.
+**3. Made the unknown/empty question a setting rather than a ruling.** New `dfUnknownAsNoCompetition` (Deal Finder options, **default off**) decides whether the "No Competition" priority also counts realms TSM has no data for.
+
+It grants **half credit** rather than full, which is the part worth keeping: a realm checked and found empty is better evidence than one we know nothing about, so the ordering becomes known-empty > unknown > contested instead of flattening the top two into a tie. 0.5 is still a hard gate against every lower priority (0.5 × 1e6 against a combined lower-tier maximum of ~1.02e4), so an unknown realm outranks a contested one however much more that one pays.
+
+Default off because "no data" can mean nobody trades that item on that realm at all — no competition and no buyers — which the tooltip says plainly. Toggling it re-ranks immediately rather than waiting for the next scan.
+
+`test/dealfinderpriority_spec.lua` 22 → 28.
 
 ### FQ-251 (#251): closed, confirmed
 

@@ -334,6 +334,14 @@ function ns:InitDB()
     -- cross-realm edge exists. Default on: an item that cannot pay is noise in
     -- a list whose entire purpose is items that can.
     if db.settings.dfExcludeCommodities == nil then db.settings.dfExcludeCommodities = true end
+    -- Should the "No Competition" priority also count realms TSM has no data
+    -- for on this item (FQ-253)? Those realms report an unknown listing count,
+    -- not zero, and the two are different claims. Default OFF, the cautious
+    -- reading: "no data" can mean nobody trades that item on that realm at
+    -- all, which is no competition and no buyers. When on, unknown realms earn
+    -- half credit in ScoreRealm so a realm checked and found empty still
+    -- outranks one we merely know nothing about.
+    if db.settings.dfUnknownAsNoCompetition == nil then db.settings.dfUnknownAsNoCompetition = false end
     db.settings.dfPriorityOrder = db.settings.dfPriorityOrder or {"profit", "noCompetition", "previousSales"}
     -- Skip deals that have no matching character (suppress "create character" tasks)
     if db.settings.skipUnassigned == nil then db.settings.skipUnassigned = false end

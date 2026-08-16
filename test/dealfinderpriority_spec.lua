@@ -136,6 +136,41 @@ check("more listings outrank fewer",
     pick({ knownZero, knownMany }, { "population" }), "KnownMany")
 
 --------------------------
+-- "No competition" vs "no data" (FQ-253)
+--------------------------
+
+-- A realm on the regional-fallback rung reports numAuctions == nil: we have no
+-- data for this item there. That is not the same claim as "nothing is listed",
+-- and by default the noCompetition priority must not treat it as one.
+local nodata  = { realmName = "NoData",  noCompetition = false, numAuctions = nil, profit = gold(100) }
+local hasComp = { realmName = "HasComp", noCompetition = false, numAuctions = 12,  profit = gold(100) }
+local empty2  = { realmName = "Empty2",  noCompetition = true,  numAuctions = 0,   profit = gold(100) }
+
+ns.db.settings.dfUnknownAsNoCompetition = nil
+check("by default an unknown realm scores like a contested one",
+    DF:ScoreRealm(nodata, { "noCompetition" }, DF:BuildScoreNorms({ nodata, hasComp })),
+    DF:ScoreRealm(hasComp, { "noCompetition" }, DF:BuildScoreNorms({ nodata, hasComp })))
+check("by default a known-empty realm still wins",
+    pick({ nodata, empty2 }, { "noCompetition" }), "Empty2")
+
+-- With the setting on, unknown realms count -- at half credit, so the ordering
+-- is known-empty > unknown > contested rather than a flat tie at the top.
+ns.db.settings.dfUnknownAsNoCompetition = true
+check("when enabled an unknown realm beats a contested one",
+    pick({ hasComp, nodata }, { "noCompetition" }), "NoData")
+check("but a known-empty realm still beats an unknown one",
+    pick({ nodata, empty2 }, { "noCompetition" }), "Empty2")
+check("all three order known-empty > unknown > contested",
+    pick({ hasComp, nodata, empty2 }, { "noCompetition" }), "Empty2")
+
+-- Half credit must still be a hard gate against lower priorities: an unknown
+-- realm at 0.5 outranks a contested realm however much more that one pays.
+local richComp = { realmName = "RichComp", noCompetition = false, numAuctions = 30, profit = gold(90000) }
+check("half credit still outranks a far richer contested realm",
+    pick({ richComp, nodata }, { "noCompetition", "profit" }), "NoData")
+ns.db.settings.dfUnknownAsNoCompetition = nil
+
+--------------------------
 -- Outliers
 --------------------------
 

@@ -163,7 +163,26 @@ function DealFinder:ScoreRealm(realmOpt, priorityOrder, norms)
                 v = p > 0 and 1 or 0
             end
         elseif key == "noCompetition" then
-            v = realmOpt.noCompetition and 1 or 0
+            -- `noCompetition` means we looked and there is nothing listed.
+            -- A realm on the regional-fallback rung has numAuctions == nil:
+            -- we have no data for this item there, which is not the same
+            -- claim (FQ-253).
+            --
+            -- dfUnknownAsNoCompetition lets the player count those too. It
+            -- earns PARTIAL credit rather than full: a realm we have checked
+            -- and found empty is better evidence than one we know nothing
+            -- about, so known-empty still outranks unknown, and both still
+            -- outrank a realm with competition. Off by default — "no data"
+            -- can also mean nobody trades that item there at all, which is
+            -- no competition and no buyers.
+            if realmOpt.noCompetition then
+                v = 1
+            elseif realmOpt.numAuctions == nil
+                and ns.db and ns.db.settings and ns.db.settings.dfUnknownAsNoCompetition then
+                v = 0.5
+            else
+                v = 0
+            end
         elseif key == "previousSales" then
             v = norms.sales > 0 and ((realmOpt.personalCount or 0) / norms.sales) or 0
         elseif key == "population" then
