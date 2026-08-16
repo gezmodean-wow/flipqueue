@@ -1924,7 +1924,10 @@ function ns:ResolveFPPrice(deal)
     local listing = deal.expectedPrice or ""
     local saleAvg = deal.saleAvg or ""
 
-    local mode = (ns.db and ns.db.settings and ns.db.settings.fpPriceSource) or "listing"
+    -- Defaults to "auto" (FQ-177, schema 14). The fallback only fires before
+    -- the DB exists; a real install always has a stored value, either the
+    -- default DB.lua wrote or the one migration 14 flipped it to.
+    local mode = (ns.db and ns.db.settings and ns.db.settings.fpPriceSource) or "auto"
 
     if mode == "saleavg" then
         if saleAvg ~= "" then return saleAvg end

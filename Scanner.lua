@@ -934,6 +934,10 @@ frame:SetScript("OnEvent", function(self, event, ...)
             ns:Print(ns.COLORS.YELLOW .. ns.db._ilvlBoundsMigrationMessage .. "|r")
             ns.db._ilvlBoundsMigrationMessage = nil
         end
+        if ns.db._fpPriceSourceMigrationMessage then
+            ns:Print(ns.COLORS.YELLOW .. ns.db._fpPriceSourceMigrationMessage .. "|r")
+            ns.db._fpPriceSourceMigrationMessage = nil
+        end
 
         -- Deleted-character login prompt. When the user logs in on a char
         -- they previously deleted from FlipQueue, give them a chance to

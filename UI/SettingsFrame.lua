@@ -1170,16 +1170,16 @@ function UI:CreateSettingsPanel(parent)
             .. "volatile item it can land 50-150x above what the realm actually pays. This is the "
             .. "source of tasks priced far above TSM's data, and of the TSM-skip noise that follows.\n"
             .. "Sale Avg - FP's historical median. Conservative; sells rather than sits.\n"
-            .. "Auto (TSM-clamped) - the Listing price unless it exceeds 10x TSM's regional average, "
-            .. "in which case Sale Avg. Falls back to Listing whenever the data to make that call is "
-            .. "missing.\n\n"
+            .. "Auto (TSM-clamped) - the default. The Listing price unless it exceeds 10x TSM's "
+            .. "regional average, in which case Sale Avg. Falls back to Listing whenever the data to "
+            .. "make that call is missing, so it can never be worse than Listing.\n\n"
             .. "Applies to the next list you generate. Existing tasks keep the price they were "
             .. "created with - regenerate a list to reprice it.",
         "fpPriceSource",
         {
+            { label = "Auto (TSM-clamped)", value = "auto" },
             { label = "Listing price",  value = "listing" },
             { label = "Sale Avg",       value = "saleavg" },
-            { label = "Auto (TSM-clamped)", value = "auto" },
         })
     sy = sy - h - SECTION_SPACING
 
@@ -2522,7 +2522,7 @@ function UI:RefreshSettings()
         settingsWidgets.copyOnClickMode:SetValue(ns.db.settings.copyOnClickMode or "realm")
     end
     if settingsWidgets.fpPriceSource then
-        settingsWidgets.fpPriceSource:SetValue(ns.db.settings.fpPriceSource or "listing")
+        settingsWidgets.fpPriceSource:SetValue(ns.db.settings.fpPriceSource or "auto")
     end
     -- Pricing / item-level spread (FQ-249)
     if settingsWidgets.ilvlSpreadCheck then

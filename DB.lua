@@ -195,8 +195,17 @@ function ns:InitDB()
     if db.settings.tsmSkipOnGenerate == nil then db.settings.tsmSkipOnGenerate = true end
     -- FlippingPal price-source preference (FQ-177). Controls which FP column
     -- flows into task expectedPrice during /fq generate. See
-    -- ns:ResolveFPPrice in Import.lua. "listing" preserves prior behavior.
-    if db.settings.fpPriceSource == nil then db.settings.fpPriceSource = "listing" end
+    -- ns:ResolveFPPrice in Import.lua.
+    --
+    -- Default is "auto" as of schema 14: FP's Listing column is a posting
+    -- suggestion that runs 50-150x above market on thin items, and shipping it
+    -- as the default is what #177 is about. "auto" uses Listing unless it
+    -- exceeds 10x TSM's regional average, and falls back to Listing whenever
+    -- the data to make that call is missing — so it cannot be worse.
+    --
+    -- Existing installs are flipped once by migration 14, which is the half
+    -- that actually reaches players: this line only ever fires on a fresh DB.
+    if db.settings.fpPriceSource == nil then db.settings.fpPriceSource = "auto" end
     -- Item-level spread discrimination (FQ-249). When FlipQueue prices a gear
     -- variant it cannot find exactly, it borrows a neighbouring item level and
     -- normally flags the result as approximate. With this on, it first checks

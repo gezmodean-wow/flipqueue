@@ -7,7 +7,7 @@ local addonName, ns = ...
 --------------------------
 
 -- Current schema version
-local CURRENT_SCHEMA = 13
+local CURRENT_SCHEMA = 14
 
 -- Schema history:
 -- nil/0  = v0.5.0 (stable release): queue array, separate inventory/characters/hiddenCharacters
@@ -44,6 +44,12 @@ local CURRENT_SCHEMA = 13
 --          players can re-enable from the Auctionator settings page.
 -- 13     = #226: per-task createdAt / lastProgressAt so "no progress in N days"
 --          can be measured. Backfilled from the owning list's createdAt.
+-- 14     = #177: fpPriceSource default "listing" → "auto". FP's Listing column
+--          is a posting suggestion that runs far above market on thin items;
+--          "auto" clamps it against TSM and falls back to Listing whenever it
+--          can't judge. Only "listing" (and nil) is flipped — a deliberate
+--          "saleavg" is left alone. Announced at login with the undo path,
+--          since it visibly changes prices players are used to.
 
 local function RunMigrations(db)
     db.schemaVersion = db.schemaVersion or 0
@@ -575,6 +581,42 @@ local function RunMigrations(db)
         end
         db.schemaVersion = 13
     end  -- migration 13
+
+    -- 14: #177 flips the FlippingPal price source default from "listing" to
+    -- "auto". FP's Listing column is what it suggests posting AT — aggressive
+    -- by design, and on a thin or volatile item it lands 50-150x above what
+    -- the realm actually pays. That is the source of the "wildly inflated
+    -- expected price" reports and of the TSM-skip noise that follows them.
+    --
+    -- "auto" keeps the Listing price unless it exceeds 10x TSM's regional
+    -- average, in which case it uses FP's Sale Avg instead, and falls back to
+    -- Listing whenever the data to make that call is missing (no TSM, no
+    -- numeric listing, no saleAvg, no usable itemKey). By construction it
+    -- cannot be worse than "listing" — it differs only where TSM says the
+    -- number is implausible.
+    --
+    -- The default alone reaches nobody who already has the addon: DB.lua
+    -- writes the default into the saved DB on first run, and afterwards a
+    -- stored "listing" is indistinguishable from a deliberate choice. So the
+    -- flip has to happen here, once, for installs that are still on it.
+    --
+    -- This is a VISIBLE change to numbers players have got used to, which is
+    -- why it announces itself and says how to undo it. Only "listing" is
+    -- touched: a player who chose "saveavg" keeps it.
+    if db.schemaVersion < 14 then
+        db.settings = db.settings or {}
+        if db.settings.fpPriceSource == nil or db.settings.fpPriceSource == "listing" then
+            db.settings.fpPriceSource = "auto"
+            db._fpPriceSourceMigrationMessage =
+                "FlippingPal price source is now Auto. FlippingPal's Listing " ..
+                "price is a posting suggestion, and on thin items it can run " ..
+                "far above what an item really sells for -- Auto keeps it " ..
+                "except where TSM says it has run away. Existing tasks keep " ..
+                "the price they were created with; regenerate a list to " ..
+                "reprice it. Change it back under Settings > Imports."
+        end
+        db.schemaVersion = 14
+    end  -- migration 14
 end  -- RunMigrations
 
 -- Expose for DB.lua

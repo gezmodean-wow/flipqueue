@@ -2,7 +2,7 @@
 
 ## v0.13.2-alpha3
 
-Follow-up to the two alpha2 reports, both of which came back with more information. The FQ-249 reporter pushed back on the item-level bound; the FQ-251 reporter's `/fq debug alts` dump turned out to be partly fiction. Embedded Cogworks-1.0 stays at **`v0.16.0`** (MINOR 31). **Schema stays at 13** — no migration. **F8 not yet run.**
+Follow-up to the two alpha2 reports, both of which came back with more information. The FQ-249 reporter pushed back on the item-level bound; the FQ-251 reporter's `/fq debug alts` dump turned out to be partly fiction. Also takes the FQ-177 default flip, which had been parked on a maintainer decision. Embedded Cogworks-1.0 stays at **`v0.16.0`** (MINOR 31). **Schema 13 → 14** — one-shot settings migration, see FQ-177 below. **F8 not yet run.**
 
 ### FQ-249 (#249): the item-level bound was too tight, and the fallback was misdescribed
 
@@ -40,6 +40,18 @@ So the premise is right for about a third of gear and badly wrong for the rest. 
 Row label uses colour rather than a glyph (muted `Realm` for a sound borrow, amber `Realm~` for a flagged one): the default WoW font renders most symbol codepoints as boxes.
 
 `test/tsmrealms_spec.lua` 39 → 65 assertions.
+
+### FQ-177 (#177): FlippingPal price source defaults to Auto
+
+The mechanism shipped in v0.13.0-alpha2 — `fpPriceSource` with Listing / Sale Avg / Auto, implemented in `ns:ResolveFPPrice` (`Import.lua:1922`). The issue stayed open because the default was still `"listing"`, which is the aggressive column the issue is *about*, so out of the box the reported symptom was unchanged. Maintainer decision taken this session: flip it.
+
+`DB.lua` defaults to `"auto"`, but that line only ever fires on a fresh DB — it writes the default into the saved DB on first run, and afterwards a stored `"listing"` is indistinguishable from a deliberate choice. **Migration 14 is the half that reaches existing players**, flipping `nil`/`"listing"` → `"auto"` once and queueing `_fpPriceSourceMigrationMessage` for the login notice (same pattern as migration 12's `_ilvlBoundsMigrationMessage`, printed from `Scanner.lua`). A deliberate `"saleavg"` is left alone, and a player who switches back to Listing afterwards keeps it — the migration is version-gated, not value-gated.
+
+`"auto"` cannot be worse than `"listing"` by construction: it keeps the Listing price unless it exceeds 10× `DBRegionMarketAvg`, and falls back to Listing on every missing input (no TSM, non-numeric listing, empty `saleAvg`, no usable itemKey). The visible cost is that newly generated tasks on outlier items price lower than players are used to, which is the point of the change and the reason it announces itself.
+
+Dropdown reordered to put Auto first and labelled as the default; the `or "listing"` fallbacks in `ResolveFPPrice` and the settings refresh now read `"auto"` so a pre-DB read agrees with the stored value.
+
+New `test/migration_fpsource_spec.lua`, 21 assertions — weighted toward what the migration must *not* do: not touch `saleavg`, not re-fire on schema 14, not silently override a player who switched back, not shadow migration 12 when both run in one pass.
 
 ### FQ-251 (#251): the diagnostic was lying
 
