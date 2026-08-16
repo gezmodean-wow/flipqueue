@@ -399,7 +399,14 @@ function UI:RenderDealFinderRealmTable(parent, group, numCols, onToggle)
             GameTooltip:AddLine(ref.realmName, 1, 1, 1)
             GameTooltip:AddDoubleLine("Blended Price", G(ref.blendedPrice), 0.7,0.7,0.7, 1,1,1)
             GameTooltip:AddDoubleLine("TSM Price", G(ref.tsmPrice), 0.7,0.7,0.7, 1,1,1)
-            GameTooltip:AddDoubleLine("AH Listings", tostring(ref.numAuctions or 0), 0.7,0.7,0.7, 1,1,1)
+            -- nil means we have no per-realm data for this item, NOT zero
+            -- listings. Rendering it as "0" told the player there was no
+            -- competition on a realm we know nothing about, while the ranking
+            -- correctly refused to treat it as competition-free — the two
+            -- disagreed on screen (FQ-253).
+            GameTooltip:AddDoubleLine("AH Listings",
+                ref.numAuctions ~= nil and tostring(ref.numAuctions) or "unknown",
+                0.7,0.7,0.7, 1,1,1)
             local baseline = group.regionMarketAvg or 0
             if baseline > 0 then
                 GameTooltip:AddDoubleLine("vs Regional Market",
@@ -611,7 +618,10 @@ function UI:RenderDealFinderResearch(parent, group)
             and ((C.GREEN or "") .. realm.personalCount .. "|r") or "-"
         TblRow({
             name = rn, tsm = G(realm.tsmPrice), blend = G(realm.blendedPrice),
-            ah = tostring(realm.numAuctions or 0), sold = soldStr,
+            -- "?" not "0": nil is "no data for this item on this realm", and
+            -- showing it as zero reads as "nothing posted here" (FQ-253).
+            ah = realm.numAuctions ~= nil and tostring(realm.numAuctions) or "|cff888888?|r",
+            sold = soldStr,
             -- Colour rather than a glyph: the default WoW font renders most
             -- symbol codepoints as boxes. Muted "Realm" = borrowed from a
             -- neighbouring item level that prices the same here (FQ-249);

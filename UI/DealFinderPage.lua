@@ -347,13 +347,30 @@ prioFrame:SetPoint("TOPLEFT", prioLabel, "BOTTOMLEFT", -8, -4)
 prioFrame:SetPoint("RIGHT", rightCol, "RIGHT", -12, 0)
 
 local prioAllocRows = {}
+
+-- Forward declaration: re-scores the current results against the priority
+-- order and refreshes the view. Defined once ShowItem and
+-- ApplyQuantitySelectionFn exist further down; RenderPriority only calls it.
+--
+-- Reordering the list used to re-render the widget and nothing else (FQ-253),
+-- so dragging "no competition" to the top changed the picture on screen and
+-- not one recommendation until the player ran another scan. Nothing said so.
+local ReapplyPriority
+
 local function RenderPriority()
     if not ns.db then return end
     -- RenderAllocList returns the y-offset after the last row (negative, growing
     -- downward). Grow prioFrame to fit the rows it just laid out so the Outlier
     -- Detection section anchored off prioFrame's bottom never overlaps, no matter
     -- how many priority rows are shown. (FQ-211)
-    local endY = UI:RenderAllocList(ns.db.settings.dfPriorityOrder, DF_ALLOC_META, prioAllocRows, prioFrame, PRIO_Y_START, RenderPriority)
+    -- RenderAllocList calls this back after a reorder. Re-render the rows, then
+    -- re-rank the results — the callback used to be RenderPriority alone, which
+    -- redrew the list and left every recommendation untouched (FQ-253).
+    local endY = UI:RenderAllocList(ns.db.settings.dfPriorityOrder, DF_ALLOC_META, prioAllocRows, prioFrame, PRIO_Y_START,
+        function()
+            RenderPriority()
+            if ReapplyPriority then ReapplyPriority() end
+        end)
     prioFrame:SetHeight(math.max(-endY + 4, 1))
 end
 
@@ -552,11 +569,8 @@ local autoLabel = bottomBar:CreateFontString(nil, "OVERLAY", "GameFontDisableSma
 autoLabel:SetPoint("LEFT", autoChk, "RIGHT", 2, 0); autoLabel:SetText("Auto-select by priority")
 autoChk:SetScript("OnClick", function(self)
     autoGenerate = self:GetChecked()
-    if autoGenerate and itemGroups and ns.DealFinder then
-        ns.DealFinder:ApplyPriority(itemGroups, ns.db.settings.dfPriorityOrder)
-        for _, group in ipairs(itemGroups) do ApplyQuantitySelection(group) end
-        if currentIdx >= 1 then ShowItem(currentIdx) end
-    end
+    -- Same path a priority reorder takes, so the two can't drift (FQ-253).
+    if ReapplyPriority then ReapplyPriority() end
 end)
 
 -- ==========================================
@@ -793,7 +807,16 @@ local function ApplyQuantitySelectionFn(group)
         group.realms[sorted[rank].idx]._selected = true
     end
 end
-ApplyQuantitySelection = ApplyQuantitySelectionFn
+
+-- Re-score the current results against the priority order and refresh the
+-- view. Assigned to the forward declaration near the priority list so a
+-- reorder can reach it (FQ-253). No-op before a scan has produced groups.
+ReapplyPriority = function()
+    if not (autoGenerate and itemGroups and ns.DealFinder) then return end
+    ns.DealFinder:ApplyPriority(itemGroups, ns.db.settings.dfPriorityOrder)
+    for _, group in ipairs(itemGroups) do ApplyQuantitySelectionFn(group) end
+    if currentIdx >= 1 then ShowItem(currentIdx) end
+end
 
 local function CountSelections(group)
     local n = 0

@@ -6,6 +6,11 @@ The engineering-detail companion lives in `CHANGELOG.md` (commit-readerese — f
 
 ---
 
+## Unreleased
+
+- **Realms FlipQueue has no data for no longer pretend to have nothing listed.** When FlipQueue can't find an item's auction data on a realm, it doesn't know how many are posted there — but the realm comparison table printed that as **0**, which reads as "nothing posted, no competition". The ranking never treated those realms as competition-free, because unknown isn't the same as empty, so the screen and the recommendation disagreed with each other. Unknown counts now show as **?**.
+- **Reordering your Deal Finder priorities takes effect immediately.** Dragging something to the top of the priority list redrew the list and left every recommendation exactly as it was — you had to run another scan before it did anything, and nothing said so. It now re-ranks the moment you reorder.
+
 ## v0.13.2-alpha3
 
 Follow-ups to both problems reported on the last build, after testers came back with more detail.

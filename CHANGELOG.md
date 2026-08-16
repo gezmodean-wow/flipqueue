@@ -1,5 +1,25 @@
 # Changelog
 
+## Unreleased
+
+### FQ-253 (#253): the two reasons alpha3's ranking fix looked like it hadn't worked
+
+Shylynce, testing FQ-252 on alpha3: *"I tried the priority to no competition first… seems like it still isn't choosing the realms with no data, its choosing realms with high margin, for example on Sargeras and Frostmourne there is none posted, but it chose to post on tich."* Two defects either side of the scoring fix, which is why the scoring fix alone didn't resolve it.
+
+**1. `numAuctions or 0` rendered *unknown* as *zero*.** `noCompetition` is set conservatively and correctly (`DealFinder.lua:446`): a realm on the regional-fallback rung has `numAuctions == nil` — no per-realm data for that item — so it is unknown, not empty. But both display sites collapsed nil to 0 (`UI/DealFinderDetail.lua:402` tooltip, `:614` comparison table). The player reads `0` in the AH column, concludes there is no competition, and watches "no competition" skip it. The data was right and the display contradicted it. Now `?` in the table, `unknown` in the tooltip.
+
+Note the interaction with FQ-249: variant gear that misses on a realm lands on the regional rung, so the realms showing a false `0` are exactly the ones that item isn't priced on.
+
+**2. Reordering the priority list never re-ranked.** `UI/DealFinderPage.lua` passed `RenderPriority` as `RenderAllocList`'s `onChanged`, and `RenderPriority` only re-renders the widget rows — `ApplyPriority` was never called, so results already on screen kept the ranking they were scanned with. The only re-rank triggers were a fresh scan or the "Auto-select by priority" checkbox, whose handler carried its own inline copy of the re-rank. Extracted that copy into `ReapplyPriority` (forward-declared above the priority list, assigned once `ShowItem` / `ApplyQuantitySelectionFn` exist) and routed both paths through it so they cannot drift.
+
+Removed a stray global on the way: `ApplyQuantitySelection = ApplyQuantitySelectionFn` had exactly one reader — the inline copy now deleted — and was leaking a global into the WoW namespace.
+
+**Open with the reporter:** whether "no competition" should treat unknown as empty. It currently does not, deliberately — a realm TSM has no data for is not a realm known to be quiet, and "no data" can mean nobody trades that item there at all.
+
+### FQ-251 (#251): closed, confirmed
+
+Reporter's alpha3 dump: `13 resolved, 0 skipped … 3 tombstoned, 0 with no record`, every character reporting a real age. Confirms all three fixes end to end — alpha2's alias fallback, alpha3's `lastScan` correction, and alpha3's tombstone labelling. The `NO RECORD` branch, which would have meant the projection path itself was passing characters over, did not fire. The three dead characters were deleted in FlipQueue; restoring them is a user decision, deliberately not automated.
+
 ## v0.13.2-alpha3
 
 Follow-up to the two alpha2 reports, both of which came back with more information. The FQ-249 reporter pushed back on the item-level bound; the FQ-251 reporter's `/fq debug alts` dump turned out to be partly fiction. Also takes the FQ-177 default flip, which had been parked on a maintainer decision. Embedded Cogworks-1.0 stays at **`v0.16.0`** (MINOR 31). **Schema 13 → 14** — one-shot settings migration, see FQ-177 below. **F8 not yet run.**
