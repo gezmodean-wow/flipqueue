@@ -1,6 +1,8 @@
 # Changelog
 
-## Unreleased
+## v0.13.2-alpha4
+
+Everything here came out of Shylynce testing alpha3 the night it shipped. Embedded Cogworks-1.0 stays at **`v0.16.0`** (MINOR 31). **Schema stays at 14** — no migration. **F8 not yet run.**
 
 ### FQ-253 (#253): the two reasons alpha3's ranking fix looked like it hadn't worked
 
