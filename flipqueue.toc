@@ -70,6 +70,7 @@ UI/ExportPage.lua
 UI/TransformPage.lua
 UI/AllocWidget.lua
 UI/PriceTooltip.lua
+UI/RealmOrderPopup.lua
 UI/DealFinderPage.lua
 UI/DealFinderDetail.lua
 UI/ResearchPage.lua

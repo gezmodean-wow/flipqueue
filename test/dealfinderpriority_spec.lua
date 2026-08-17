@@ -171,6 +171,65 @@ check("half credit still outranks a far richer contested realm",
 ns.db.settings.dfUnknownAsNoCompetition = nil
 
 --------------------------
+-- Realm order (FQ-255)
+--
+-- The criterion that finally breaks the all-tie case. Two realms with no data
+-- for an item tie on profit (same regional average), on population (neither
+-- has a per-item count) and on competition, so before this the pick came down
+-- to whichever the realm hash yielded first.
+--------------------------
+
+-- Stub the activity source so the seed is deterministic in the spec.
+ns.TSMRealms = {
+    GetRealmsByActivity = function()
+        return {
+            { realm = "Busy",   activity = 20000 },
+            { realm = "Middle", activity = 9000 },
+            { realm = "Dead",   activity = 1000 },
+        }
+    end,
+}
+function ns:NormalizeRealmKey(r) return (r or ""):lower():gsub("[^%w]", "") end
+
+ns.db.settings.dfRealmOrder = nil
+check("seeds from TSM activity, busiest first",
+    table.concat(DF:GetRealmOrder(), ","), "Busy,Middle,Dead")
+
+local dead   = { realmName = "Dead",   noCompetition = false, numAuctions = nil, profit = gold(100) }
+local busy   = { realmName = "Busy",   noCompetition = false, numAuctions = nil, profit = gold(100) }
+local middle = { realmName = "Middle", noCompetition = false, numAuctions = nil, profit = gold(100) }
+
+-- The reported case: several no-data realms, everything else equal.
+check("busiest no-data realm wins",
+    pick({ dead, middle, busy }, { "profit", "noCompetition", "population", "realmOrder" }), "Busy")
+check("and the order of the candidates does not change the answer",
+    pick({ busy, dead, middle }, { "profit", "noCompetition", "population", "realmOrder" }), "Busy")
+
+-- A realm the player has never ranked sorts below every ranked one.
+local unranked = { realmName = "Unlisted", noCompetition = false, numAuctions = nil, profit = gold(100) }
+check("an unranked realm loses to a ranked one",
+    pick({ unranked, dead }, { "realmOrder" }), "Dead")
+
+-- Dragging overrides the seed entirely.
+ns.db.settings.dfRealmOrder = { "Dead", "Middle", "Busy" }
+check("a stored order overrides the activity seed",
+    table.concat(DF:GetRealmOrder(), ","), "Dead,Middle,Busy")
+check("and scoring follows the player's order, not activity",
+    pick({ busy, middle, dead }, { "realmOrder" }), "Dead")
+
+-- It must stay a tie-break: anything above it still decides first.
+local deadButRich = { realmName = "Dead", noCompetition = false, numAuctions = nil, profit = gold(9000) }
+local busyButPoor = { realmName = "Busy", noCompetition = false, numAuctions = nil, profit = gold(100) }
+ns.db.settings.dfRealmOrder = { "Busy", "Middle", "Dead" }
+check("profit still outranks realm order when listed first",
+    pick({ busyButPoor, deadButRich }, { "profit", "realmOrder" }), "Dead")
+check("but realm order decides when profit ties",
+    pick({ dead, busy }, { "profit", "realmOrder" }), "Busy")
+
+ns.db.settings.dfRealmOrder = nil
+ns.TSMRealms = nil
+
+--------------------------
 -- Outliers
 --------------------------
 

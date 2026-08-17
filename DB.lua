@@ -343,6 +343,32 @@ function ns:InitDB()
     -- outranks one we merely know nothing about.
     if db.settings.dfUnknownAsNoCompetition == nil then db.settings.dfUnknownAsNoCompetition = false end
     db.settings.dfPriorityOrder = db.settings.dfPriorityOrder or {"profit", "noCompetition", "previousSales"}
+    -- The priority widget is reorder-only — it has no way to add a criterion —
+    -- so anything missing from the stored order is unreachable forever. That
+    -- is how "population" shipped defined but unusable: DF_ALLOC_META has
+    -- always listed it and the default order never did.
+    --
+    -- Append any known criterion the stored order lacks. Self-healing rather
+    -- than a migration: it is idempotent, it fixes a DB restored from an old
+    -- backup, and it covers criteria added later without another schema bump.
+    -- Appending is safe by construction — a criterion at the bottom of the
+    -- list only decides cases where everything above it already tied, which
+    -- previously resolved arbitrarily (FQ-255).
+    do
+        local known = { "profit", "noCompetition", "previousSales", "population", "realmOrder" }
+        local present = {}
+        for _, key in ipairs(db.settings.dfPriorityOrder) do present[key] = true end
+        for _, key in ipairs(known) do
+            if not present[key] then
+                db.settings.dfPriorityOrder[#db.settings.dfPriorityOrder + 1] = key
+            end
+        end
+    end
+    -- Player-ordered realm preference (FQ-255). Empty means "use TSM's listing
+    -- counts", which DealFinder:GetRealmOrder resolves on demand — storing the
+    -- seed would freeze it, and it should track TSM's data until the player
+    -- actually expresses a preference by dragging.
+    db.settings.dfRealmOrder = db.settings.dfRealmOrder or {}
     -- Skip deals that have no matching character (suppress "create character" tasks)
     if db.settings.skipUnassigned == nil then db.settings.skipUnassigned = false end
     -- TSM character detection dismissed list

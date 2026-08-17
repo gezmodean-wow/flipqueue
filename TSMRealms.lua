@@ -28,6 +28,10 @@ local QUERY_CACHE_TTL = 60   -- seconds
 -- the query cache rather than aged out (FQ-249).
 local bucketCache = {}
 
+-- Per-realm listing counts (FQ-255). Same lifetime as the caches above: only
+-- changes when AppData reloads.
+local activityCache = {}
+
 --------------------------
 -- Base-32 Decoding
 -- (matches TSM's private.UnpackData encoding)
@@ -95,6 +99,7 @@ local function ProcessPendingData()
     -- Realm strings just changed underneath the derived caches (FQ-249).
     wipe(queryCache)
     wipe(bucketCache)
+    wipe(activityCache)
     isLoaded = true
 end
 
@@ -535,6 +540,51 @@ function TSMRealms:SpreadVerdict(pricing)
     return pricing.ilvlSpread <= threshold and "tight" or "wide"
 end
 
+-- How much trade happens on a realm, as the count of distinct items its
+-- auction house currently lists (FQ-255).
+--
+-- This exists because the `population` scoring criterion uses per-ITEM
+-- auction counts as its proxy, and that number is exactly unavailable in the
+-- case where it matters most: a realm with no data for the item being priced
+-- has no count at all, so every such realm ties and the choice between them
+-- falls to whatever order they happened to be built in.
+--
+-- A realm's total listing count is the obvious stand-in and needs no new data
+-- source — it is already sitting in the AppData we load. Measured across the
+-- live 40-realm file it separates realms cleanly and agrees with what players
+-- call mega-servers: Moon Guard 22,849, Area 52 22,402, Illidan 20,869 down to
+-- Goldrinn 4,158, a 5.5x spread.
+--
+-- Counting `{` is deliberate: every entry in the item-data string opens with
+-- one, so this is a single character scan rather than a parse. Memoised
+-- because the string runs to megabytes and the result only changes when TSM
+-- downloads new data.
+function TSMRealms:GetRealmActivity(realmName)
+    if not isLoaded or not realmName then return 0 end
+    local cached = activityCache[realmName]
+    if cached then return cached end
+    local rawEntry = realmRaw[realmName]
+    if not (rawEntry and rawEntry.str) then return 0 end
+    local _, count = rawEntry.str:gsub("{", "")
+    activityCache[realmName] = count
+    return count
+end
+
+-- Every captured realm ordered busiest first. Used to seed the player's realm
+-- order so the feature works without them configuring anything.
+function TSMRealms:GetRealmsByActivity()
+    local out = {}
+    if not isLoaded then return out end
+    for _, realm in ipairs(realmList) do
+        out[#out + 1] = { realm = realm, activity = self:GetRealmActivity(realm) }
+    end
+    table.sort(out, function(a, b)
+        if a.activity ~= b.activity then return a.activity > b.activity end
+        return a.realm < b.realm   -- deterministic on ties
+    end)
+    return out
+end
+
 function TSMRealms:GetRealmUpdateTime(realmName)
     local r = realmRaw[realmName]
     return r and r.downloadTime
@@ -597,6 +647,7 @@ end
 function TSMRealms:InvalidateCache()
     wipe(queryCache)
     wipe(bucketCache)
+    wipe(activityCache)
 end
 
 -- Collect every unique numeric itemID referenced in any realm's raw

@@ -337,7 +337,8 @@ local DF_ALLOC_META = {
     profit         = {label = "Most Profit",     icon = "Interface\\Icons\\INV_Misc_Coin_17", color = {1, 0.82, 0}},
     noCompetition  = {label = "No Competition",  icon = "Interface\\Icons\\Achievement_PVP_H_01", color = {0.3, 1, 0.3}},
     previousSales  = {label = "Previous Sales",  icon = "Interface\\Icons\\INV_Misc_Book_09", color = {0.4, 0.8, 1}},
-    population     = {label = "High Population", icon = "Interface\\Icons\\Achievement_GuildPerk_EverybodysFriend", color = {0.7, 0.5, 1}},
+    population     = {label = "Most Listings",   icon = "Interface\\Icons\\Achievement_GuildPerk_EverybodysFriend", color = {0.7, 0.5, 1}},
+    realmOrder     = {label = "My Realm Order",  icon = "Interface\\Icons\\INV_Misc_Map_01", color = {0.9, 0.6, 0.9}},
 }
 
 local PRIO_Y_START = -2
@@ -374,8 +375,31 @@ local function RenderPriority()
     prioFrame:SetHeight(math.max(-endY + 4, 1))
 end
 
+-- Realm order lives in a popup: this column doesn't scroll and the realm list
+-- runs to dozens of rows (FQ-255).
+local realmOrderBtn = CreateFrame("Button", nil, rightCol, "GameMenuButtonTemplate")
+realmOrderBtn:SetSize(150, 20)
+realmOrderBtn:SetPoint("TOPLEFT", prioFrame, "BOTTOMLEFT", 8, -6)
+realmOrderBtn:SetText("Realm Order...")
+realmOrderBtn:SetScript("OnEnter", function(self)
+    GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+    GameTooltip:AddLine("Realm Order")
+    GameTooltip:AddLine("Which realm wins when they are otherwise equal - most often", 1, 1, 1, true)
+    GameTooltip:AddLine("when FlipQueue has no listings for an item on any of them.", 1, 1, 1, true)
+    GameTooltip:AddLine(" ")
+    GameTooltip:AddLine("Starts ordered by how busy each realm's auction house is, using", 1, 0.82, 0, true)
+    GameTooltip:AddLine("TSM's own data. Drag to override it.", 1, 0.82, 0, true)
+    GameTooltip:AddLine(" ")
+    GameTooltip:AddLine("Move 'Realm Order' up the priority list above to give it more say.", 0.7, 0.7, 0.7, true)
+    GameTooltip:Show()
+end)
+realmOrderBtn:SetScript("OnLeave", function() GameTooltip:Hide() end)
+realmOrderBtn:SetScript("OnClick", function()
+    if UI.ToggleRealmOrderPopup then UI:ToggleRealmOrderPopup() end
+end)
+
 local outlierLabel = rightCol:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-outlierLabel:SetPoint("TOPLEFT", prioFrame, "BOTTOMLEFT", 8, -14)
+outlierLabel:SetPoint("TOPLEFT", realmOrderBtn, "BOTTOMLEFT", -8, -14)
 outlierLabel:SetText("Outlier Detection"); outlierLabel:SetTextColor(0.8, 0.8, 0.8)
 
 local outlierDesc = rightCol:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")

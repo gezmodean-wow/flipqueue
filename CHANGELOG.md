@@ -1,5 +1,25 @@
 # Changelog
 
+## Unreleased
+
+### FQ-255 (#255): realm order — tied realms were picked arbitrarily
+
+Shylynce, after the #252/#253 fixes: *"when it chooses a realm for an item, and there are multiple realms to choose from out of the list of no items on that realm, it chooses randomly it seems like… if it can prioritize the dead realms with the most population."*
+
+**The "randomly" was literal.** `GetSellRealms()` returns a hash and `ScanChunked` walked it with `pairs`, whose order is unspecified. `ApplyPriority` selects on strict `>`, so tied realms resolved to whichever the iterator yielded first — potentially differently between sessions for identical data. #252 made this *more* visible, not less: normalized scoring produces exact ties far more often than the old unbounded arithmetic did, and two no-data realms tie on every criterion at once. Iteration is now sorted by normalized realm key.
+
+**Realm order as a ranking criterion.** No population data exists anywhere in the addon — `RealmData.lua` carries only connected-realm AH groupings — and the `population` criterion's per-item auction count is precisely unavailable in the case that matters, since a no-data realm has no count. So `TSMRealms:GetRealmActivity(realm)` counts the distinct items a realm's AH lists, straight from the AppData already loaded. Measured against the live 40-realm file: Moon Guard 22,849, **Area 52 22,402**, Illidan 20,869 … Goldrinn 4,158 — a 5.5× spread that agrees with which realms players call mega-servers, and puts Area 52 second, which is the call the reporter made. Counting `{` rather than parsing makes it a single character scan, memoised alongside the other AppData-derived caches; verified to reproduce the parsed entry counts exactly.
+
+New `realmOrder` criterion scores a realm by its rank in `dfRealmOrder`, seeded from that activity and overridden by dragging. An empty setting means "follow TSM's data" rather than a frozen snapshot; a stored order self-heals by appending realms captured since it was saved, so a new mega-server ranks on merit instead of sorting last for having arrived late. Unranked realms score 0, below every ranked one.
+
+`UI/RealmOrderPopup.lua` holds the drag list — the Deal Finder config column doesn't scroll and the realm list runs to dozens of rows. Realms you sell on are green; each row shows its listing count, so the default ordering shows its evidence rather than asking to be trusted. "Reset to busiest first" clears the stored order rather than rewriting it with today's seed.
+
+**Also fixed, found on the way: `population` has been defined but unreachable since it shipped.** `DF_ALLOC_META` has always listed it; `dfPriorityOrder` never did, and the priority widget is reorder-only with no way to add a criterion. `DB.lua` now appends any known criterion missing from a stored order — self-healing rather than a migration, since it is idempotent, survives a restored backup, and covers criteria added later without a schema bump. Appending is safe by construction: a criterion at the bottom only decides cases that already tied and previously resolved arbitrarily. Relabelled "High Population" → "Most Listings", which is what it actually measures.
+
+`test/dealfinderpriority_spec.lua` 28 → 36.
+
+**Deliberately not built:** a CSV import of external realm population data. The data is ordinal and slow-moving, TSM already supplies a live signal that refreshes hourly, and an import costs a paste surface to harden plus a third-party format to track. Revisit if players ask.
+
 ## v0.13.2-alpha4
 
 Everything here came out of Shylynce testing alpha3 the night it shipped. Embedded Cogworks-1.0 stays at **`v0.16.0`** (MINOR 31). **Schema stays at 14** — no migration. **F8 not yet run.**

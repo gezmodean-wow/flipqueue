@@ -95,6 +95,71 @@ function DealFinder:IsOutlier(realmPrice, regionAvg, multiplier)
 end
 
 --------------------------
+-- Realm order (FQ-255)
+--------------------------
+
+-- The player's preferred realm order, busiest-first by default.
+--
+-- Exists because every other criterion can tie. Two realms with no data for
+-- an item tie on profit (both quote the same regional average), on population
+-- (neither has a per-item listing count) and on competition — so the pick fell
+-- to whatever order the realms happened to be built in, which is a hash walk
+-- and therefore arbitrary and unreproducible between sessions.
+--
+-- Seeded from TSM's own per-realm listing counts so it is useful before the
+-- player touches it, and stored as an explicit list so dragging it is what
+-- overrides the seed. A realm absent from the stored order sorts after every
+-- listed one, which is what a newly-visited realm should do.
+function DealFinder:GetRealmOrder()
+    local stored = ns.db and ns.db.settings and ns.db.settings.dfRealmOrder
+    if not (stored and #stored > 0) then return self:BuildDefaultRealmOrder() end
+
+    -- A stored order predates any realm captured since it was saved. Appending
+    -- the newcomers by activity keeps them ranked on merit instead of dumping
+    -- them below realms the player never actually compared them against — a
+    -- brand-new mega-server should not sort last because it arrived late.
+    -- Returns a copy: the caller must not be able to mutate the setting by
+    -- holding the result.
+    local seen, out = {}, {}
+    for _, realm in ipairs(stored) do
+        if not seen[realm] then
+            seen[realm] = true
+            out[#out + 1] = realm
+        end
+    end
+    for _, entry in ipairs(self:BuildDefaultRealmOrder()) do
+        if not seen[entry] then
+            seen[entry] = true
+            out[#out + 1] = entry
+        end
+    end
+    return out
+end
+
+function DealFinder:BuildDefaultRealmOrder()
+    local out = {}
+    if ns.TSMRealms and ns.TSMRealms.GetRealmsByActivity then
+        for _, entry in ipairs(ns.TSMRealms:GetRealmsByActivity()) do
+            out[#out + 1] = entry.realm
+        end
+    end
+    return out
+end
+
+-- realm display name -> 1-based rank. Realms we have no opinion on get nil.
+function DealFinder:BuildRealmRank()
+    local rank = {}
+    for i, realm in ipairs(self:GetRealmOrder()) do
+        if not rank[realm] then rank[realm] = i end
+        -- Also index the normalized form so a display/normalized mismatch
+        -- between the stored order and the scan's realm names still resolves.
+        local norm = ns.NormalizeRealmKey and ns:NormalizeRealmKey(realm)
+        if norm and not rank[norm] then rank[norm] = i end
+    end
+    return rank
+end
+
+--------------------------
 -- Priority Scoring
 --------------------------
 
@@ -122,6 +187,11 @@ function DealFinder:BuildScoreNorms(realms)
         if (o.personalCount or 0) > norms.sales then norms.sales = o.personalCount end
     end
     if norms.profitMin == math.huge then norms.profitMin, norms.profitMax = 0, 0 end
+    -- Realm ranks are a property of the player's settings rather than of this
+    -- item, but they belong here so scoring stays a pure function of its
+    -- arguments and the spec can drive it without touching the DB.
+    norms.realmRank = self:BuildRealmRank()
+    norms.realmCount = #self:GetRealmOrder()
     return norms
 end
 
@@ -194,6 +264,17 @@ function DealFinder:ScoreRealm(realmOpt, priorityOrder, norms)
             local n = realmOpt.numAuctions
             if n ~= nil then
                 v = (1 + n) / (1 + norms.auctions)
+            end
+        elseif key == "realmOrder" then
+            -- Rank 1 scores 1.0, the last listed realm scores just above 0,
+            -- and an unlisted realm scores 0 — so anything the player has
+            -- ranked beats anything they haven't. This is the criterion that
+            -- finally breaks the all-tie case (FQ-255).
+            local rank = norms.realmRank and (norms.realmRank[realmOpt.realmName]
+                or (ns.NormalizeRealmKey and norms.realmRank[ns:NormalizeRealmKey(realmOpt.realmName or "")]))
+            local count = norms.realmCount or 0
+            if rank and count > 0 then
+                v = (count - rank + 1) / count
             end
         end
         score = score + v * weight
@@ -273,6 +354,13 @@ function DealFinder:ScanChunked(pool, onProgress, onComplete)
     local sellRealms = self:GetSellRealms()
     local realmCount = 0
     for _ in pairs(sellRealms) do realmCount = realmCount + 1 end
+
+    -- Stable iteration order for the per-item realm loop below (FQ-255).
+    local sortedSellRealms = {}
+    for key, info in pairs(sellRealms) do
+        sortedSellRealms[#sortedSellRealms + 1] = { key = key, display = info.display, chars = info.chars }
+    end
+    table.sort(sortedSellRealms, function(a, b) return a.key < b.key end)
 
     local hasRealmData = ns.TSMRealms and ns.TSMRealms:IsLoaded()
     -- Sales data from unified SalesIndex
@@ -365,7 +453,14 @@ function DealFinder:ScanChunked(pool, onProgress, onComplete)
 
             -- Build realm options for this item
             local realmOptions = {}
-            for _, realmInfo in pairs(sellRealms) do
+            -- Deterministic order (FQ-255). GetSellRealms returns a hash, and
+            -- `pairs` order is unspecified — so when realms tied on every
+            -- criterion the winner was whichever the iterator happened to
+            -- yield first, and that could differ between sessions for the same
+            -- item and the same data. Sorting the keys makes a tie resolve the
+            -- same way twice; the realmOrder criterion then decides it on
+            -- merit rather than on iteration luck.
+            for _, realmInfo in ipairs(sortedSellRealms) do
                 local targetRealm = realmInfo.display
                 local pricing = FindRealmPricing(allRealmPrices, targetRealm)
 
