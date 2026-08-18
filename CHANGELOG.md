@@ -1,6 +1,8 @@
 # Changelog
 
-## Unreleased
+## v0.13.2-alpha5
+
+One issue, from Shylynce testing alpha4. Embedded Cogworks-1.0 stays at **`v0.16.0`** (MINOR 31) — the corrected `ItemKeyToItemString` is merged upstream as v0.17.0 but not yet tagged, so the `Core.lua` override and its `.pkgmeta` pin stay put. **Schema stays at 14** — the priority-order repair is a self-heal in `DB.lua`, not a migration. **F8 not yet run**; the realm-order popup is new UI and is the thing to look at first.
 
 ### FQ-255 (#255): realm order — tied realms were picked arbitrarily
 

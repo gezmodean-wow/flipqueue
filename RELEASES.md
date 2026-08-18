@@ -6,7 +6,9 @@ The engineering-detail companion lives in `CHANGELOG.md` (commit-readerese — f
 
 ---
 
-## Unreleased
+## v0.13.2-alpha5
+
+Deal Finder picks a better realm when it has nothing to separate them.
 
 - **Deal Finder picks the busier realm when it has nothing else to go on.** If several realms looked equally good for an item — which happens most often when FlipQueue has no listings for it on any of them — the one it picked really was arbitrary, and could differ between sessions for the same item. It now falls back to a **realm order**, which starts out ranked by how busy each realm's auction house actually is, using data TSM already downloads. So between two quiet realms you get the bigger one.
 - **You can set that realm order yourself.** There's a **Realm Order...** button in the Deal Finder options: drag realms into whatever order you prefer, and the ones you have a selling character on are highlighted. Each realm shows how many different items are listed there, so you can see why the default order looks the way it does. "Reset to busiest first" hands it back to FlipQueue.
