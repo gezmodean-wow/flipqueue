@@ -63,13 +63,22 @@ get_local_ack() {
   # We extract field 3, trim outer whitespace, then drop everything from the
   # first interior whitespace onward — the version code itself never contains
   # whitespace, so the leading non-whitespace token is the code.
+  #
+  # The `shared/` match is anchored to a TABLE ROW (^|) and not just to any line
+  # mentioning shared/. Without that anchor the first match inside the block is
+  # whatever prose happens to name the file pool — cogworks' own CLAUDE.md gained
+  # such a sentence in the COG-42 governance sweep, three lines above the table.
+  # Prose has no `|`, so $3 was empty, awk printed nothing and exited, and every
+  # cog reported "Standards not yet acknowledged" no matter what the table said.
+  # A silent false negative: the shared/-pool half of the standards check was
+  # effectively disabled for any cog whose intro text mentions shared/.
   if [[ ! -f CLAUDE.md ]]; then
     echo ""
     return
   fi
   awk -F'|' '
     /Standards acknowledgments/ { in_block=1; next }
-    in_block && /shared\// {
+    in_block && /^\|/ && /shared\// {
       gsub(/^[[:space:]]+|[[:space:]]+$/, "", $3)
       sub(/[[:space:]].*$/, "", $3)
       print $3
