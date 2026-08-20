@@ -6,6 +6,48 @@ The engineering-detail companion lives in `CHANGELOG.md` (commit-readerese — f
 
 ---
 
+## v0.13.2
+
+This release is mostly about trust in the numbers. Deal Finder now genuinely follows the priority order you set, explains every price when you hover it, and lets you decide the realm order it falls back on. Gear prices agree with TradeSkillMaster again, characters parked on realms you never visit stay up to date, and a new **Storage** role keeps bank alts out of your to-do lists without hiding their stock. Everything below is new since v0.13.1.
+
+### Deal Finder recommends the realm you actually asked for
+
+- **Your priority order genuinely decides now.** If you dragged **no competition** to the top, Deal Finder would still recommend a realm that had competition whenever it made more than about 100 gold — a big enough number further down the list simply outweighed the thing at the top. Everything is now measured on the same scale before your order is applied, so whatever you put first decides and the rest only break ties. If you left the list on its default this never affected you; if you changed it, it did.
+- **Reordering your priorities takes effect immediately** instead of quietly waiting for the next scan.
+- **Ties go to the busier realm.** When several realms looked equally good — most often when FlipQueue has no listings for the item on any of them — the pick really was arbitrary, and could differ between sessions. It now falls back to a **realm order**, ranked by how busy each realm's auction house actually is, using data TSM already downloads. Between two quiet realms you get the bigger one.
+- **You can set that realm order yourself.** A **Realm Order...** button in the Deal Finder options opens a drag list: your selling realms are highlighted, each realm shows how many different items are listed there, and "Reset to busiest first" hands it back to FlipQueue. How much say it gets is up to you — it lives in the same priority list as everything else.
+- **Realms FlipQueue has no data for no longer pretend to be empty.** Unknown listing counts showed as **0**, which reads as "no competition" when the truth is "no idea". They now show as **?**, and there's a new option if you'd rather "no competition" counted those realms anyway — at half strength, so a realm checked and found empty still beats one that's simply unknown.
+- **Crafting materials are out of the scan.** Anything that stacks trades on a single region-wide auction house, so the price is identical everywhere and there is no profit in moving it. They were filling the scan with items that could never pay. The inventory preview says how many were skipped, and a **"Hide region-wide items"** checkbox puts them back if you want them.
+- **A priority option that was never usable now is.** "Most Listings" (previously "High Population") existed in the code since it shipped but could never appear in your priority list.
+
+### Gear prices match TradeSkillMaster again
+
+- When a piece of gear exists at several item levels, FlipQueue was working out the wrong item level for the one you actually have, then quietly settling for the price of a completely different version — one reported polearm read 119k on a realm where the real figure was nearer 14k. Plain items and anything that stacks were never affected, which is why roughly half a list looked wrong. The item level is now worked out correctly, and near-miss matching is bounded to nearby item levels instead of ones fifty levels away.
+- FlipQueue also now checks whether an item's *other* item levels actually sell for different amounts on that realm. For a lot of gear they don't — those prices are borrowed silently and safely. Where item level really does drive the price, the approximate-price warning stays. **Settings → Pricing** controls how trusting this is, or turns it off entirely.
+
+### Every price explains itself
+
+Hover any price in Deal Finder — realm cards and the comparison table alike — and it tells you where the number came from: this realm's own data, a close item-level match, or a region-wide average; recent market value versus cheapest currently listed, with both shown; **how long ago TSM last downloaded that realm's data**, in red if it's over a day old; every item level FlipQueue has a price for on that realm and which one yours came from; and how your own past sales there changed the figure. If a price looks wrong, the reason should be on screen instead of something to guess at.
+
+### Expected prices from FlippingPal are realistic out of the box
+
+- FlippingPal's "Listing" column is what it suggests posting *at* — an aggressive number that on a thin item can be a hundred times what it really sells for, and it was the default FlipQueue shipped with. New installs and anyone still on that default now use **Auto**, which keeps FlippingPal's listing price except where TradeSkillMaster says it has clearly run away. **You'll see a one-time message about this when you log in.** If you'd already picked a source yourself, nothing changes for you; the old behaviour is one dropdown away at **Settings → Imports**.
+- To-do rows whose price still looks inflated — more than 10× TSM's regional average — carry an orange **!** with the comparison in the tooltip, and the generator says how many tasks are affected, pointing at that same setting.
+
+### Your characters, wherever they're parked
+
+- **New: storage-only characters.** Set a character's role to **Storage** on the Characters page and it holds your stock without ever being given a posting or buying task. Its bags and bank still count as items you own, and it can still hand things over to the character selling them. Previously the only way to keep a character out of your to-do lists was **Hidden**, which also hid its inventory.
+- **Characters on realms you rarely visit update again.** Some characters could sit with stale bags forever — FlipQueue only recognised a realm after you had logged into it, so alts parked on far-flung realms were quietly skipped every time. They're now recognised from the records FlipQueue already has, no login required, and the loading bar says how many were skipped instead of reporting a tidy total while dropping a quarter of them.
+- **"No character on that realm" no longer shows for realms you do have a character on.** If everyone there is set to **Buy Only** — a common setup for parked bank alts — no one may post a sale, and FlipQueue used to report that as *nobody exists there*. It now counts those separately, names the realms, and tells you the fix is a role change, not a new character.
+
+### Smaller fixes
+
+- **Shift-click an item anywhere in FlipQueue to put its link in chat**, the way every other item in the game works.
+- **A mailbox toy in the Tools drawer works when you click it.** Toys were being used as if they were sitting in your bags; a learned toy lives in the toy box, so nothing happened.
+- **FlipQueue notices when your pinned TSM profile no longer exists.** A profile renamed or deleted inside TSM left the group tree empty with nothing to explain why. It now falls back to the profile TSM is actually using and tells you once, and the group list names the profile it's showing.
+- **Updated for WoW 12.1.0**, and re-checked against the latest TradeSkillMaster so posting prices continue to follow your Auctioning operations exactly.
+- **Better help when you need it:** `/fq debug pricing` shows exactly how an item was priced on every realm, and the new `/fq debug alts` lists every character FlipQueue knows about, when each one's bags were last read, and which ones aren't contributing — and no longer reports nonsense while doing it.
+
 ## v0.13.2-alpha5
 
 Deal Finder picks a better realm when it has nothing to separate them.

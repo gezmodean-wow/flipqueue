@@ -1,5 +1,30 @@
 # Changelog
 
+## v0.13.2
+
+Public stable release. **Same code as `v0.13.2-alpha5`** — this promotion is the docs finalization plus the release tag, per the channel-semantics convention. Embedded Cogworks-1.0 is `v0.16.0` (MINOR 31); `## Interface` is `120100` (WoW 12.1.0). **Schema 14** (the FQ-177 default flip, alpha3). The `Core.lua` `ItemKeyToItemString` override ships one more release — the corrected builder is merged upstream (cogworks#83) but v0.17.0 is untagged, so the override and the `.pkgmeta` `v0.16.0` pin stay; rollback owed on the next line.
+
+Since v0.13.1 this line shipped across alpha1–alpha5 — a backlog round in alpha1, then a patch-day build and three tester-driven follow-ups:
+
+- **FQ-235 (alpha1)** — commodities out of the cross-realm deal pool: `ns:IsCommodity` (API answer first, max-stack proxy while uncached, Unknown deliberately never cached), `FilterPoolCommodities` behind `dfExcludeCommodities` (default on), `AuctionPost` delegating so posting and deal-finding can't disagree.
+- **FQ-217 (alpha1)** — pinned TSM profile revalidated via `TSM:GetProfileState`; dead pins fall back to the active profile with a once-per-session notice; the group tree names the profile it rendered.
+- **FQ-219 (alpha1)** — toys dispatched as toys (`type = "toy"` + numeric ID, attribute cleared per call); `dispatchValue`/`dispatchName` split keeps localized names on screen.
+- **FQ-245 (alpha1)** — `storage` character role: holds stock, takes no work; `ns:CharHoldsStock` / `ns:CharIsStorage`, no gate rewrites needed.
+- **FQ-248 (alpha1)** — `FindBestAssignment` returns `(nil, reason)`; `noSeller` breakdown (excluded from the sum invariant by design) names buy-only realms and the actual fix.
+- **FQ-177 (alpha1 → alpha3)** — inflation markers (`ns:FPPriceInflation`, 10× `DBRegionMarketAvg`) pointing at the price-source setting from where the wrong price shows (alpha1); then the default flipped Listing → **Auto** with a one-time notice, one-shot migration to **schema 14** that never touches an explicit prior choice (alpha3).
+- **FQ-249 (alpha2 → alpha3, five builds of attention)** — variant gear priced wrong: item level now derived from the item key instead of guessed, nearest-ilvl matching bounded (alpha2); bound widened from measured spread, per-realm ilvl-spread check silences the `~` warning where price doesn't vary by ilvl, **Settings → Pricing** trust control, full provenance tooltips including AppData age (alpha3); item-string builder round-tripped against real WoW strings (alpha5 line).
+- **FQ-251 (alpha2 → alpha3)** — alts resolved without a prior login to their realm; skip counts surfaced instead of a tidy "30 / 30"; `/fq debug alts` added, then fixed to stop reporting fiction (wrong staleness source, silently-contributing-nothing characters now called out).
+- **FQ-250 (alpha2)** — shift-click item links everywhere in the UI.
+- **12.1.0 (alpha2)** — Interface `120007` → `120100`; posting re-audited against TSM v4.14.75.
+- **FQ-252 (alpha3)** — priority criteria normalized to one scale before the ordered comparison, so the list decides lexicographically instead of letting an unbounded criterion outweigh a boolean above it.
+- **FQ-253 (alpha4)** — unknown listing counts render `?`/`unknown` instead of `0`; opt-in "count no-data realms as no competition" at half strength; reordering re-ranks immediately via the extracted `ReapplyPriority`.
+- **FQ-255 (alpha5)** — deterministic realm iteration (sorted, not `pairs` over a hash); `realmOrder` criterion seeded from `TSMRealms:GetRealmActivity` (distinct-item counts from AppData, memoised), `UI/RealmOrderPopup.lua` drag list; the unreachable `population` criterion self-healed into stored orders and relabelled "Most Listings".
+- **Process** — `PriceTooltip` made load-order independent; a stray `ApplyQuantitySelection` global removed; spec suite grew by ~150 assertions across seven new files.
+
+Known and deliberately not blocking: **FQ-254** (bank pull leaves a few items behind on the first visit; reopening finishes them) — reported 2026-08-17, has a workaround, next line.
+
+F8 was not run on the individual alphas, but the line has live tester exposure end to end: Shylynce drove alphas 2–5 (FQ-249/251/252/253/255 are all their reports) and confirmed alpha5 "working very well" on #249. **F8 waived on maintainer direction for this stable tag**, on the strength of that exposure.
+
 ## v0.13.2-alpha5
 
 One issue, from Shylynce testing alpha4. Embedded Cogworks-1.0 stays at **`v0.16.0`** (MINOR 31) — the corrected `ItemKeyToItemString` is merged upstream as v0.17.0 but not yet tagged, so the `Core.lua` override and its `.pkgmeta` pin stay put. **Schema stays at 14** — the priority-order repair is a self-heal in `DB.lua`, not a migration. **F8 not yet run**; the realm-order popup is new UI and is the thing to look at first.

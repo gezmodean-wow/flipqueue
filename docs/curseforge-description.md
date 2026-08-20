@@ -16,6 +16,7 @@ The foundation of cross-realm flipping is knowing your inventory. Through Syndic
 
 - **Full cross-character inventory** — see every item you own in one place, with status badges showing what's assigned, posted, or sitting idle
 - **Character overview** — gold totals, task counts, auction stats, and which AH cluster each character belongs to
+- **Character roles** — mark each character as selling, buying only, or **storage-only**: a storage character holds stock that still counts as yours without ever being handed a task
 - **Realm coverage map** — instantly see which realms you have characters on, which ones need a new alt, and how much gold is waiting on each
 - **Multi-account support** — share inventory and realm coverage between WoW accounts
 - **Live tracking** — inventory updates automatically as you move items between bags, bank, and warbank
@@ -30,7 +31,7 @@ Once FlipQueue knows your inventory, it's time to find what's worth flipping.
 
 ### Deal Finder (Built-in)
 
-Powered by [TSM](https://www.curseforge.com/wow/addons/tradeskill-master) pricing data, the Deal Finder scans your entire inventory and finds items that are worth more on another realm's auction house. It auto-selects the best destination realm for each item based on profit margin — and steers around realms where you already have that item posted, so you never split your own listings — then lets you generate tasks with one click.
+Powered by [TSM](https://www.curseforge.com/wow/addons/tradeskill-master) pricing data, the Deal Finder scans your entire inventory and finds items that are worth more on another realm's auction house. It auto-selects the best destination realm for each item using a priority order you control — most profit, no competition, your own realm ranking, in whatever order matters to you — and steers around realms where you already have that item posted, so you never split your own listings. Every price explains itself on hover: where the number came from, how fresh TSM's data for that realm is, and which item level it was matched against. Then generate tasks with one click.
 
 ![Deal Finder showing cross-realm price grid with profit columns and ilvl variant breakdown](https://raw.githubusercontent.com/gezmodean-wow/flipqueue/master/docs/storefront/screenshots/02-deal-finder.png)
 
