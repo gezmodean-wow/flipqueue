@@ -22,6 +22,16 @@ local MAX_PENDING_DELTAS = 500
 local REPLAY_THRESHOLD = 100  -- above this, skip replay and full sync
 local RETRY_INTERVAL = 5
 local MAX_RETRIES = 3
+local THROTTLE_BACKOFF = 1.0  -- seconds to pause the send queue after the server throttles us
+
+-- Send result codes (FQ-256). SendAddonMessage does not raise when the
+-- server throttles it: it returns AddonMessageThrottle and drops the
+-- message. Treating a clean pcall as "sent" lost most full-sync chunks on
+-- whisper links. Fallback values match ChatThrottleLib's table.
+local SEND_RESULT = (Enum and Enum.SendAddonMessageResult) or {}
+local RESULT_SUCCESS = SEND_RESULT.Success or 0
+local RESULT_THROTTLED = SEND_RESULT.AddonMessageThrottle or 3
+local RESULT_CHANNEL_THROTTLED = SEND_RESULT.ChannelThrottle or 8
 
 -- Opcodes
 local OP_PAIR = "PAIR"
@@ -68,6 +78,14 @@ local missedPings = {}         -- [accountUUID] = count
 local pendingPairRequests = {} -- [senderGameAccountID] = { uuid, bnetAccountID, charName }
 local friendRetryTimer = nil   -- delayed retry for BN_FRIEND_INFO_CHANGED timing
 local reconnectTicker = nil    -- periodic probe for disconnected partners
+local throttledUntil = 0       -- GetTime() before which DrainQueue sends nothing
+local throttleCount = 0        -- throttled sends since load (reported per full sync)
+local lastThrottleLog = -math.huge
+-- [partnerUUID] = { total, sent, startedAt, throttlesAtStart, notifiedStep }
+-- An outbound full sync is "in flight" from enqueue until its FEND drains;
+-- a second request in that window is skipped instead of queueing another
+-- full copy of the payload behind the first.
+local outboundFullSync = {}
 local syncLog = {}             -- ring buffer of recent sync events for debugging
 local SYNC_LOG_MAX = 200
 
@@ -621,17 +639,42 @@ local function GetSendBucket(priority)
     return q
 end
 
-function Sync:Enqueue(msg, target, priority, transport)
+-- onSent (optional) runs once the message leaves the queue for good (sent,
+-- or failed with a non-throttle error), so callers track progress on what
+-- actually went out, not on what was queued. Throttled sends don't count.
+function Sync:Enqueue(msg, target, priority, transport, onSent)
     priority = priority or 5
     transport = transport or "bnet"
     local q = GetSendBucket(priority)
     q.tail = q.tail + 1
-    q[q.tail] = { msg = msg, target = target, priority = priority, transport = transport }
+    q[q.tail] = { msg = msg, target = target, priority = priority, transport = transport, onSent = onSent }
     sendQueueCount = sendQueueCount + 1
+end
+
+-- Put a popped entry back at the head of its bucket so it is the next one
+-- sent, keeping chunk order intact.
+local function Requeue(entry)
+    local q = GetSendBucket(entry.priority)
+    if q.head > q.tail then
+        q.head, q.tail = 1, 0
+    end
+    q.head = q.head - 1
+    q[q.head] = entry
+    sendQueueCount = sendQueueCount + 1
+end
+
+-- Collapse a send function's return into a SendAddonMessageResult code.
+-- Retail returns an enum; older clients returned a boolean, and
+-- BNSendGameData may return nothing. No value means it went out.
+local function ToSendResult(result)
+    if result == nil or result == true then return RESULT_SUCCESS end
+    if result == false then return -1 end
+    return result
 end
 
 function Sync:DrainQueue()
     if sendQueueCount == 0 then return end
+    if GetTime() < throttledUntil then return end
 
     -- Pop the highest-urgency entry (lowest priority number) first.
     -- PRIORITY values are all 1..5 per the opcode table at the top
@@ -654,16 +697,37 @@ function Sync:DrainQueue()
     end
     if not entry then return end
 
-    local ok, err
+    local ok, ret
     if entry.transport == "whisper" then
-        ok, err = pcall(C_ChatInfo.SendAddonMessage, PREFIX, entry.msg, "WHISPER", entry.target)
+        ok, ret = pcall(C_ChatInfo.SendAddonMessage, PREFIX, entry.msg, "WHISPER", entry.target)
     else
-        ok, err = pcall(BNSendGameData, entry.target, PREFIX, entry.msg)
+        ok, ret = pcall(BNSendGameData, entry.target, PREFIX, entry.msg)
     end
-    if not ok then
-        self:Log("SEND_ERR", tostring(err) .. " → " .. tostring(entry.transport) .. ":" .. tostring(entry.target))
-        ns:PrintDebug("Sync send failed: " .. tostring(err))
+    local result = ok and ToSendResult(ret) or nil
+    if result == RESULT_THROTTLED or result == RESULT_CHANNEL_THROTTLED then
+        -- The server dropped it. Retry the same message after a pause; the
+        -- allowance refills over time. Log at most every 30s so a long
+        -- transfer doesn't flood the 200-entry ring.
+        Requeue(entry)
+        local now = GetTime()
+        throttledUntil = now + THROTTLE_BACKOFF
+        throttleCount = throttleCount + 1
+        if now - lastThrottleLog >= 30 then
+            lastThrottleLog = now
+            self:Log("THROTTLED", entry.transport .. ": server throttled sends (" .. throttleCount
+                .. " total); backing off " .. THROTTLE_BACKOFF .. "s, " .. sendQueueCount .. " queued")
+        end
+        return
+    end
+    if not ok or result ~= RESULT_SUCCESS then
+        local err = ok and ("result " .. tostring(result)) or tostring(ret)
+        self:Log("SEND_ERR", err .. " → " .. tostring(entry.transport) .. ":" .. tostring(entry.target))
+        ns:PrintDebug("Sync send failed: " .. err)
+        -- Still settle it: a FEND that errors must clear the in-flight
+        -- full sync, or every later request to this partner is skipped.
+        if entry.onSent then entry.onSent() end
     else
+        if entry.onSent then entry.onSent() end
         -- Log successful sends (skip FDAT chunks to reduce noise, same rule as RECV)
         local firstSep = entry.msg:find(SEP, 1, true)
         local opcode = firstSep and entry.msg:sub(1, firstSep - 1) or entry.msg
@@ -1482,17 +1546,41 @@ end
 -- Full Sync
 --------------------------
 
+-- Refresh partner rows each time a transfer crosses a 5% step, so the
+-- "Syncing N%" label moves without refreshing the UI on every chunk.
+local function NotifyProgress(self, st, done, total)
+    local step = math.floor(done * 20 / total)
+    if step ~= st.notifiedStep then
+        st.notifiedStep = step
+        self:NotifyPartnerStateChanged()
+    end
+end
+
+-- Returns false when a full sync to this partner is already in flight;
+-- callers that print to the player use that to say so.
 function Sync:RequestFullSyncWith(partnerUUID)
     if not ns.db or not ns.db.sync then return end
     local partner = ns.db.sync.partners[partnerUUID]
     if not partner then return end
+
+    -- Every reconnect path (ping, pong, friend-info, pair ack, the Sync
+    -- button) lands here. While our copy is still draining, the partner
+    -- has already been asked for theirs, so another request would only
+    -- queue a second full payload behind the first (FQ-256).
+    local inFlight = outboundFullSync[partnerUUID]
+    if inFlight then
+        self:Log("FULL_SYNC_SKIP", (partner.label or partnerUUID) .. " already sending "
+            .. inFlight.sent .. "/" .. inFlight.total)
+        return false
+    end
 
     local target, transport, chunkSize = self:ResolveTarget(partnerUUID)
     if not target then return end
 
     partnerStates[partnerUUID] = "syncing"
     self:SendRaw(OP_FSYN, target, transport)
-    self:SendFullSyncTo(target, transport, chunkSize)
+    self:SendFullSyncTo(target, transport, chunkSize, partnerUUID)
+    return true
 end
 
 -- Legacy wrapper: request full sync with all partners
@@ -1511,11 +1599,14 @@ function Sync:OnFullSyncRequest(senderID)
     -- Resolve target via partner record so we use the stored transport + chunk size
     local target, transport, chunkSize = self:ResolveTarget(senderUUID)
     if target then
-        self:SendFullSyncTo(target, transport, chunkSize)
+        self:SendFullSyncTo(target, transport, chunkSize, senderUUID)
     end
 end
 
-function Sync:BuildFullSyncPayload()
+-- excludeOwnerUUID: skip characters owned by that account. The receiver
+-- never overwrites characters it owns (MergeCharacters), so sending a
+-- partner its own characters back is pure transfer cost.
+function Sync:BuildFullSyncPayload(excludeOwnerUUID)
     if not ns.db then return {} end
 
     local payload = {
@@ -1534,33 +1625,102 @@ function Sync:BuildFullSyncPayload()
     -- Send ALL known characters (not just our own) for gossip relay
     -- Each character is tagged with its accountUUID so the receiver knows ownership
     for charKey, charData in pairs(ns.db.characters or {}) do
-        payload.characters[charKey] = charData
-        if not charData.accountUUID or charData.accountUUID == ns.db.sync.accountUUID then
-            table.insert(payload.ownedCharacters, charKey)
+        if not (excludeOwnerUUID and charData.accountUUID == excludeOwnerUUID) then
+            payload.characters[charKey] = charData
+            if not charData.accountUUID or charData.accountUUID == ns.db.sync.accountUUID then
+                table.insert(payload.ownedCharacters, charKey)
+            end
         end
     end
 
     return payload
 end
 
-function Sync:SendFullSyncTo(target, transport, chunkSize)
+function Sync:SendFullSyncTo(target, transport, chunkSize, partnerUUID)
     if not target then return end
     transport = transport or "bnet"
     chunkSize = chunkSize or CHUNK_SIZE_BNET
 
-    local payload = self:BuildFullSyncPayload()
-    local serialized = self:Serialize(payload)
+    local inFlight = partnerUUID and outboundFullSync[partnerUUID]
+    if inFlight then
+        self:Log("FULL_SYNC_SKIP", tostring(target) .. " already sending " .. inFlight.sent .. "/" .. inFlight.total)
+        return
+    end
+
+    -- An error here (e.g. the script-time watchdog on a very large
+    -- account) would leave the partner waiting on a FEND that never comes,
+    -- with nothing in the sync log to say why. Record it.
+    local ok, serialized = pcall(function()
+        return self:Serialize(self:BuildFullSyncPayload(partnerUUID))
+    end)
+    if not ok then
+        self:Log("FULL_SYNC_ERROR", tostring(target) .. " | could not build payload: " .. tostring(serialized))
+        return
+    end
 
     local totalChunks = math.ceil(#serialized / chunkSize)
+    local state = {
+        total = totalChunks,
+        sent = 0,
+        startedAt = GetTime(),
+        throttlesAtStart = throttleCount,
+    }
+    if partnerUUID then outboundFullSync[partnerUUID] = state end
+    self:Log("FULL_SYNC_SEND", transport .. ":" .. tostring(target) .. " | " .. totalChunks
+        .. " chunks, " .. #serialized .. " bytes")
+
+    -- Progress counts on drain, so the log shows what actually left the
+    -- client. Log every 25% so a slow link is visibly moving.
+    local step = math.ceil(totalChunks / 4)
+    local nextLogAt = step
+    local function onChunkSent()
+        state.sent = state.sent + 1
+        NotifyProgress(self, state, state.sent, totalChunks)
+        if state.sent >= nextLogAt and state.sent < totalChunks then
+            self:Log("FULL_SYNC_PROGRESS", "sent " .. state.sent .. "/" .. totalChunks
+                .. " (" .. math.floor(GetTime() - state.startedAt) .. "s)")
+            nextLogAt = nextLogAt + step
+        end
+    end
+
     for i = 1, totalChunks do
         local startIdx = (i - 1) * chunkSize + 1
         local endIdx = math.min(i * chunkSize, #serialized)
         local chunk = serialized:sub(startIdx, endIdx)
         local msg = OP_FDAT .. SEP .. i .. SEP .. totalChunks .. SEP .. chunk
-        self:Enqueue(msg, target, PRIORITY[OP_FDAT], transport)
+        self:Enqueue(msg, target, PRIORITY[OP_FDAT], transport, onChunkSent)
     end
 
-    self:Enqueue(OP_FEND, target, PRIORITY[OP_FEND], transport)
+    self:Enqueue(OP_FEND, target, PRIORITY[OP_FEND], transport, function()
+        if partnerUUID and outboundFullSync[partnerUUID] == state then
+            outboundFullSync[partnerUUID] = nil
+        end
+        self:Log("FULL_SYNC_SENT", tostring(target) .. " | " .. state.sent .. "/" .. totalChunks
+            .. " chunks in " .. math.floor(GetTime() - state.startedAt) .. "s, "
+            .. (throttleCount - state.throttlesAtStart) .. " throttled")
+        self:NotifyPartnerStateChanged()
+    end)
+end
+
+-- Progress of the full sync with a partner, for UI. Either may be nil.
+--   out — { done, total } chunks of ours the server has accepted
+--   inc — { done, total } chunks of theirs received so far
+function Sync:GetFullSyncProgress(partnerUUID)
+    local o, b = outboundFullSync[partnerUUID], fullSyncBuffers[partnerUUID]
+    return o and { done = o.sent, total = o.total } or nil,
+           b and { done = b.received, total = b.expected } or nil
+end
+
+-- "Syncing 45%" across both directions, or nil when nothing is moving.
+-- A whisper full sync can run for many minutes; the partner rows show
+-- this so a slow transfer doesn't read as a stuck one.
+function Sync:GetFullSyncProgressText(partnerUUID)
+    local out, inc = self:GetFullSyncProgress(partnerUUID)
+    if not out and not inc then return nil end
+    local done = (out and out.done or 0) + (inc and inc.done or 0)
+    local total = (out and out.total or 0) + (inc and inc.total or 0)
+    if total == 0 then return "Syncing" end
+    return "Syncing " .. math.floor(done * 100 / total) .. "%"
 end
 
 function Sync:OnFullSyncData(payload, senderGameAccountID)
@@ -1582,12 +1742,34 @@ function Sync:OnFullSyncData(payload, senderGameAccountID)
     if not chunkIdx or not totalChunks then return end
 
     local bufferKey = senderUUID
+    local buffer = fullSyncBuffers[bufferKey]
 
-    if not fullSyncBuffers[bufferKey] then
-        fullSyncBuffers[bufferKey] = { expected = totalChunks, chunks = {} }
+    -- Chunks arrive in send order, so chunk 1 (or a different total) means
+    -- the partner started a new transfer. Start a fresh buffer instead of
+    -- mixing two serializations, which deserializes to garbage.
+    if not buffer or chunkIdx == 1 or buffer.expected ~= totalChunks then
+        if buffer then
+            self:Log("FULL_SYNC_RESTART", "from " .. bufferKey .. " | dropped "
+                .. buffer.received .. "/" .. buffer.expected)
+        end
+        local step = math.ceil(totalChunks / 4)
+        buffer = { expected = totalChunks, chunks = {}, received = 0,
+                   startedAt = GetTime(), step = step, nextLogAt = step }
+        fullSyncBuffers[bufferKey] = buffer
+        self:Log("FULL_SYNC_RECV", "from " .. bufferKey .. " | expecting " .. totalChunks .. " chunks")
     end
-    fullSyncBuffers[bufferKey].expected = totalChunks
-    fullSyncBuffers[bufferKey].chunks[chunkIdx] = data
+
+    if not buffer.chunks[chunkIdx] then
+        buffer.received = buffer.received + 1
+    end
+    buffer.chunks[chunkIdx] = data
+    NotifyProgress(self, buffer, buffer.received, buffer.expected)
+
+    if buffer.received >= buffer.nextLogAt and buffer.received < buffer.expected then
+        self:Log("FULL_SYNC_PROGRESS", "received " .. buffer.received .. "/" .. buffer.expected
+            .. " (" .. math.floor(GetTime() - buffer.startedAt) .. "s)")
+        buffer.nextLogAt = buffer.nextLogAt + buffer.step
+    end
 end
 
 function Sync:OnFullSyncEnd(senderGameAccountID)
@@ -1600,31 +1782,37 @@ function Sync:OnFullSyncEnd(senderGameAccountID)
 
     local buffer = fullSyncBuffers[bufferKey]
     if not buffer or not buffer.expected then return end
+    fullSyncBuffers[bufferKey] = nil
 
-    -- Reassemble
-    local complete = true
-    for i = 1, buffer.expected do
-        if not buffer.chunks[i] then
-            complete = false
-            break
+    if buffer.received < buffer.expected then
+        -- This used to be a debug-only print, so a lossy link looked like a
+        -- sync that never finished (FQ-256). Tell the player, and drop out
+        -- of "syncing" so the UI doesn't show a transfer that has ended.
+        local firstMissing
+        for i = 1, buffer.expected do
+            if not buffer.chunks[i] then firstMissing = i break end
         end
-    end
-
-    if not complete then
-        ns:PrintDebug("Full sync incomplete — missing chunks")
-        fullSyncBuffers[bufferKey] = nil
+        local partner = ns.db.sync.partners[senderUUID]
+        self:Log("FULL_SYNC_INCOMPLETE", "from " .. bufferKey .. " | got " .. buffer.received .. "/"
+            .. buffer.expected .. ", first missing #" .. tostring(firstMissing))
+        ns:Print(ns.COLORS.RED .. "Sync with " .. ((partner and partner.label) or "partner")
+            .. " lost data in transit (" .. buffer.received .. "/" .. buffer.expected
+            .. " pieces). Press Sync to try again.|r")
+        partnerStates[senderUUID] = "connected"
+        self:NotifyPartnerStateChanged()
         return
     end
 
-    local serialized = ""
-    for i = 1, buffer.expected do
-        serialized = serialized .. buffer.chunks[i]
-    end
-    fullSyncBuffers[bufferKey] = nil
+    -- One concat instead of appending chunk by chunk, which copied the
+    -- growing string every step (quadratic in chunk count).
+    local serialized = table.concat(buffer.chunks, "", 1, buffer.expected)
 
     local remoteData = self:Deserialize(serialized)
     if not remoteData or type(remoteData) ~= "table" then
+        self:Log("FULL_SYNC_BAD_DATA", "from " .. bufferKey .. " | " .. #serialized .. " bytes did not deserialize")
         ns:PrintDebug("Full sync: deserialization failed")
+        partnerStates[senderUUID] = "connected"
+        self:NotifyPartnerStateChanged()
         return
     end
 
@@ -1641,7 +1829,8 @@ function Sync:OnFullSyncEnd(senderGameAccountID)
     if remoteData.characters then
         for _ in pairs(remoteData.characters) do charCount = charCount + 1 end
     end
-    self:Log("FULL_SYNC_DONE", "from " .. (senderUUID or "?") .. " | " .. charCount .. " chars received")
+    self:Log("FULL_SYNC_DONE", "from " .. (senderUUID or "?") .. " | " .. charCount .. " chars, "
+        .. #serialized .. " bytes in " .. math.floor(GetTime() - buffer.startedAt) .. "s")
     ns:Print(ns.COLORS.GREEN .. "Sync complete.|r")
 
     if ns.UI and ns.UI.Refresh then ns.UI:Refresh() end
@@ -2209,7 +2398,12 @@ function Sync:ForceSyncByUUID(accountUUID)
         ns:Print(ns.COLORS.RED .. (partner.label or "Partner") .. " is not currently reachable.|r")
         return
     end
-    self:RequestFullSyncWith(accountUUID)
+    if self:RequestFullSyncWith(accountUUID) == false then
+        local out = self:GetFullSyncProgress(accountUUID)
+        ns:Print(ns.COLORS.CYAN .. "Already syncing with " .. (partner.label or "partner")
+            .. " (" .. out.done .. "/" .. out.total .. " sent).|r")
+        return
+    end
     ns:Print(ns.COLORS.CYAN .. "Full resync requested with " .. (partner.label or "partner") .. ".|r")
 end
 

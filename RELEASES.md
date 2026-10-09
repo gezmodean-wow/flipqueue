@@ -6,6 +6,18 @@ The engineering-detail companion lives in `CHANGELOG.md` (commit-readerese — f
 
 ---
 
+## v0.13.3-alpha1
+
+Syncing between your own accounts is more reliable, and you can see it working.
+
+- **Syncing no longer sends everything twice.** When two linked accounts came online together, each one sent its full data twice, so every sync took twice as long as it needed to. Each side now sends once.
+- **You can watch a sync happen.** Linked accounts show **Syncing** with a percentage while data is moving, in the mini window and in Settings. A large account can take a few minutes, and before this a sync in progress looked the same as one that was stuck.
+- **A failed sync tells you it failed.** If data goes missing on the way, you get a chat message saying so and telling you to press **Sync** again. Before, it just never finished.
+- **Less data to send.** Each account no longer sends a linked account its own characters back.
+- **Better help when you report a problem.** The sync log in Settings now records how much data a sync involves, how far it has got, and how long it took.
+
+Both linked accounts need this version for the full improvement. It still syncs with accounts on the previous version.
+
 ## v0.13.2
 
 This release is mostly about trust in the numbers. Deal Finder now genuinely follows the priority order you set, explains every price when you hover it, and lets you decide the realm order it falls back on. Gear prices agree with TradeSkillMaster again, characters parked on realms you never visit stay up to date, and a new **Storage** role keeps bank alts out of your to-do lists without hiding their stock. Everything below is new since v0.13.1.

@@ -2622,6 +2622,10 @@ function UI:RefreshSettings()
 
                 local statusBits = {}
                 statusBits[#statusBits + 1] = isConnected and "|cff66cc66Online|r" or "|cffcc6666Offline|r"
+                local progress = ns.Sync.GetFullSyncProgressText and ns.Sync:GetFullSyncProgressText(uuid)
+                if progress then
+                    statusBits[#statusBits + 1] = "|cffffcc66" .. progress .. "|r"
+                end
                 local lastSync = partner.lastFullSync or 0
                 if lastSync > 0 then
                     statusBits[#statusBits + 1] = "last sync " .. ns:FormatRelativeTime(lastSync)

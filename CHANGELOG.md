@@ -1,5 +1,29 @@
 # Changelog
 
+## v0.13.3-alpha1
+
+One issue, from makkenmak's same-Battle.net whisper link (Moexbridge ↔ Moexbridges, Aerie Peak). Embedded Cogworks-1.0 stays at **`v0.16.0`**; the `Core.lua` `ItemKeyToItemString` override stays (cogworks#83 rollback still owed). **Schema stays at 14**; no SavedVariables change. The wire format is unchanged, so this alpha syncs with v0.13.2 partners. Those partners still send duplicates and lose throttled chunks, so both sides need the alpha for the full effect. **F8 not yet run.** Before an alpha2, read a tester's `FULL_SYNC_SENT` line: elapsed time and throttle count are the first real measurement of the whisper link's rate.
+
+### FQ-256 (#256): incredibly slow sync
+
+**What the logs showed.** Two v0.13.2 sync logs from 17:24–17:26. Pairing and transport are healthy: no `REJECT` (the #234 symptom is gone), and PING/PONG round-trip every 15s in both directions. Both sides sent FSYN within one second of each other: A on `PING_RECONNECT`, B on `PONG_RECONNECT`. Both then logged `RECV FSYN`. Neither side ever logged `SEND FEND` or `FULL_SYNC_DONE` in the 1.5–2 minutes covered. `FDAT` is excluded from the sync log, so v0.13.2 cannot tell a slow transfer from a dead one.
+
+**Defects found:**
+
+- **Every mutual reconnect doubled the transfer.** `RequestFullSyncWith` sends FSYN and then the payload. The receiving side's `OnFullSyncRequest` answered that FSYN with another full payload, even though its own `RequestFullSyncWith` had already queued one. Both sides do this at once, which the logs show, so each side sent its data twice. Fixed with a per-partner `outboundFullSync` in-flight guard covering both entry points. A request inside the window logs `FULL_SYNC_SKIP`; `ForceSyncByUUID` reports "Already syncing (n/N sent)".
+- **Throttled sends were counted as sent.** `DrainQueue` checked only `pcall`. Retail `SendAddonMessage` returns `Enum.SendAddonMessageResult` and drops the message on `AddonMessageThrottle`/`ChannelThrottle`; it does not raise. The result is now read (`ToSendResult`, which also tolerates boolean and no-value returns from older clients and `BNSendGameData`). A throttled entry is requeued at its bucket head, keeping chunk order, and the queue pauses `THROTTLE_BACKOFF` (1s). **Not confirmed as active in the reporter's logs:** their heartbeats all got through during the transfer, which argues against a heavy per-message throttle at 8 msg/s. Kept as correctness hardening, and the new logging will settle it.
+- **A failed transfer was invisible.** At FEND with missing chunks, `OnFullSyncEnd` printed only through `PrintDebug` (the reporter has `debug=0`) and left the partner in `syncing`. It now logs `FULL_SYNC_INCOMPLETE` with the first missing index, tells the player in chat, and returns the partner to `connected`. Deserialize failure logs `FULL_SYNC_BAD_DATA`. A payload build/serialize error is caught and logged as `FULL_SYNC_ERROR` instead of leaving the partner waiting on a FEND that never comes.
+- **Overlapping transfers could merge into garbage.** `OnFullSyncData` kept one buffer per sender and wrote into it regardless of transfer. Chunk 1, or a changed total, now starts a fresh buffer (`FULL_SYNC_RESTART` logs what was dropped). No wire change: chunks are sent in order.
+- **Quadratic reassembly.** `serialized = serialized .. chunk` over ~2,000 chunks is replaced by one `table.concat`.
+
+**Payload trim.** `BuildFullSyncPayload(excludeOwnerUUID)` no longer sends a partner the characters it owns; `MergeCharacters` already ignores them on arrival. Relay of third-party characters is unchanged.
+
+**Observability.** The log now shows `FULL_SYNC_SEND` (chunks and bytes), `FULL_SYNC_RECV`, `FULL_SYNC_PROGRESS` every 25% in both directions, `FULL_SYNC_SENT` (elapsed time and throttle count), and `FULL_SYNC_DONE` (bytes and elapsed time). `THROTTLED` is rate-limited to once per 30s. Partner rows in the mini view and Settings show "Syncing N%" (`GetFullSyncProgressText`), refreshed at 5% steps. Progress counts on drain through a new `Enqueue` `onSent` callback, which also fires on a hard send error so a failed FEND still clears the in-flight state.
+
+**Size context.** The maintainer's own SavedVariables serialize to 408 KB of full-sync payload: 1,737 whisper messages at 235 bytes, about 3.6 minutes at the 8 msg/s drain rate. The largest parts are `todoLists` (188 KB), `characters` (113 KB), and `log` (76 KB). Compression and history trimming are the next speed lever. Both change the wire format, so they need a capability handshake and were deliberately left out.
+
+**Tests.** New `test/sync_spec.lua`, 41 checks. It loads two `Sync.lua` instances on a fake wire with a token-bucket throttle (10-message burst, 1/s refill) and a fake clock. Cases: a full sync survives the throttle; repeat requests are deduped; receiver-owned characters are excluded; a dropped chunk is reported; a restarted transfer replaces a stale buffer; a FEND send error still clears state; a mutual reconnect sends one copy per side; a build error is logged. Mutation-checked: with throttle handling disabled, 9 checks fail. 20 spec files, all passing.
+
 ## v0.13.2
 
 Public stable release. **Same code as `v0.13.2-alpha5`** — this promotion is the docs finalization plus the release tag, per the channel-semantics convention. Embedded Cogworks-1.0 is `v0.16.0` (MINOR 31); `## Interface` is `120100` (WoW 12.1.0). **Schema 14** (the FQ-177 default flip, alpha3). The `Core.lua` `ItemKeyToItemString` override ships one more release — the corrected builder is merged upstream (cogworks#83) but v0.17.0 is untagged, so the override and the `.pkgmeta` `v0.16.0` pin stay; rollback owed on the next line.
