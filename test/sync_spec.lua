@@ -241,5 +241,36 @@ do
     check("send error: a later request is not skipped", a.Sync:RequestFullSyncWith("UB"), true)
 end
 
+--------------------------
+-- 7. Both sides reconnect at once: each sends one copy, not two
+--------------------------
+-- The player's logs: A sends FSYN on PING_RECONNECT while B sends FSYN on
+-- PONG_RECONNECT. Each side then gets the other's FSYN and, before the
+-- fix, queued a second full copy of its own payload behind the first.
+do
+    local a, b = Fresh()
+    a.Sync:RequestFullSyncWith("UB")
+    b.Sync:RequestFullSyncWith("UA")
+    RunToIdle(a, b)
+    check("mutual: A built its payload once", LogHas(a, "FULL_SYNC_SEND"), 1)
+    check("mutual: B built its payload once", LogHas(b, "FULL_SYNC_SEND"), 1)
+    check("mutual: A skipped B's FSYN", LogHas(a, "FULL_SYNC_SKIP"), 1)
+    check("mutual: B merged A's data once", LogHas(b, "FULL_SYNC_DONE"), 1)
+    check("mutual: A merged B's data once", LogHas(a, "FULL_SYNC_DONE"), 1)
+end
+
+--------------------------
+-- 8. A payload build error is logged, not silent
+--------------------------
+do
+    local a = Fresh()
+    local real = a.Sync.Serialize
+    a.Sync.Serialize = function() error("script ran too long") end
+    a.Sync:RequestFullSyncWith("UB")
+    a.Sync.Serialize = real
+    check("build error: FULL_SYNC_ERROR logged", LogHas(a, "FULL_SYNC_ERROR"), 1)
+    check("build error: nothing left in flight", a.Sync:GetFullSyncProgress("UB"), nil)
+end
+
 print(string.format("sync_spec: %d passed, %d failed", passed, failed))
 if failed > 0 then os.exit(1) end

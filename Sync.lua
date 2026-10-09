@@ -1647,8 +1647,16 @@ function Sync:SendFullSyncTo(target, transport, chunkSize, partnerUUID)
         return
     end
 
-    local payload = self:BuildFullSyncPayload(partnerUUID)
-    local serialized = self:Serialize(payload)
+    -- An error here (e.g. the script-time watchdog on a very large
+    -- account) would leave the partner waiting on a FEND that never comes,
+    -- with nothing in the sync log to say why. Record it.
+    local ok, serialized = pcall(function()
+        return self:Serialize(self:BuildFullSyncPayload(partnerUUID))
+    end)
+    if not ok then
+        self:Log("FULL_SYNC_ERROR", tostring(target) .. " | could not build payload: " .. tostring(serialized))
+        return
+    end
 
     local totalChunks = math.ceil(#serialized / chunkSize)
     local state = {
