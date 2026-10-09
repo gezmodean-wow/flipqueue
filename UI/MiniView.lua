@@ -362,7 +362,9 @@ local function RefreshPartnerStrip()
             row.syncBtn:Hide()
         else
             row.syncBtn:Show()
-            local stateTag = isConnected and "|cffccffccOnline|r" or "|cffaaaaaaOffline|r"
+            local progress = ns.Sync.GetFullSyncProgressText and ns.Sync:GetFullSyncProgressText(uuid)
+            local stateTag = (progress and ("|cffffcc66" .. progress .. "|r"))
+                or (isConnected and "|cffccffccOnline|r" or "|cffaaaaaaOffline|r")
             row.label:SetText("|cffffffff" .. (partner.label or "Account") .. "|r  " .. stateTag)
 
             local lastSync = partner.lastFullSync or 0
