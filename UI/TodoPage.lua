@@ -33,6 +33,10 @@ local function BuildPostNowData()
             elseif qi.quality and qi.quality ~= "" then
                 displayName = QualityColorName(displayName, qi.quality)
             end
+            -- Gear shows its item level beside the name (FQ-258).
+            if ns.IlvlDisplay then
+                displayName = displayName .. ns.IlvlDisplay:Suffix(qi, resolvedID)
+            end
 
             local locParts = {}
             if task.locations then
@@ -54,6 +58,9 @@ local function BuildPostNowData()
                 _tooltipText   = qi.name ~= "" and qi.name or tostring(qi.itemID),
                 _tooltipExtra  = (qi.targetRealm or "") ~= "" and
                     ("Sell on: " .. qi.targetRealm .. "  @  " .. (qi.expectedPrice or "?")) or nil,
+                _tooltipHook = ns.IlvlDisplay and function(tt)
+                    ns.IlvlDisplay:AddTooltipLines(tt, qi, resolvedID)
+                end or nil,
                 _taskIndex = task.taskIndex,
                 _queueItem  = qi,
                 _fuzzy = task.fuzzyMatch,
@@ -135,6 +142,11 @@ local function BuildTodoData()
                 displayName = QualityColorName(displayName, quality)
             elseif item.quality and item.quality ~= "" then
                 displayName = QualityColorName(displayName, item.quality)
+            end
+            -- Gear shows its item level beside the name (FQ-258), preferring
+            -- the ilvl the import recorded: that is the variant being bought.
+            if ns.IlvlDisplay then
+                displayName = displayName .. ns.IlvlDisplay:Suffix(item, resolvedID)
             end
 
             local sourceStr = item.source or ""
@@ -236,6 +248,9 @@ local function BuildTodoData()
                 _tooltipItemID = resolvedID or tonumber(item.itemID),
                 _tooltipText   = item.name or "?",
                 _tooltipExtra  = tooltipExtra,
+                _tooltipHook = ns.IlvlDisplay and function(tt)
+                    ns.IlvlDisplay:AddTooltipLines(tt, item, resolvedID)
+                end or nil,
                 _taskIndex = task.taskIndex,
                 _todoItem  = item,
             }
@@ -945,9 +960,9 @@ function UI:RefreshTodoPage()
                         row.bg:SetColorTexture(ii % 2 == 0 and 0.08 or 0.06, ii % 2 == 0 and 0.08 or 0.06, ii % 2 == 0 and 0.12 or 0.1, 0.5)
                     end
 
-                    local lookupIcon, quality
+                    local lookupIcon, quality, resolvedID
                     pcall(function()
-                        lookupIcon, quality = LookupItemInfo(item.itemID, item.itemKey, item.name)
+                        lookupIcon, quality, resolvedID = LookupItemInfo(item.itemID, item.itemKey, item.name)
                     end)
                     local itemIcon = item.icon or lookupIcon
                     if itemIcon then
@@ -973,6 +988,9 @@ function UI:RefreshTodoPage()
                         displayName = QualityColorName(displayName, quality)
                     elseif item.quality and item.quality ~= "" then
                         displayName = QualityColorName(displayName, item.quality)
+                    end
+                    if ns.IlvlDisplay then
+                        displayName = displayName .. ns.IlvlDisplay:Suffix(item, resolvedID)
                     end
                     -- Prefix buy tasks with the lifecycle-aware tag — [BUY]
                     -- before purchase, [CHECK MAIL] after AH confirmation,
