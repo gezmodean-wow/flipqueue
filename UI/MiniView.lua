@@ -444,6 +444,9 @@ local function GetOrCreateMiniRow(index)
             -- resolves to the variant (correct ilvl, sockets, recipe rank)
             -- and TSM/Auctionator price hooks key off the right item.
             if ns:SetTooltipItem(GameTooltip, self.tooltipItemKey, self.tooltipItemID) then
+                if self.tooltipTask and ns.IlvlDisplay then
+                    ns.IlvlDisplay:AddTooltipLines(GameTooltip, self.tooltipTask, self.tooltipItemID)
+                end
                 if self.tooltipExtra then
                     GameTooltip:AddLine(self.tooltipExtra, 0.7, 0.7, 0.7, true)
                 end
@@ -492,6 +495,7 @@ function UI:RefreshMini()
         row.tooltipItemID = nil; row.tooltipItemKey = nil
         row.tooltipItemName = nil
         row.tooltipExtra = nil
+        row.tooltipTask = nil
         if row._taskActionBtns then
             UI.HideTaskActionBtns(row)
         end
@@ -679,6 +683,16 @@ function UI:RefreshMini()
             row.tooltipItemKey = task.itemKey
             row.tooltipItemID = task.itemID
             row.tooltipItemName = task.name
+            row.tooltipTask = task._taskItem
+            -- Name-keyed imports (FlippingPal website paste, Auctionator/PBS
+            -- lists) carry no itemID, so SetTooltipItem had nothing to show
+            -- and the row fell back to a bare name (FQ-258). Resolve one by
+            -- name (memoized) so the item tooltip renders.
+            if ns.IlvlDisplay and not tonumber(task.itemID) then
+                row.tooltipItemID = ns.IlvlDisplay:ResolveItemID(task._taskItem) or task.itemID
+            end
+            local ilvlSuffix = ns.IlvlDisplay
+                and ns.IlvlDisplay:Suffix(task._taskItem, row.tooltipItemID, ns.COLORS.WHITE) or ""
             if task._isBuy then
                 row.tooltipExtra = "BUY on: " .. (task.realm or "?") .. "  @  " .. (task.price or "?")
             else
@@ -741,7 +755,7 @@ function UI:RefreshMini()
                 namePrefix = ns.COLORS.GREEN .. "[POST] " .. ns.COLORS.RESET
             end
             local qtyStr = (task.quantity or 1) > 1 and (" x" .. (task.quantity or 1)) or ""
-            row.text:SetText(statusIcon .. namePrefix .. ns.COLORS.WHITE .. task.name .. qtyStr .. ns.COLORS.RESET .. statusTag .. priceStr)
+            row.text:SetText(statusIcon .. namePrefix .. ns.COLORS.WHITE .. task.name .. ilvlSuffix .. qtyStr .. ns.COLORS.RESET .. statusTag .. priceStr)
 
             -- Action buttons (complete/skip/delete) on mouseover
             local capturedTask = task
@@ -759,6 +773,9 @@ function UI:RefreshMini()
                     if self.tooltipItemID or self.tooltipItemName then
                         GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
                         if ns:SetTooltipItem(GameTooltip, self.tooltipItemKey, self.tooltipItemID) then
+                            if self.tooltipTask and ns.IlvlDisplay then
+                                ns.IlvlDisplay:AddTooltipLines(GameTooltip, self.tooltipTask, self.tooltipItemID)
+                            end
                             if self.tooltipExtra then
                                 GameTooltip:AddLine(self.tooltipExtra, 0.7, 0.7, 0.7, true)
                             end

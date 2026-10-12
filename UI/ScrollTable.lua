@@ -694,6 +694,12 @@ function ScrollTableMixin:Render()
                     GameTooltip:SetText(rowData._tooltipText, 1, 1, 1)
                     usedGameTooltip = true
                 end
+                -- Optional per-row hook, run after the item has populated the
+                -- tooltip so it can read what was rendered (FQ-258 adds the
+                -- deal's item level here). Errors must not cost the tooltip.
+                if usedGameTooltip and type(rowData._tooltipHook) == "function" then
+                    pcall(rowData._tooltipHook, GameTooltip)
+                end
                 -- Append per-row metadata (realm, price, character, etc.)
                 -- to whichever tooltip backend rendered the item — previously
                 -- the extra was dropped on item/itemString rows because the
