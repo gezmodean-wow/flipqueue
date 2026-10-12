@@ -1027,6 +1027,12 @@ function UI:RefreshMini()
     mini:SetHeight(math.min(frameHeight, maxScreenHeight))
     resizeGrip:SetShown(not miniCollapsed)
     if UI.UpdateToolDrawerHeight then UI:UpdateToolDrawerHeight() end
+
+    -- Every row was hidden at the top of this refresh, taking the hovered
+    -- row's tooltip with it; put it back (FQ-259).
+    for i = 1, visibleRows do
+        UI.ReplayHover(miniRows[i])
+    end
 end
 
 --------------------------

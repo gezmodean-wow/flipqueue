@@ -17,6 +17,34 @@ local SCROLLBAR_INSET = 22
 local SCROLLBAR_HIDDEN_INSET = 2
 
 --------------------------
+-- Hover replay (FQ-259)
+--------------------------
+
+-- Refreshes rebuild rows by hiding them and re-showing them. A tooltip hides
+-- with its owner, but the mouse never left the row, so the client fires no
+-- fresh OnEnter: the hovered tooltip flashed up and then vanished on the next
+-- bag/sync/auction-driven refresh. Call this on a row after re-showing it to
+-- restore its hover state (tooltip, highlight, action buttons).
+local function IsMouseFocus(frame)
+    if GetMouseFoci then
+        for _, f in ipairs(GetMouseFoci()) do
+            if f == frame then return true end
+        end
+        return false
+    end
+    return GetMouseFocus ~= nil and GetMouseFocus() == frame
+end
+
+function UI.ReplayHover(frame)
+    if not frame or not frame:IsVisible() or not frame:IsMouseOver() then return end
+    -- Focus check keeps a popup or sibling layered over the row from
+    -- triggering a tooltip the player can't see the row for.
+    if not IsMouseFocus(frame) then return end
+    local onEnter = frame:GetScript("OnEnter")
+    if onEnter then onEnter(frame) end
+end
+
+--------------------------
 -- ScrollTable Class
 --------------------------
 
@@ -715,6 +743,11 @@ function ScrollTableMixin:Render()
 
     self.content:SetHeight(math.max(1, #self.data * ROW_HEIGHT))
     self:UpdateScrollBarVisibility()
+
+    -- Restore the hovered row's tooltip lost to the hide/re-show above (FQ-259).
+    for i = 1, #self.data do
+        UI.ReplayHover(self.rows[i])
+    end
 end
 
 function ScrollTableMixin:SetRowClickHandler(fn)
