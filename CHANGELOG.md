@@ -1,6 +1,46 @@
 # Changelog
 
-## v0.13.3-alpha2 (unreleased)
+## v0.13.3-alpha2
+
+Six issues: the FQ-256 follow-up from makkenmak's alpha1 measurement, four from the 2026-10-09 Discord batch, and the TSM audit #263 asked for. Embedded Cogworks-1.0 stays at **`v0.16.0`**; the `Core.lua` `ItemKeyToItemString` override stays (cogworks#83). **Schema stays at 14.** One new file, `ItemLevelDisplay.lua` (toc line 28). **F8 not yet run.** Each fix was built on its own branch, and the combination passes all 24 spec files (`test/*_spec.lua`).
+
+### FQ-256 (#256): full sync, part 2. The log was the payload
+
+makkenmak's alpha1 log: `FULL_SYNC_SENT … 22002/22002 chunks in 2966s, 0 throttled`, which is **5.2 MB at the queue's ~7.4 msg/s with no server throttling**. The alpha1 estimate of 400 KB was 13× low. Both status dumps show the sales log at its cap (10,000 and 9,586 entries); at ~408 bytes per entry that is ~4 MB, about 80% of the payload. `MergeLog` only inserts entries the receiver lacks and never updates existing ones, so re-sending entries the partner already holds is pure transfer cost. The receiving side was never the bottleneck: deserializing a 4 MB log costs ~0.4s of CPU in stock Lua 5.1. Character data is small and was already in sync (85 characters and 404 rows on both sides).
+
+- **Incremental log via a watermark.** Each payload carries `builtAt` (sender's clock at build time). The receiver stores it as `partner.logBuiltAt` and returns it in FSYN as `"<w>[;n]"`. The sender stores that as `partner.peerLogSince` and sends only log entries newer than `w - 300s`. The watermark is the build time, not the merge time, because entries created during a 45-minute transfer postdate the build. It bootstraps from `lastFullSync - 1 day` for links already established, so the first alpha2 sync is already incremental. Entries inserted by `MergeLog` are stamped `_rcvAt`/`_rcvFrom`, so incremental sends relay them to third partners but never echo them back to their source. A sender that filtered from later than the receiver holds logs `FULL_SYNC_LOG_GAP`; the receiver re-requests and leaves its watermark where it was.
+- **Compatible with older clients both ways.** An older client sends a bare FSYN, which clears `peerLogSince`, so it gets the full log. It also ignores the FSYN payload. A new client with no watermark sends `0`.
+- **The initiator waits for the watermark.** `RequestFullSyncWith` sends FSYN and builds nothing until the partner's FSYN arrives (a current partner answers once with `;n`), falling back to building after `FSYN_REPLY_WAIT` (10s) for older partners. A mutual reconnect needs no answer, because both sides already sent FSYN. `awaitingReply` dedupes repeat requests in that window. FSYN moves from priority 5 to 4, so it no longer waits behind the partner's own FDAT.
+- **Archive and templates left out of the payload.** `MergeTodoLists` reads only `active` and `upcoming`; the archive (up to 50 lists, 188 KB in the maintainer's data) was dropped on arrival.
+- **To-do lists reach the partner immediately.** `TodoList:CommitList` now emits `TDCOMMIT`. `ApplyDelta` has handled it since v0.9, but nothing ever sent it. This is makkenmak's "I can only see the todo on one of the accounts": a new list could only travel inside a full sync, which takes about 50 minutes on that link. Merging different active lists no longer mixes them: the newer list (`createdAt`) wins and the replaced one is archived; the same list still merges tasks by UUID.
+- **Multi-chunk deltas were sent four times and could never arrive.** The retry clock started at enqueue, so a delta that took longer than `RETRY_INTERVAL` (5s) to drain was re-queued `MAX_RETRIES` times while the first copy was still in the queue, then dropped. An `IMP` delta (a whole import source) or a `CHAR` delta could do this. Now `SendDeltaEntry` marks it `inFlight` until the last chunk drains. `inFlight` is cleared on load because `pendingDeltas` persist. The receiver also discarded a chunk-reassembly buffer 60s after its *first* chunk, so any delta over ~450 whisper chunks (~100 KB) never completed. It now expires after 60s of silence.
+
+`test/sync_spec.lua` → 65 checks. It now uses a fake-clock `C_Timer` and `time()`, because the shim's inline timers hid the FSYN wait. New cases: incremental log, older-partner compatibility, payload trim, a ~60 KB delta over a slow link arriving once and intact, and active-list precedence. Mutation-checked: the retry fix, the reassembly fix and the log filter each fail a case when reverted.
+
+### FQ-262 (#262): "avoid realms where I already have an auction posted" leaked in four places
+
+Shylynce: the box is ticked, yet items are pulled for realms that already have them listed.
+
+1. **Deal Finder undid its own avoidance.** `ApplyQuantitySelectionFn` (a local in `UI/DealFinderPage.lua`) ran after `ApplyPriority` on every scan and every reorder, and re-picked the top N realms by score, ignoring `hasActiveAuction`. It is now `DealFinder:ApplyQuantitySelection`: clean realms fill the quantity first, and a posted realm is selected only when every candidate is posted (the documented fallback, flagged by `selectedPosted`).
+2. **The generator never consulted the setting.** New `DemotePostedRealmDeals` in `TodoGenerator.lua` moves deals whose target realm already lists the item behind every other deal after sorting, so they only get stock no clean realm wanted.
+3. **The bank pull never re-checked.** `Tracker:BuildPullOps` and `Tracker:AutoPullFromBank` pulled for every task on the realm. On AH open, `CheckOwnedAuctions` then matched the existing listing to the task and marked it done, leaving the pulled stack in the bags. New `Tracker._SkipPullAlreadyPosted` skips those pulls and prints a yellow chat line once per task per session.
+4. **Expired "active" entries counted as posted** in `SalesIndex` (false positives only). Fixed.
+
+All gated on `dfAvoidPostedRealms` (default on). **Behaviour note:** with the setting on, a sell task for an item already listed on the current realm is no longer pulled at all, which also covers the all-realms-posted fallback. That is what the player asked for, and the chat line makes it visible. Not covered: "Pull Saleable" (`AuctionPost:ScanBankForSaleable`) ignores tasks and listings by design. `test/postedrealm_spec.lua` has 19 checks; 6 fail against the old code.
+
+### FQ-259 (#259): to-do tooltip flashes and disappears
+
+Every refresh rebuilds rows by hiding and re-showing them (`ScrollTableMixin:Render`, `UI:RefreshMini`). A tooltip hides with its owner, and since the mouse never left the row, no new `OnEnter` fires. Refreshes are event-driven and constant: `BAG_UPDATE_DELAYED` (debounced 0.5s), every sync delta, partner-state changes, AH/mail/bank events, and the auction-expiry ticker. New `UI.ReplayHover(frame)` (`UI/ScrollTable.lua`) re-runs the row's `OnEnter` when it is visible, under the mouse and holds mouse focus (`GetMouseFoci`, falling back to `GetMouseFocus`). It is called at the end of `Render` and `RefreshMini`, so it covers every ScrollTable page. `test/hoverreplay_spec.lua` (13). Not fixed, filed for follow-up: MiniView rows that aren't tasks lose `OnEnter` after the first refresh (`MiniView.lua:490`).
+
+### FQ-258 (#258): item level beside gear names; the "ilvl 44" tooltip
+
+**Why 44.** FlippingPal website pastes and Auctionator/PBS lists carry only a name plus a DATA-line item level. `Import.lua:401-404` stores `itemKey = <name>` with no bonus IDs, and buy tasks inherit it (`TodoGenerator.lua:1363`). The tooltip falls back to `SetItemByID` of the base item, which the client scales to the hovering character. Buyers usually shop on low-level alts, hence 44. No link can be built to fix this, because the variant information was never in the import. The MiniView tooltip failed outright for name-keyed tasks.
+
+New `ItemLevelDisplay.lua` (`ns.IlvlDisplay`) resolves an item level in this order: the live import record's ilvl, the importKey's `:iNNN` suffix, `task.ilvl`, then the level computed from the item key. Only for equippable gear; nothing for bags, tabards, shirts, pets, commodities or recipes. Memoized per itemID, name and key, caching hits only. Rows show `Name (233)` on the to-do page (post-now, next-steps and grouped views) and the MiniView. The tooltip adds "Item level from import: N", plus a grey note when the tooltip's own number differs because of scaling. MiniView name-keyed tasks now resolve an itemID, so they get a tooltip at all. ScrollTable gains an optional per-row `_tooltipHook`, called in `pcall`. `test/ilvldisplay_spec.lua` (32). Side effect: the name column now sorts and filters with the ` (233)` suffix.
+
+### FQ-260 (#260): deposit only task items
+
+The option already existed: `extrasMode = "disabled"` (Off) makes the bank popup deposit only task items. It was reachable only from the Characters page, and the default (Manual) still puts every extra into the Execute batch, with no per-item untick. New row: **Settings → Item Management → "Extra item deposits"** (Auto / Manual / Off), writing the global `extrasMode`. Per-character overrides on the Characters page still take precedence, and the row's description says so. The bank popup's extras header now reads "Deposit extras - not tasks (N)", with a hint line pointing at the setting. `test/taskonlydeposit_spec.lua` (7).
 
 ### TSM posting audit → v4.14.77
 

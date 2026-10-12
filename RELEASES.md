@@ -6,6 +6,31 @@ The engineering-detail companion lives in `CHANGELOG.md` (commit-readerese — f
 
 ---
 
+## v0.13.3-alpha2
+
+Syncing between your accounts gets much faster, and a batch of fixes from your reports.
+
+### Syncing between your own accounts
+
+- **Much less to send.** Every sync used to send your entire sales history (up to 10,000 entries), even though the other account already had almost all of it. On a same-Battle.net link that alone could take most of an hour. Now each sync sends only what's new since the last one.
+- **New to-do lists appear on your other account right away,** instead of waiting for the next full sync.
+- **Two different to-do lists no longer get mixed together.** When your accounts disagree, the newer list wins and the older one is saved to your list history.
+- **Large updates arrive reliably.** Big changes, like a fresh import, could be sent several times over or never finish arriving over a same-Battle.net link.
+- Both linked accounts need this version for the full speed-up.
+
+### "Avoid realms where I already have an auction posted" now does what it says
+
+- **Deal Finder no longer picks a realm you already have the item listed on** when it has another choice. A later step was quietly undoing your setting.
+- **To-do lists send items to realms you're not already listed on first.**
+- **FlipQueue won't pull an item out of the bank for a realm where you already have it listed.** It tells you in chat when it skips one, so nothing goes missing silently.
+
+### Smaller fixes
+
+- **Tooltips on the to-do list stay open.** They used to flash up and vanish whenever your bags changed or a sync update arrived.
+- **Gear shows its item level next to the name** in your to-do list, like Auctionator does, for example "Glorious Legplates (233)". The tooltip also tells you the item level from your import. The game's own tooltip scales gear to the character you're on, which is why it could say 44.
+- **New setting: Settings → Item Management → Extra item deposits.** Set it to **Off** to deposit only the items your tasks need and leave everything else in your bags. The bank window also says which items are extras.
+- **No more "TSM is newer than expected" warning.** We checked FlipQueue's auction posting against the latest TradeSkillMaster; nothing changed, so your post prices were never affected.
+
 ## v0.13.3-alpha1
 
 Syncing between your own accounts is more reliable, and you can see it working.
