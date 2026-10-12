@@ -35,6 +35,28 @@ end
 local now = 1000
 function GetTime() return now end
 
+-- Timers fire on the fake clock, not inline as in wow_shim: RequestFullSyncWith
+-- waits for the partner's FSYN before sending, and that ordering is under test.
+local timers = {}
+C_Timer = {
+    After = function(delay, fn) timers[#timers + 1] = { at = now + delay, fn = fn } end,
+    NewTicker = function() return { Cancel = function() end } end,
+}
+-- time() on the same fake clock, so delta retry timing is really exercised.
+local timeBase = os.time()
+time = function() return timeBase + math.floor(now) end
+local function RunTimers()
+    local i = 1
+    while i <= #timers do
+        if timers[i].at <= now then
+            local t = table.remove(timers, i)
+            t.fn()
+        else
+            i = i + 1
+        end
+    end
+end
+
 local accounts = {}     -- [charName] = instance
 local sending           -- instance currently draining
 local wireDrop          -- optional fn(msg) -> true to lose a message in transit
@@ -49,6 +71,7 @@ C_ChatInfo = {
         if b.tokens < 1 then return 3 end   -- AddonMessageThrottle
         b.tokens = b.tokens - 1
         sending.sentCount = sending.sentCount + 1
+        sending.sent[#sending.sent + 1] = msg
         local dest = accounts[target]
         if dest and not (wireDrop and wireDrop(msg)) then
             dest.inbox[#dest.inbox + 1] = { msg = msg, from = sending.charName }
@@ -69,14 +92,17 @@ local function NewAccount(charName, uuid, partnerChar, partnerUUID)
     function ns:InvalidateInventoryNameIndex() end
     ns.db = {
         characters = {},
+        log = {},
+        todoLists = { upcoming = {}, archive = {} },
         sync = {
             accountUUID = uuid,
+            lastSentSeq = 0,
             partners = { [partnerUUID] = { transport = "whisper", charName = partnerChar, label = partnerChar } },
         },
     }
     assert(loadfile("Sync.lua"))("flipqueue", ns)
     local inst = { ns = ns, Sync = ns.Sync, charName = charName, inbox = {},
-                   bucket = NewBucket(), sentCount = 0 }
+                   bucket = NewBucket(), sentCount = 0, sent = {} }
     accounts[charName] = inst
     return inst
 end
@@ -98,6 +124,7 @@ end
 local function Fresh()
     accounts = {}
     wireDrop = nil
+    timers = {}
     now = now + 100
     local a = NewAccount("Alice-Realm", "UA", "Bob-Realm", "UB")
     local b = NewAccount("Bob-Realm", "UB", "Alice-Realm", "UA")
@@ -117,7 +144,9 @@ local function RunToIdle(a, b)
         sending = a; a.Sync:DrainQueue()
         sending = b; b.Sync:DrainQueue()
         Deliver(a); Deliver(b)
-        if a.sentCount + b.sentCount == before
+        RunTimers()
+        if math.floor(now) % 5 == 0 then a.Sync:RetryUnacked(); b.Sync:RetryUnacked() end
+        if a.sentCount + b.sentCount == before and #timers == 0
             and a.Sync:GetFullSyncProgress("UB") == nil and b.Sync:GetFullSyncProgress("UA") == nil then
             quiet = quiet + 1
             if quiet > 20 then return end   -- > 2s of no traffic covers a throttle backoff
@@ -154,13 +183,21 @@ end
 do
     local a, b = Fresh()
     check("dedupe: first request starts", a.Sync:RequestFullSyncWith("UB"), true)
-    check("dedupe: second request is skipped", a.Sync:RequestFullSyncWith("UB"), false)
-    check("dedupe: third request is skipped", a.Sync:RequestFullSyncWith("UB"), false)
-    check("dedupe: FULL_SYNC_SEND logged once", LogHas(a, "FULL_SYNC_SEND"), 1)
+    check("dedupe: repeat while awaiting reply is skipped", a.Sync:RequestFullSyncWith("UB"), false)
+    check("dedupe: progress text while awaiting reply", a.Sync:GetFullSyncProgressText("UB"), "Syncing")
+    -- B answers with its own FSYN; that starts A's send.
+    for _ = 1, 30 do
+        now = now + 0.12
+        sending = a; a.Sync:DrainQueue(); sending = b; b.Sync:DrainQueue()
+        Deliver(a); Deliver(b); RunTimers()
+        if a.Sync:GetFullSyncProgress("UB") then break end
+    end
     local out = a.Sync:GetFullSyncProgress("UB")
-    check("dedupe: progress reports 0 sent before drain", out and out.done, 0)
-    check("dedupe: progress text before drain", a.Sync:GetFullSyncProgressText("UB"), "Syncing 0%")
+    check("dedupe: send started on B's reply, before the fallback timer", out ~= nil, true)
+    check("dedupe: repeat while sending is skipped", a.Sync:RequestFullSyncWith("UB"), false)
+    check("dedupe: progress text while sending", (a.Sync:GetFullSyncProgressText("UB") or ""):match("^Syncing %d+%%$") ~= nil, true)
     RunToIdle(a, b)
+    check("dedupe: FULL_SYNC_SEND logged once", LogHas(a, "FULL_SYNC_SEND"), 1)
     check("dedupe: B merged exactly one transfer", LogHas(b, "FULL_SYNC_DONE"), 1)
     check("dedupe: B never restarted a transfer", LogHas(b, "FULL_SYNC_RESTART"), 0)
     check("dedupe: progress text clears when done", a.Sync:GetFullSyncProgressText("UB"), nil)
@@ -254,7 +291,7 @@ do
     RunToIdle(a, b)
     check("mutual: A built its payload once", LogHas(a, "FULL_SYNC_SEND"), 1)
     check("mutual: B built its payload once", LogHas(b, "FULL_SYNC_SEND"), 1)
-    check("mutual: A skipped B's FSYN", LogHas(a, "FULL_SYNC_SKIP"), 1)
+    check("mutual: neither side answered the other's FSYN with another", LogHas(a, "SEND FSYN") + LogHas(b, "SEND FSYN"), 2)
     check("mutual: B merged A's data once", LogHas(b, "FULL_SYNC_DONE"), 1)
     check("mutual: A merged B's data once", LogHas(a, "FULL_SYNC_DONE"), 1)
 end
@@ -267,9 +304,127 @@ do
     local real = a.Sync.Serialize
     a.Sync.Serialize = function() error("script ran too long") end
     a.Sync:RequestFullSyncWith("UB")
+    now = now + 11; RunTimers()          -- B never answers; the fallback timer builds
     a.Sync.Serialize = real
     check("build error: FULL_SYNC_ERROR logged", LogHas(a, "FULL_SYNC_ERROR"), 1)
     check("build error: nothing left in flight", a.Sync:GetFullSyncProgress("UB"), nil)
+end
+
+local function LastDetail(inst, event)
+    local d
+    for _, e in ipairs(inst.Sync:GetSyncLog()) do
+        if e.event == event then d = e.detail end
+    end
+    return d
+end
+
+local function MakeLog(n, base)
+    local log = {}
+    for i = 1, n do
+        log[i] = { itemKey = "3000" .. i .. ";;", charKey = "Alice-Realm", postedAt = base + i,
+                   auctionStatus = "sold", name = "Logged item " .. i }
+    end
+    return log
+end
+
+--------------------------
+-- 9. The sales log is sent incrementally once a watermark exists
+--------------------------
+do
+    local a, b = Fresh()
+    local old = time() - 10 * 86400
+    a.ns.db.log = MakeLog(200, old)
+    a.Sync:RequestFullSyncWith("UB")
+    RunToIdle(a, b)
+    check("incremental: first sync is a full log", LastDetail(a, "FULL_SYNC_LOG"):find("200/200 log entries (full)", 1, true) ~= nil, true)
+    check("incremental: B holds all 200", #b.ns.db.log, 200)
+    check("incremental: B stored A's build time", type(b.ns.db.sync.partners.UA.logBuiltAt), "number")
+
+    -- Five new sales, then the next sync.
+    for i = 1, 5 do
+        a.ns.db.log[#a.ns.db.log + 1] = { itemKey = "4000" .. i .. ";;", charKey = "Alice-Realm",
+            postedAt = time(), auctionStatus = "active", name = "New item " .. i }
+    end
+    a.Sync:RequestFullSyncWith("UB")
+    RunToIdle(a, b)
+    check("incremental: second sync sends only the 5 new entries", LastDetail(a, "FULL_SYNC_LOG"):find("5/205 log entries since", 1, true) ~= nil, true)
+    check("incremental: B now holds 205", #b.ns.db.log, 205)
+    check("incremental: no gap re-request", LogHas(b, "FULL_SYNC_LOG_GAP"), 0)
+    check("incremental: B did not echo A's entries back", (LastDetail(b, "FULL_SYNC_LOG") or ""):find("| 0/200 log entries since", 1, true) ~= nil, true)
+end
+
+--------------------------
+-- 10. An older partner (FSYN with no watermark) gets the whole log
+--------------------------
+do
+    local a = Fresh()
+    a.ns.db.log = MakeLog(50, time() - 86400)
+    a.ns.db.sync.partners.UB.peerLogSince = time()   -- stale value from a newer session
+    a.Sync:OnWhisperMessage("FSYN", "Bob-Realm")         -- what v0.13.3-alpha1 and older send
+    check("old partner: watermark cleared", a.ns.db.sync.partners.UB.peerLogSince, nil)
+    check("old partner: full log sent", LastDetail(a, "FULL_SYNC_LOG"):find("50/50 log entries (full)", 1, true) ~= nil, true)
+    check("old partner: no FSYN reply to an old client", LogHas(a, "SEND FSYN"), 0)
+end
+
+--------------------------
+-- 11. Archive and templates stay home
+--------------------------
+do
+    local a = Fresh()
+    a.ns.db.todoLists.archive = { { list = { tasks = { 1, 2, 3 } } } }
+    a.ns.db.todoLists.templates = { x = 1 }
+    a.ns.db.todoLists.active = { name = "L", createdAt = 1, tasks = {} }
+    local p = a.Sync:BuildFullSyncPayload("UB")
+    check("payload: archive not sent", p.todoLists.archive, nil)
+    check("payload: templates not sent", p.todoLists.templates, nil)
+    check("payload: active list still sent", p.todoLists.active and p.todoLists.active.name, "L")
+end
+
+--------------------------
+-- 12. A large delta arrives once, intact, over a slow link
+--------------------------
+-- ~60 KB at the spec's 1 msg/s refill takes minutes. Before the fix the
+-- retry clock started at enqueue, so it was re-queued three times while the
+-- first copy drained, and the receiver's reassembly buffer expired 60s after
+-- its first chunk, so it never completed.
+do
+    local a, b = Fresh()
+    local committed = {}
+    b.ns.TodoList = { CommitList = function(_, list, mode) committed[#committed + 1] = { list = list, mode = mode } end }
+    a.Sync:OnWhisperMessage("PING" .. "\001" .. "UB", "Bob-Realm")   -- mark B connected
+    a.inbox, b.inbox = {}, {}
+    local tasks = {}
+    for i = 1, 250 do tasks[i] = { taskUUID = "t" .. i, itemKey = "5000" .. i .. ";;", note = string.rep("x", 200) } end
+    a.Sync:EmitDelta("TDCOMMIT", { mode = "replace", list = { name = "Big", createdAt = 7, tasks = tasks } })
+    local started = now
+    RunToIdle(a, b)
+    local copies = 0
+    for _, m in ipairs(a.sent) do
+        if m:find("^C\001%d+\0011\001") then copies = copies + 1 end
+    end
+    check("big delta: took longer than 60s to arrive", now - started > 60, true)
+    check("big delta: sent exactly once", copies, 1)
+    check("big delta: applied once", #committed, 1)
+    check("big delta: arrived intact", committed[1] and #committed[1].list.tasks, 250)
+    check("big delta: acked and cleared", #a.ns.db.sync.partners.UB.pendingDeltas, 0)
+end
+
+--------------------------
+-- 13. Different active lists: newer wins, tasks never mix
+--------------------------
+do
+    local a = Fresh()
+    local archived = {}
+    a.ns.TodoList = { ArchiveList = function(_, list, reason) archived[#archived + 1] = reason end }
+    a.ns.db.todoLists.active = { name = "Mine", createdAt = 10, tasks = { { taskUUID = "m1" } } }
+    a.Sync:MergeTodoLists({ active = { name = "Theirs", createdAt = 20, tasks = { { taskUUID = "t1" } } } })
+    check("lists: newer remote list becomes active", a.ns.db.todoLists.active.name, "Theirs")
+    check("lists: tasks not mixed", #a.ns.db.todoLists.active.tasks, 1)
+    check("lists: replaced list archived", archived[1], "replaced")
+    a.Sync:MergeTodoLists({ active = { name = "Older", createdAt = 5, tasks = { { taskUUID = "o1" } } } })
+    check("lists: older remote list ignored", a.ns.db.todoLists.active.name, "Theirs")
+    a.Sync:MergeTodoLists({ active = { name = "Theirs", createdAt = 20, tasks = { { taskUUID = "t2" } } } })
+    check("lists: same list merges tasks", #a.ns.db.todoLists.active.tasks, 2)
 end
 
 print(string.format("sync_spec: %d passed, %d failed", passed, failed))

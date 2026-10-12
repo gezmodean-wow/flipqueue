@@ -51,8 +51,10 @@ local PRIORITY = {
     [OP_PING] = 1, [OP_PONG] = 1,
     [OP_PAIR] = 2, [OP_PACK] = 2, [OP_PDEN] = 2, [OP_UNLK] = 2,
     [OP_DACK] = 3,
-    [OP_DELT] = 4,
-    [OP_FSYN] = 5, [OP_FDAT] = 5, [OP_FEND] = 5,
+    -- FSYN rides with deltas, not behind our own FDAT: it carries the log
+    -- watermark the partner waits on before building its payload (FQ-256).
+    [OP_DELT] = 4, [OP_FSYN] = 4,
+    [OP_FDAT] = 5, [OP_FEND] = 5,
 }
 
 --------------------------
@@ -86,6 +88,10 @@ local lastThrottleLog = -math.huge
 -- a second request in that window is skipped instead of queueing another
 -- full copy of the payload behind the first.
 local outboundFullSync = {}
+local lastOutboundStart = {}   -- [partnerUUID] = GetTime() our last full send began
+local fsynSentAt = {}          -- [partnerUUID] = GetTime() we last sent FSYN
+local awaitingReply = {}       -- [partnerUUID] = GetTime() we asked and haven't started sending
+local FSYN_REPLY_WAIT = 10     -- seconds to wait for a partner's watermark
 local syncLog = {}             -- ring buffer of recent sync events for debugging
 local SYNC_LOG_MAX = 200
 
@@ -128,6 +134,14 @@ function Sync:Init()
             end
         end
     end)
+
+    -- pendingDeltas persist in SavedVariables; a reload mid-send would leave
+    -- inFlight set with no queued chunk left to clear it, blocking retries.
+    for _, partner in pairs(ns.db and ns.db.sync and ns.db.sync.partners or {}) do
+        for _, entry in ipairs(partner.pendingDeltas or {}) do
+            entry.inFlight = nil
+        end
+    end
 
     -- Register BNet addon prefix
     C_ChatInfo.RegisterAddonMessagePrefix(PREFIX)
@@ -584,8 +598,9 @@ end
 
 local msgCounter = 0
 
--- Send a structured message, chunking if necessary
-function Sync:SendMessage(opcode, payload, target, transport, chunkSize)
+-- Send a structured message, chunking if necessary. onSent (optional) runs
+-- when the final chunk leaves the queue.
+function Sync:SendMessage(opcode, payload, target, transport, chunkSize, onSent)
     if not target then return end
     transport = transport or "bnet"
     chunkSize = chunkSize or CHUNK_SIZE_BNET
@@ -603,7 +618,7 @@ function Sync:SendMessage(opcode, payload, target, transport, chunkSize)
     local msgLen = #fullMsg
 
     if msgLen <= chunkSize then
-        self:Enqueue(fullMsg, target, PRIORITY[opcode] or 5, transport)
+        self:Enqueue(fullMsg, target, PRIORITY[opcode] or 5, transport, onSent)
     else
         msgCounter = msgCounter + 1
         local msgID = msgCounter
@@ -613,7 +628,7 @@ function Sync:SendMessage(opcode, payload, target, transport, chunkSize)
             local startIdx = (i - 1) * chunkSize + 1
             local endIdx = math.min(i * chunkSize, msgLen)
             local chunk = "C" .. SEP .. msgID .. SEP .. i .. SEP .. totalChunks .. SEP .. fullMsg:sub(startIdx, endIdx)
-            self:Enqueue(chunk, target, PRIORITY[opcode] or 5, transport)
+            self:Enqueue(chunk, target, PRIORITY[opcode] or 5, transport, i == totalChunks and onSent or nil)
         end
     end
 end
@@ -821,6 +836,10 @@ function Sync:OnChunkReceived(message, senderGameAccountID)
     reassembly[reassemblyKey].chunks[chunkIdx] = data
 
     local entry = reassembly[reassemblyKey]
+    -- Expire on silence, not age: over whisper a ~100 KB delta (an import, a
+    -- committed to-do list) takes longer than 60s to arrive, and dating the
+    -- buffer from its first chunk discarded it mid-transfer (FQ-256).
+    entry.receivedAt = time()
     local complete = true
     for i = 1, entry.total do
         if not entry.chunks[i] then
@@ -884,7 +903,7 @@ function Sync:Dispatch(opcode, payload, senderGameAccountID)
     elseif opcode == OP_PONG then
         self:OnPong(senderGameAccountID, payload)
     elseif opcode == OP_FSYN then
-        self:OnFullSyncRequest(senderGameAccountID)
+        self:OnFullSyncRequest(senderGameAccountID, payload)
     elseif opcode == OP_FDAT then
         self:OnFullSyncData(payload, senderGameAccountID)
     elseif opcode == OP_FEND then
@@ -1574,13 +1593,42 @@ function Sync:RequestFullSyncWith(partnerUUID)
         return false
     end
 
+    -- Already asked, and our send hasn't started: still waiting on the reply.
+    local asked = awaitingReply[partnerUUID]
+    if asked and GetTime() - asked < FSYN_REPLY_WAIT then
+        self:Log("FULL_SYNC_SKIP", (partner.label or partnerUUID) .. " already requested, waiting for reply")
+        return false
+    end
+
     local target, transport, chunkSize = self:ResolveTarget(partnerUUID)
     if not target then return end
 
     partnerStates[partnerUUID] = "syncing"
-    self:SendRaw(OP_FSYN, target, transport)
-    self:SendFullSyncTo(target, transport, chunkSize, partnerUUID)
+    local requestedAt = GetTime()
+    awaitingReply[partnerUUID] = requestedAt
+    self:SendSyncRequest(partnerUUID, partner, target, transport, chunkSize)
+
+    -- Don't build our payload yet. A current partner answers with its own
+    -- FSYN carrying its log watermark, and OnFullSyncRequest sends our data
+    -- then, filtered to what it lacks. Building now would use last session's
+    -- watermark, or none at all on the first sync after an update. An older
+    -- partner never answers, so after FSYN_REPLY_WAIT send anyway.
+    C_Timer.After(FSYN_REPLY_WAIT, function()
+        if awaitingReply[partnerUUID] == requestedAt then awaitingReply[partnerUUID] = nil end
+        if (lastOutboundStart[partnerUUID] or -1) >= requestedAt then return end
+        local t, tr, cs = self:ResolveTarget(partnerUUID)
+        if t then self:SendFullSyncTo(t, tr, cs, partnerUUID) end
+    end)
     return true
+end
+
+-- FSYN carries "<watermark>[;n]": how much of the partner's log we already
+-- hold (0 = none), and ";n" = "don't answer with your own FSYN". Older
+-- clients ignore the payload entirely (FQ-256).
+function Sync:SendSyncRequest(partnerUUID, partner, target, transport, chunkSize, noReply)
+    fsynSentAt[partnerUUID] = GetTime()
+    local w = self:GetLogWatermark(partner) or 0
+    self:SendMessage(OP_FSYN, tostring(math.floor(w)) .. (noReply and ";n" or ""), target, transport, chunkSize)
 end
 
 -- Legacy wrapper: request full sync with all partners
@@ -1591,31 +1639,101 @@ function Sync:RequestFullSync()
     end
 end
 
-function Sync:OnFullSyncRequest(senderID)
+function Sync:OnFullSyncRequest(senderID, payload)
     if not self:IsLinked() then return end
     local senderUUID = self:IdentifySender(senderID)
     if not senderUUID or not ns.db.sync.partners[senderUUID] then return end
+    -- No number (older client) or 0 (new link, wiped data) means the next
+    -- payload carries the whole log.
+    local partner = ns.db.sync.partners[senderUUID]
+    local w = payload and tonumber(payload:match("^(%d+)"))
+    partner.peerLogSince = w
     partnerStates[senderUUID] = "syncing"
     -- Resolve target via partner record so we use the stored transport + chunk size
     local target, transport, chunkSize = self:ResolveTarget(senderUUID)
-    if target then
-        self:SendFullSyncTo(target, transport, chunkSize, senderUUID)
+    if not target then return end
+
+    -- A current client that asked us for data is waiting for our watermark
+    -- before it sends its own. Answer unless we asked it ourselves moments
+    -- ago (mutual reconnect) or it said not to.
+    local recentlyAsked = fsynSentAt[senderUUID] and (GetTime() - fsynSentAt[senderUUID]) < FSYN_REPLY_WAIT * 3
+    if w and not payload:find(";n", 1, true) and not recentlyAsked then
+        self:SendSyncRequest(senderUUID, partner, target, transport, chunkSize, true)
     end
+    self:SendFullSyncTo(target, transport, chunkSize, senderUUID)
+end
+
+--------------------------
+-- Incremental log (FQ-256)
+--------------------------
+-- The sales log was ~80% of a full sync: 10,000 entries at ~400 bytes,
+-- about 4 MB, or ~45 minutes over whisper, on every reconnect. MergeLog
+-- only ever inserts entries the receiver lacks, so resending ones it already
+-- holds changes nothing.
+--
+-- Watermark protocol, compatible with older versions both ways:
+--   * Every payload carries builtAt (sender's clock when it was built).
+--   * After merging, the receiver stores it as partner.logBuiltAt.
+--   * The receiver's FSYN carries that number. The sender stores it as
+--     partner.peerLogSince and sends only log entries newer than it.
+--     Older clients send FSYN with no payload, which clears peerLogSince,
+--     so they get the full log. Older clients also ignore the FSYN payload.
+-- The watermark is the build time, not the merge time: entries created
+-- while a 45-minute transfer was in flight postdate the build but not the
+-- merge.
+local LOG_SINCE_MARGIN = 300     -- seconds of overlap; dedupe absorbs repeats
+local LOG_BOOTSTRAP_MARGIN = 86400
+
+-- Latest time this entry could have entered our log. _rcvAt covers entries
+-- relayed from another partner with old posting times.
+local function LogEntryTime(e)
+    return math.max(e._rcvAt or 0, e.postedAt or 0, e.soldAt or 0, e.collectedAt or 0)
+end
+
+-- The value we put in our FSYN to this partner, or nil to ask for everything.
+-- Before builtAt existed, lastFullSync (merge time) is the only record. A day
+-- of margin covers a transfer that was built long before it merged.
+function Sync:GetLogWatermark(partner)
+    if not partner then return nil end
+    if partner.logBuiltAt then return partner.logBuiltAt end
+    if partner.lastFullSync then return partner.lastFullSync - LOG_BOOTSTRAP_MARGIN end
+    return nil
 end
 
 -- excludeOwnerUUID: skip characters owned by that account. The receiver
 -- never overwrites characters it owns (MergeCharacters), so sending a
--- partner its own characters back is pure transfer cost.
-function Sync:BuildFullSyncPayload(excludeOwnerUUID)
+-- partner its own characters back is pure transfer cost. The same partner
+-- gets no log entries it sent us (_rcvFrom), and none older than logSince.
+function Sync:BuildFullSyncPayload(excludeOwnerUUID, logSince)
     if not ns.db then return {} end
+
+    -- Only active and upcoming: MergeTodoLists reads nothing else, and the
+    -- archive alone was ~190 KB of history the receiver dropped on arrival.
+    local todo = ns.db.todoLists or {}
+    local log = ns.db.log or {}
+    local sendLog = log
+    -- No watermark means a new link, an older client, or a partner that lost
+    -- its data. Send everything then, including entries it once sent us.
+    if logSince and logSince > 0 then
+        sendLog = {}
+        local cutoff = logSince - LOG_SINCE_MARGIN
+        for _, e in ipairs(log) do
+            local t = LogEntryTime(e)
+            if (t == 0 or t >= cutoff) and not (excludeOwnerUUID and e._rcvFrom == excludeOwnerUUID) then
+                sendLog[#sendLog + 1] = e
+            end
+        end
+    end
 
     local payload = {
         accountUUID = ns.db.sync.accountUUID,
+        builtAt = time(),
+        logSince = logSince,
         ownedCharacters = {},
         characters = {},
         warbank = ns.db.warbank,
-        todoLists = ns.db.todoLists,
-        log = ns.db.log,
+        todoLists = { active = todo.active, upcoming = todo.upcoming },
+        log = sendLog,
         imports = ns.db.imports,
         doNotTrack = ns.db.doNotTrack,
         guilds = ns.db.guilds,
@@ -1650,13 +1768,20 @@ function Sync:SendFullSyncTo(target, transport, chunkSize, partnerUUID)
     -- An error here (e.g. the script-time watchdog on a very large
     -- account) would leave the partner waiting on a FEND that never comes,
     -- with nothing in the sync log to say why. Record it.
+    local partner = partnerUUID and ns.db.sync.partners[partnerUUID]
+    local logSince = partner and partner.peerLogSince
+    local logCount
     local ok, serialized = pcall(function()
-        return self:Serialize(self:BuildFullSyncPayload(partnerUUID))
+        local payload = self:BuildFullSyncPayload(partnerUUID, logSince)
+        logCount = #payload.log
+        return self:Serialize(payload)
     end)
     if not ok then
         self:Log("FULL_SYNC_ERROR", tostring(target) .. " | could not build payload: " .. tostring(serialized))
         return
     end
+    self:Log("FULL_SYNC_LOG", tostring(target) .. " | " .. tostring(logCount) .. "/" .. #(ns.db.log or {})
+        .. " log entries" .. (logSince and logSince > 0 and (" since " .. date("%m/%d %H:%M", logSince)) or " (full)"))
 
     local totalChunks = math.ceil(#serialized / chunkSize)
     local state = {
@@ -1665,7 +1790,11 @@ function Sync:SendFullSyncTo(target, transport, chunkSize, partnerUUID)
         startedAt = GetTime(),
         throttlesAtStart = throttleCount,
     }
-    if partnerUUID then outboundFullSync[partnerUUID] = state end
+    if partnerUUID then
+        outboundFullSync[partnerUUID] = state
+        lastOutboundStart[partnerUUID] = state.startedAt
+        awaitingReply[partnerUUID] = nil
+    end
     self:Log("FULL_SYNC_SEND", transport .. ":" .. tostring(target) .. " | " .. totalChunks
         .. " chunks, " .. #serialized .. " bytes")
 
@@ -1716,7 +1845,9 @@ end
 -- this so a slow transfer doesn't read as a stuck one.
 function Sync:GetFullSyncProgressText(partnerUUID)
     local out, inc = self:GetFullSyncProgress(partnerUUID)
-    if not out and not inc then return nil end
+    if not out and not inc then
+        return awaitingReply[partnerUUID] and "Syncing" or nil
+    end
     local done = (out and out.done or 0) + (inc and inc.done or 0)
     local total = (out and out.total or 0) + (inc and inc.total or 0)
     if total == 0 then return "Syncing" end
@@ -1816,12 +1947,26 @@ function Sync:OnFullSyncEnd(senderGameAccountID)
         return
     end
 
-    self:MergeFullSync(remoteData)
+    local partnerRec = ns.db.sync.partners[senderUUID]
+    local askedSince = self:GetLogWatermark(partnerRec)
 
-    if senderUUID then
-        partnerStates[senderUUID] = "connected"
-        if ns.db.sync.partners[senderUUID] then
-            ns.db.sync.partners[senderUUID].lastFullSync = time()
+    self:MergeFullSync(remoteData, senderUUID)
+
+    partnerStates[senderUUID] = "connected"
+    if partnerRec then
+        partnerRec.lastFullSync = time()
+        -- If the sender filtered its log from a later point than we hold
+        -- (it used a stale watermark), entries in between are missing. Keep
+        -- our watermark where it was and ask again; otherwise advance it to
+        -- this payload's build time.
+        local sentSince = remoteData.logSince
+        if sentSince and sentSince > 0 and (not askedSince or sentSince > askedSince + LOG_SINCE_MARGIN) then
+            self:Log("FULL_SYNC_LOG_GAP", "from " .. senderUUID .. " | sent since " .. sentSince
+                .. ", we hold since " .. tostring(askedSince) .. "; re-requesting")
+            local t, tr, cs = self:ResolveTarget(senderUUID)
+            if t then self:SendSyncRequest(senderUUID, partnerRec, t, tr, cs, true) end
+        elseif remoteData.builtAt then
+            partnerRec.logBuiltAt = remoteData.builtAt
         end
     end
 
@@ -1842,7 +1987,7 @@ end
 -- Merge Algorithms
 --------------------------
 
-function Sync:MergeFullSync(remote)
+function Sync:MergeFullSync(remote, senderUUID)
     if not ns.db or not remote then return end
 
     self._applying = true
@@ -1852,7 +1997,7 @@ function Sync:MergeFullSync(remote)
     self:MergeCharacters(remote.characters, remote.ownedCharacters, remote.accountUUID)
     self:MergeWarbank(remote.warbank)
     self:MergeTodoLists(remote.todoLists)
-    self:MergeLog(remote.log)
+    self:MergeLog(remote.log, senderUUID)
     self:MergeImports(remote.imports)
     self:MergeDoNotTrack(remote.doNotTrack)
 
@@ -1925,15 +2070,29 @@ function Sync:MergeWarbank(remoteWarbank)
     end
 end
 
+local function ListIdentity(list)
+    return (list.name or "") .. "|" .. tostring(list.createdAt or 0)
+end
+
 function Sync:MergeTodoLists(remoteTodo)
     if not remoteTodo then return end
 
-    if remoteTodo.active and remoteTodo.active.tasks then
-        if not ns.db.todoLists.active then
-            ns.db.todoLists.active = remoteTodo.active
-        else
-            self:MergeTasks(ns.db.todoLists.active.tasks, remoteTodo.active.tasks)
+    local remoteActive = remoteTodo.active
+    if remoteActive and remoteActive.tasks then
+        local localActive = ns.db.todoLists.active
+        if not localActive then
+            ns.db.todoLists.active = remoteActive
+        elseif ListIdentity(localActive) == ListIdentity(remoteActive) then
+            self:MergeTasks(localActive.tasks, remoteActive.tasks)
+        elseif (remoteActive.createdAt or 0) > (localActive.createdAt or 0) then
+            -- Different lists: the newer one wins. Merging tasks across
+            -- them mixed two to-do lists into one (FQ-256).
+            if ns.TodoList and ns.TodoList.ArchiveList then
+                ns.TodoList:ArchiveList(localActive, "replaced")
+            end
+            ns.db.todoLists.active = remoteActive
         end
+        -- else ours is newer; the partner adopts it when it merges our payload.
     end
 
     if remoteTodo.upcoming then
@@ -1985,9 +2144,13 @@ function Sync:MergeTasks(localTasks, remoteTasks)
     end
 end
 
-function Sync:MergeLog(remoteLog)
+-- Inserted entries are stamped with when and from whom they arrived, so the
+-- incremental send relays them to other partners and skips echoing them
+-- back to their source (FQ-256).
+function Sync:MergeLog(remoteLog, senderUUID)
     if not remoteLog then return end
 
+    local now = time()
     local seen = {}
     for _, entry in ipairs(ns.db.log or {}) do
         local key = (entry.itemKey or "") .. "|" .. (entry.charKey or "") .. "|" .. (entry.postedAt or 0)
@@ -1997,6 +2160,8 @@ function Sync:MergeLog(remoteLog)
     for _, entry in ipairs(remoteLog) do
         local key = (entry.itemKey or "") .. "|" .. (entry.charKey or "") .. "|" .. (entry.postedAt or 0)
         if not seen[key] then
+            entry._rcvAt = now
+            entry._rcvFrom = senderUUID
             table.insert(ns.db.log, entry)
             seen[key] = true
         end
@@ -2029,6 +2194,18 @@ end
 -- Delta Sync
 --------------------------
 
+-- Send (or resend) a pending delta. The retry clock starts when the last
+-- chunk drains, not when it is queued: a multi-chunk delta over whisper can
+-- take minutes to leave, and timing it from enqueue resent it MAX_RETRIES
+-- times while the first copy was still in the queue, then gave up (FQ-256).
+function Sync:SendDeltaEntry(entry, target, transport, chunkSize)
+    entry.inFlight = true
+    self:SendMessage(OP_DELT, entry.delta, target, transport, chunkSize, function()
+        entry.inFlight = nil
+        entry.sentAt = time()
+    end)
+end
+
 function Sync:EmitDelta(deltaType, data)
     if self._applying then return end
     if not ns.db or not ns.db.sync then return end
@@ -2052,10 +2229,9 @@ function Sync:EmitDelta(deltaType, data)
         if pState == "connected" or pState == "syncing" then
             local target, transport, chunkSize = self:ResolveTarget(uuid)
             if target then
-                self:SendMessage(OP_DELT, delta, target, transport, chunkSize)
-                partner.pendingDeltas[#partner.pendingDeltas + 1] = {
-                    seq = seq, sentAt = time(), retries = 0, delta = delta,
-                }
+                local entry = { seq = seq, sentAt = time(), retries = 0, delta = delta }
+                partner.pendingDeltas[#partner.pendingDeltas + 1] = entry
+                self:SendDeltaEntry(entry, target, transport, chunkSize)
             else
                 -- Can't reach them — queue for later
                 table.insert(partner.pendingDeltas, {
@@ -2302,13 +2478,13 @@ function Sync:RetryUnacked()
             if target then
                 for i = #partner.pendingDeltas, 1, -1 do
                     local entry = partner.pendingDeltas[i]
-                    if entry.sentAt > 0 and (now - entry.sentAt) > RETRY_INTERVAL then
+                    if not entry.inFlight and entry.sentAt > 0 and (now - entry.sentAt) > RETRY_INTERVAL then
                         if entry.retries >= MAX_RETRIES then
                             table.remove(partner.pendingDeltas, i)
                         else
                             entry.retries = entry.retries + 1
                             entry.sentAt = now
-                            self:SendMessage(OP_DELT, entry.delta, target, transport, chunkSize)
+                            self:SendDeltaEntry(entry, target, transport, chunkSize)
                         end
                     end
                 end
@@ -2329,7 +2505,7 @@ function Sync:ReplayPendingDeltas(partnerUUID)
     for _, entry in ipairs(partner.pendingDeltas) do
         entry.sentAt = time()
         entry.retries = 0
-        self:SendMessage(OP_DELT, entry.delta, target, transport, chunkSize)
+        self:SendDeltaEntry(entry, target, transport, chunkSize)
     end
 end
 
@@ -2401,7 +2577,7 @@ function Sync:ForceSyncByUUID(accountUUID)
     if self:RequestFullSyncWith(accountUUID) == false then
         local out = self:GetFullSyncProgress(accountUUID)
         ns:Print(ns.COLORS.CYAN .. "Already syncing with " .. (partner.label or "partner")
-            .. " (" .. out.done .. "/" .. out.total .. " sent).|r")
+            .. (out and (" (" .. out.done .. "/" .. out.total .. " sent)") or "") .. ".|r")
         return
     end
     ns:Print(ns.COLORS.CYAN .. "Full resync requested with " .. (partner.label or "partner") .. ".|r")
