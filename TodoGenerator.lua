@@ -542,6 +542,33 @@ local function SortDealsForAllocation(deals, allocationOrder)
     end)
 end
 
+-- Move deals targeting a realm where the player already has that item listed
+-- behind every other deal, keeping the allocation order within each half
+-- (FQ-262). Deals claim inventory in list order, so a posted-realm deal now
+-- only gets stock no clean realm wanted — demoted, not dropped, matching the
+-- Deal Finder's fallback. Before this the "avoid realms where I already have
+-- an auction posted" setting was never consulted by the generator, so an
+-- import could hand the player's only copy to a realm they were already on.
+-- Returns the reordered array and how many deals were demoted.
+local function DemotePostedRealmDeals(deals)
+    if not (ns.db and ns.db.settings.dfAvoidPostedRealms and ns.SalesIndex) then
+        return deals, 0
+    end
+    local clean, posted = {}, {}
+    for _, deal in ipairs(deals) do
+        if deal.itemKey and deal.targetRealm
+            and ns.SalesIndex:HasActiveAuction(deal.itemKey, deal.targetRealm) then
+            posted[#posted + 1] = deal
+        else
+            clean[#clean + 1] = deal
+        end
+    end
+    if #posted == 0 then return deals, 0 end
+    for _, d in ipairs(posted) do clean[#clean + 1] = d end
+    return clean, #posted
+end
+TodoList._DemotePostedRealmDeals = DemotePostedRealmDeals  -- exposed for specs
+
 -- Build grouped display data from generated items.
 -- Groups items by assignedChar (each char implies a realm).
 -- sortMode: "profit" | "character" | "realm" | "noCompetition"
@@ -923,12 +950,25 @@ function TodoList:GenerateTodoList(source, allocationOrder, opts)
         end
         SortDealsForAllocation(sellDeals, allocationOrder)
         SortDealsForAllocation(buyDeals, opts.buyAllocationOrder)
+        local demotedSell, demotedBuy
+        sellDeals, demotedSell = DemotePostedRealmDeals(sellDeals)  -- FQ-262
+        buyDeals, demotedBuy = DemotePostedRealmDeals(buyDeals)
+        if demotedSell + demotedBuy > 0 then
+            ns:PrintDebug("Generate: " .. (demotedSell + demotedBuy) ..
+                " deal(s) demoted (already listed on that realm)")
+        end
         -- Recombine: sell deals first (they claim pool), then buy deals
         deals = {}
         for _, d in ipairs(sellDeals) do table.insert(deals, d) end
         for _, d in ipairs(buyDeals) do table.insert(deals, d) end
     else
         SortDealsForAllocation(deals, allocationOrder)
+        local demoted
+        deals, demoted = DemotePostedRealmDeals(deals)  -- FQ-262
+        if demoted > 0 then
+            ns:PrintDebug("Generate: " .. demoted ..
+                " deal(s) demoted (already listed on that realm)")
+        end
     end
 
     -- Track remaining pool quantities. Also index the pool by itemKey and

@@ -30,7 +30,8 @@ function Tracker:AutoPullFromBank(onComplete, fromClick)
             local item = task.item
             if item.action == "buy" then
                 -- Buy tasks are purchased from AH, not pulled from bank
-            elseif ns:RealmMatches(item.targetRealm or "", currentRealm) then
+            elseif ns:RealmMatches(item.targetRealm or "", currentRealm)
+                and not Tracker._SkipPullAlreadyPosted(item, currentRealm) then  -- FQ-262
                 -- Use the task's own quantity — it already accounts for TSM postCap
                 -- and available inventory from when the to-do list was generated
                 local targetQty = item.quantity or 1

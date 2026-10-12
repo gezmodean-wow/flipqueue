@@ -848,16 +848,10 @@ end)
 -- QUANTITY-AWARE SELECTION
 -- ==========================================
 
+-- Delegates to DealFinder so the posted-realm avoidance it applies can't be
+-- overwritten by a score-only re-pick here again (FQ-262).
 local function ApplyQuantitySelectionFn(group)
-    local qty = group.quantity or 1
-    if #group.realms <= 1 then return end
-    local sorted = {}
-    for i, r in ipairs(group.realms) do sorted[i] = {idx = i, score = r.score or 0} end
-    table.sort(sorted, function(a, b) return a.score > b.score end)
-    for _, r in ipairs(group.realms) do r._selected = false end
-    for rank = 1, math.min(qty, #sorted) do
-        group.realms[sorted[rank].idx]._selected = true
-    end
+    ns.DealFinder:ApplyQuantitySelection(group)
 end
 
 -- Re-score the current results against the priority order and refresh the
