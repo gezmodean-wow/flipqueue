@@ -336,6 +336,51 @@ function DealFinder:ApplyPriority(itemGroups, priorityOrder)
     end
 end
 
+-- Quantity-aware selection: when the player holds N of an item, select up to
+-- N realms in score order. Runs after ApplyPriority on every scan and every
+-- priority reorder.
+--
+-- This used to live in DealFinderPage and ranked on score alone, so it
+-- silently overwrote ApplyPriority's posted-realm avoidance: the top-scoring
+-- realm got re-selected even when the player already had that item listed
+-- there, and the deal went to the to-do list and was pulled from the bank
+-- (FQ-262). With dfAvoidPostedRealms on, clean realms fill the quantity first;
+-- a posted realm is only picked when no clean realm exists at all — the same
+-- demote-not-drop fallback ApplyPriority uses, flagged via selectedPosted.
+function DealFinder:ApplyQuantitySelection(group)
+    if not group or not group.realms or #group.realms <= 1 then return end
+    local qty = group.quantity or 1
+    local avoidPosted = ns.db and ns.db.settings.dfAvoidPostedRealms
+
+    local sorted = {}
+    for i, r in ipairs(group.realms) do
+        sorted[#sorted + 1] = { idx = i, score = r.score or 0, posted = r.hasActiveAuction and true or false }
+    end
+    -- Index tie-break keeps the order deterministic (table.sort isn't stable).
+    table.sort(sorted, function(a, b)
+        if a.score ~= b.score then return a.score > b.score end
+        return a.idx < b.idx
+    end)
+
+    for _, r in ipairs(group.realms) do r._selected = false end
+
+    local picked, anyPosted = 0, false
+    for _, s in ipairs(sorted) do
+        if picked >= qty then break end
+        if not (avoidPosted and s.posted) then
+            group.realms[s.idx]._selected = true
+            picked = picked + 1
+            if s.posted then anyPosted = true end
+        end
+    end
+    if picked == 0 and sorted[1] then
+        -- Every candidate is posted: keep the single best rather than drop it.
+        group.realms[sorted[1].idx]._selected = true
+        anyPosted = true
+    end
+    group.selectedPosted = anyPosted
+end
+
 --------------------------
 -- Core Scan (chunked)
 --------------------------

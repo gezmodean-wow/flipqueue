@@ -65,6 +65,7 @@ local function BuildIndex()
     local logStats = { sold = 0, active = 0, expired = 0, cancelled = 0, skipped = 0, collected = 0, totalRevenue = 0, totalFees = 0 }
     local uncollected = {}  -- charKey -> { sold, expired, cancelled }
     local activeByItem = {} -- baseItemID -> { [targetRealm display] = true }
+    local now = time()
 
     for _, entry in ipairs(log) do
         local key = entry.itemKey
@@ -78,7 +79,10 @@ local function BuildIndex()
         -- Active auctions, indexed by base itemID -> the realms they sit on.
         -- Keep the raw display realm (not normalized) so connected-realm
         -- matching via ns:RealmsOverlap works at query time.
-        if isActive then
+        -- An "active" entry past its expiresAt is no longer on the AH (sold or
+        -- expired; the status just hasn't been reconciled yet), so it must not
+        -- block a realm or a bank pull (FQ-262).
+        if isActive and not (entry.expiresAt and entry.expiresAt <= now) then
             local baseID = BaseItemID(entry.itemKey)
             if baseID and entry.targetRealm and entry.targetRealm ~= "" then
                 activeByItem[baseID] = activeByItem[baseID] or {}

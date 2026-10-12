@@ -72,6 +72,32 @@ end
 -- Expose for TrackerBank
 Tracker._CountInBags = CountInBags
 
+-- True when a sell task's item should NOT be pulled from the bank because the
+-- player already has that item listed on this realm's AH (FQ-262).
+--
+-- The "avoid realms where I already have an auction posted" setting only
+-- steered which realm a deal was assigned to. Tasks that still landed on a
+-- posted realm — FlippingPal imports, a list generated before the item was
+-- posted, Deal Finder's all-realms-posted fallback — were pulled from the bank
+-- anyway, and on AH open the existing listing then "completed" the task,
+-- leaving the pulled stack sitting in the bags. Gated on the same setting so
+-- turning it off restores the old behaviour. Prints once per task per session
+-- so a skipped pull is never silent.
+local postedPullNotified = setmetatable({}, { __mode = "k" })
+local function SkipPullAlreadyPosted(item, realm)
+    if not (ns.db and ns.db.settings.dfAvoidPostedRealms) then return false end
+    if not (ns.SalesIndex and item and item.itemKey) then return false end
+    if not ns.SalesIndex:HasActiveAuction(item.itemKey, realm) then return false end
+    if not postedPullNotified[item] then
+        postedPullNotified[item] = true
+        ns:Print((ns.COLORS and ns.COLORS.YELLOW or "") .. "Not pulling|r " ..
+            (item.name or "?") .. " — you already have it listed on " ..
+            (realm or "?") .. ". (Deal Finder: \"Avoid realms where I already have an auction posted\")")
+    end
+    return true
+end
+Tracker._SkipPullAlreadyPosted = SkipPullAlreadyPosted
+
 --------------------------
 -- Bag Snapshot for Post Detection
 --------------------------
@@ -707,7 +733,8 @@ function Tracker:BuildPullOps()
         for _, task in ipairs(todoTasks) do
             local item = task.item
             taskCount = taskCount + 1
-            if item.action ~= "buy" and ns:RealmMatches(item.targetRealm or "", currentRealm) then
+            if item.action ~= "buy" and ns:RealmMatches(item.targetRealm or "", currentRealm)
+                and not SkipPullAlreadyPosted(item, currentRealm) then  -- FQ-262
                 local targetQty = item.quantity or 1
                 local inBags = Tracker._CountInBags(item)
                 local stillNeeded = targetQty - inBags
