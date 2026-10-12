@@ -1236,7 +1236,7 @@ function UI:CreateSettingsPanel(parent)
     ------------------------------------------------
     local secItems = CreateCollapsibleSection(content, y, "items",
         "Item Management",
-        "Manage my items, reagents, deposit overflow, batch size")
+        "Manage my items, extras, reagents, deposit overflow, batch size")
     sc = secItems.content
     sy = 0
 
@@ -1257,6 +1257,20 @@ function UI:CreateSettingsPanel(parent)
         if UI.RefreshSettings then UI:RefreshSettings() end
     end)
     sy = sy - h - SECTION_SPACING
+
+    -- (FQ-260) Extras tri-mode. Until now extrasMode was only reachable from
+    -- the Characters page, so players looking in Settings for "deposit only
+    -- my task items" found the reagent row but no way to stop the extras
+    -- sweep, and Manual still put every extra into the Execute batch. Off
+    -- here is the tasks-only answer: BuildExtraDepositOps, the drawer's
+    -- Deposit Extras button and AutoDepositExtraItems all gate on it.
+    settingsWidgets.extrasModeRow, h = CreateSettingsTriMode(sc, sy,
+        "Extra item deposits",
+        "Items in your bags that are not tasks and not reagents. Auto: deposit to warbank on bank open. " ..
+        "Manual: listed in the bank popup and deposited when you click Execute. " ..
+        "Off: deposit only task items. Per-character overrides on the Characters page take precedence.",
+        "extrasMode")
+    sy = sy - h - ITEM_SPACING
 
     -- (#155) Reagents are now their own action class with a tri-state mode.
     -- Replaces the old depositIncludeReagents bool which conflated "include
@@ -2444,6 +2458,9 @@ function UI:RefreshSettings()
     ApplyRowState(settingsWidgets.goldBufferRow, settingsWidgets.goldBufferBox, manageGoldOn)
 
     -- Items-related rows
+    if settingsWidgets.extrasModeRow then
+        settingsWidgets.extrasModeRow:SetAlpha(manageItemsOn and 1.0 or 0.4)
+    end
     if settingsWidgets.reagentsModeRow then
         settingsWidgets.reagentsModeRow:SetAlpha(manageItemsOn and 1.0 or 0.4)
     end
@@ -2472,6 +2489,9 @@ function UI:RefreshSettings()
     end
     if settingsWidgets.goldDepositModeRow and settingsWidgets.goldDepositModeRow.refresh then
         settingsWidgets.goldDepositModeRow.refresh()
+    end
+    if settingsWidgets.extrasModeRow and settingsWidgets.extrasModeRow.refresh then
+        settingsWidgets.extrasModeRow.refresh()
     end
     if settingsWidgets.reagentsModeRow and settingsWidgets.reagentsModeRow.refresh then
         settingsWidgets.reagentsModeRow.refresh()
