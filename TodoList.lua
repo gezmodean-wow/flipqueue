@@ -54,6 +54,14 @@ function TodoList:CommitList(preview, mode)
     StampNew(preview.tasks)
     if ns.db.todoLists.active then StampNew(ns.db.todoLists.active.tasks) end
 
+    -- Send the committed list to linked accounts now, rather than leaving it
+    -- for the next full sync, which can take most of an hour over a same-
+    -- account link (FQ-256). Partners have handled TDCOMMIT since v0.9; it was
+    -- simply never sent. EmitDelta is a no-op while applying a received one.
+    if ns.Sync and ns.Sync.IsLinked and ns.Sync:IsLinked() then
+        ns.Sync:EmitDelta("TDCOMMIT", { mode = mode, list = preview })
+    end
+
     -- Imports are ephemeral working state for the import → generate phase.
     -- Once a list has been committed they've served their purpose, and the
     -- to-do list itself becomes the source of truth for what's "active".
