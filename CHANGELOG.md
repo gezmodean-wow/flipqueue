@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.13.3-alpha2 (unreleased)
+
+### TSM posting audit → v4.14.77
+
+#263's diagnostics showed `TSM posting audit: running=v4.14.76 audited=v4.14.75 status=ahead`. Re-audited against **v4.14.77** (the latest installed). `MakePostDecision` still starts at line 417 and `IsAuctionFiltered` at 269 in `LibTSMSystem/Source/Operation/AuctioningOperation.lua`, and every branch matches `AuctionPost`'s port. One nuance was confirmed rather than changed. TSM checks `matchStackSize` only when `private.maxStackSizeFunc` is set, and retail never sets it: `Core/Service/Operations/Core.lua:69` passes it only with `AH_STACKS`. `Load` therefore never registers `matchStackSize` on retail, so FlipQueue's ungated check in `IsAuctionFiltered` is an equivalent no-op. `Load` adds no setting that `MakePostDecision` reads, and `matchWhitelist` still defaults to true at `Schema.lua:270` under the same key. `TSM_AUDITED_VERSION` bumped to `v4.14.77`; no behaviour change. Players on v4.14.76 now report `status=behind`, which is silent: no chat warning, diagnostics line only.
+
 ## v0.13.3-alpha1
 
 One issue, from makkenmak's same-Battle.net whisper link (Moexbridge ↔ Moexbridges, Aerie Peak). Embedded Cogworks-1.0 stays at **`v0.16.0`**; the `Core.lua` `ItemKeyToItemString` override stays (cogworks#83 rollback still owed). **Schema stays at 14**; no SavedVariables change. The wire format is unchanged, so this alpha syncs with v0.13.2 partners. Those partners still send duplicates and lose throttled chunks, so both sides need the alpha for the full effect. **F8 not yet run.** Before an alpha2, read a tester's `FULL_SYNC_SENT` line: elapsed time and throttle count are the first real measurement of the whisper link's rate.

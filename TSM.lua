@@ -70,7 +70,16 @@ local OP_CACHE_TTL = 300 -- 5 min for operations (they rarely change mid-session
 -- blacklist branch bypasses. AuctioningOperation.Load registers no new setting
 -- that MakePostDecision reads; every name in EXPECTED_OP_FIELDS is still
 -- present. The local port in AuctionPost:ResolvePostPrice remains accurate.
-local TSM_AUDITED_VERSION = "v4.14.75"
+--
+-- Re-audited 2026-10-12 against TSM v4.14.77 (a player on v4.14.76 reported
+-- status=ahead in #263): MakePostDecision still at 417, IsAuctionFiltered at
+-- 269, every branch as above. IsAuctionFiltered gates matchStackSize on
+-- private.maxStackSizeFunc, which retail never sets (Core/Service/Operations/
+-- Core.lua:69 passes it only with AH_STACKS), so retail ops carry no
+-- matchStackSize field and our ungated check is equivalently a no-op. Load
+-- adds no setting MakePostDecision reads; matchWhitelist still defaults true
+-- at Schema.lua:270.
+local TSM_AUDITED_VERSION = "v4.14.77"
 
 -- Fields we expect every Auctioning operation record to expose. If TSM
 -- renames one, GetItemAuctioningOp returns nil for it and ResolvePostPrice
