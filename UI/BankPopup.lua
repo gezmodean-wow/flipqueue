@@ -826,8 +826,12 @@ function UI:ShowBankPopup(ops, onExecute)
 
     -- Deposit extras section
     if extraCount > 0 then
-        idx = AddSectionHeader(f, idx, "Deposit extras (" .. extraCount .. ")", "extras")
+        -- (FQ-260) Spell out that these are NOT tasks and where to turn
+        -- them off — "extras" alone read as part of the task batch.
+        idx = AddSectionHeader(f, idx, "Deposit extras - not tasks (" .. extraCount .. ")", "extras")
         if not IsCollapsed("extras") then
+            idx = AddItemRow(f, idx, "Interface\\FriendsFrame\\InformationIcon", ns.COLORS.GRAY
+                .. "Tasks only? Set Extra item deposits to Off in Settings > Item Management.|r")
             for _, op in ipairs(ops.extras) do
                 idx = AddItemRow(f, idx, op.icon, op.name)
             end
