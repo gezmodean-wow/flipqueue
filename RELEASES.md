@@ -6,6 +6,10 @@ The engineering-detail companion lives in `CHANGELOG.md` (commit-readerese — f
 
 ---
 
+## v0.13.3-alpha3
+
+- **Bank deposits no longer get stuck.** For some players, depositing to the warbank could stop partway with the bank window sitting on "Depositing" and nothing in chat. If a deposit now runs into a problem, FlipQueue skips that item, finishes the rest, and tells you in chat. If you see that message, please send your FlipQueue debug log with your bug report so we can fix the cause.
+
 ## v0.13.3-alpha2
 
 Syncing between your accounts gets much faster, and a batch of fixes from your reports.

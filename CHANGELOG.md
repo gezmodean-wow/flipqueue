@@ -1,5 +1,18 @@
 # Changelog
 
+## v0.13.3-alpha3
+
+One diagnostic fix for FQ-272. Embedded Cogworks-1.0 stays at **`v0.16.0`**; the `Core.lua` `ItemKeyToItemString` override stays (cogworks#83). **Schema stays at 14.** No new files. **F8 not yet run.**
+
+### FQ-272 (#272): deposits stall silently after a successful pull
+
+crameroni (0.13.2): the bank popup opens but nothing is deposited, in auto or manual. Pulls work. Their dump shows 64/64 pulls through `ProcessSync`, then `Bank popup: 0 pulls, 17 deposits` and DoDeposits' opening `BankOpProgress(0, 0, "Depositing")`. After that, nothing: no `[deposit-pick]` line (logged on every `PickDepositSlot` call, debug off or not) and no `BankPopupComplete`. The chain died on an uncaught Lua error somewhere between `DoDeposits` (`Tracker.lua`) and `PickDepositSlot`, which covers the `AutoDepositToWarbank` bag scan and the first `HandleOp`. Every helper on that path checks out statically, so the cause is still open. The two later `BeginBankExecution totalOps=30` lines are the Debug Console fake-op buttons.
+
+- **Per-op `xpcall` in both engines.** `BankQueue:Process` NextOp and `ProcessSync` doIssue run each op under `xpcall`. On error, the stack goes to the debug ring via `ReportOpError`, the op counts as failed (`stats.errors` / `nonRetryableErrors` + `failedNames`), and the batch continues. The player gets one red chat line per run.
+- **Guarded deposit sub-phases.** The warbank, extras and reagents sub-phases in `DoDeposits` run through `GuardedPhase`. An error in the scan before the engine starts logs its stack, `Abort`s any queue that is still running, counts the phase's ops as failed, and continues to the next sub-phase, so the popup reaches its summary. The continuation is once-guarded, so an error thrown after the phase has already continued can't run the chain twice.
+
+No root-cause fix yet; the next dump from an affected player carries the stack.
+
 ## v0.13.3-alpha2
 
 Six issues: the FQ-256 follow-up from makkenmak's alpha1 measurement, four from the 2026-10-09 Discord batch, and the TSM audit #263 asked for. Embedded Cogworks-1.0 stays at **`v0.16.0`**; the `Core.lua` `ItemKeyToItemString` override stays (cogworks#83). **Schema stays at 14.** One new file, `ItemLevelDisplay.lua` (toc line 28). **F8 not yet run.** Each fix was built on its own branch, and the combination passes all 24 spec files (`test/*_spec.lua`).
