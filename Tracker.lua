@@ -283,7 +283,7 @@ function Tracker:WalkBagsInScope(opKind, cb)
     local function IsReagent(bagIndex, hyperlink)
         if bagIndex == ns.REAGENT_BAG then return true end
         local _, _, _, _, _, _, _, _, _, _, _, classID =
-            GetItemInfo(hyperlink)
+            C_Item.GetItemInfo(hyperlink)
         return classID == Enum.ItemClass.Tradegoods
     end
 

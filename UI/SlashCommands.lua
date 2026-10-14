@@ -1983,10 +1983,10 @@ local function debugPost(key)
         -- before lookup. Some price sources may key on the level
         -- form rather than the variant string.
         local ilvl
-        if GetDetailedItemLevelInfo and ns.ItemKeyToItemString then
+        if C_Item.GetDetailedItemLevelInfo and ns.ItemKeyToItemString then
             local wowStr = ns:ItemKeyToItemString(key)
             if wowStr then
-                ilvl = GetDetailedItemLevelInfo(wowStr)
+                ilvl = C_Item.GetDetailedItemLevelInfo(wowStr)
             end
         end
         if ilvl then

@@ -185,7 +185,7 @@ local function ItemMatchesTabFlags(itemLink, depositFlags)
     if not depositFlags or depositFlags == 0 then return true end
     if not itemLink then return true end
 
-    local _, _, quality, _, _, _, _, _, _, _, _, classID = GetItemInfo(itemLink)
+    local _, _, quality, _, _, _, _, _, _, _, _, classID = C_Item.GetItemInfo(itemLink)
     if not classID then return true end  -- can't determine — allow
 
     local function has(flag)
@@ -303,7 +303,7 @@ local function FindStackTarget(itemLink, itemID, bagList, allocatedSlots, ignore
     if not itemID then return nil end
     local stackMax
     if itemLink then
-        local _, _, _, _, _, _, _, sm = GetItemInfo(itemLink)
+        local _, _, _, _, _, _, _, sm = C_Item.GetItemInfo(itemLink)
         stackMax = sm
     end
     if not stackMax or stackMax <= 1 then return nil end
