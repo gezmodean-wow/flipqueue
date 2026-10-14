@@ -694,6 +694,31 @@ local function WaitForBagUpdate(minDelay, callback)
 end
 
 --------------------------
+-- Op error guard (FQ-272)
+--------------------------
+-- Both engines issue ops from C_Timer continuations, where an uncaught Lua
+-- error ends the chain with no callback — the popup never completes and the
+-- player sees nothing (BugSack off). Ops run under xpcall instead; the stack
+-- goes to the debug ring so the next /fq dump carries it, and the player gets
+-- one chat line per run.
+local function OpErrorHandler(err)
+    local stack = debugstack and debugstack(2) or ""
+    return tostring(err) .. "\n" .. stack
+end
+
+local _opErrorNotified = false
+local function ReportOpError(op, err)
+    ns:PrintDebug(string.format("[BankQueue] op error: %s %s @ bag=%s slot=%s: %s",
+        tostring(op and op.op), tostring(op and op.name),
+        tostring(op and op.srcBag), tostring(op and op.srcSlot), tostring(err)))
+    if not _opErrorNotified then
+        _opErrorNotified = true
+        ns:Print(ns.COLORS.RED .. "A bank move hit an error|r and was skipped. " ..
+            "Details are in the FlipQueue debug log — please include it in a bug report.")
+    end
+end
+
+--------------------------
 -- Queue Processor
 --------------------------
 
@@ -1141,7 +1166,16 @@ ProcessNextBatch = function()
             return
         end
         local op = batch[i]
-        local issuedAMove = HandleOp(op)
+        -- FQ-272: a Lua error in HandleOp used to kill this C_Timer chain
+        -- silently — no Finish, no callback, popup stuck on "Depositing".
+        -- Count it as a failed op and keep the batch moving.
+        local okOp, issuedAMove = xpcall(HandleOp, OpErrorHandler, op)
+        if not okOp then
+            pcall(ClearCursor)
+            ReportOpError(op, issuedAMove)
+            stats.errors = stats.errors + 1
+            issuedAMove = false
+        end
         if issuedAMove then
             optimistic = optimistic + 1
             if BankQueue.onProgress then
@@ -1206,6 +1240,7 @@ function BankQueue:Process(ops, label, callback)
         end
     end
 
+    _opErrorNotified = false
     queue = ops
     stats = { successes = {}, errors = 0, deferred = {} }
     onComplete = callback
@@ -1311,6 +1346,7 @@ function BankQueue:ProcessSync(ops, label, callback)
         end
     end
 
+    _opErrorNotified = false
     BankQueue.processing = true
 
     -- Cache enabled bag lists once so every snapshot scans identical bag sets,
@@ -1710,7 +1746,14 @@ function BankQueue:ProcessSync(ops, label, callback)
             local op = remainingOps[i]
             local panelChanged = bankOpen and EnsurePanel(NeededBankType(op))
             local doIssue = function()
-                IssueOne(op)
+                -- FQ-272: same guard as the batched engine's NextOp.
+                local okOp, err = xpcall(IssueOne, OpErrorHandler, op)
+                if not okOp then
+                    pcall(ClearCursor)
+                    ReportOpError(op, err)
+                    nonRetryableErrors = nonRetryableErrors + 1
+                    table.insert(failedNames, op.name or "?")
+                end
                 if i < #remainingOps then
                     local delay = CurrentInterMoveDelay()
                     NotifyWait(delay, "Waiting for bag update", "variable")
