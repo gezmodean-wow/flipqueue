@@ -1,5 +1,19 @@
 # Changelog
 
+## v0.13.3-alpha4
+
+Root-cause fix for FQ-272. Embedded Cogworks-1.0 stays at **`v0.16.0`**; the `Core.lua` `ItemKeyToItemString` override stays (cogworks#83). **Schema stays at 14.** No new files. **F8 not yet run.**
+
+### FQ-272 (#272): every warbank deposit failed with "attempt to call a nil value"
+
+The alpha3 `xpcall` guard caught it on the first try. crameroni's debug log shows all 37 deposits failing at `BankQueue.lua:306`, `FindStackTarget`'s `GetItemInfo(itemLink)`. The bare global `GetItemInfo` no longer exists on the live client (Interface 120005); only `C_Item.GetItemInfo` does. `PickDepositSlot` calls `FindStackTarget` first for every deposit, so no deposit could succeed. Pulls never reach that function, which is why they kept working.
+
+- **Live crashes fixed:** `BankQueue.lua:188` (`ItemMatchesTabFlags`, reached only for warbank tabs with deposit filters set), `BankQueue.lua:306` (`FindStackTarget`, every deposit), and `Tracker.lua:286` (`WalkBagsInScope` reagent check, reached when reagent deposits are on) now call `C_Item.GetItemInfo`.
+- **Silent no-ops fixed:** `GetDetailedItemLevelInfo` (`TSM.lua` op-price ilvl lookup, `/fq` ilvl diagnostics in `UI/SlashCommands.lua`) and `IsUsableItem` (`UI/ToolRegistry.lua`) were nil-guarded, so they quietly returned nothing. They now use the `C_Item` versions.
+- `test/taskonlydeposit_spec.lua` stubbed the removed global, so it hid the bug. The class data now lives on the `C_Item.GetItemInfo` stub and there is no global; the spec errors against the old `Tracker.lua`. 24/24 specs pass.
+
+The alpha3 guards stay in place.
+
 ## v0.13.3-alpha3
 
 One diagnostic fix for FQ-272. Embedded Cogworks-1.0 stays at **`v0.16.0`**; the `Core.lua` `ItemKeyToItemString` override stays (cogworks#83). **Schema stays at 14.** No new files. **F8 not yet run.**

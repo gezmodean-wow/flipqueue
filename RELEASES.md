@@ -6,6 +6,11 @@ The engineering-detail companion lives in `CHANGELOG.md` (commit-readerese — f
 
 ---
 
+## v0.13.3-alpha4
+
+- **Depositing to the warbank works again.** Since a recent game update, every item FlipQueue tried to deposit failed. The bank window opened, but nothing moved, in both Auto and Manual. Pulling items out of the bank was not affected.
+- **Item level checks are working again.** A few behind-the-scenes item level and "can I use this item" checks had also stopped working after the same game update.
+
 ## v0.13.3-alpha3
 
 - **Bank deposits no longer get stuck.** For some players, depositing to the warbank could stop partway with the bank window sitting on "Depositing" and nothing in chat. If a deposit now runs into a problem, FlipQueue skips that item, finishes the rest, and tells you in chat. If you see that message, please send your FlipQueue debug log with your bug report so we can fix the cause.
