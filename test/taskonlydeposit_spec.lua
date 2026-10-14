@@ -45,10 +45,11 @@ C_Container = {
     GetContainerItemInfo = function(bag, slot) return bag == 0 and BAG[slot] or nil end,
 }
 local function idOf(link) return tonumber(link:match("item:(%d+)")) end
-function GetItemInfo(link)
-    return nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, CLASS[idOf(link)]
-end
-C_Item = { GetItemInfo = function(link) return link:match("%[(.-)%]") end }
+-- No global GetItemInfo: the live client (Interface 120005) removed it, and a
+-- bare call is what broke every deposit in FQ-272. Only C_Item exists here.
+C_Item = { GetItemInfo = function(link)
+    return link:match("%[(.-)%]"), nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, CLASS[idOf(link)]
+end }
 
 --------------------------
 -- Namespace

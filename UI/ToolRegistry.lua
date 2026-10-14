@@ -510,8 +510,8 @@ local function EvalItem(itemID)
     local remaining, cdStart, cdDur = CooldownRemaining(s, d)
     local icon = C_Item.GetItemIconByID and C_Item.GetItemIconByID(itemID) or nil
     local usable = true
-    if IsUsableItem then
-        local v = IsUsableItem(itemID)
+    if C_Item.IsUsableItem then
+        local v = C_Item.IsUsableItem(itemID)
         if v == false then usable = false end
     end
     return { owned = true, icon = icon,

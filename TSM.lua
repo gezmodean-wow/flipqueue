@@ -640,13 +640,13 @@ function TSM:ItemKeyToLevelString(fqKey, itemLink)
     if not itemID then return nil end
 
     local ilvl
-    if itemLink and GetDetailedItemLevelInfo then
-        ilvl = GetDetailedItemLevelInfo(itemLink)
+    if itemLink and C_Item.GetDetailedItemLevelInfo then
+        ilvl = C_Item.GetDetailedItemLevelInfo(itemLink)
     end
     if not ilvl and self.ItemKeyToItemString then
         local wowStr = ns:ItemKeyToItemString(fqKey)
-        if wowStr and GetDetailedItemLevelInfo then
-            ilvl = GetDetailedItemLevelInfo(wowStr)
+        if wowStr and C_Item.GetDetailedItemLevelInfo then
+            ilvl = C_Item.GetDetailedItemLevelInfo(wowStr)
         end
     end
 
