@@ -551,6 +551,32 @@ function Tracker:ShowBankOpsPopup()
             if not hasDeposits and not hasExtras and not hasReagents then callback() return end
             if ns.UI then ns.UI:BankOpProgress(0, 0, "Depositing") end
 
+            -- FQ-272: run a deposit sub-phase under xpcall. A Lua error in
+            -- the bag scan (before BankQueue takes over) used to end the
+            -- chain silently — popup stuck on "Depositing", no completion,
+            -- nothing in chat. On error: log the stack, count the phase's
+            -- ops as failed, and continue to the next sub-phase. `onDone`
+            -- is once-guarded so an error thrown *after* the phase already
+            -- continued can't run the rest of the chain twice.
+            local function GuardedPhase(label, opCount, run, onDone)
+                local continued = false
+                local function cont(names, errCount)
+                    if continued then return end
+                    continued = true
+                    onDone(names, errCount)
+                end
+                local ok, err = xpcall(function() run(cont) end, function(e)
+                    return tostring(e) .. "\n" .. (debugstack and debugstack(2) or "")
+                end)
+                if not ok then
+                    ns:PrintDebug("[bank] " .. label .. " deposit phase error: " .. tostring(err))
+                    ns:Print(ns.COLORS.RED .. "Depositing " .. label .. " stopped on an error.|r " ..
+                        "Details are in the FlipQueue debug log — please include it in a bug report.")
+                    if ns.BankQueue and ns.BankQueue.processing then ns.BankQueue:Abort() end
+                    cont({}, opCount)
+                end
+            end
+
             -- Wire heartbeat hooks for deposit-only flows (no pulls).
             -- DoPulls would have set these, but it early-returns when
             -- there's nothing to pull; without re-wiring here a pure
@@ -592,7 +618,9 @@ function Tracker:ShowBankOpsPopup()
                 if ns.BankQueue then
                     ns.BankQueue.onProgress = MakeDepositDeltaTracker()
                 end
-                Tracker:AutoDepositReagents(function(_reagentSuccessNames, reagentErrorCount)
+                GuardedPhase("reagents", reagentOps and #reagentOps or 0, function(done)
+                    Tracker:AutoDepositReagents(done)
+                end, function(_reagentSuccessNames, reagentErrorCount)
                     if ns.UI and reagentErrorCount and reagentErrorCount > 0 then
                         ns.UI:BankOpProgress(0, reagentErrorCount, "Depositing")
                     end
@@ -606,7 +634,9 @@ function Tracker:ShowBankOpsPopup()
                 if ns.BankQueue then
                     ns.BankQueue.onProgress = MakeDepositDeltaTracker()
                 end
-                Tracker:AutoDepositExtraItems(function(_extraSuccessNames, extraErrorCount)
+                GuardedPhase("extras", extraOps and #extraOps or 0, function(done)
+                    Tracker:AutoDepositExtraItems(done)
+                end, function(_extraSuccessNames, extraErrorCount)
                     if ns.UI and extraErrorCount and extraErrorCount > 0 then
                         ns.UI:BankOpProgress(0, extraErrorCount, "Depositing")
                     end
@@ -622,7 +652,9 @@ function Tracker:ShowBankOpsPopup()
             if ns.BankQueue then
                 ns.BankQueue.onProgress = MakeDepositDeltaTracker()
             end
-            Tracker:AutoDepositToWarbank(function(_warbankSuccessNames, warbankErrorCount)
+            GuardedPhase("to-do items", depositOps and #depositOps or 0, function(done)
+                Tracker:AutoDepositToWarbank(done)
+            end, function(_warbankSuccessNames, warbankErrorCount)
                 if ns.UI and warbankErrorCount and warbankErrorCount > 0 then
                     ns.UI:BankOpProgress(0, warbankErrorCount, "Depositing")
                 end
