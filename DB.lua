@@ -472,16 +472,7 @@ function ns:CleanupLegacyData()
             end
         end
 
-        -- Count cap: keep the newest salesRetentionCount entries. Entries are
-        -- appended chronologically, so the oldest sit at the front.
-        local cap = s.salesRetentionCount
-        if type(cap) == "number" and cap > 0 and #db.log > cap then
-            local excess = #db.log - cap
-            for _ = 1, excess do
-                table.remove(db.log, 1)
-                removedLogs = removedLogs + 1
-            end
-        end
+        removedLogs = removedLogs + ns:TrimLogToCap()
 
         if removedLogs > 0 then
             cleaned.oldLogs = removedLogs
@@ -611,6 +602,44 @@ end
 
 -- Get effective setting for a character (per-char override or global default).
 -- Per-char value of nil means "inherit global."
+-- Count cap (salesRetentionCount): keep the newest entries, return how many
+-- were removed. Called at login and after a sync merge. Entries merged from
+-- a linked account are appended with their original, older times, so the
+-- front of the log is not reliably the oldest. Drop by time instead.
+function ns:TrimLogToCap()
+    local log = ns.db and ns.db.log
+    local cap = ns.db and ns.db.settings and ns.db.settings.salesRetentionCount
+    if not log or type(cap) ~= "number" or cap <= 0 or #log <= cap then return 0 end
+
+    local function EntryTime(e) return e.postedAt or e.soldAt or e.collectedAt or 0 end
+    local excess = #log - cap
+    local times = {}
+    for i, e in ipairs(log) do times[i] = EntryTime(e) end
+    table.sort(times)
+    local cutoff = times[excess]
+
+    -- Everything older than the cutoff goes; entries at exactly the cutoff go
+    -- oldest-position-first until the excess is covered.
+    local below = 0
+    for _, t in ipairs(times) do
+        if t < cutoff then below = below + 1 else break end
+    end
+    local atCutoff = excess - below
+    local kept = {}
+    for _, e in ipairs(log) do
+        local t = EntryTime(e)
+        if t < cutoff then
+            -- drop
+        elseif t == cutoff and atCutoff > 0 then
+            atCutoff = atCutoff - 1
+        else
+            kept[#kept + 1] = e
+        end
+    end
+    for i = 1, #log do log[i] = kept[i] end
+    return excess
+end
+
 function ns:GetCharSetting(charKey, settingKey)
     local charData = ns.db.characters and ns.db.characters[charKey]
     if charData and charData.settings and charData.settings[settingKey] ~= nil then

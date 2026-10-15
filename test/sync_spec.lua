@@ -427,5 +427,128 @@ do
     check("lists: same list merges tasks", #a.ns.db.todoLists.active.tasks, 2)
 end
 
+--------------------------
+-- 14. A resent delta that arrives after later ones is still applied
+--------------------------
+-- makkenmak's to-do list never reached the other account. A big TDCOMMIT
+-- whose first copy is lost gets resent after smaller, later deltas have
+-- arrived. The high-water dedupe (seq <= lastRecvSeq) threw the resend away.
+do
+    local a, b = Fresh()
+    local committed = {}
+    b.ns.TodoList = { CommitList = function(_, list, mode) committed[#committed + 1] = list end }
+    a.Sync:OnWhisperMessage("PING" .. "\001" .. "UB", "Bob-Realm")   -- mark B connected
+    a.inbox, b.inbox = {}, {}
+    local lost = false
+    wireDrop = function(msg)
+        -- Lose chunk 1 of the first multi-chunk message (the TDCOMMIT).
+        if not lost and msg:find("^C\001%d+\0011\001") then lost = true; return true end
+    end
+    local tasks = {}
+    for i = 1, 40 do tasks[i] = { taskUUID = "t" .. i, note = string.rep("y", 200) } end
+    a.Sync:EmitDelta("TDCOMMIT", { mode = "replace", list = { name = "L", createdAt = 9, tasks = tasks } })
+    a.Sync:EmitDelta("TDSTATUS", { taskUUID = "t1", status = "done" })
+    RunToIdle(a, b)
+    check("out of order: first TDCOMMIT copy was lost", lost, true)
+    check("out of order: resent TDCOMMIT applied", #committed, 1)
+    check("out of order: queue drained", #a.ns.db.sync.partners.UB.pendingDeltas, 0)
+    -- A third copy of the same seq is still a duplicate.
+    local p = b.ns.db.sync.partners.UA
+    check("out of order: applied seq is remembered", b.Sync:SeenDeltaSeq(p, 1), true)
+end
+
+--------------------------
+-- 15. Old records keep their high-water mark as the floor
+--------------------------
+do
+    local a = Fresh()
+    local p = { lastRecvSeq = 50 }
+    check("seq floor: old seq still a duplicate", a.Sync:SeenDeltaSeq(p, 50), true)
+    check("seq floor: new seq applied", a.Sync:SeenDeltaSeq(p, 52), false)
+    check("seq floor: gap seq applied late", a.Sync:SeenDeltaSeq(p, 51), false)
+    check("seq floor: repeat is a duplicate", a.Sync:SeenDeltaSeq(p, 52), true)
+    a.Sync:SeenDeltaSeq(p, 3000)
+    local n = 0
+    for _ in pairs(p.recvSeqs) do n = n + 1 end
+    check("seq floor: set stays bounded", n, 1)
+    check("seq floor: floor advanced", p.recvSeqFloor, 2000)
+end
+
+--------------------------
+-- 16. A posting session can't push the list out of an offline partner's queue
+--------------------------
+do
+    local a = Fresh()   -- B never connected: everything queues
+    a.Sync:EmitDelta("TDCOMMIT", { mode = "replace", list = { name = "L", createdAt = 9, tasks = {} } })
+    for i = 1, 700 do a.Sync:EmitDelta("TDSTATUS", { taskUUID = "t" .. i, status = "done" }) end
+    local pending = a.ns.db.sync.partners.UB.pendingDeltas
+    check("queue cap: still capped", #pending, 500)
+    check("queue cap: TDCOMMIT kept", pending[1].delta.type, "TDCOMMIT")
+    check("queue cap: newest status kept", pending[500].delta.data.taskUUID, "t700")
+end
+
+--------------------------
+-- 17. TDCLEAR only clears the list it names; TDCOMMIT applies once
+--------------------------
+do
+    local a = Fresh()
+    a.ns.db.todoLists.active = { name = "New", createdAt = 20, tasks = {} }
+    a.Sync:ApplyDelta({ type = "TDCLEAR", data = { name = "Old", createdAt = 10 } })
+    check("clear: a stale TDCLEAR leaves the newer list", a.ns.db.todoLists.active and a.ns.db.todoLists.active.name, "New")
+    a.Sync:ApplyDelta({ type = "TDCLEAR", data = { name = "New", createdAt = 20 } })
+    check("clear: a matching TDCLEAR clears it", a.ns.db.todoLists.active, nil)
+    a.ns.db.todoLists.active = { name = "X", createdAt = 1, tasks = {} }
+    a.Sync:ApplyDelta({ type = "TDCLEAR", data = {} })
+    check("clear: an older client's TDCLEAR still clears", a.ns.db.todoLists.active, nil)
+
+    local commits = 0
+    a.ns.TodoList = { CommitList = function(_, list) commits = commits + 1; a.ns.db.todoLists.active = list end }
+    local function List() return { name = "L", createdAt = 9, tasks = { { taskUUID = "a" }, { taskUUID = "b" } } } end
+    a.Sync:ApplyDelta({ type = "TDCOMMIT", data = { mode = "replace", list = List() } })
+    a.Sync:ApplyDelta({ type = "TDCOMMIT", data = { mode = "replace", list = List() } })
+    check("commit: same list committed once", commits, 1)
+    check("commit: tasks not duplicated", #a.ns.db.todoLists.active.tasks, 2)
+end
+
+--------------------------
+-- 18. A link that never completed a sync asks for everything with 0
+--------------------------
+do
+    local a = Fresh()
+    check("watermark: never synced is nil", a.Sync:GetLogWatermark({ lastFullSync = 0 }), nil)
+    check("watermark: bootstrap from lastFullSync", a.Sync:GetLogWatermark({ lastFullSync = 200000 }), 200000 - 86400)
+    a.Sync:SendSyncRequest("UB", { lastFullSync = 0 }, "Bob-Realm", "whisper", 240)
+    sending = a; a.Sync:DrainQueue()
+    check("watermark: FSYN payload is 0, not negative", a.sent[#a.sent], "FSYN\0010")
+end
+
+--------------------------
+-- 19. Heartbeats stay out of the sync log
+--------------------------
+do
+    local a = Fresh()
+    a.Sync:OnWhisperMessage("PING" .. "\001" .. "UB", "Bob-Realm")
+    sending = a; a.Sync:DrainQueue()
+    check("log: RECV PING not logged", LogHas(a, "RECV PING"), 0)
+    check("log: SEND PONG not logged", LogHas(a, "SEND PONG"), 0)
+end
+
+--------------------------
+-- 20. A merge that pushes the log past the cap trims the oldest by time
+--------------------------
+do
+    local a = Fresh()
+    assert(loadfile("DB.lua"))("flipqueue", a.ns)
+    a.ns.db.settings = { salesRetentionCount = 100 }
+    a.ns.db.log = MakeLog(80, 5000)                -- own entries, times 5001..5080
+    local theirs = MakeLog(80, 1000)               -- partner's, older: 1001..1080
+    for _, e in ipairs(theirs) do e.charKey = "Bob-Realm" end
+    a.Sync:MergeLog(theirs, "UB")
+    check("cap: trimmed to the cap after merge", #a.ns.db.log, 100)
+    local ownLeft = 0
+    for _, e in ipairs(a.ns.db.log) do if e.charKey == "Alice-Realm" then ownLeft = ownLeft + 1 end end
+    check("cap: the oldest entries went, not our own newest", ownLeft, 80)
+end
+
 print(string.format("sync_spec: %d passed, %d failed", passed, failed))
 if failed > 0 then os.exit(1) end

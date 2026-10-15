@@ -118,13 +118,17 @@ end
 -- CheckAutoComplete when all tasks reached a terminal state.
 function TodoList:ClearCurrent(reason)
     if not ns.db or not ns.db.todoLists then return end
-    if ns.db.todoLists.active then
-        self:ArchiveList(ns.db.todoLists.active, reason or "discarded")
+    local cleared = ns.db.todoLists.active
+    if cleared then
+        self:ArchiveList(cleared, reason or "discarded")
     end
     ns.db.todoLists.active = nil
 
+    -- Name the cleared list, so a partner only clears that one and never a
+    -- newer list it received in the meantime (FQ-256).
     if ns.Sync and ns.Sync.IsLinked and ns.Sync:IsLinked() and not ns.Sync._applying then
-        ns.Sync:EmitDelta("TDCLEAR", {})
+        ns.Sync:EmitDelta("TDCLEAR", cleared
+            and { name = cleared.name, createdAt = cleared.createdAt or 0 } or {})
     end
 
     -- Auto-promote next queued list if available
