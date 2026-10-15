@@ -6,6 +6,15 @@ The engineering-detail companion lives in `CHANGELOG.md` (commit-readerese — f
 
 ---
 
+## v0.13.3-alpha5
+
+Syncing between your own accounts:
+
+- **To-do lists reach your other account reliably.** A new to-do list could go missing on the way, especially when you posted a lot while the other account was offline. FlipQueue now keeps resending it until it arrives.
+- **Clearing a to-do list can't wipe a newer one.** If one account cleared an old list while the other account already had a new one, the new list could be cleared by mistake.
+- **The sync log keeps the whole sync.** Connection checks used to fill the log, so by the time you copied it, the start of a long sync was gone. This makes sync problems much easier to track down.
+- **Your sales history stays within the size you chose,** even right after syncing in your other account's history.
+
 ## v0.13.3-alpha4
 
 - **Depositing to the warbank works again.** Since a recent game update, every item FlipQueue tried to deposit failed. The bank window opened, but nothing moved, in both Auto and Manual. Pulling items out of the bank was not affected.

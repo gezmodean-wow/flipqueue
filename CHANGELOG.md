@@ -1,5 +1,23 @@
 # Changelog
 
+## v0.13.3-alpha5
+
+FQ-256 follow-up from makkenmak's alpha3 logs. Embedded Cogworks-1.0 stays at **`v0.16.0`**; the `Core.lua` `ItemKeyToItemString` override stays (cogworks#83). **Schema stays at 14.** No new files. **F8 not yet run.**
+
+### FQ-256 (#256): to-do list never reached the other account; logs never showed the start of a sync
+
+The logs are from 10-14, with both accounts on alpha3. acc1 (Moexbridge) → acc2 (Moexbridges): `FULL_SYNC_SENT 18432/18432 chunks in 2498s, 0 throttled`, 4,331,323 bytes. alpha2's estimate compared this against the 10-10 transfer (22,002 chunks), but that one went **acc2 → acc1**, so the two can't be compared. acc2's log grew to 18,301 entries (its own ~9.6k plus acc1's ~8.7k): the full log was merged. That fits the first completed acc1 → acc2 sync, where `lastFullSync == 0`. acc1 dumped `TD|none` while acc2 held a 525-task list. Neither 200-line sync log reached back to the start of the transfer.
+
+- **Delta dedupe tracks applied seqs** (`Sync:SeenDeltaSeq`). It used to drop anything with `seq <= lastRecvSeq`. When the first copy of a large TDCOMMIT lost a chunk, the resend arrived after smaller, later deltas had already raised the mark, and was dropped as seen. The ACK goes out before the dedupe, so the sender also forgot it. Now: a set of applied seqs above `recvSeqFloor`. The floor starts at the old `lastRecvSeq`, so existing records re-apply nothing; the set keeps 1,000 seqs behind the newest.
+- **List deltas survive the queue.** `TrimPending` evicts the oldest delta that isn't a TDCOMMIT/TDCLEAR. The 500 cap used to drop the oldest outright, and a posting session queues hundreds of TDSTATUS/TDLOG for an offline partner. When TDCOMMIT/TDCLEAR run out of retries, they are parked (`sentAt = 0`) for `ReplayPendingDeltas` instead of dropped.
+- **TDCLEAR names its list** (`{name, createdAt}`), and the receiver clears only a matching active list. An older client's empty payload still clears. **TDCOMMIT is idempotent** (`Sync:ApplyTodoCommit`): the same list, or `append`, merges by task UUID instead of committing again.
+- **Sync log keeps the start of a sync.** PING/PONG are no longer logged: a pair every 15s wrote 4 lines, so the 200-line ring held about 12 minutes. `SYNC_LOG_MAX` is now 500.
+- **Never-synced watermark.** With `lastFullSync == 0`, `GetLogWatermark` returned `-86400`, and FSYN's `^(%d+)` read it as no number. The result was the same (full log), but only by accident. It now returns nil, which sends `0`.
+- **Log cap after a merge.** New `ns:TrimLogToCap()` (DB.lua) drops entries oldest *by time*. Login cleanup and `MergeLog` both use it. Merged entries are appended with older timestamps, so front-trimming would have dropped our own newest entries.
+- **`/fq dump` `SY|` line** per partner: state, `lastFull` / `logBuilt` / `peerSince`, sent and received seq, pending deltas by type.
+
+`test/sync_spec.lua` 65 → 90 checks. Reverting any one fix fails its targeted case (dedupe, eviction, watermark, heartbeat log, TDCLEAR identity, merge trim, double commit). All 24 spec files pass.
+
 ## v0.13.3-alpha4
 
 Root-cause fix for FQ-272. Embedded Cogworks-1.0 stays at **`v0.16.0`**; the `Core.lua` `ItemKeyToItemString` override stays (cogworks#83). **Schema stays at 14.** No new files. **F8 not yet run.**
