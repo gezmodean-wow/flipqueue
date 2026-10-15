@@ -93,7 +93,7 @@ local fsynSentAt = {}          -- [partnerUUID] = GetTime() we last sent FSYN
 local awaitingReply = {}       -- [partnerUUID] = GetTime() we asked and haven't started sending
 local FSYN_REPLY_WAIT = 10     -- seconds to wait for a partner's watermark
 local syncLog = {}             -- ring buffer of recent sync events for debugging
-local SYNC_LOG_MAX = 200
+local SYNC_LOG_MAX = 500
 
 --------------------------
 -- Init
@@ -750,7 +750,7 @@ function Sync:DrainQueue()
         if opcode == "C" then
             opcode = "CHUNK"
         end
-        if opcode ~= OP_FDAT then
+        if opcode ~= OP_FDAT and opcode ~= OP_PING and opcode ~= OP_PONG then
             local detail = entry.transport .. ":" .. tostring(entry.target)
             self:Log("SEND " .. opcode, detail)
         end
@@ -873,8 +873,11 @@ function Sync:OnChunkReceived(message, senderGameAccountID)
 end
 
 function Sync:Dispatch(opcode, payload, senderGameAccountID)
-    -- Log all incoming traffic (skip FDAT chunks to reduce noise)
-    if opcode ~= OP_FDAT then
+    -- Log incoming traffic except FDAT chunks and heartbeats. A PING/PONG
+    -- pair every 15s wrote four lines, so the ring held about 12 minutes and
+    -- the start of every slow sync (FSYN watermarks, FULL_SYNC_LOG) had
+    -- already scrolled out by the time a player copied it (FQ-256).
+    if opcode ~= OP_FDAT and opcode ~= OP_PING and opcode ~= OP_PONG then
         local detail = "from " .. tostring(senderGameAccountID)
         if payload and payload ~= "" and #payload < 80 then
             detail = detail .. " | " .. payload
@@ -1696,7 +1699,10 @@ end
 function Sync:GetLogWatermark(partner)
     if not partner then return nil end
     if partner.logBuiltAt then return partner.logBuiltAt end
-    if partner.lastFullSync then return partner.lastFullSync - LOG_BOOTSTRAP_MARGIN end
+    -- lastFullSync is 0 on a link that has never completed a sync this way.
+    -- 0 minus the margin went out as "-86400", which the partner's FSYN
+    -- parser reads as no number at all.
+    if (partner.lastFullSync or 0) > 0 then return partner.lastFullSync - LOG_BOOTSTRAP_MARGIN end
     return nil
 end
 
@@ -2110,6 +2116,28 @@ function Sync:MergeTodoLists(remoteTodo)
     end
 end
 
+-- Apply a received TDCOMMIT. It can now arrive more than once (it is kept
+-- and resent until acked), so applying it again must change nothing: a list
+-- we already hold is merged by task UUID instead of committed again.
+function Sync:ApplyTodoCommit(list, mode)
+    local todo = ns.db.todoLists
+    if list.items and not list.tasks then
+        list.tasks, list.items = list.items, nil
+    end
+    local id = ListIdentity(list)
+    local active = todo.active
+    if active and active.tasks and (mode == "append" or ListIdentity(active) == id) then
+        self:MergeTasks(active.tasks, list.tasks)
+        return
+    end
+    for _, queued in ipairs(todo.upcoming or {}) do
+        if ListIdentity(queued) == id then return end
+    end
+    if ns.TodoList and ns.TodoList.CommitList then
+        ns.TodoList:CommitList(list, mode)
+    end
+end
+
 function Sync:MergeTasks(localTasks, remoteTasks)
     if not localTasks or not remoteTasks then return end
 
@@ -2166,6 +2194,11 @@ function Sync:MergeLog(remoteLog, senderUUID)
             seen[key] = true
         end
     end
+
+    -- Each account's log holds its own entries plus the partner's, so a
+    -- merge can double it. Apply the cap now rather than at next login
+    -- (FQ-256: 18,301 entries against a 10,000 cap).
+    if ns.TrimLogToCap then ns:TrimLogToCap() end
 end
 
 function Sync:MergeImports(remoteImports)
@@ -2198,6 +2231,25 @@ end
 -- chunk drains, not when it is queued: a multi-chunk delta over whisper can
 -- take minutes to leave, and timing it from enqueue resent it MAX_RETRIES
 -- times while the first copy was still in the queue, then gave up (FQ-256).
+-- Deltas that carry a whole to-do list, or remove one. Losing one leaves
+-- the partner on a different list until the next full sync, which can be
+-- an hour away over a same-account link (FQ-256).
+local KEEP_DELTA = { TDCOMMIT = true, TDCLEAR = true }
+
+-- Trim the oldest queued deltas past the cap, keeping list deltas. A posting
+-- session queues hundreds of TDSTATUS/TDLOG for an offline partner, which
+-- pushed the TDCOMMIT that created the list out of the queue.
+local function TrimPending(partner)
+    local pending = partner.pendingDeltas
+    while #pending > MAX_PENDING_DELTAS do
+        local drop = 1
+        for i, e in ipairs(pending) do
+            if not (e.delta and KEEP_DELTA[e.delta.type]) then drop = i; break end
+        end
+        table.remove(pending, drop)
+    end
+end
+
 function Sync:SendDeltaEntry(entry, target, transport, chunkSize)
     entry.inFlight = true
     self:SendMessage(OP_DELT, entry.delta, target, transport, chunkSize, function()
@@ -2245,10 +2297,7 @@ function Sync:EmitDelta(deltaType, data)
             })
         end
 
-        -- Enforce per-partner cap
-        while #partner.pendingDeltas > MAX_PENDING_DELTAS do
-            table.remove(partner.pendingDeltas, 1)
-        end
+        TrimPending(partner)
     end
 end
 
@@ -2266,16 +2315,42 @@ function Sync:OnDelta(payload, senderID)
     local replyTarget, replyTransport = SenderToTarget(senderID)
     self:Enqueue(OP_DACK .. SEP .. ackPayload, replyTarget, PRIORITY[OP_DACK], replyTransport)
 
-    -- Deduplicate against this partner's lastRecvSeq
     local partner = ns.db.sync.partners[senderUUID]
-    if delta.seq and delta.seq <= (partner.lastRecvSeq or 0) then
-        return -- already seen
-    end
-    if delta.seq then
-        partner.lastRecvSeq = delta.seq
+    if delta.seq and self:SeenDeltaSeq(partner, delta.seq) then
+        return -- already applied
     end
 
     self:ApplyDelta(delta)
+end
+
+-- Deltas can arrive out of order: a large one that has to be resent lands
+-- after smaller ones sent later. A high-water mark (lastRecvSeq) dropped
+-- every such resend as already seen, so it was never applied (FQ-256: the
+-- TDCOMMIT that creates a to-do list). Track the seqs actually applied.
+-- Everything at or below recvSeqFloor counts as applied. The floor starts
+-- at the old high-water mark, so a record from before this change
+-- re-applies nothing.
+local RECV_SEQ_KEEP = 1000
+
+function Sync:SeenDeltaSeq(partner, seq)
+    if not partner.recvSeqs then
+        partner.recvSeqs = {}
+        partner.recvSeqFloor = partner.lastRecvSeq or 0
+    end
+    if seq <= (partner.recvSeqFloor or 0) or partner.recvSeqs[seq] then return true end
+
+    partner.recvSeqs[seq] = true
+    if seq > (partner.lastRecvSeq or 0) then partner.lastRecvSeq = seq end
+    -- Bound the set: anything more than RECV_SEQ_KEEP behind the newest is
+    -- folded into the floor.
+    local floor = partner.lastRecvSeq - RECV_SEQ_KEEP
+    if floor > (partner.recvSeqFloor or 0) then
+        for k in pairs(partner.recvSeqs) do
+            if k <= floor then partner.recvSeqs[k] = nil end
+        end
+        partner.recvSeqFloor = floor
+    end
+    return false
 end
 
 function Sync:ApplyDelta(delta)
@@ -2338,9 +2413,7 @@ function Sync:ApplyDelta(delta)
         end
     elseif deltaType == "TDCOMMIT" then
         if data and data.mode and data.list then
-            if ns.TodoList and ns.TodoList.CommitList then
-                ns.TodoList:CommitList(data.list, data.mode)
-            end
+            self:ApplyTodoCommit(data.list, data.mode)
         end
     elseif deltaType == "TDSTATUS" then
         if data and data.taskUUID then
@@ -2392,7 +2465,12 @@ function Sync:ApplyDelta(delta)
             self:RemoveTaskByUUID(data.taskUUID)
         end
     elseif deltaType == "TDCLEAR" then
-        if ns.db.todoLists.active then
+        -- Clear only the list the partner cleared. A TDCLEAR queued while we
+        -- were offline could otherwise wipe a newer list that arrived since.
+        -- Older clients send no identity; clear as before.
+        local active = ns.db.todoLists.active
+        if active and (not data or data.createdAt == nil
+            or ListIdentity(active) == ListIdentity(data)) then
             ns.db.todoLists.active = nil
         end
     elseif deltaType == "IMP" then
@@ -2480,7 +2558,12 @@ function Sync:RetryUnacked()
                     local entry = partner.pendingDeltas[i]
                     if not entry.inFlight and entry.sentAt > 0 and (now - entry.sentAt) > RETRY_INTERVAL then
                         if entry.retries >= MAX_RETRIES then
-                            table.remove(partner.pendingDeltas, i)
+                            if entry.delta and KEEP_DELTA[entry.delta.type] then
+                                -- Park it: ReplayPendingDeltas resends it on reconnect.
+                                entry.sentAt = 0
+                            else
+                                table.remove(partner.pendingDeltas, i)
+                            end
                         else
                             entry.retries = entry.retries + 1
                             entry.sentAt = now

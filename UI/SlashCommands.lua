@@ -444,6 +444,27 @@ local function cmdState()
     L("RT|pullIP=" .. V(tr._pullInProgress) .. "|depIP=" .. V(tr._depositInProgress)
         .. "|cancels=" .. V(tr._pendingCancels) .. "|ahOpen=" .. V(tr._isAHOpen))
 
+    -- Linked accounts: the log watermark and delta queue state, so a slow or
+    -- incomplete sync can be read from one dump (FQ-256).
+    local sy = ns.db.sync
+    for uuid, p in pairs(sy and sy.partners or {}) do
+        local function T(ts) return (ts and ts > 0) and date("%m/%d %H:%M", ts) or "-" end
+        local queued = {}
+        for _, e in ipairs(p.pendingDeltas or {}) do
+            local ty = e.delta and e.delta.type or "?"
+            queued[ty] = (queued[ty] or 0) + 1
+        end
+        local q = {}
+        for ty, n in pairs(queued) do q[#q + 1] = ty .. "=" .. n end
+        table.sort(q)
+        L("SY|" .. (p.label or uuid) .. "|" .. (p.transport or "?")
+            .. "|state=" .. V(ns.Sync and ns.Sync.GetPartnerState and ns.Sync:GetPartnerState(uuid))
+            .. "|lastFull=" .. T(p.lastFullSync) .. "|logBuilt=" .. T(p.logBuiltAt)
+            .. "|peerSince=" .. T(p.peerLogSince)
+            .. "|sentSeq=" .. V(sy.lastSentSeq) .. "|recvSeq=" .. V(p.lastRecvSeq)
+            .. "|pending=" .. #(p.pendingDeltas or {}) .. (#q > 0 and (" " .. table.concat(q, ",")) or ""))
+    end
+
     -- Where the deals went when the active list was generated (FQ-228
     -- follow-up). Imports are cleared on commit, so after the fact this is the
     -- only record of how many deals produced how few tasks, and why.
