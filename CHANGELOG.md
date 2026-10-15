@@ -1,5 +1,25 @@
 # Changelog
 
+## v0.13.3
+
+Public stable release. **Same code as `v0.13.3-alpha6`.** This promotion is the docs finalization plus the release tag, per the channel-semantics convention. Embedded Cogworks-1.0 is `v0.16.0`; `## Interface` is `120105` (WoW 12.1.5). **Schema 14**, unchanged since v0.13.2. One new file this line: `ItemLevelDisplay.lua` (alpha2). The `Core.lua` `ItemKeyToItemString` override ships again. cogworks#83 is fixed upstream but has no tagged release past v0.16.0, so the override and the `.pkgmeta` `v0.16.0` pin stay. The rollback is still owed.
+
+Since v0.13.2 this line shipped across alpha1 to alpha6:
+
+- **FQ-256 (alpha1 → alpha5)**: same-BNet whisper sync. alpha1: the mutual-reconnect double payload (`outboundFullSync` guard), throttle results read instead of assumed, `FULL_SYNC_INCOMPLETE`/progress/"Syncing N%", single `table.concat` reassembly, receiver-owned characters dropped from the payload. alpha2: incremental log via the `builtAt` watermark carried in FSYN (the log was ~80% of a 5.2 MB payload), archive/templates out of the payload, `TDCOMMIT` actually emitted, the newer active list wins, multi-chunk deltas marked in flight until drained. alpha5: seq-set delta dedupe (the real TDCOMMIT loss), TDCOMMIT/TDCLEAR survive queue eviction and parked retries, TDCLEAR carries list identity, idempotent TDCOMMIT, PING/PONG out of the sync log (ring 500), never-synced watermark `0`, `ns:TrimLogToCap` by time after merge, `/fq dump` `SY|` line. Wire-compatible with older clients throughout.
+- **FQ-272 (alpha3 → alpha4)**: alpha3 added per-op `xpcall` in both BankQueue engines plus `GuardedPhase` around deposit sub-phases. Its first stack pointed at the root cause: the bare `GetItemInfo` global is gone from the live client. alpha4 switched `BankQueue`/`Tracker` to `C_Item.GetItemInfo`, and fixed the silently nil-guarded `GetDetailedItemLevelInfo`/`IsUsableItem`. The guards stay. Confirmed fixed by the reporter; #272 closed.
+- **FQ-262 (alpha2)**: `dfAvoidPostedRealms` leaked in four places. Fixed via `DealFinder:ApplyQuantitySelection`, `DemotePostedRealmDeals`, `Tracker._SkipPullAlreadyPosted`, and expired entries no longer counting as posted in `SalesIndex`.
+- **FQ-259 (alpha2)**: `UI.ReplayHover` re-fires `OnEnter` after row rebuilds. #271 (MiniView non-task rows) was filed from this work and is not fixed in this line.
+- **FQ-258 (alpha2)**: `ns.IlvlDisplay` puts `Name (ilvl)` on gear rows and the import ilvl in the tooltip.
+- **FQ-260 (alpha2)**: global `extrasMode` row in **Settings → Item Management**.
+- **TSM audit**: v4.14.77 (alpha2, #263), then v4.14.78 (alpha6). `MakePostDecision`/`IsAuctionFiltered` unchanged both times.
+- **12.1.5 (alpha6)**: Interface `120100` → `120105`; Syndicator 287 / TSM v4.14.78 / Auctionator 341 dependency surface re-checked, nothing changed.
+- **Process**: `test/sync_spec.lua` added (90 checks, mutation-checked). `taskonlydeposit_spec` no longer stubs globals the live client lacks. 24 spec files green.
+
+Known and deliberately not blocking: **#256** stays open pending makkenmak's alpha5 logs (the watermark/TDCOMMIT fixes aren't yet confirmed in the field). **FQ-254** (bank pull leaves a few items behind on the first visit) and **#271** carry over to the next line.
+
+F8 was not run on the individual alphas. Stable was tagged on maintainer direction.
+
 ## v0.13.3-alpha6
 
 Patch 12.1.5 compatibility. Embedded Cogworks-1.0 stays at **`v0.16.0`**; the `Core.lua` `ItemKeyToItemString` override stays (cogworks#83). **Schema stays at 14.** No new files. **F8 not yet run.**

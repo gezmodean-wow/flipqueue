@@ -6,6 +6,43 @@ The engineering-detail companion lives in `CHANGELOG.md` (commit-readerese — f
 
 ---
 
+## v0.13.3
+
+This release is mostly about syncing between your own accounts and getting the warbank working again after a game update. Syncs are far smaller and faster, to-do lists actually reach your other account, and deposits work again. A batch of fixes from your reports is in here too, along with support for patch 12.1.5. Everything below is new since v0.13.2.
+
+### Syncing between your own accounts
+
+- **Much faster syncs.** Every sync used to send your entire sales history, up to 10,000 entries, even though your other account already had almost all of it. On a same-Battle.net link that could take most of an hour. Now each sync sends only what's new since the last one.
+- **Syncing no longer sends everything twice.** When two linked accounts came online together, each one sent its full data twice. Each side now sends once.
+- **To-do lists reach your other account, and arrive right away.** New lists used to wait for the next full sync, and a list could go missing on the way, especially after a long posting session while the other account was offline. FlipQueue now sends a new list straight away and keeps resending it until it arrives.
+- **Two different to-do lists no longer get mixed together.** When your accounts disagree, the newer list wins and the older one is saved to your list history. Clearing an old list on one account can no longer wipe a newer one on the other.
+- **You can watch a sync happen.** Linked accounts show **Syncing** with a percentage while data is moving. If a sync fails, a chat message tells you so and asks you to press **Sync** again, so a failed sync no longer looks like one that's just slow.
+- **Better help when you report a problem.** The sync log records how big a sync is, how far it has got and how long it took, and it now holds the whole sync instead of being filled up by connection checks.
+- Both linked accounts need this version for the full speed-up. It still syncs with accounts on older versions.
+
+### Banking
+
+- **Depositing to the warbank works again.** Since a recent game update, every item FlipQueue tried to deposit failed. The bank window opened, but nothing moved, in both Auto and Manual. Pulling items out of the bank was not affected.
+- **A problem with one item no longer stops the whole deposit.** FlipQueue skips that item, finishes the rest and tells you in chat.
+- **New setting: Settings → Item Management → Extra item deposits.** Set it to **Off** to deposit only the items your tasks need and leave everything else in your bags. The bank window also says which items are extras.
+
+### "Avoid realms where I already have an auction posted" now does what it says
+
+- **Deal Finder no longer picks a realm you already have the item listed on** when it has another choice. A later step was quietly undoing your setting.
+- **To-do lists send items to realms you're not already listed on first.**
+- **FlipQueue won't pull an item out of the bank for a realm where you already have it listed.** It tells you in chat when it skips one, so nothing goes missing without a word.
+
+### Smaller fixes
+
+- **Gear shows its item level next to the name** in your to-do list, for example "Glorious Legplates (233)". The tooltip also tells you the item level from your import. The game's own tooltip scales gear to the character you're on, which is why it could say 44.
+- **Tooltips on the to-do list stay open.** They used to flash up and vanish whenever your bags changed or a sync update arrived.
+- **Item level checks work again.** A few behind-the-scenes item level and "can I use this item" checks had stopped working after the same game update that broke deposits.
+
+### Compatibility
+
+- **Updated for patch 12.1.5.** FlipQueue no longer shows as out of date in the AddOns list.
+- **Checked against the latest Syndicator, TradeSkillMaster and Auctionator.** Nothing FlipQueue relies on changed, so posting prices still follow your TSM Auctioning operations exactly, and you won't see the "TSM is newer than expected" warning.
+
 ## v0.13.3-alpha6
 
 - **Updated for patch 12.1.5.** FlipQueue no longer shows as out of date in the AddOns list after the patch.
