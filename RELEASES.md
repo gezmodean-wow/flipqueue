@@ -6,6 +6,11 @@ The engineering-detail companion lives in `CHANGELOG.md` (commit-readerese — f
 
 ---
 
+## v0.13.3-alpha6
+
+- **Updated for patch 12.1.5.** FlipQueue no longer shows as out of date in the AddOns list after the patch.
+- **Checked against the latest Syndicator, TradeSkillMaster and Auctionator.** Nothing FlipQueue relies on changed, so posting prices, inventory tracking and shopping lists work as before.
+
 ## v0.13.3-alpha5
 
 Syncing between your own accounts:

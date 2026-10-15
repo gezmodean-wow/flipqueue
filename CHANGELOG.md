@@ -1,5 +1,20 @@
 # Changelog
 
+## v0.13.3-alpha6
+
+Patch 12.1.5 compatibility. Embedded Cogworks-1.0 stays at **`v0.16.0`**; the `Core.lua` `ItemKeyToItemString` override stays (cogworks#83). **Schema stays at 14.** No new files. **F8 not yet run.**
+
+### 12.1.5 / dependency audit (#276)
+
+- **`## Interface: 120105`** (was 120100). 12.1.5 went live 2026-10-13 (US) / 10-14 (EU), so FlipQueue loaded as out of date. Syndicator 287 and TSM v4.14.78 both ship 120105; TSM dropped 120100 from its retail list.
+- **`TSM_AUDITED_VERSION` → v4.14.78.** Re-read `AuctioningOperation.Load` (184), `IsAuctionFiltered` (269) and `MakePostDecision` (417–510): same line numbers, same setting list, every branch unchanged. `matchWhitelist` still defaults true at `Schema.lua:270`. `AuctionPost:ResolvePostPrice`'s port is still accurate. Without the bump, players on v4.14.78 got the one-time newer-TSM warning.
+- **Dependency surface checked, no changes needed:**
+  - **Syndicator 287:** `API.GetAllCharacters` / `GetByCharacterFullName` / `GetWarband` / `DeleteCharacter` / `IsReady`; events `Ready`, `BagCacheUpdate`, `WarbandBankCacheUpdate`; slot fields `itemLink` / `itemCount` / `isBound`; `bags` / `bankTabs[].slots` / warband `bank[].slots` layout; `SYNDICATOR_DATA.Version` 2.
+  - **TSM v4.14.78:** the 8 `TSM_API` functions FQ calls; the `TradeSkillMasterDB` keys it reads (operations / sharedOperations / groups / items / whitelist / matchWhitelist / globalOperations / csv*); the `TSM_APPHELPER_LOAD_DATA` hook.
+  - **Auctionator 341:** `API.v1.CreateShoppingList` / `GetShoppingListItems`; `Shopping.ListManager:GetIndexForName` / `Delete`.
+
+All 24 spec files pass.
+
 ## v0.13.3-alpha5
 
 FQ-256 follow-up from makkenmak's alpha3 logs. Embedded Cogworks-1.0 stays at **`v0.16.0`**; the `Core.lua` `ItemKeyToItemString` override stays (cogworks#83). **Schema stays at 14.** No new files. **F8 not yet run.**
