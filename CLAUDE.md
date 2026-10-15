@@ -9,7 +9,7 @@
 - Allowed to run lua syntax checks and file operations without asking
 
 ## Project Context
-- WoW addon (Lua, .toc) for The War Within (Interface 120005, current retail only)
+- WoW addon (Lua, .toc) for Midnight (Interface 120105, current retail only)
 - GitHub org: `gezmodean-wow` (private)
 - Repo: `gezmodean-wow/flipqueue`
 - Local path: `C:\src\flipqueue`

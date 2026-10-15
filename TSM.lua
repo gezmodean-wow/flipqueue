@@ -79,7 +79,12 @@ local OP_CACHE_TTL = 300 -- 5 min for operations (they rarely change mid-session
 -- matchStackSize field and our ungated check is equivalently a no-op. Load
 -- adds no setting MakePostDecision reads; matchWhitelist still defaults true
 -- at Schema.lua:270.
-local TSM_AUDITED_VERSION = "v4.14.77"
+--
+-- Re-audited 2026-10-14 against TSM v4.14.78 (12.1.5 / Interface 120105):
+-- Load (184), IsAuctionFiltered (269) and MakePostDecision (417-510) are
+-- unchanged -- same line numbers, same setting list, every branch as above.
+-- matchWhitelist still defaults true at Schema.lua:270.
+local TSM_AUDITED_VERSION = "v4.14.78"
 
 -- Fields we expect every Auctioning operation record to expose. If TSM
 -- renames one, GetItemAuctioningOp returns nil for it and ResolvePostPrice
