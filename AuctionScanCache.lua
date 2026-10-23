@@ -718,6 +718,52 @@ end
 
 function ScanCache:DefaultFreshAge() return DEFAULT_FRESH_AGE_SEC end
 
+-- How many listings the cache holds for an item on this realm, across every
+-- variant and every key form, counting only entries scanned at or after
+-- minScannedAt (nil = any age). Zero after a fresh item search means the
+-- item is not on this realm's AH at all (FQ-278).
+--
+-- Key forms, from MakeCacheKey: "<realm>|c:<id>" for commodities,
+-- "<realm>|t:i:<id>..." when TSM canonicalised the variant, "<realm>|<id>;..."
+-- otherwise. Caged pets: "<realm>|pet:<species>;..." and "<realm>|t:p:<species>...".
+-- A TSM prefix must be followed by ":" or the end so i:123 does not match i:1234.
+function ScanCache:CountListingsForItemID(itemID, speciesID, minScannedAt)
+    local realm = CurrentRealm()
+    local species = tonumber(speciesID)
+    local prefixes, exact = {}, {}
+    if species and species > 0 then
+        prefixes[#prefixes + 1] = realm .. "|pet:" .. species .. ";"
+        prefixes[#prefixes + 1] = realm .. "|t:p:" .. species
+    else
+        local id = tonumber(itemID)
+        if not id then return 0 end
+        exact[realm .. "|c:" .. id] = true
+        prefixes[#prefixes + 1] = realm .. "|" .. id .. ";"
+        prefixes[#prefixes + 1] = realm .. "|t:i:" .. id
+    end
+
+    local total = 0
+    for k, v in pairs(cache) do
+        if not (minScannedAt and (v.scannedAt or 0) < minScannedAt) then
+            local match = exact[k]
+            if not match then
+                for i = 1, #prefixes do
+                    local p = prefixes[i]
+                    if k:find(p, 1, true) == 1 then
+                        local nextChar = k:sub(#p + 1, #p + 1)
+                        if p:sub(-1) == ";" or nextChar == "" or nextChar == ":" then
+                            match = true
+                            break
+                        end
+                    end
+                end
+            end
+            if match and v.listings then total = total + #v.listings end
+        end
+    end
+    return total
+end
+
 function ScanCache:GetSize()
     local n = 0
     for _ in pairs(cache) do n = n + 1 end

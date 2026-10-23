@@ -190,6 +190,11 @@ function ns:InitDB()
     if db.settings.importAutoImport == nil then db.settings.importAutoImport = false end
     -- TSM rejection handling
     if db.settings.tsmAutoSkipRejected == nil then db.settings.tsmAutoSkipRejected = true end
+    -- Buy tasks whose item has no listings at all on the buy realm are moved
+    -- to the log as skipped when the AH opens there (FQ-278). Opt-in: a
+    -- one-off empty market should not remove tasks for players who did not
+    -- ask for it.
+    if db.settings.buyAutoSkipSoldOut == nil then db.settings.buyAutoSkipSoldOut = false end
     -- TSM generation-time filtering: skip deals below TSM min price during todo generation
     -- Skipped deals still appear in results but don't consume inventory
     if db.settings.tsmSkipOnGenerate == nil then db.settings.tsmSkipOnGenerate = true end
