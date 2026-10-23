@@ -824,10 +824,12 @@ function Tracker:BuildPullOps()
                                         name = queueItem.name or "?",
                                         icon = info.iconFileID,
                                         quantity = info.stackCount or 1,
-                                        -- Kept for wave ordering below.
+                                        -- Kept for wave ordering and the
+                                        -- partial-stack credit below.
                                         _realm = queueItem.targetRealm or "",
                                         _char = queueItem.assignedChar or "",
                                         _seq = #ops + 1,
+                                        _itemID = tonumber(itemID),
                                     })
                                     needed[queueItem] = count - (info.stackCount or 1)
                                     break
@@ -840,7 +842,8 @@ function Tracker:BuildPullOps()
         end
     end
 
-    return ns:PlanPullWave(ops, ns:GetFreeBagSlots())
+    local stackRoom = ns.GetBagStackRoom and ns:GetBagStackRoom() or nil  -- FQ-254
+    return ns:PlanPullWave(ops, ns:GetFreeBagSlots(), stackRoom)
 end
 
 -- Build warbank deposit operation list without executing.

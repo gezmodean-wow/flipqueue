@@ -61,10 +61,11 @@ ns.WARBANK_TABS = {12, 13, 14, 15, 16}
 -- tool, had no check at all and would happily plan 304 pulls against 164 free
 -- slots (FQ-233). One helper, so the two cannot drift apart again.
 --
--- Counts empty slots and nothing else: a stackable item merging into a partial
--- stack costs no slot, so this under-counts real capacity. That is the right
--- direction to be wrong in — a wave that fits is worth more than a wave that
--- theoretically could have been larger.
+-- Counts empty slots and nothing else. A stackable item merging into a partial
+-- stack costs no slot; that room is accounted separately by GetBagStackRoom so
+-- PlanPullWave can credit it (FQ-254). Erring short is still the right
+-- direction — a wave that fits is worth more than one that theoretically
+-- could have been larger.
 function ns:GetFreeBagSlots()
     local free = 0
     for _, bagIndex in ipairs(ns.INVENTORY_BAGS) do
@@ -77,6 +78,44 @@ function ns:GetFreeBagSlots()
         end
     end
     return free
+end
+
+-- Room left in the bags' partial stacks, per item ID: { [itemID] = units }.
+-- A pulled stack that fits into this room takes no bag slot. Only stacks the
+-- client can size are counted (GetItemMaxStackSizeByID nil → ignored), and
+-- unstackable items never appear, so the figure can only under-credit (FQ-254).
+--
+-- The reported shape: "a few items" left behind on the first bank visit, taken
+-- on the second. The pull cap counted empty slots alone, so a wave with a few
+-- stackables that would have merged into partial stacks was cut short by
+-- exactly that many; reopening the bank recomputed against the new state and
+-- finished them.
+function ns:GetBagStackRoom()
+    local room = {}
+    if not (C_Item and C_Item.GetItemMaxStackSizeByID) then return room end
+    local maxStackByID = {}
+    for _, bagIndex in ipairs(ns.INVENTORY_BAGS) do
+        local ok, numSlots = pcall(C_Container.GetContainerNumSlots, bagIndex)
+        if ok and numSlots then
+            for slot = 1, numSlots do
+                local ok2, info = pcall(C_Container.GetContainerItemInfo, bagIndex, slot)
+                local itemID = ok2 and info and tonumber(info.itemID)
+                if itemID and (info.stackCount or 1) > 0 then
+                    local maxStack = maxStackByID[itemID]
+                    if maxStack == nil then
+                        local ok3, m = pcall(C_Item.GetItemMaxStackSizeByID, itemID)
+                        maxStack = (ok3 and tonumber(m)) or false
+                        maxStackByID[itemID] = maxStack
+                    end
+                    if maxStack and maxStack > 1 then
+                        local spare = maxStack - (info.stackCount or 1)
+                        if spare > 0 then room[itemID] = (room[itemID] or 0) + spare end
+                    end
+                end
+            end
+        end
+    end
+    return room
 end
 
 -- Turn a full pull plan into the one wave that fits, and say what was left.
@@ -92,7 +131,13 @@ end
 -- `_seq` (the emission index) breaks ties: table.sort is not stable, so without
 -- it two ops with the same realm, character and name could swap between calls
 -- and the popup would reshuffle under the player between redraws.
-function ns:PlanPullWave(ops, freeSlots)
+--
+-- `stackRoom` (optional, from GetBagStackRoom) credits pulls that merge into a
+-- partial stack already in the bags: an op with `_itemID` and `quantity` that
+-- fits the remaining room for that item takes no slot (FQ-254). Once the slots
+-- are gone, only such merges are kept; the wave never skips an op to reach a
+-- smaller one behind it, so the realm grouping above still holds.
+function ns:PlanPullWave(ops, freeSlots, stackRoom)
     table.sort(ops, function(a, b)
         local ar, br = a._realm or "", b._realm or ""
         if ar ~= br then return ar < br end
@@ -105,9 +150,28 @@ function ns:PlanPullWave(ops, freeSlots)
 
     local planned = #ops
     freeSlots = math.max(0, freeSlots or 0)
-    if planned > freeSlots then
-        for i = planned, freeSlots + 1, -1 do ops[i] = nil end
+    if planned <= freeSlots then return ops, planned, freeSlots end
+
+    local room = {}
+    for id, units in pairs(stackRoom or {}) do room[id] = units end
+    local slotsLeft = freeSlots
+    local kept = 0
+    for i = 1, planned do
+        local op = ops[i]
+        local id = tonumber(op._itemID)
+        local qty = op.quantity or 1
+        local merges = id and (room[id] or 0) >= qty
+        if merges then
+            room[id] = room[id] - qty
+            kept = kept + 1
+        elseif slotsLeft > 0 then
+            slotsLeft = slotsLeft - 1
+            kept = kept + 1
+        else
+            break
+        end
     end
+    for i = planned, kept + 1, -1 do ops[i] = nil end
     return ops, planned, freeSlots
 end
 

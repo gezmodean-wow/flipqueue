@@ -101,7 +101,19 @@ function Tracker:AutoPullFromBank(onComplete, fromClick)
                                     end
                                 end
                                 if matched then
-                                    table.insert(moves, {bag = bagIndex, slot = slot, name = queueItem.name or "?"})
+                                    table.insert(moves, {
+                                        op = "pull",
+                                        srcBag = bagIndex,
+                                        srcSlot = slot,
+                                        name = queueItem.name or "?",
+                                        quantity = info.stackCount or 1,
+                                        -- For the wave planner's ordering and
+                                        -- partial-stack credit (FQ-254).
+                                        _realm = queueItem.targetRealm or "",
+                                        _char = queueItem.assignedChar or "",
+                                        _seq = #moves + 1,
+                                        _itemID = tonumber(itemID),
+                                    })
                                     needed[queueItem] = count - (info.stackCount or 1)
                                     break
                                 end
@@ -118,38 +130,29 @@ function Tracker:AutoPullFromBank(onComplete, fromClick)
         return
     end
 
-    -- Check free bag space before pulling. Shared with Tracker:BuildPullOps
-    -- via ns:GetFreeBagSlots — this planner counted and that one did not,
-    -- which is FQ-233.
-    local freeBagSlots = ns:GetFreeBagSlots()
+    -- Fit the plan to the bags. Shared with Tracker:BuildPullOps via
+    -- ns:PlanPullWave — this planner counted free slots and that one did not,
+    -- which was FQ-233; neither credited partial stacks, which was FQ-254.
+    local stackRoom = ns.GetBagStackRoom and ns:GetBagStackRoom() or nil
+    local ops, planned, freeBagSlots = ns:PlanPullWave(moves, ns:GetFreeBagSlots(), stackRoom)
 
-    if freeBagSlots == 0 then
-        ns:Print(ns.COLORS.RED .. "Bags are full!|r Cannot pull " .. #moves .. " item(s) from bank.")
+    if #ops == 0 then
+        ns:Print(ns.COLORS.RED .. "Bags are full!|r Cannot pull " .. planned .. " item(s) from bank.")
         if onComplete then onComplete({}, 0) end
         return
     end
 
-    if freeBagSlots < #moves then
+    if #ops < planned then
         ns:Print(ns.COLORS.YELLOW .. "Only " .. freeBagSlots .. " free bag slot(s) — pulling " ..
-            freeBagSlots .. " of " .. #moves .. " item(s) from bank.|r")
+            #ops .. " of " .. planned .. " item(s) from bank.|r")
     end
 
-    -- Build operations from the moves list
-    local totalMoves = math.min(#moves, freeBagSlots)
-    local ops = {}
+    local totalMoves = #ops
     local hasWarbankPulls = false
-    for i = 1, totalMoves do
-        local isWarbank = false
+    for _, op in ipairs(ops) do
         for _, wb in ipairs(ns.WARBANK_TABS) do
-            if moves[i].bag == wb then isWarbank = true; break end
+            if op.srcBag == wb then hasWarbankPulls = true; break end
         end
-        if isWarbank then hasWarbankPulls = true end
-        table.insert(ops, {
-            op = "pull",
-            srcBag = moves[i].bag,
-            srcSlot = moves[i].slot,
-            name = moves[i].name,
-        })
     end
 
     local function PullComplete(successNames, errorCount)
