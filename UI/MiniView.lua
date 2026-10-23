@@ -414,6 +414,45 @@ partnerStrip:SetPoint("RIGHT", mini, "RIGHT", -4, 0)
 
 local miniRows = {}
 
+-- Tooltip for any pooled row that is not a to-do task: reads the row's
+-- tooltip* fields. Installed at creation, but RefreshMini clears every row's
+-- scripts at the top of each pass (rows are pooled, and a row that was a task
+-- last time must not keep that task's handlers), so each row kind re-installs
+-- the handlers it wants in the branch that builds it (FQ-271). Task rows have
+-- their own, with the action buttons.
+local function MiniRowOnEnter(self)
+    if self.tooltipItemID or self.tooltipItemName then
+        GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+        -- Prefer the bonus-ID-decorated itemString so the tooltip
+        -- resolves to the variant (correct ilvl, sockets, recipe rank)
+        -- and TSM/Auctionator price hooks key off the right item.
+        if ns:SetTooltipItem(GameTooltip, self.tooltipItemKey, self.tooltipItemID) then
+            if self.tooltipTask and ns.IlvlDisplay then
+                ns.IlvlDisplay:AddTooltipLines(GameTooltip, self.tooltipTask, self.tooltipItemID)
+            end
+            if self.tooltipExtra then
+                GameTooltip:AddLine(self.tooltipExtra, 0.7, 0.7, 0.7, true)
+            end
+            GameTooltip:Show()
+        elseif self.tooltipItemName and self.tooltipItemName ~= "" then
+            GameTooltip:SetText(self.tooltipItemName, 1, 1, 1)
+            if self.tooltipExtra then
+                GameTooltip:AddLine(self.tooltipExtra, 0.7, 0.7, 0.7, true)
+            end
+            GameTooltip:Show()
+        end
+    end
+end
+
+local function MiniRowOnLeave()
+    GameTooltip:Hide()
+end
+
+local function WireMiniRowTooltip(row)
+    row:SetScript("OnEnter", MiniRowOnEnter)
+    row:SetScript("OnLeave", MiniRowOnLeave)
+end
+
 local function GetOrCreateMiniRow(index)
     if miniRows[index] then return miniRows[index] end
 
@@ -437,30 +476,7 @@ local function GetOrCreateMiniRow(index)
     row.tooltipItemName = nil
 
     row:EnableMouse(true)
-    row:SetScript("OnEnter", function(self)
-        if self.tooltipItemID or self.tooltipItemName then
-            GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
-            -- Prefer the bonus-ID-decorated itemString so the tooltip
-            -- resolves to the variant (correct ilvl, sockets, recipe rank)
-            -- and TSM/Auctionator price hooks key off the right item.
-            if ns:SetTooltipItem(GameTooltip, self.tooltipItemKey, self.tooltipItemID) then
-                if self.tooltipTask and ns.IlvlDisplay then
-                    ns.IlvlDisplay:AddTooltipLines(GameTooltip, self.tooltipTask, self.tooltipItemID)
-                end
-                if self.tooltipExtra then
-                    GameTooltip:AddLine(self.tooltipExtra, 0.7, 0.7, 0.7, true)
-                end
-                GameTooltip:Show()
-            elseif self.tooltipItemName and self.tooltipItemName ~= "" then
-                GameTooltip:SetText(self.tooltipItemName, 1, 1, 1)
-                if self.tooltipExtra then
-                    GameTooltip:AddLine(self.tooltipExtra, 0.7, 0.7, 0.7, true)
-                end
-                GameTooltip:Show()
-            end
-        end
-    end)
-    row:SetScript("OnLeave", function() GameTooltip:Hide() end)
+    WireMiniRowTooltip(row)
 
     miniRows[index] = row
     return row
@@ -837,6 +853,8 @@ function UI:RefreshMini()
             row.tooltipItemID = nil; row.tooltipItemKey = nil
             row.tooltipItemName = task._dismissible and "Right-click to dismiss" or nil
             row.tooltipExtra = nil
+            row.tooltipTask = nil
+            WireMiniRowTooltip(row)  -- cleared at the top of the refresh (FQ-271)
             if task._dismissible and task._onDismiss then
                 local capturedDismiss = task._onDismiss
                 row:SetScript("OnMouseDown", function(_, button)
@@ -881,6 +899,8 @@ function UI:RefreshMini()
             row.tooltipItemID = nil; row.tooltipItemKey = nil
             row.tooltipItemName = step._tooltipText
             row.tooltipExtra = step._tooltipExtra
+            row.tooltipTask = nil
+            WireMiniRowTooltip(row)  -- cleared at the top of the refresh (FQ-271)
 
             -- Click-to-copy: left-click opens a dual-entry copy blip
             -- pinned below the mini row showing both the character
@@ -944,6 +964,8 @@ function UI:RefreshMini()
         genRow.tooltipItemID = nil; genRow.tooltipItemKey = nil
         genRow.tooltipItemName = "Open Generator"
         genRow.tooltipExtra = "Click to open the main window on the To-Do Generator page"
+        genRow.tooltipTask = nil
+        WireMiniRowTooltip(genRow)  -- cleared at the top of the refresh (FQ-271)
         genRow:SetScript("OnMouseDown", function()
             UI.currentPage = "generator"
             UI.mainFrame:Show()
