@@ -1609,6 +1609,17 @@ function UI:CreateSettingsPanel(parent)
         "ahAutoScanOnOpen")
     sy = sy - h - SECTION_SPACING
 
+    -- (FQ-278) Opt-in. Off by default: a task vanishing because one search
+    -- came back empty is a surprise nobody asked for unless they ticked this.
+    settingsWidgets.buyAutoSkipSoldOut, h = CreateSettingsCheckbox(sc, sy,
+        "Skip buy tasks when the item is sold out",
+        "When you open the Auction House on a realm you have buy tasks for, FlipQueue searches each item once. " ..
+        "If none at all are listed, the task is moved to the log as skipped with the reason, and any sell task that " ..
+        "depended on that purchase goes with it. Listings above your buy price still count as available, and a search " ..
+        "that times out never removes a task. Off by default.",
+        "buyAutoSkipSoldOut")
+    sy = sy - h - SECTION_SPACING
+
     secAH.contentHeight = math.abs(sy)
 
     ------------------------------------------------
@@ -2470,6 +2481,9 @@ function UI:RefreshSettings()
     if settingsWidgets.maxWithdrawBox then
         local val = ns.db.settings.maxWithdrawGold or 0
         settingsWidgets.maxWithdrawBox:SetText(tostring(val))
+    end
+    if settingsWidgets.buyAutoSkipSoldOut then
+        settingsWidgets.buyAutoSkipSoldOut:SetChecked(ns.db.settings.buyAutoSkipSoldOut == true)
     end
     if settingsWidgets.ahAutoScan then
         settingsWidgets.ahAutoScan:SetChecked(ns.db.settings.ahAutoScanOnOpen)
