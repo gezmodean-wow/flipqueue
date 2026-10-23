@@ -6,6 +6,23 @@ The engineering-detail companion lives in `CHANGELOG.md` (commit-readerese — f
 
 ---
 
+## v0.13.4-alpha1
+
+Keeping your to-do list honest: tasks that can't go anywhere now leave the list on their own, with the reason in the log.
+
+### To-do list
+
+- **Tasks for items you already have listed no longer sit in the list.** With **Avoid realms where I already have an auction posted** on, FlipQueue already refused to pull such an item from the bank, but the task stayed behind with nothing to finish it, especially when the listing belonged to another of your characters. The task now moves to the log as skipped, and chat tells you why.
+- **New optional setting: skip buy tasks when the item is sold out.** Find it at **Settings → Auction House**. It's off unless you turn it on. When you open the Auction House on a realm you have buy tasks for, FlipQueue checks each item once. If none at all are listed, the task moves to the log as skipped instead of waiting for you to delete it, and the sell task that depended on that purchase goes with it. Listings above your buy price still count as available, and a search that times out never removes anything.
+
+### Banking
+
+- **The first bank visit pulls everything that fits.** A few items used to be left behind, and reopening the bank picked them up. FlipQueue was counting empty bag slots only, so items that would simply stack onto what you already carry were counted as needing a slot they didn't need.
+
+### Smaller fixes
+
+- **The mini window's hint rows keep their tooltips.** The "Right-click to dismiss" notices and the Next Steps rows showed a tooltip until the first refresh and then stopped.
+
 ## v0.13.3
 
 This release is mostly about syncing between your own accounts and getting the warbank working again after a game update. Syncs are far smaller and faster, to-do lists actually reach your other account, and deposits work again. A batch of fixes from your reports is in here too, along with support for patch 12.1.5. Everything below is new since v0.13.2.

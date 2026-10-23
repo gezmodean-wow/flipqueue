@@ -1,5 +1,42 @@
 # Changelog
 
+## v0.13.4-alpha1
+
+Two new reports from the 2026-10-23 Discord batch plus the two carry-overs from the v0.13.3 line. Embedded Cogworks-1.0 stays at **`v0.16.0`**; the `Core.lua` `ItemKeyToItemString` override stays (cogworks#83). **Schema stays at 14.** One new file, `BuySoldOut.lua` (toc after `BuyListSync.lua`). **F8 not yet run.** Each fix was built on its own branch (PRs #279, #283, #281, #282, squash-merged); master passes all 25 spec files.
+
+### FQ-277 (#277): tasks already listed on the realm stayed in the to-do list
+
+Fallout from FQ-262. `Tracker._SkipPullAlreadyPosted` declined to pull a task whose item was listed on the target realm, but nothing then finished the task: `CheckOwnedAuctions` matches only the current character's own auctions and only tasks assigned to it, while `SalesIndex:HasActiveAuction` is realm-wide (any character, any linked account). A task whose listing belonged to another character was never pulled and never completed.
+
+- **`TodoList:SkipTaskToLog(idx, reason, charKey)`** — the FQ-179 shape (skipped log entry with `failReason`, remove from the active list, `TDLOG` delta so the partner inserts the entry and removes by UUID), factored for reuse. `SkipTask` still only flips status.
+- **`TodoList:SkipAlreadyListedTasks(charKey, realm)`** — gated on `dfAvoidPostedRealms`; walks this character's pending sell tasks for the realm backwards and resolves each one, printing "Skipped: … you already have it listed on …". Called at the top of `Tracker:BuildPullOps` and `Tracker:AutoPullFromBank` (replacing the inline guard) and as **phase 4 of `CheckOwnedAuctions`**, after own-listing matches complete as posted.
+- `test/postedrealm_spec.lua` 22 → 31: task leaves the list, log entry carries the reason and character, other-character listing resolved by the AH-open sweep, buy tasks and other characters' tasks untouched, setting off unchanged.
+
+### FQ-278 (#278): skip buy tasks whose item is sold out (opt-in)
+
+- **`buyAutoSkipSoldOut`**, default **false** (maintainer: optional). Settings → Auction House → "Skip buy tasks when the item is sold out". `/fq dump` `S|` line gains `soldOut=`.
+- **`BuySoldOut.lua`** (new): on `AUCTION_HOUSE_SHOW` + 1.0s, collects this character's pending buy tasks for the realm at the browse/buy step with nothing in bags, not yet checked this visit, and issues one `AuctionAutoScan:ScanItem` each. On result: `AuctionScanCache:CountListingsForItemID(itemID, species, scanStartedAt - 1)` == 0 → `TodoList:SkipBuyTaskSoldOut`. A timeout, a failed send, or a result landing after `AUCTION_HOUSE_CLOSED` removes nothing. Pending count is taken before any scan is issued so a synchronous result cannot settle early. Shopping list rebuilds once.
+- **`AuctionScanCache:CountListingsForItemID`** — counts listings across every key form (`<realm>|<id>;…`, `<realm>|t:i:<id>` with a `:`/end guard so i:123 ≠ i:1234, `<realm>|c:<id>`, pet forms) with a `scannedAt` floor.
+- **`AuctionAutoScan:ScanItem(…, opts)`** — `opts.ignorePostingGate` bypasses `ahPostingEnabled == false`; the gate exists so FQ does not compete with TSM's post scan, and a buy-side lookup is not posting.
+- **`TodoList:SkipBuyTaskSoldOut(idx, realm)`** — resolves the buy task ("Sold out on <realm>") and the sell half of its flip ("Buy skipped: <name> sold out on <realm>") via `SkipTaskToLog`. **`FindCorrelatedSellTasks`** factored out of `DeleteTask`, same predicate.
+- `test/buysoldout_spec.lua` (37 checks), incl. the real counter driven through `ITEM_SEARCH_RESULTS_UPDATED` / `COMMODITY_SEARCH_RESULTS_UPDATED`. `test/wow_shim.lua` gains `C_Timer.NewTimer` / `NewTicker`.
+
+### FQ-271 (#271): mini view non-task rows lost their tooltip after the first refresh
+
+`UI:RefreshMini` clears every pooled row's `OnEnter`/`OnLeave` at the top of each pass; only task rows re-wired theirs. The creation-time handler is now `MiniRowOnEnter` / `MiniRowOnLeave` / `WireMiniRowTooltip`, re-installed by the dismissible notice rows, the Next Steps rows and the "Open Generator" row. `UI.ReplayHover` (FQ-259) then restores the hover for them too. No headless coverage (needs the live UI).
+
+### FQ-254 (#254): bank pull left a few items behind on the first visit
+
+Leading hypothesis fixed; the reporter never answered whether the popup showed "Pull tasks (N of M)". The cap counted empty slots only, so pulls that merge into partial stacks already in the bags were cut off by exactly that many.
+
+- **`ns:GetBagStackRoom()`** — `{ [itemID] = units }` of room in the bags' partial stacks via `C_Item.GetItemMaxStackSizeByID`; unknown sizes and unstackables are never credited.
+- **`ns:PlanPullWave(ops, freeSlots, stackRoom)`** — an op whose `_itemID` and `quantity` fit the remaining room takes no slot; once slots are gone only merges are kept, in order, never skipping an op (realm grouping from FQ-233 preserved). `Tracker:BuildPullOps` tags ops with `_itemID`. **`Tracker:AutoPullFromBank` now goes through `PlanPullWave` too** instead of its own `min(#moves, freeSlots)`.
+- `test/pullwave_spec.lua` 20 → 35.
+
+### Housekeeping
+
+Closed #258, #259, #260, #262, #263 (shipped in v0.13.3) with Player updates. #256 Player update posted: the alpha5 delta path works (acc2 → acc1 reconnect 123 chunks / 28.9 KB in 16s) but acc1 → acc2 still sends ~449 KB of non-log payload (characters, imports, warbank, guilds) in ~257s; next step is incremental characters/imports in `BuildFullSyncPayload`. Four stale agent worktrees under `.claude/worktrees/` (FQ-258/259/260/262, squash-merged) are still attached locally.
+
 ## v0.13.3
 
 Public stable release. **Same code as `v0.13.3-alpha6`.** This promotion is the docs finalization plus the release tag, per the channel-semantics convention. Embedded Cogworks-1.0 is `v0.16.0`; `## Interface` is `120105` (WoW 12.1.5). **Schema 14**, unchanged since v0.13.2. One new file this line: `ItemLevelDisplay.lua` (alpha2). The `Core.lua` `ItemKeyToItemString` override ships again. cogworks#83 is fixed upstream but has no tagged release past v0.16.0, so the override and the `.pkgmeta` `v0.16.0` pin stay. The rollback is still owed.
