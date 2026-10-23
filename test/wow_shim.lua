@@ -42,8 +42,19 @@ time = os.time
 date = os.date
 
 -- C_Timer.After(delay, fn) — run synchronously so chunked code paths complete
--- inline in a test (no frame loop to yield to).
-C_Timer = { After = function(_, fn) if fn then fn() end end }
+-- inline in a test (no frame loop to yield to). NewTimer / NewTicker fire once,
+-- synchronously, and hand back a cancellable handle.
+C_Timer = {
+    After = function(_, fn) if fn then fn() end end,
+    NewTimer = function(_, fn)
+        if fn then fn() end
+        return { Cancel = function() end }
+    end,
+    NewTicker = function(_, fn)
+        if fn then fn() end
+        return { Cancel = function() end }
+    end,
+}
 
 -- wipe(t) — empty a table in place.
 function wipe(t)

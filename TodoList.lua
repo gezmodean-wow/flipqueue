@@ -2056,6 +2056,65 @@ function TodoList:SkipAlreadyListedTasks(charKey, realm)
     return skipped
 end
 
+-- Indices of the sell tasks that depend on a flip's buy task. Cross-realm
+-- flips generate a buy + sell pair; removing the buy orphans the sell, so the
+-- two callers that drop a buy task (DeleteTask, SkipBuyTaskSoldOut) take the
+-- sell half along. Empty for anything that is not a flip buy.
+local function FindCorrelatedSellTasks(tasks, buyIndex)
+    local item = tasks and tasks[buyIndex]
+    local found = {}
+    if not item or item.action ~= "buy" or item.dealType ~= "flip" then return found end
+    local buyKey = item.itemKey or ""
+    local buyName = item.name and item.name:lower() or ""
+    local buyTarget = item.targetRealm or ""
+    local buyRealm = item.buyRealm or ""
+    for i, other in ipairs(tasks) do
+        if i ~= buyIndex and other.action == "sell"
+                and other.dealType == "flip"
+                and ((buyKey ~= "" and other.itemKey == buyKey)
+                    or (buyName ~= "" and other.name and other.name:lower() == buyName))
+                and ns:RealmsOverlap(other.targetRealm or "", buyTarget)
+                and ns:RealmsOverlap(other.buyRealm or "", buyRealm) then
+            table.insert(found, i)
+        end
+    end
+    return found
+end
+
+-- (FQ-278) A buy task whose item has no listings on its buy realm is moved to
+-- the log as skipped, and so is the sell half of its flip: there is nothing to
+-- post without the purchase. Returns the number of tasks resolved.
+function TodoList:SkipBuyTaskSoldOut(taskIndex, realm)
+    local current = self:GetCurrentList()
+    local tasks = current and current.tasks
+    local task = tasks and tasks[taskIndex]
+    if not task or task.action ~= "buy" then return 0 end
+    realm = realm or task.buyRealm or "?"
+    local name = task.name or "?"
+
+    local partners = FindCorrelatedSellTasks(tasks, taskIndex)
+    local toRemove = { taskIndex }
+    for _, i in ipairs(partners) do toRemove[#toRemove + 1] = i end
+    table.sort(toRemove, function(a, b) return a > b end)
+
+    local removed = 0
+    for _, idx in ipairs(toRemove) do
+        local t = tasks[idx]
+        local reason = (idx == taskIndex) and ("Sold out on " .. realm)
+            or ("Buy skipped: " .. name .. " sold out on " .. realm)
+        if t and self:SkipTaskToLog(idx, reason, t.assignedChar) then
+            removed = removed + 1
+        end
+    end
+
+    local tail = #partners > 0
+        and (" (and " .. #partners .. " linked sell task" .. (#partners > 1 and "s" or "") .. ")") or ""
+    ns:Print((ns.COLORS and ns.COLORS.ORANGE or "") .. "Skipped:|r " .. name ..
+        " — sold out on " .. realm .. ", none listed" .. tail)
+    self:CheckAutoComplete()
+    return removed
+end
+
 -- Delete a task entirely (remove from list, no logging).
 function TodoList:DeleteTask(taskIndex)
     if not ns.db or not ns.db.todoLists or not ns.db.todoLists.active then
@@ -2068,25 +2127,8 @@ function TodoList:DeleteTask(taskIndex)
     local deletedUUID = item.taskUUID
 
     -- If deleting a buy task, cascade-delete correlated sell tasks for the same deal.
-    -- Cross-realm flips generate a buy + sell pair; removing the buy orphans the sell.
     if item.action == "buy" and item.dealType == "flip" then
-        local buyKey = item.itemKey or ""
-        local buyName = item.name and item.name:lower() or ""
-        local buyTarget = item.targetRealm or ""
-        local buyRealm = item.buyRealm or ""
-
-        -- Collect indices of correlated sell tasks (reverse order for safe removal)
-        local toRemove = {}
-        for i, other in ipairs(tasks) do
-            if i ~= taskIndex and other.action == "sell"
-                    and other.dealType == "flip"
-                    and ((buyKey ~= "" and other.itemKey == buyKey)
-                        or (buyName ~= "" and other.name and other.name:lower() == buyName))
-                    and ns:RealmsOverlap(other.targetRealm or "", buyTarget)
-                    and ns:RealmsOverlap(other.buyRealm or "", buyRealm) then
-                table.insert(toRemove, i)
-            end
-        end
+        local toRemove = FindCorrelatedSellTasks(tasks, taskIndex)
 
         -- Remove sell tasks + buy task together (descending order)
         table.insert(toRemove, taskIndex)

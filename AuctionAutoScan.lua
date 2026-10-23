@@ -272,8 +272,11 @@ end
 -- (item not listed on this realm), we mark these fqKeys as "empty market"
 -- in the cache so ResolvePostPrice flips from "scan pending" to "ready
 -- (no competition)" instead of staying stuck.
-function AutoScan:ScanItem(itemID, isCommodity, callback, expectedFqKeys)
-    if not PostingEnabled() then
+-- opts.ignorePostingGate: run even when the player has turned FlipQueue's
+-- posting flow off. The gate exists so FQ does not compete with TSM's post
+-- scan; a buy-side lookup (FQ-278) is not posting and still needs the data.
+function AutoScan:ScanItem(itemID, isCommodity, callback, expectedFqKeys, opts)
+    if not PostingEnabled() and not (opts and opts.ignorePostingGate) then
         if callback then pcall(callback, false) end
         return
     end
