@@ -14,6 +14,9 @@
 --      the only copy of an item to a realm it was already listed on.
 --   3. The bank pull planner pulled for every task on the realm, posted or not.
 --   4. An "active" log entry past its expiry still counted as listed.
+-- FQ-277 followed: a task the planner declined to pull stayed pending with
+-- nothing left to finish it (the AH-open check only matches this character's
+-- own listings). The planner now resolves such tasks to the log as skipped.
 
 dofile("test/wow_shim.lua")
 
@@ -238,10 +241,27 @@ local helmTask = { itemKey = "1001;;", itemID = 1001, name = "Thorium Helm",
 local hatTask  = { itemKey = "1002;;", itemID = 1002, name = "Russet Hat",
                    targetRealm = "Sargeras", quantity = 1, status = "pending",
                    assignedChar = "Main-Sargeras" }
-local list = { tasks = { helmTask, hatTask } }
+local list
+local function NewList()
+    list = { tasks = {
+        { itemKey = "1001;;", itemID = 1001, name = "Thorium Helm", targetRealm = "Sargeras",
+          quantity = 1, status = "pending", assignedChar = "Main-Sargeras", taskUUID = "helm" },
+        { itemKey = "1002;;", itemID = 1002, name = "Russet Hat", targetRealm = "Sargeras",
+          quantity = 1, status = "pending", assignedChar = "Main-Sargeras", taskUUID = "hat" },
+    } }
+    return list
+end
 function ns.TodoList:GetCurrentList() return list end
-function ns.TodoList:GetCharacterTasks()
-    return { { item = helmTask }, { item = hatTask } }
+-- The real GetCharacterTasks reads ns.db.todoLists.active; mirror it over the
+-- fixture so a task the planner resolves really leaves the planner's input.
+function ns.TodoList:GetCharacterTasks(charKey)
+    local out = {}
+    for i, item in ipairs(list.tasks) do
+        if item.status == "pending" and item.assignedChar == charKey then
+            out[#out + 1] = { taskIndex = i, item = item }
+        end
+    end
+    return out
 end
 
 local function PulledNames()
@@ -252,19 +272,77 @@ local function PulledNames()
     return table.concat(out, ",")
 end
 
+local function TaskNames()
+    local out = {}
+    for _, t in ipairs(list.tasks) do out[#out + 1] = t.name end
+    table.sort(out)
+    return table.concat(out, ",")
+end
+
+local function SkippedEntries()
+    local out = {}
+    for _, e in ipairs(ns.db.log) do
+        if e.auctionStatus == "skipped" then out[#out + 1] = e end
+    end
+    return out
+end
+
+NewList()
 ns.db = { settings = { dfAvoidPostedRealms = true }, characters = {},
-          log = { Active("1001;;", "Sargeras", { expiresAt = now + 3600 }) } }
+          log = { Active("1001;;", "Sargeras", { expiresAt = now + 3600 }) },
+          todoLists = { active = list } }
 SI:Invalidate()
 printed = {}
 check("pull: listed item is skipped, the other still pulled", PulledNames(), "Russet Hat")
 check("pull: skip is announced", #printed, 1)
 check("pull: announcement names the item",
     printed[1] and printed[1]:find("Thorium Helm", 1, true) ~= nil, true)
+-- FQ-277: the task is resolved, not left pending.
+check("pull: listed task leaves the active list", TaskNames(), "Russet Hat")
+local skipped = SkippedEntries()
+check("pull: one skipped log entry written", #skipped, 1)
+check("pull: log entry names the item", skipped[1] and skipped[1].name, "Thorium Helm")
+check("pull: log entry carries the reason",
+    skipped[1] and skipped[1].failReason, "Already listed on Sargeras")
+check("pull: log entry is on this character", skipped[1] and skipped[1].charKey, "Main-Sargeras")
 PulledNames()
 check("pull: announced once per task, not every replan", #printed, 1)
+check("pull: replan writes no second entry", #SkippedEntries(), 1)
 
+-- The AH-open sweep covers a task whose listing belongs to another character
+-- on the realm: the owned-auction check cannot match it, so this is the only
+-- path that finishes it.
+NewList()
+ns.db.todoLists.active = list
+ns.db.log = { Active("1001;;", "Sargeras", { expiresAt = now + 3600, charKey = "Alt-Sargeras" }) }
+SI:Invalidate()
+printed = {}
+check("sweep: resolves a task listed by another character",
+    TodoList:SkipAlreadyListedTasks("Main-Sargeras", "Sargeras"), 1)
+check("sweep: the unlisted task stays", TaskNames(), "Russet Hat")
+check("sweep: nothing to do on a second pass",
+    TodoList:SkipAlreadyListedTasks("Main-Sargeras", "Sargeras"), 0)
+
+-- Buy tasks are bought, not posted; a listing on the buy realm is not a reason
+-- to drop one. Other characters' tasks are left for their own sweep.
+NewList()
+ns.db.todoLists.active = list
+list.tasks[1].action = "buy"
+list.tasks[2].assignedChar = "Alt-Sargeras"
+ns.db.log = { Active("1001;;", "Sargeras", { expiresAt = now + 3600 }),
+              Active("1002;;", "Sargeras", { expiresAt = now + 3600 }) }
+SI:Invalidate()
+check("sweep: buy tasks and other characters' tasks untouched",
+    TodoList:SkipAlreadyListedTasks("Main-Sargeras", "Sargeras"), 0)
+check("sweep: list unchanged", #list.tasks, 2)
+
+NewList()
+ns.db.todoLists.active = list
+ns.db.log = { Active("1001;;", "Sargeras", { expiresAt = now + 3600 }) }
+SI:Invalidate()
 ns.db.settings.dfAvoidPostedRealms = false
 check("pull, setting off: both pulled as before", PulledNames(), "Russet Hat,Thorium Helm")
+check("pull, setting off: nothing resolved", TaskNames(), "Russet Hat,Thorium Helm")
 
 print(string.format("\n%d passed, %d failed", passed, failed))
 os.exit(failed == 0 and 0 or 1)

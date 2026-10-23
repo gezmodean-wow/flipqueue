@@ -1964,6 +1964,98 @@ function TodoList:SkipTask(taskIndex, reason)
     self:CheckAutoComplete()
 end
 
+-- Resolve a task as skipped and take it off the active list. Same shape as
+-- the TSM rejection path (FQ-179): a "skipped" log entry carries the reason
+-- for /fq log, the task leaves the list so it stops reading as work to do,
+-- and a linked partner gets the TDLOG delta MoveTaskToLog uses (insert the
+-- entry, remove the task by UUID). SkipTask, by contrast, only flips status
+-- and leaves the row in place for the player to act on.
+-- Returns the log entry, or nil when the index no longer points at a task.
+function TodoList:SkipTaskToLog(taskIndex, reason, charKey)
+    local current = self:GetCurrentList()
+    local tasks = current and current.tasks
+    local task = tasks and tasks[taskIndex]
+    if not task then return nil end
+
+    local logEntry = {
+        itemKey        = task.itemKey,
+        itemID         = task.itemID,
+        name           = task.name,
+        quality        = task.quality,
+        icon           = task.icon,
+        targetRealm    = task.targetRealm,
+        expectedPrice  = task.expectedPrice,
+        postedPrice    = nil,
+        postedAt       = time(),
+        charKey        = charKey or task.assignedChar or ns:GetCharKey(),
+        expiresAt      = nil,
+        auctionStatus  = "skipped",
+        soldAt         = nil,
+        soldPrice      = nil,
+        postedQuantity = task.quantity or 1,
+        failReason     = reason,
+    }
+    ns.db.log = ns.db.log or {}
+    table.insert(ns.db.log, logEntry)
+
+    if task.importSource and task.importKey then
+        ns:ImportRemove(task.importSource, task.importKey)
+    end
+    table.remove(tasks, taskIndex)
+
+    if ns.Sync and ns.Sync.IsLinked and ns.Sync:IsLinked() and not ns.Sync._applying
+        and task.taskUUID then
+        ns.Sync:EmitDelta("TDLOG", { taskUUID = task.taskUUID, logEntry = logEntry })
+    end
+    return logEntry
+end
+
+-- Resolve this character's sell tasks for a realm where the item is already
+-- listed, by any character on any linked account (FQ-277).
+--
+-- The "avoid realms where I already have an auction posted" setting stopped
+-- the bank pull for these tasks (FQ-262), but nothing then finished them:
+-- the owned-auction check on AH open only matches this character's own
+-- listings, so a task whose listing belongs to another character stayed
+-- pending forever. Gated on the same setting. Returns the number resolved.
+function TodoList:SkipAlreadyListedTasks(charKey, realm)
+    if not (ns.db and ns.db.settings and ns.db.settings.dfAvoidPostedRealms) then return 0 end
+    if not (ns.SalesIndex and ns.SalesIndex.HasActiveAuction) then return 0 end
+    local current = self:GetCurrentList()
+    if not (current and current.tasks) then return 0 end
+    charKey = charKey or ns:GetCharKey()
+    realm = realm or charKey:match("%-(.+)$") or ""
+    if realm == "" then return 0 end
+
+    local skipped = 0
+    -- Walk backwards: SkipTaskToLog removes by index.
+    for idx = #current.tasks, 1, -1 do
+        local task = current.tasks[idx]
+        if task.status == "pending" and task.action ~= "buy"
+            and task.assignedChar == charKey and task.itemKey
+            and ns:RealmMatches(task.targetRealm or "", realm)
+            and ns.SalesIndex:HasActiveAuction(task.itemKey, realm) then
+            local reason = "Already listed on " .. realm
+            if self:SkipTaskToLog(idx, reason, charKey) then
+                skipped = skipped + 1
+                ns:Print((ns.COLORS and ns.COLORS.ORANGE or "") .. "Skipped:|r " ..
+                    (task.name or "?") .. " — you already have it listed on " .. realm ..
+                    ". (Deal Finder: \"Avoid realms where I already have an auction posted\")")
+            end
+        end
+    end
+
+    if skipped > 0 then
+        if ns.SalesIndex.Invalidate then ns.SalesIndex:Invalidate() end
+        self:CheckAutoComplete()
+        if ns.UI then
+            if ns.UI.Refresh then ns.UI:Refresh() end
+            if ns.UI.RefreshMini then ns.UI:RefreshMini() end
+        end
+    end
+    return skipped
+end
+
 -- Delete a task entirely (remove from list, no logging).
 function TodoList:DeleteTask(taskIndex)
     if not ns.db or not ns.db.todoLists or not ns.db.todoLists.active then

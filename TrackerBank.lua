@@ -20,6 +20,7 @@ function Tracker:AutoPullFromBank(onComplete, fromClick)
 
     local charKey = ns:GetCharKey()
     local currentRealm = charKey:match("%-(.+)$") or GetRealmName()
+    Tracker._ResolveAlreadyListedTasks(charKey, currentRealm)  -- FQ-262 / FQ-277
 
     -- Build needed list from the active to-do list
     local needed = {} -- item -> qty still needed from bank
@@ -30,8 +31,7 @@ function Tracker:AutoPullFromBank(onComplete, fromClick)
             local item = task.item
             if item.action == "buy" then
                 -- Buy tasks are purchased from AH, not pulled from bank
-            elseif ns:RealmMatches(item.targetRealm or "", currentRealm)
-                and not Tracker._SkipPullAlreadyPosted(item, currentRealm) then  -- FQ-262
+            elseif ns:RealmMatches(item.targetRealm or "", currentRealm) then
                 -- Use the task's own quantity — it already accounts for TSM postCap
                 -- and available inventory from when the to-do list was generated
                 local targetQty = item.quantity or 1

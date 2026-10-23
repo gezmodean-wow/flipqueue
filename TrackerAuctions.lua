@@ -308,6 +308,14 @@ function Tracker:CheckOwnedAuctions()
         if ns.UI and ns.UI.Refresh then ns.UI:Refresh() end
         if ns.UI and ns.UI.RefreshMini then ns.UI:RefreshMini() end
     end
+
+    -- Phase 4 (FQ-277): whatever is still pending for this realm after our
+    -- own listings were matched above is listed by another character (or the
+    -- other account). Nothing else would ever finish those tasks. The sweep
+    -- is gated on "avoid realms where I already have an auction posted".
+    if ns.TodoList and ns.TodoList.SkipAlreadyListedTasks then
+        ns.TodoList:SkipAlreadyListedTasks(charKey, currentRealm)
+    end
 end
 
 --------------------------
