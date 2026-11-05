@@ -73,6 +73,28 @@ end
 
 local ns = { COLORS = { GRAY = "|cff888888", WHITE = "|cffffffff" } }
 do
+    -- Core.lua delegates ItemKeyToItemString to Cogworks-1.0 (v0.17.0, COG-83).
+    -- Use the vendored library when this checkout has it (Libs/Cogworks-1.0/ is
+    -- gitignored; the packager fetches it), else a minimal builder with the
+    -- same 13-leading-field layout, which is all this spec needs from it.
+    local cw = { _modules = {} }
+    local itemsChunk = loadfile("Libs/Cogworks-1.0/Items.lua")
+    if itemsChunk then
+        LibStub = setmetatable({}, { __call = function(_, major) return major == "Cogworks-1.0" and cw or nil end })
+        itemsChunk()
+    else
+        function cw:ItemKeyToItemString(itemKey)
+            if not itemKey or itemKey == "" or itemKey:find("^pet:") then return nil end
+            local idStr, bonusStr = strsplit(";", itemKey)
+            if not tonumber(idStr) then return nil end
+            local parts = { "item", idStr, "", "", "", "", "", "", "", "", "", "", "" }
+            local bonuses = (bonusStr and bonusStr ~= "") and { strsplit(":", bonusStr) } or {}
+            parts[#parts + 1] = tostring(#bonuses)
+            for _, b in ipairs(bonuses) do parts[#parts + 1] = b end
+            return table.concat(parts, ":")
+        end
+    end
+    ns.cw = cw
     local src = assert(io.open("Core.lua")):read("*a")
     local body = src:match("(function ns:ItemKeyToItemString%(itemKey%).-\nend)")
     assert(body, "could not locate ns:ItemKeyToItemString in Core.lua")
