@@ -9,11 +9,15 @@
 -- each outstanding buy task's item is searched once; zero listings moves the
 -- task (and the sell half of its flip) to the log as skipped. Pinned here:
 --   * off by default, and nothing is searched while off
---   * only this character's browse/buy-step tasks on this realm are searched
+--   * browse/buy-step tasks on this realm are searched, whichever character
+--     owns them (FQ-285: the AH is realm-wide); a character already holding
+--     the item is not searched for
 --   * zero listings -> skipped to the log with the reason; listings -> kept
+--   * one search per item answers for every character's task of that item,
+--     with one chat line for the group
 --   * a flip's sell task goes with its sold-out buy
 --   * a timed-out search removes nothing
---   * one search per task per visit; closing the AH starts a fresh visit
+--   * one search per item per visit; closing the AH starts a fresh visit
 --   * the cache counter sees every key form and ignores stale entries
 
 dofile("test/wow_shim.lua")
@@ -164,33 +168,70 @@ check("nothing searched while off", #scans, 0)
 check("task kept while off", TaskNames(), "Thorium Helm")
 
 --------------------------
--- 2. Candidates: this character, this realm, still buying
+-- 2. Candidates: this realm, any character, still buying
 --------------------------
 
 Reset(true)
-listingsByID = { [1001] = 0, [1002] = 3, [1003] = 0, [1004] = 0, [1005] = 0 }
+listingsByID = { [1001] = 0, [1002] = 3, [1003] = 0, [1004] = 0, [1005] = 0, [1007] = 0 }
+-- Another character on the realm whose stored bags already hold item 1007.
+ns.db.characters["Alt-Sargeras"] = { inventory = { items = { ["1007;;"] = { name = "Gold Bar", quantity = 2 } } } }
+function ns:ItemsMatch(key, _, task) return key == task.itemKey end
 SetList({
     Buy(1001, "Thorium Helm"),                                            -- sold out
     Buy(1002, "Russet Hat"),                                              -- listed
     Buy(1003, "Frozen Shield", { buyRealm = "Kazzak" }),                  -- other realm
-    Buy(1004, "Copper Bar", { assignedChar = "Alt-Sargeras" }),           -- other character
+    Buy(1004, "Copper Bar", { assignedChar = "Alt-Sargeras" }),           -- other character, sold out
     Buy(1005, "Aquamarine", { steps = { { type = "collect", status = "pending" } } }), -- bought already
     Sell(1006, "Blue Overalls", { targetRealm = "Sargeras", assignedChar = "Buyer-Sargeras" }),
+    Buy(1007, "Gold Bar", { assignedChar = "Alt-Sargeras" }),             -- other character already holds it
 })
-check("two tasks searched", SoldOut:Check("Buyer-Sargeras", "Sargeras"), 2)
-check("the searched items are the two buy tasks on this realm",
-    scans[1].itemID .. "," .. scans[2].itemID, "1001,1002")
+check("three items searched", SoldOut:Check("Buyer-Sargeras", "Sargeras"), 3)
+check("the searched items are the open buy tasks on this realm, whoever owns them",
+    scans[1].itemID .. "," .. scans[2].itemID .. "," .. scans[3].itemID, "1001,1002,1004")
 check("buy-side lookups bypass the posting gate", scans[1].gate, true)
-check("sold-out task resolved, the rest untouched",
-    TaskNames(), "Aquamarine,Blue Overalls,Copper Bar,Frozen Shield,Russet Hat")
+check("sold-out tasks resolved for both characters, the rest untouched",
+    TaskNames(), "Aquamarine,Blue Overalls,Frozen Shield,Gold Bar,Russet Hat")
 local skipped = Skipped()
-check("one skipped log entry", #skipped, 1)
+check("two skipped log entries", #skipped, 2)
 check("entry names the item", skipped[1].name, "Thorium Helm")
 check("entry carries the reason", skipped[1].failReason, "Sold out on Sargeras")
 check("entry is on the buying character", skipped[1].charKey, "Buyer-Sargeras")
-check("player is told", #printed, 1)
+check("other character's entry is on that character", skipped[2].charKey, "Alt-Sargeras")
+check("player is told once per item", #printed, 2)
 check("message says sold out", printed[1]:find("sold out on Sargeras", 1, true) ~= nil, true)
-check("Auctionator list rebuilt", rebuilds, 1)
+check("Auctionator list rebuilt once", rebuilds, 1)
+ns.ItemsMatch = nil
+
+--------------------------
+-- 2b. Same item on several characters: one search, every task resolved
+--------------------------
+
+Reset(true)
+listingsByID = { [1101] = 0, [1102] = 4 }
+SetList({
+    Buy(1101, "Elixir of Giants"),
+    Buy(1101, "Elixir of Giants", { assignedChar = "Alt-Sargeras", taskUUID = "giants-alt" }),
+    Buy(1101, "Elixir of Giants", { assignedChar = "Third-Sargeras", taskUUID = "giants-third" }),
+    Buy(1102, "Elixir of Mongoose"),
+    Buy(1102, "Elixir of Mongoose", { assignedChar = "Alt-Sargeras", taskUUID = "mongoose-alt" }),
+})
+check("one search per item, not per task", SoldOut:Check("Buyer-Sargeras", "Sargeras"), 2)
+check("searched items", scans[1].itemID .. "," .. scans[2].itemID, "1101,1102")
+check("all three characters' sold-out tasks resolved, the listed item's tasks kept",
+    TaskNames(), "Elixir of Mongoose,Elixir of Mongoose")
+skipped = Skipped()
+check("three skipped entries", #skipped, 3)
+local skippedChars = {}
+for _, e in ipairs(skipped) do skippedChars[#skippedChars + 1] = e.charKey end
+table.sort(skippedChars)
+check("one entry per character", table.concat(skippedChars, ","),
+    "Alt-Sargeras,Buyer-Sargeras,Third-Sargeras")
+check("one chat line for the group", #printed, 1)
+check("the line counts the characters", printed[1]:find("3 characters", 1, true) ~= nil, true)
+check("the line names them", printed[1]:find("Buyer, Alt, Third", 1, true) ~= nil, true)
+check("Auctionator list rebuilt once", rebuilds, 1)
+-- Nothing left to search on a second pass this visit.
+check("second pass searches nothing", SoldOut:Check("Buyer-Sargeras", "Sargeras"), 0)
 
 --------------------------
 -- 3. A flip's sell half goes with its sold-out buy
