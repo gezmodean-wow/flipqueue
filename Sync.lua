@@ -1706,30 +1706,87 @@ function Sync:GetLogWatermark(partner)
     return nil
 end
 
+-- Latest time this character record could have changed on this account:
+-- the inventory scan, a field write stamped with updatedAt (role, class,
+-- gold), or its arrival from another partner (_rcvAt, for relay). 0 means
+-- the record predates the stamps and is always sent.
+local function CharacterTime(charData)
+    local inv = charData.inventory
+    return math.max(inv and inv.lastScan or 0, charData.updatedAt or 0, charData._rcvAt or 0)
+end
+
 -- excludeOwnerUUID: skip characters owned by that account. The receiver
 -- never overwrites characters it owns (MergeCharacters), so sending a
 -- partner its own characters back is pure transfer cost. The same partner
 -- gets no log entries it sent us (_rcvFrom), and none older than logSince.
+--
+-- The same watermark bounds the rest of the payload (FQ-256). Once the log
+-- was incremental, the fixed cost of a sync was everything else: about 90
+-- bank characters' inventories, every imported deal and the warbank, ~450 KB
+-- or four minutes over whisper, resent on every reconnect although none of
+-- it had changed. Every merge on the receiver only inserts or replaces, so a
+-- record it already holds can be left out without loss. Characters, import
+-- deals and the warbank now go only when they changed after the watermark
+-- (less the same overlap margin as the log). No watermark still sends all.
+--
+-- Returns the payload and a stats table for the sync log.
 function Sync:BuildFullSyncPayload(excludeOwnerUUID, logSince)
-    if not ns.db then return {} end
+    if not ns.db then return {}, {} end
+
+    -- No watermark means a new link, an older client, or a partner that lost
+    -- its data. Send everything then, including entries it once sent us.
+    local since = (logSince and logSince > 0) and (logSince - LOG_SINCE_MARGIN) or nil
+    local function Changed(t)
+        return since == nil or t == 0 or t >= since
+    end
 
     -- Only active and upcoming: MergeTodoLists reads nothing else, and the
     -- archive alone was ~190 KB of history the receiver dropped on arrival.
     local todo = ns.db.todoLists or {}
     local log = ns.db.log or {}
     local sendLog = log
-    -- No watermark means a new link, an older client, or a partner that lost
-    -- its data. Send everything then, including entries it once sent us.
-    if logSince and logSince > 0 then
+    if since then
         sendLog = {}
-        local cutoff = logSince - LOG_SINCE_MARGIN
         for _, e in ipairs(log) do
-            local t = LogEntryTime(e)
-            if (t == 0 or t >= cutoff) and not (excludeOwnerUUID and e._rcvFrom == excludeOwnerUUID) then
+            if Changed(LogEntryTime(e)) and not (excludeOwnerUUID and e._rcvFrom == excludeOwnerUUID) then
                 sendLog[#sendLog + 1] = e
             end
         end
     end
+
+    local stats = { chars = 0, charsTotal = 0, imports = 0, importsTotal = 0, warbank = false }
+
+    -- Import deals carry importedAt; MergeImports only adds keys the receiver
+    -- lacks, so an old deal it has seen is dead weight. A replaced import
+    -- gets fresh stamps and goes whole.
+    local sendImports = ns.db.imports
+    if since and ns.db.imports then
+        sendImports = {}
+        for source, deals in pairs(ns.db.imports) do
+            local out = {}
+            for key, deal in pairs(deals) do
+                stats.importsTotal = stats.importsTotal + 1
+                if type(deal) ~= "table" or Changed(deal.importedAt or 0) then
+                    out[key] = deal
+                    stats.imports = stats.imports + 1
+                end
+            end
+            if next(out) then sendImports[source] = out end
+        end
+    elseif ns.db.imports then
+        for _, deals in pairs(ns.db.imports) do
+            for _ in pairs(deals) do stats.importsTotal = stats.importsTotal + 1 end
+        end
+        stats.imports = stats.importsTotal
+    end
+
+    -- MergeWarbank replaces only when the remote scan is newer, so an
+    -- unchanged warbank is a no-op on arrival.
+    local warbank = ns.db.warbank
+    if warbank and since and not Changed(warbank.lastScan or 0) then
+        warbank = nil
+    end
+    stats.warbank = warbank ~= nil
 
     local payload = {
         accountUUID = ns.db.sync.accountUUID,
@@ -1737,27 +1794,31 @@ function Sync:BuildFullSyncPayload(excludeOwnerUUID, logSince)
         logSince = logSince,
         ownedCharacters = {},
         characters = {},
-        warbank = ns.db.warbank,
+        warbank = warbank,
         todoLists = { active = todo.active, upcoming = todo.upcoming },
         log = sendLog,
-        imports = ns.db.imports,
+        imports = sendImports,
         doNotTrack = ns.db.doNotTrack,
-        guilds = ns.db.guilds,
+        -- guilds were sent too, but MergeFullSync never read them.
         deletedCharacters = ns.db.deletedCharacters,
     }
 
-    -- Send ALL known characters (not just our own) for gossip relay
-    -- Each character is tagged with its accountUUID so the receiver knows ownership
+    -- Send known characters (not just our own) for gossip relay. Each is
+    -- tagged with its accountUUID so the receiver knows ownership.
     for charKey, charData in pairs(ns.db.characters or {}) do
         if not (excludeOwnerUUID and charData.accountUUID == excludeOwnerUUID) then
-            payload.characters[charKey] = charData
-            if not charData.accountUUID or charData.accountUUID == ns.db.sync.accountUUID then
-                table.insert(payload.ownedCharacters, charKey)
+            stats.charsTotal = stats.charsTotal + 1
+            if Changed(CharacterTime(charData)) then
+                stats.chars = stats.chars + 1
+                payload.characters[charKey] = charData
+                if not charData.accountUUID or charData.accountUUID == ns.db.sync.accountUUID then
+                    table.insert(payload.ownedCharacters, charKey)
+                end
             end
         end
     end
 
-    return payload
+    return payload, stats
 end
 
 function Sync:SendFullSyncTo(target, transport, chunkSize, partnerUUID)
@@ -1776,10 +1837,11 @@ function Sync:SendFullSyncTo(target, transport, chunkSize, partnerUUID)
     -- with nothing in the sync log to say why. Record it.
     local partner = partnerUUID and ns.db.sync.partners[partnerUUID]
     local logSince = partner and partner.peerLogSince
-    local logCount
+    local logCount, stats
     local ok, serialized = pcall(function()
-        local payload = self:BuildFullSyncPayload(partnerUUID, logSince)
+        local payload, st = self:BuildFullSyncPayload(partnerUUID, logSince)
         logCount = #payload.log
+        stats = st
         return self:Serialize(payload)
     end)
     if not ok then
@@ -1788,6 +1850,11 @@ function Sync:SendFullSyncTo(target, transport, chunkSize, partnerUUID)
     end
     self:Log("FULL_SYNC_LOG", tostring(target) .. " | " .. tostring(logCount) .. "/" .. #(ns.db.log or {})
         .. " log entries" .. (logSince and logSince > 0 and (" since " .. date("%m/%d %H:%M", logSince)) or " (full)"))
+    if stats then
+        self:Log("FULL_SYNC_SCOPE", tostring(target) .. " | " .. stats.chars .. "/" .. stats.charsTotal
+            .. " characters, " .. stats.imports .. "/" .. stats.importsTotal .. " import deals, warbank "
+            .. (stats.warbank and "sent" or "unchanged") .. ", " .. #serialized .. " bytes")
+    end
 
     local totalChunks = math.ceil(#serialized / chunkSize)
     local state = {
@@ -2026,6 +2093,9 @@ function Sync:MergeCharacters(remoteChars, ownedChars, remoteUUID)
         -- we've tombstoned — even if the partner still has them, our delete
         -- is authoritative until the user explicitly restores.
         if charOwner ~= myUUID and not ns:IsCharDeleted(charKey) then
+            -- Arrival time, so a record relayed on to a third partner counts
+            -- as changed here even though its own scan time is older.
+            charData._rcvAt = time()
             ns.db.characters[charKey] = charData
             -- Synced characters bring item names the name -> itemID index
             -- hasn't seen (FQ-223). The index memoizes on first use, which can
