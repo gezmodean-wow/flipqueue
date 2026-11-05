@@ -5,14 +5,18 @@
 -- Run from the repo root with stock Lua 5.1:
 --   "C:\Program Files (x86)\Lua\5.1\lua.exe" test/itemstring_spec.lua
 --
--- Why this exists: Cogworks-1.0's ItemKeyToItemString lays the bonus block one
--- field early (its parts table stops at 12 entries, omitting itemContext), so
--- the bonus COUNT lands in itemContext and the first real bonus ID lands in
--- numBonusIDs. Every ilvl derived from such a string is wrong, which is half
--- of the FQ-249 wrong-price report. Core.lua currently carries a local
--- override; these checks fail against the broken layout and pass against the
--- corrected one, so they also serve as the acceptance test for the eventual
--- Cogworks fix and the signal that the override can be deleted.
+-- Why this exists: Cogworks-1.0's ItemKeyToItemString once laid the bonus
+-- block one field early (its parts table stopped at 12 entries, omitting
+-- itemContext), so the bonus COUNT landed in itemContext and the first real
+-- bonus ID in numBonusIDs. Every ilvl derived from such a string was wrong,
+-- half of the FQ-249 wrong-price report. FlipQueue carried a local override in
+-- Core.lua until Cogworks-1.0 v0.17.0 (COG-83) fixed the library; Core.lua now
+-- delegates again, and these checks run against the vendored library so a
+-- regression there, or a reintroduced override, fails here.
+--
+-- Libs/Cogworks-1.0/ is gitignored (the packager fetches it at the pinned
+-- tag), so on a checkout without it the layout checks are skipped and only
+-- the delegation check runs.
 
 dofile("test/wow_shim.lua")
 
@@ -27,15 +31,28 @@ local function check(label, got, want)
     end
 end
 
--- Core.lua is large and pulls in a lot of client surface; the builder is
--- self-contained, so load just it rather than standing up all of Core.
-local ns = {}
+print("itemstring spec")
+
+-- Core.lua must delegate to the library, not carry its own builder.
 local src = assert(io.open("Core.lua")):read("*a")
 local body = src:match("(function ns:ItemKeyToItemString%(itemKey%).-\nend)")
 assert(body, "could not locate ns:ItemKeyToItemString in Core.lua")
-assert(loadstring("local ns = ...\n" .. body))(ns)
+check("Core.lua delegates ItemKeyToItemString to Cogworks",
+    body:find("return ns.cw:ItemKeyToItemString(itemKey)", 1, true) ~= nil, true)
 
-print("itemstring spec")
+-- Load just Items.lua from the vendored library behind a minimal LibStub.
+local itemsChunk = loadfile("Libs/Cogworks-1.0/Items.lua")
+if not itemsChunk then
+    print("  SKIP layout checks: Libs/Cogworks-1.0/Items.lua not present on this checkout")
+    print(string.format("\n%d passed, %d failed", passed, failed))
+    os.exit(failed == 0 and 0 or 1)
+end
+local cw = { _modules = {} }
+LibStub = setmetatable({}, { __call = function(_, major) return major == "Cogworks-1.0" and cw or nil end })
+itemsChunk()
+local ns = { cw = cw }
+function ns:ItemKeyToItemString(itemKey) return ns.cw:ItemKeyToItemString(itemKey) end
+check("library builder loaded", type(cw.ItemKeyToItemString), "function")
 
 -- Field positions, 1-indexed, per WoW's documented layout:
 --   1 item  2 itemID  3 enchant  4-7 gems  8 suffix  9 uniqueID
