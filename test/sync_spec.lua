@@ -550,5 +550,59 @@ do
     check("cap: the oldest entries went, not our own newest", ownLeft, 80)
 end
 
+--------------------------
+-- 21. Characters, imports and the warbank go only when changed (FQ-256)
+--------------------------
+do
+    local a, b = Fresh()
+    b.ns.db.imports = {}
+    local old = time() - 10 * 86400
+    -- A bank alt scanned ten days ago, an alt scanned just now, and the
+    -- fixture's Alice-Realm, which carries no timestamp at all.
+    a.ns.db.characters["Oldbank-Realm"] = { accountUUID = "UA", inventory = { lastScan = old, items = { ["1;;"] = { count = 1 } } } }
+    a.ns.db.characters["Active-Realm"] = { accountUUID = "UA", inventory = { lastScan = time(), items = {} } }
+    a.ns.db.imports = { fpScanner = {
+        ["old;;"] = { itemID = 1, importedAt = old },
+        ["new;;"] = { itemID = 2, importedAt = time() },
+    } }
+    a.ns.db.warbank = { lastScan = old, items = { ["9;;"] = { quantity = 3 } } }
+
+    a.Sync:RequestFullSyncWith("UB")
+    RunToIdle(a, b)
+    check("scope: first sync sends every character", LastDetail(a, "FULL_SYNC_SCOPE"):find("3/3 characters, 2/2 import deals, warbank sent", 1, true) ~= nil, true)
+    check("scope: B holds the old bank alt", b.ns.db.characters["Oldbank-Realm"] ~= nil, true)
+    check("scope: B holds the old import", b.ns.db.imports.fpScanner["old;;"] ~= nil, true)
+    check("scope: B holds the warbank", b.ns.db.warbank and b.ns.db.warbank.items["9;;"] ~= nil, true)
+    check("scope: merged character carries its arrival time", type(b.ns.db.characters["Oldbank-Realm"]._rcvAt), "number")
+
+    -- Nothing changed on A except a role click on the active alt.
+    b.ns.db.characters["Oldbank-Realm"].marker = "kept"
+    a.ns.db.characters["Active-Realm"].updatedAt = time()
+    a.Sync:RequestFullSyncWith("UB")
+    RunToIdle(a, b)
+    local scope = LastDetail(a, "FULL_SYNC_SCOPE")
+    check("scope: second sync leaves the old bank alt home", scope:find("2/3 characters", 1, true) ~= nil, true)
+    check("scope: second sync leaves the old import home", scope:find("1/2 import deals", 1, true) ~= nil, true)
+    check("scope: unchanged warbank not sent", scope:find("warbank unchanged", 1, true) ~= nil, true)
+    check("scope: B's copy of the old bank alt untouched", b.ns.db.characters["Oldbank-Realm"].marker, "kept")
+    check("scope: B's warbank untouched", b.ns.db.warbank.items["9;;"].quantity, 3)
+    check("scope: changed alt still arrives", b.ns.db.characters["Active-Realm"] ~= nil, true)
+
+    -- A rescan of the bank alt sends it again.
+    a.ns.db.characters["Oldbank-Realm"].inventory.lastScan = time()
+    a.Sync:RequestFullSyncWith("UB")
+    RunToIdle(a, b)
+    check("scope: rescanned alt sent again", LastDetail(a, "FULL_SYNC_SCOPE"):find("3/3 characters", 1, true) ~= nil, true)
+    check("scope: B's copy replaced", b.ns.db.characters["Oldbank-Realm"].marker, nil)
+
+    -- A partner with no watermark gets everything.
+    a.ns.db.characters["Oldbank-Realm"].inventory.lastScan = old
+    local p, st = a.Sync:BuildFullSyncPayload("UB", nil)
+    check("scope: no watermark sends all characters", st.chars, 3)
+    check("scope: no watermark sends all imports", st.imports, 2)
+    check("scope: no watermark sends the warbank", p.warbank ~= nil, true)
+    check("scope: guilds no longer ride along", p.guilds, nil)
+end
+
 print(string.format("sync_spec: %d passed, %d failed", passed, failed))
 if failed > 0 then os.exit(1) end
