@@ -107,15 +107,7 @@ local function cmdCleanup(args)
             return
         end
         if args:find("confirm") then
-            local removed, byReason = TL:PurgeTrapped()
-            local parts = {}
-            for reason, count in pairs(byReason) do
-                parts[#parts + 1] = count .. " × " .. (TL.TRAPPED_LABELS[reason] or reason)
-            end
-            ns:Print(ns.COLORS.GREEN .. "Removed " .. removed .. " trapped task(s)|r"
-                .. (#parts > 0 and (": " .. table.concat(parts, ", ")) or ""))
-            UI:Refresh()
-            if UI.RefreshMini then UI:RefreshMini() end
+            TL:PurgeTrappedAndReport()
         else
             PrintTaskCleanupReport(classified, true)
             ns:Print("Run " .. ns.COLORS.YELLOW .. "/fq cleanup trapped confirm|r"

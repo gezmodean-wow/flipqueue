@@ -61,6 +61,40 @@ local BUILTIN_TOOLS = {
         end,
         tooltip = "Reload the user interface.",
     },
+    {
+        -- The drawer form of `/fq cleanup trapped confirm` (FQ-264). Removing
+        -- tasks is not undoable, so the button previews what would go and
+        -- asks before doing it. Hidden by default; enable it in the Tools
+        -- drawer settings.
+        id = "cleanup", type = "action", label = "Clean Up Trapped",
+        icon = "Interface\\Icons\\INV_Pet_Broom",
+        onUse = function()
+            local TL = ns.TodoList
+            if not (TL and TL.ClassifyTasks and TL.PurgeTrappedAndReport) then return end
+            local classified = TL:ClassifyTasks()
+            if classified.trappedCount == 0 then
+                ns:Print(ns.COLORS.GREEN .. "No trapped tasks to remove.|r")
+                return
+            end
+            local lines = {}
+            for reason, count in pairs(classified.byReason or {}) do
+                lines[#lines + 1] = count .. " × " .. (TL.TRAPPED_LABELS[reason] or reason)
+            end
+            table.sort(lines)
+            local message = "Remove " .. classified.trappedCount .. " trapped task(s)?\n"
+                .. table.concat(lines, "\n")
+                .. "\n\nThis cannot be undone. Stale tasks are never removed."
+            if ns.cw and ns.cw.ShowConfirmDialog then
+                ns.cw:ShowConfirmDialog("Clean up trapped tasks", message, function()
+                    TL:PurgeTrappedAndReport()
+                end)
+            else
+                ns:Print(message:gsub("\n", " "))
+                ns:Print("Run " .. ns.COLORS.YELLOW .. "/fq cleanup trapped confirm|r to remove them.")
+            end
+        end,
+        tooltip = "Remove to-do tasks that can never resolve. Shows what would go and asks first.",
+    },
 
     --------------------------------------------------------------------
     -- Service tools
@@ -202,8 +236,13 @@ local BUILTIN_TOOLS = {
 }
 
 -- Shipped default order + the tools hidden until the player enables them.
-local DEFAULT_ORDER  = { "logout", "reload", "ah", "vendor", "warbank", "hearthstone", "mailbox", "bank" }
-local DEFAULT_HIDDEN = { mailbox = true, bank = true }
+local DEFAULT_ORDER  = { "logout", "reload", "ah", "vendor", "warbank", "hearthstone", "mailbox", "bank", "cleanup" }
+local DEFAULT_HIDDEN = { mailbox = true, bank = true, cleanup = true }
+
+-- The builtins that existed before `knownBuiltins` was recorded (v0.13.4).
+-- An install seeded before then has already made its choices about these;
+-- only builtins added later get their shipped visibility applied once.
+local LEGACY_BUILTINS = { "logout", "reload", "ah", "vendor", "warbank", "hearthstone", "mailbox", "bank" }
 
 local MISSING_ICON = "Interface\\Icons\\INV_Misc_QuestionMark"
 TR.MISSING_ICON = MISSING_ICON
@@ -233,6 +272,18 @@ local function Config()
     if type(tb.hidden) ~= "table" then
         tb.hidden = {}
         for id in pairs(DEFAULT_HIDDEN) do tb.hidden[id] = true end
+    end
+    -- A builtin added after this install was seeded starts with its shipped
+    -- visibility, once; after that the player's show/hide choice sticks.
+    if type(tb.knownBuiltins) ~= "table" then
+        tb.knownBuiltins = {}
+        for _, id in ipairs(LEGACY_BUILTINS) do tb.knownBuiltins[id] = true end
+    end
+    for _, d in ipairs(BUILTIN_TOOLS) do
+        if not tb.knownBuiltins[d.id] then
+            tb.knownBuiltins[d.id] = true
+            if DEFAULT_HIDDEN[d.id] then tb.hidden[d.id] = true end
+        end
     end
     if type(tb.methodPriority) ~= "table" then tb.methodPriority = {} end
     if type(tb.macros) ~= "table" then tb.macros = {} end

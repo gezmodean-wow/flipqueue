@@ -2636,6 +2636,25 @@ function TodoList:PurgeTrapped()
     return removed, classified.byReason
 end
 
+-- PurgeTrapped plus the chat summary and UI refresh. Shared by the slash
+-- command's confirm form and the Tools drawer button (FQ-264). Returns the
+-- number removed.
+function TodoList:PurgeTrappedAndReport()
+    local removed, byReason = self:PurgeTrapped()
+    local parts = {}
+    for reason, count in pairs(byReason or {}) do
+        parts[#parts + 1] = count .. " × " .. (TRAPPED_LABELS[reason] or reason)
+    end
+    table.sort(parts)
+    ns:Print((ns.COLORS and ns.COLORS.GREEN or "") .. "Removed " .. removed .. " trapped task(s)|r"
+        .. (#parts > 0 and (": " .. table.concat(parts, ", ")) or ""))
+    if ns.UI then
+        if ns.UI.Refresh then ns.UI:Refresh() end
+        if ns.UI.RefreshMini then ns.UI:RefreshMini() end
+    end
+    return removed
+end
+
 --------------------------
 -- Unknown Name Resolution
 --------------------------

@@ -123,5 +123,69 @@ check("toy label is the localized name", e.dispatchName, "Der Wirtstochter")
 local unowned = TR:EvalMethod({ kind = "toy", id = 99999, name = "Not Learned" })
 check("unowned toy is not owned", unowned.owned, false)
 
+--------------------------
+-- Clean Up Trapped drawer tool (FQ-264)
+--------------------------
+
+local function has(list, id)
+    for _, d in ipairs(list) do if d.id == id then return true end end
+    return false
+end
+
+-- An install seeded before the tool existed: eight tools in the saved order,
+-- mailbox shown again by the player, no knownBuiltins yet.
+ns.db = { settings = { toolbox = {
+    order = { "logout", "reload", "ah", "vendor", "warbank", "hearthstone", "mailbox", "bank" },
+    hidden = { bank = true },
+} } }
+check("existing install: cleanup is listed for settings",
+    has(TR:GetAllTools(), "cleanup"), true)
+check("existing install: cleanup starts hidden in the drawer",
+    has(TR:GetTools(), "cleanup"), false)
+check("existing install: the player's unhidden mailbox stays visible",
+    has(TR:GetTools(), "mailbox"), true)
+check("existing install: bank stays hidden", has(TR:GetTools(), "bank"), false)
+
+-- The player turns it on; a later load must not hide it again.
+ns.db.settings.toolbox.hidden.cleanup = nil
+check("after enabling: cleanup shows in the drawer",
+    has(TR:GetTools(), "cleanup"), true)
+
+-- A fresh install gets the shipped defaults, cleanup included and hidden.
+ns.db = { settings = {} }
+check("fresh install: default order ends with cleanup",
+    TR.DEFAULT_ORDER[#TR.DEFAULT_ORDER], "cleanup")
+check("fresh install: cleanup hidden by default", has(TR:GetTools(), "cleanup"), false)
+check("fresh install: cleanup in the settings list",
+    has(TR:GetAllTools(), "cleanup"), true)
+
+-- The tool itself: previews and asks, never removes without the confirm.
+local cleanupTool
+for _, d in ipairs(TR:GetAllTools()) do if d.id == "cleanup" then cleanupTool = d end end
+check("cleanup tool is an action", cleanupTool and cleanupTool.type, "action")
+local prints, purged, dialog = {}, 0, nil
+ns.COLORS = setmetatable({}, { __index = function() return "" end })
+function ns:Print(msg) prints[#prints + 1] = msg end
+ns.TodoList = {
+    TRAPPED_LABELS = { ["item-gone"] = "item is not on any character, bank or warbank" },
+    ClassifyTasks = function() return { trappedCount = 2, byReason = { ["item-gone"] = 2 } } end,
+    PurgeTrappedAndReport = function() purged = purged + 1 return 2 end,
+}
+ns.cw = { ShowConfirmDialog = function(_, title, message, onConfirm) dialog = { title = title, message = message, onConfirm = onConfirm } end }
+cleanupTool.onUse()
+check("click opens a confirm dialog", dialog ~= nil, true)
+check("dialog counts the tasks", dialog and dialog.message:find("Remove 2 trapped task", 1, true) ~= nil, true)
+check("dialog lists the reason", dialog and dialog.message:find("2 × item is not on any character", 1, true) ~= nil, true)
+check("nothing removed before confirming", purged, 0)
+dialog.onConfirm()
+check("confirm removes", purged, 1)
+
+-- Nothing trapped: say so, no dialog.
+dialog = nil
+ns.TodoList.ClassifyTasks = function() return { trappedCount = 0, byReason = {} } end
+cleanupTool.onUse()
+check("nothing trapped: no dialog", dialog, nil)
+check("nothing trapped: player told", prints[#prints]:find("No trapped tasks", 1, true) ~= nil, true)
+
 print(string.format("tooldispatch_spec: %d passed, %d failed", passed, failed))
 if failed > 0 then os.exit(1) end
