@@ -608,7 +608,10 @@ function Scanner:RefreshCurrentCharacterFromSyndicator()
         return
     end
     ns.db.characters[fqKey] = ns.db.characters[fqKey] or {}
-    ns.db.characters[fqKey].class = select(2, UnitClass("player"))
+    local me = ns.db.characters[fqKey]
+    local class = select(2, UnitClass("player"))
+    if me.class ~= class then me.updatedAt = time() end   -- FQ-256
+    me.class = class
 
     local t0 = debugprofilestop and debugprofilestop() or nil
     WriteProjectedInventory(fqKey, charData, "current")
@@ -1019,6 +1022,7 @@ frame:SetScript("OnEvent", function(self, event, ...)
                     for charKey, charData in pairs(ns.db.characters) do
                         if ns:IsPhantomChar(charKey) and (charData.role or "both") ~= "none" then
                             charData.role = "none"
+                            charData.updatedAt = time()   -- FQ-256
                             hidden = hidden + 1
                         end
                     end
@@ -1119,6 +1123,7 @@ frame:SetScript("OnEvent", function(self, event, ...)
                 local oldGold = charEntry.gold or 0
                 local newGold = GetMoney()
                 charEntry.gold = newGold
+                if newGold ~= oldGold then charEntry.updatedAt = time() end   -- FQ-256
                 if ns.cw and ns.cw.Fire and newGold ~= oldGold then
                     ns.cw:Fire(ns.cw.Events.GoldChanged, charKey, newGold, newGold - oldGold)
                 end

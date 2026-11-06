@@ -889,6 +889,7 @@ function ns:SetCharRole(charKey, role)
     local charData = ns.db.characters[charKey]
     if not charData then return end
     charData.role = role
+    charData.updatedAt = time()   -- full sync sends only changed characters (FQ-256)
     -- Keep .ignored in sync for backward compatibility
     charData.ignored = (role == "none")
 end
