@@ -1,5 +1,40 @@
 # Changelog
 
+## v0.13.4-alpha2
+
+Three follow-ups to the alpha1 field results. Embedded Cogworks-1.0 stays at **`v0.16.0`**; the `Core.lua` `ItemKeyToItemString` override stays (cogworks#83 is fixed upstream as 0.17.0 but has no tag; cogworks#86 asks for one, and the rollback is prepared in draft PR #288). **Schema stays at 14.** No new files. **F8 not yet run**; the maintainer tested the pre-merge `integ/v0.13.4-alpha2` branch in-game. Each fix was built on its own branch (PRs #286, #287, #289, squash-merged); master passes all 25 spec files.
+
+### FQ-285 (#285): sold-out buy skip resolved one character's task at a time
+
+Follow-up to FQ-278 from scraze. `BuySoldOut:Check` only collected tasks with `assignedChar == current`, so when several characters each held a buy task for the same sold-out item on a realm, each AH visit skipped one task and Next Steps routed the player to the next character for the same item.
+
+- Candidates are now realm-wide (no `assignedChar` filter). `AlreadyHeld(task, currentCharKey)` reads live bags for the current character and the stored inventory scan (`ns.db.characters[char].inventory.items` via `ns:ItemsMatch`) for every other character.
+- Tasks are grouped by `itemID:species`, one `AuctionAutoScan:ScanItem` per group. **`BuySoldOut:ResolveGroup(group, realm, gotResults, scanStartedAt)`** resolves every task in the group and prints one line: "Skipped: X — sold out on R, none listed (N characters: A, B, C[, n linked sell tasks])". `Resolve` stays as the single-task wrapper; `Check` returns the group count.
+- **`TodoList:SkipBuyTaskSoldOut(idx, realm, silent)`** gains `silent` and returns `(removed, linkedSells)` so the group line owns the chat output.
+- `test/buysoldout_spec.lua` 37 → 48.
+
+### FQ-256 (#256): full sync sends only what changed since the watermark
+
+The alpha5 delta path cut the log, but acc1 → acc2 still sent ~449 KB of characters, imports, warbank and guilds on every sync (~257 s over the whisper transport). **`Sync:BuildFullSyncPayload(excludeOwnerUUID, logSince)`** now applies the FSYN watermark (minus `LOG_SINCE_MARGIN`) to the whole payload, not just the log.
+
+- `Changed(t)` is `since == nil or t == 0 or t >= since`. Characters by `CharacterTime = max(inventory.lastScan, updatedAt, _rcvAt)`, import deals by `importedAt`, warbank by `lastScan`. Guilds are dropped from the payload (the receiver never merged them). Returns `(payload, stats)`.
+- `charData.updatedAt` is stamped by `DB:SetCharRole` and by `Scanner` on class change, phantom role → none and gold change; `MergeCharacters` stamps `_rcvAt = time()` so a character relayed from a third account counts as changed on the next hop.
+- `SendFullSyncTo` logs **`FULL_SYNC_SCOPE`**: `<target> | c/C characters, i/I import deals, warbank sent|unchanged, N bytes`. Reaches the maintainer through **Settings → Multi-Account → Copy Log**; this is the line to ask makkenmak for.
+- `MergeFullSync` keeps insert-or-replace semantics, so a partial payload never deletes anything on the receiver. Wire-compatible: a peer that sends no watermark still gets the full payload.
+- `test/sync_spec.lua` 90 → 107 (section 21).
+
+### FQ-264 (#264): Tools drawer button for cleaning up trapped tasks
+
+tikiwiki1531 asked for `/fq cleanup trapped` as a button.
+
+- New `ToolRegistry` builtin **`cleanup`** ("Clean Up Trapped", `INV_Pet_Broom`, type `action`): runs `TodoList:ClassifyTasks`, prints "No trapped tasks" when there is nothing to do, otherwise `ns.cw:ShowConfirmDialog` with the count and per-reason breakdown; confirm calls **`TodoList:PurgeTrappedAndReport()`** (purge, sorted reason summary, UI refresh), which `/fq cleanup trapped confirm` now shares.
+- Hidden by default: `DEFAULT_ORDER` ends with `cleanup`, `DEFAULT_HIDDEN.cleanup = true`. `toolbox.knownBuiltins` plus the `LEGACY_BUILTINS` list let `Config()` apply the shipped visibility exactly once per new builtin on an existing install, without touching tools the player has already shown or hidden.
+- `test/tooldispatch_spec.lua` 28 → 44.
+
+### Housekeeping
+
+#285 and #264 closed by the merges (Player summaries in both bodies; the #264 summary went in by hand after a denied `gh issue edit`). Alpha2 Player updates go out on #285, #264 and #256 with this tag. #284 (two BNet accounts, same import → different lists) awaits `/fq state` from both accounts; #261 (RU realms) was nudged 2026-11-04, no reply. Draft PR #288 (Cogworks `v0.17.0` re-pin, override removal, itemstring/ilvldisplay specs load the vendored library) waits on cogworks#86. The alpha1 `.claude/worktrees/` leftovers are still attached locally.
+
 ## v0.13.4-alpha1
 
 Two new reports from the 2026-10-23 Discord batch plus the two carry-overs from the v0.13.3 line. Embedded Cogworks-1.0 stays at **`v0.16.0`**; the `Core.lua` `ItemKeyToItemString` override stays (cogworks#83). **Schema stays at 14.** One new file, `BuySoldOut.lua` (toc after `BuyListSync.lua`). **F8 not yet run.** Each fix was built on its own branch (PRs #279, #283, #281, #282, squash-merged); master passes all 25 spec files.

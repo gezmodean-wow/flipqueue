@@ -6,6 +6,20 @@ The engineering-detail companion lives in `CHANGELOG.md` (commit-readerese — f
 
 ---
 
+## v0.13.4-alpha2
+
+Follow-ups from your alpha1 reports: the sold-out skip handles all your characters at once, syncs between your own accounts send far less, and cleaning up trapped tasks is now a button.
+
+### To-do list
+
+- **Sold-out buy tasks are skipped for all your characters at once.** When several of your characters had a buy task for the same item on the same realm, FlipQueue only skipped the task for the character you were on, and Next Steps then sent you to the next character for the same sold-out item. One Auction House visit now resolves every task for that item on the realm, and a single chat line names the characters involved. **Skip buy tasks when the item is sold out** still has to be on.
+- **New Tools drawer button: Clean Up Trapped.** It does what the `/fq cleanup trapped` command does: shows how many tasks can never finish and why, and asks before removing anything. It's hidden until you turn it on under **Settings → Tools Drawer**.
+
+### Syncing between your own accounts
+
+- **Syncs between linked accounts send only what changed.** Every sync used to resend all of your characters, every imported deal and the whole warbank, even when none of it had changed. On a same-Battle.net link that could take several minutes. A sync now carries only the characters, imports and warbank changes since the last one. Both accounts need this version to see the saving; it still syncs with older versions.
+- **The sync log says what each sync carried.** If a sync still feels slow, **Copy Log** under Settings → Multi-Account now shows how many characters and imports went across, so a report can point at what's left.
+
 ## v0.13.4-alpha1
 
 Keeping your to-do list honest: tasks that can't go anywhere now leave the list on their own, with the reason in the log.
