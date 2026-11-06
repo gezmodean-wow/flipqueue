@@ -2083,8 +2083,11 @@ end
 
 -- (FQ-278) A buy task whose item has no listings on its buy realm is moved to
 -- the log as skipped, and so is the sell half of its flip: there is nothing to
--- post without the purchase. Returns the number of tasks resolved.
-function TodoList:SkipBuyTaskSoldOut(taskIndex, realm)
+-- post without the purchase. Returns the number of tasks resolved and the
+-- number of linked sell tasks among them. `silent` skips the chat line:
+-- BuySoldOut prints one summary when several characters' tasks for the same
+-- item are resolved together (FQ-285).
+function TodoList:SkipBuyTaskSoldOut(taskIndex, realm, silent)
     local current = self:GetCurrentList()
     local tasks = current and current.tasks
     local task = tasks and tasks[taskIndex]
@@ -2107,12 +2110,14 @@ function TodoList:SkipBuyTaskSoldOut(taskIndex, realm)
         end
     end
 
-    local tail = #partners > 0
-        and (" (and " .. #partners .. " linked sell task" .. (#partners > 1 and "s" or "") .. ")") or ""
-    ns:Print((ns.COLORS and ns.COLORS.ORANGE or "") .. "Skipped:|r " .. name ..
-        " — sold out on " .. realm .. ", none listed" .. tail)
+    if not silent then
+        local tail = #partners > 0
+            and (" (and " .. #partners .. " linked sell task" .. (#partners > 1 and "s" or "") .. ")") or ""
+        ns:Print((ns.COLORS and ns.COLORS.ORANGE or "") .. "Skipped:|r " .. name ..
+            " — sold out on " .. realm .. ", none listed" .. tail)
+    end
     self:CheckAutoComplete()
-    return removed
+    return removed, #partners
 end
 
 -- Delete a task entirely (remove from list, no logging).
