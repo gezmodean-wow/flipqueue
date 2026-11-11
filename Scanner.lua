@@ -120,7 +120,9 @@ end
 -- locations = {...} }`.
 -- Battle pets are handled via link parsing (Syndicator includes the full
 -- caged-pet hyperlink).
-local function FoldContainerSlots(slots, items, location)
+-- `tabIndex` (warbank only) records the per-tab split in entry.tabs so the
+-- generator can honour the Characters-page tab toggles (FQ-290).
+local function FoldContainerSlots(slots, items, location, tabIndex)
     if type(slots) ~= "table" then return end
     for _, slot in ipairs(slots) do
         local link = slot and slot.itemLink
@@ -165,6 +167,10 @@ local function FoldContainerSlots(slots, items, location)
                 entry.quantity = entry.quantity + count
                 if location then
                     entry.locations[location] = (entry.locations[location] or 0) + count
+                end
+                if tabIndex then
+                    entry.tabs = entry.tabs or {}
+                    entry.tabs[tabIndex] = (entry.tabs[tabIndex] or 0) + count
                 end
             end
         end
@@ -226,31 +232,42 @@ local function ProjectCharacterInventory(charData)
 end
 
 -- Project Syndicator's warband data into FlipQueue's ns.db.warbank shape.
--- Returns (items table, totalSlots, freeSlots) — the three fields required
--- by the to-do generator's warbank budget and the TodoPage header readout.
+-- Returns (items table, totalSlots, freeSlots, tabs) — the first three feed
+-- the to-do generator's warbank budget and the TodoPage header readout;
+-- `tabs[i] = { total, free }` is the per-tab split behind
+-- ns:GetWarbankFreeSlots (FQ-290). Syndicator keys warband.bank by tab index
+-- in purchase order, which is the order the bank UI and the Characters-page
+-- toggles use.
 local function ProjectWarband(warbandData)
     local items = {}
     local totalSlots, freeSlots = 0, 0
+    local tabs = {}
     if type(warbandData) ~= "table" or type(warbandData.bank) ~= "table" then
-        return items, 0, 0
+        return items, 0, 0, tabs
     end
 
-    for _, tab in pairs(warbandData.bank) do
+    for tabIndex, tab in pairs(warbandData.bank) do
         -- Each tab is { slots = {...}, name, iconTexture, depositFlags, ... }
         -- (or sometimes the slot list directly, depending on version).
         local slots = tab.slots or tab
         if type(slots) == "table" then
+            local tabTotal, tabFree = 0, 0
             for _, slot in ipairs(slots) do
-                totalSlots = totalSlots + 1
+                tabTotal = tabTotal + 1
                 if not (slot and slot.itemLink and slot.itemLink ~= "") then
-                    freeSlots = freeSlots + 1
+                    tabFree = tabFree + 1
                 end
             end
-            FoldContainerSlots(slots, items, nil)
+            totalSlots = totalSlots + tabTotal
+            freeSlots = freeSlots + tabFree
+            if type(tabIndex) == "number" then
+                tabs[tabIndex] = { total = tabTotal, free = tabFree }
+            end
+            FoldContainerSlots(slots, items, nil, type(tabIndex) == "number" and tabIndex or nil)
         end
     end
 
-    return items, totalSlots, freeSlots
+    return items, totalSlots, freeSlots, tabs
 end
 
 --------------------------
@@ -638,12 +655,13 @@ function Scanner:RefreshWarbankFromSyndicator()
     local ok, warbandData = pcall(Syndicator.API.GetWarband, 1)
     if not ok or type(warbandData) ~= "table" then return end
 
-    local items, totalSlots, freeSlots = ProjectWarband(warbandData)
+    local items, totalSlots, freeSlots, tabs = ProjectWarband(warbandData)
     ns.db.warbank = {
         lastScan   = time(),
         items      = items,
         totalSlots = totalSlots,
         freeSlots  = freeSlots,
+        tabs       = tabs,
     }
     ns:InvalidateInventoryNameIndex()
 

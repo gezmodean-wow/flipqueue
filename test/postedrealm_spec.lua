@@ -46,6 +46,9 @@ function ns:ImportRemove() end
 function ns:ResolveItemID(deal) return tonumber(deal.itemID) end
 function ns:IsPhantomChar() return false end
 function ns:IsDoNotTrack() return false end
+-- FQ-290 warbank tab helpers (DB.lua); every tab enabled in these fixtures.
+function ns:GetWarbankEnabledQuantity(itemData) return itemData and itemData.quantity or 0 end
+function ns:GetWarbankFreeSlots() local wb = ns.db and ns.db.warbank; return wb and wb.freeSlots, wb and wb.totalSlots end
 function ns:IsWarboundUntilEquipped() return false end
 function ns:ParseGoldValue(str)
     return tonumber((tostring(str or ""):gsub("[^%d]", ""))) or 0

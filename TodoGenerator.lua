@@ -108,7 +108,9 @@ function TodoList:BuildItemPool()
         end
     end
 
-    -- Warbank (same tradeable filter: exclude soulbound, BoP, Quest, BtA, BtW)
+    -- Warbank (same tradeable filter: exclude soulbound, BoP, Quest, BtA, BtW).
+    -- Only stock in tabs the player left enabled on the Characters page
+    -- counts (FQ-290); a disabled tab is the player's "leave this alone".
     if ns.db.warbank and ns.db.warbank.items then
         for itemKey, itemData in pairs(ns.db.warbank.items) do
             local numID = tonumber(itemData.itemID)
@@ -117,8 +119,9 @@ function TodoList:BuildItemPool()
             local tradeable = not itemData.isBound
                 and not itemData.isWarbound
                 and (not bt or (bt ~= 1 and bt ~= 4 and bt ~= 7 and bt ~= 8))
-            if not isDNT and tradeable and (itemData.quantity or 0) > 0 then
-                AddToPool(itemKey, itemData, "Warbank", "warbank", itemData.quantity)
+            local qty = ns:GetWarbankEnabledQuantity(itemData)
+            if not isDNT and tradeable and qty > 0 then
+                AddToPool(itemKey, itemData, "Warbank", "warbank", qty)
             end
         end
     end
@@ -883,8 +886,9 @@ function TodoList:GenerateTodoList(source, allocationOrder, opts)
     -- also render a "visit the warbank" nag in that case.
     local warbankBudget = nil
     local warbankCredits = 0  -- retrieves counted, for debug output
-    if ns.db.warbank and type(ns.db.warbank.freeSlots) == "number" then
-        warbankBudget = ns.db.warbank.freeSlots
+    local scannedFree = ns:GetWarbankFreeSlots()  -- enabled tabs only (FQ-290)
+    if type(scannedFree) == "number" then
+        warbankBudget = scannedFree
         local wbItems = ns.db.warbank.items or {}
         local activeTasks = ns.db.todoLists and ns.db.todoLists.active
             and ns.db.todoLists.active.tasks or {}
@@ -1025,7 +1029,7 @@ function TodoList:GenerateTodoList(source, allocationOrder, opts)
         ns:PrintDebug("Generate: " .. #deals .. " deals, " .. #pool .. " pool items, source=" .. source)
         if warbankBudget ~= nil then
             ns:PrintDebug("  Warbank budget: " .. warbankBudget .. " free slots"
-                .. " (" .. (ns.db.warbank.freeSlots or 0) .. " scanned + "
+                .. " (" .. (scannedFree or 0) .. " scanned in enabled tabs + "
                 .. warbankCredits .. " pending retrieves)")
         else
             ns:PrintDebug("  Warbank budget: unknown (no scan data) — not enforcing")

@@ -675,20 +675,64 @@ end
 -- Bank Tab Filtering
 --------------------------
 
+-- The Characters page toggles write pullTabs.warbank[i] / pullTabs.bank[char][i]
+-- directly. Nothing ever changes pullTabs.mode from its "all" default, so the
+-- old `mode == "all"` early return here made every toggle a no-op (FQ-290):
+-- the filter is the per-tab flags themselves, default enabled.
+
+-- True when warbank tab `i` (1-based, matching ns.WARBANK_TABS order and
+-- Syndicator's warband.bank index) is enabled for selling/pulling/depositing.
+function ns:IsWarbankTabEnabled(i)
+    local cfg = ns.db and ns.db.settings and ns.db.settings.pullTabs
+        and ns.db.settings.pullTabs.warbank
+    return not cfg or cfg[i] ~= false
+end
+
 -- Returns the list of warbank bag indices (12-16) filtered by settings
 function ns:GetEnabledWarbankTabs()
-    if not ns.db or not ns.db.settings.pullTabs or ns.db.settings.pullTabs.mode == "all" then
-        return ns.WARBANK_TABS
-    end
-    local cfg = ns.db.settings.pullTabs.warbank
-    if not cfg then return ns.WARBANK_TABS end
     local result = {}
     for i, bagIndex in ipairs(ns.WARBANK_TABS) do
-        if cfg[i] ~= false then  -- default true if not explicitly disabled
+        if ns:IsWarbankTabEnabled(i) then
             table.insert(result, bagIndex)
         end
     end
     return result
+end
+
+-- Free and total warbank slots the addon may actually use: summed over
+-- enabled tabs when the last scan recorded per-tab counts, else the
+-- whole-warbank figures (older scans and partner data synced from a
+-- pre-FQ-290 build). Returns nil when there is no scan data at all.
+function ns:GetWarbankFreeSlots()
+    local wb = ns.db and ns.db.warbank
+    if not wb then return nil end
+    if type(wb.tabs) == "table" and next(wb.tabs) then
+        local free, total = 0, 0
+        for i, tab in pairs(wb.tabs) do
+            if ns:IsWarbankTabEnabled(i) then
+                free = free + (tab.free or 0)
+                total = total + (tab.total or 0)
+            end
+        end
+        return free, total
+    end
+    if type(wb.freeSlots) == "number" then return wb.freeSlots, wb.totalSlots or 0 end
+    return nil
+end
+
+-- Quantity of a warbank item sitting in enabled tabs. Items projected before
+-- FQ-290 (or synced from a partner on an older build) carry no per-tab split
+-- and count in full.
+function ns:GetWarbankEnabledQuantity(itemData)
+    if not itemData then return 0 end
+    if type(itemData.tabs) == "table" then
+        local qty = 0
+        for i, n in pairs(itemData.tabs) do
+            if ns:IsWarbankTabEnabled(i) then qty = qty + (n or 0) end
+        end
+        return qty
+    end
+    return itemData.quantity or 0
 end
 
 -- Returns the effective deposit-overflow settings for the current character.
@@ -710,7 +754,7 @@ end
 
 -- Returns the list of bank bag indices (6-11) filtered by settings for current character
 function ns:GetEnabledBankTabs()
-    if not ns.db or not ns.db.settings.pullTabs or ns.db.settings.pullTabs.mode == "all" then
+    if not ns.db or not ns.db.settings.pullTabs then
         return ns.BANK_TABS
     end
     local charKey = ns:GetCharKey()

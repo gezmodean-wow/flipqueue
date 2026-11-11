@@ -1140,6 +1140,7 @@ local function ShowConfigPanel(charKey)
             GameTooltip:SetText(self.label:GetText() or ("Warbank Tab " .. i), 1, 1, 1)
             local isOn = not pt.warbank or pt.warbank[i] ~= false
             GameTooltip:AddLine(isOn and "Enabled (click to disable)" or "Disabled (click to enable)", 0.7, 0.7, 0.7)
+            GameTooltip:AddLine("Disabled tabs are left alone: nothing in them is put on the to-do list, pulled or deposited.", 0.6, 0.6, 0.6, true)
             GameTooltip:Show()
         end)
         btn:SetScript("OnLeave", function() GameTooltip:Hide() end)
