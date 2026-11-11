@@ -600,7 +600,7 @@ local msgCounter = 0
 
 -- Send a structured message, chunking if necessary. onSent (optional) runs
 -- when the final chunk leaves the queue.
-function Sync:SendMessage(opcode, payload, target, transport, chunkSize, onSent)
+function Sync:SendMessage(opcode, payload, target, transport, chunkSize, onSent, tag)
     if not target then return end
     transport = transport or "bnet"
     chunkSize = chunkSize or CHUNK_SIZE_BNET
@@ -618,7 +618,7 @@ function Sync:SendMessage(opcode, payload, target, transport, chunkSize, onSent)
     local msgLen = #fullMsg
 
     if msgLen <= chunkSize then
-        self:Enqueue(fullMsg, target, PRIORITY[opcode] or 5, transport, onSent)
+        self:Enqueue(fullMsg, target, PRIORITY[opcode] or 5, transport, onSent, tag)
     else
         msgCounter = msgCounter + 1
         local msgID = msgCounter
@@ -628,7 +628,7 @@ function Sync:SendMessage(opcode, payload, target, transport, chunkSize, onSent)
             local startIdx = (i - 1) * chunkSize + 1
             local endIdx = math.min(i * chunkSize, msgLen)
             local chunk = "C" .. SEP .. msgID .. SEP .. i .. SEP .. totalChunks .. SEP .. fullMsg:sub(startIdx, endIdx)
-            self:Enqueue(chunk, target, PRIORITY[opcode] or 5, transport, i == totalChunks and onSent or nil)
+            self:Enqueue(chunk, target, PRIORITY[opcode] or 5, transport, i == totalChunks and onSent or nil, tag)
         end
     end
 end
@@ -657,13 +657,39 @@ end
 -- onSent (optional) runs once the message leaves the queue for good (sent,
 -- or failed with a non-throttle error), so callers track progress on what
 -- actually went out, not on what was queued. Throttled sends don't count.
-function Sync:Enqueue(msg, target, priority, transport, onSent)
+-- tag (optional) groups the chunks of one message so CancelQueued can drop
+-- them before they go out.
+function Sync:Enqueue(msg, target, priority, transport, onSent, tag)
     priority = priority or 5
     transport = transport or "bnet"
     local q = GetSendBucket(priority)
     q.tail = q.tail + 1
-    q[q.tail] = { msg = msg, target = target, priority = priority, transport = transport, onSent = onSent }
+    q[q.tail] = { msg = msg, target = target, priority = priority, transport = transport, onSent = onSent, tag = tag }
     sendQueueCount = sendQueueCount + 1
+end
+
+-- Mark every queued chunk carrying `tag` as cancelled; DrainQueue skips them.
+-- Entries stay in their ring so head/tail bookkeeping is untouched. Returns
+-- the number cancelled. A superseded snapshot delta uses this so a partner
+-- never waits behind a warbank or character state we have already replaced
+-- (FQ-256).
+function Sync:CancelQueued(tag)
+    if not tag then return 0 end
+    local n = 0
+    for p = 1, 5 do
+        local q = sendQueues[p]
+        if q then
+            for i = q.head, q.tail do
+                local e = q[i]
+                if e and e.tag == tag and not e.cancelled then
+                    e.cancelled = true
+                    n = n + 1
+                end
+            end
+        end
+    end
+    self._cancelledChunks = (self._cancelledChunks or 0) + n
+    return n
 end
 
 -- Put a popped entry back at the head of its bucket so it is the next one
@@ -687,6 +713,10 @@ local function ToSendResult(result)
     return result
 end
 
+-- Messages (chunks) still waiting to go out, cancelled ones included until
+-- DrainQueue reaches them. Read by /fq state.
+function Sync:GetQueueDepth() return sendQueueCount end
+
 function Sync:DrainQueue()
     if sendQueueCount == 0 then return end
     if GetTime() < throttledUntil then return end
@@ -697,7 +727,7 @@ function Sync:DrainQueue()
     local entry
     for p = 1, 5 do
         local q = sendQueues[p]
-        if q and q.head <= q.tail then
+        while q and q.head <= q.tail do
             entry = q[q.head]
             q[q.head] = nil
             q.head = q.head + 1
@@ -707,8 +737,12 @@ function Sync:DrainQueue()
                 q.head, q.tail = 1, 0
             end
             sendQueueCount = sendQueueCount - 1
-            break
+            -- Chunks of a superseded delta (CancelQueued) are dropped here,
+            -- without their onSent: the delta they belonged to is gone.
+            if not entry.cancelled then break end
+            entry = nil
         end
+        if entry then break end
     end
     if not entry then return end
 
@@ -2320,12 +2354,49 @@ local function TrimPending(partner)
     end
 end
 
+local function DeltaTag(seq) return "DELT:" .. tostring(seq) end
+
 function Sync:SendDeltaEntry(entry, target, transport, chunkSize)
     entry.inFlight = true
     self:SendMessage(OP_DELT, entry.delta, target, transport, chunkSize, function()
         entry.inFlight = nil
         entry.sentAt = time()
-    end)
+    end, DeltaTag(entry.seq))
+end
+
+-- Snapshot deltas carry whole state, so a newer one makes every older one
+-- for the same thing worthless: the warbank, one character's scan, one
+-- import source. Everything else (to-do list edits, do-not-track, character
+-- delete/undelete) is an event and keeps its order. A posting session on a
+-- 90-alt account queued hundreds of warbank and character snapshots behind
+-- each other over whisper, and the partner replayed or full-synced all of
+-- them on reconnect (FQ-256, #284).
+local function SupersedeKey(delta)
+    local t = delta and delta.type
+    local d = delta and delta.data
+    if t == "WB" then return "WB" end
+    if t == "CHAR" and type(d) == "table" and d.charKey then return "CHAR:" .. tostring(d.charKey) end
+    if t == "IMP" and type(d) == "table" and d.source then return "IMP:" .. tostring(d.source) end
+    return nil
+end
+
+-- Drop pending deltas this one replaces, and the chunks of theirs still
+-- waiting in the send queue. Returns the number of deltas dropped.
+function Sync:SupersedePending(partner, delta)
+    local key = SupersedeKey(delta)
+    if not key then return 0 end
+    local pending = partner.pendingDeltas
+    local dropped = 0
+    for i = #pending, 1, -1 do
+        local e = pending[i]
+        if e.delta and SupersedeKey(e.delta) == key then
+            self:CancelQueued(DeltaTag(e.seq))
+            table.remove(pending, i)
+            dropped = dropped + 1
+        end
+    end
+    self._supersededDeltas = (self._supersededDeltas or 0) + dropped
+    return dropped
 end
 
 function Sync:EmitDelta(deltaType, data)
@@ -2346,6 +2417,7 @@ function Sync:EmitDelta(deltaType, data)
     -- Fan out to ALL partners
     for uuid, partner in pairs(ns.db.sync.partners) do
         partner.pendingDeltas = partner.pendingDeltas or {}
+        self:SupersedePending(partner, delta)
         local pState = partnerStates[uuid] or "disconnected"
 
         if pState == "connected" or pState == "syncing" then
