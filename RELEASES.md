@@ -6,6 +6,18 @@ The engineering-detail companion lives in `CHANGELOG.md` (commit-readerese — f
 
 ---
 
+## v0.13.4-alpha3
+
+Two fixes from your reports: warbank tab choices are finally respected, and syncing between your own accounts no longer piles up copies of the same warbank.
+
+### Banking
+
+- **Unticking a warbank tab now really leaves it alone.** The tick boxes on the Characters page were saving your choice, but nothing was reading it: a hidden setting overrode them for pulling and depositing, and the to-do list never looked at which tab an item sits in at all. Items in a tab you have unticked now stay off the to-do list, are not pulled or deposited, and the warbank free-space count only counts the tabs you left on. Your existing tick boxes apply as soon as you update; nothing to redo.
+
+### Syncing between your own accounts
+
+- **Repeated warbank and character updates no longer queue up behind each other.** Every time your bags changed, FlipQueue queued a fresh copy of the whole warbank for your other account, and every character scan did the same for that character. A posting session could leave hundreds of these waiting, and the backlog made the next reconnect fall back to a slow full sync. A newer copy now replaces the older one that was still waiting, so your other account only ever receives the latest. If you report a slow sync, **/fq state** now shows how many updates are waiting and how many were replaced.
+
 ## v0.13.4-alpha2
 
 Follow-ups from your alpha1 reports: the sold-out skip handles all your characters at once, syncs between your own accounts send far less, and cleaning up trapped tasks is now a button.

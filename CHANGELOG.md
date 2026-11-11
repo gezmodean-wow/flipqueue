@@ -1,5 +1,31 @@
 # Changelog
 
+## v0.13.4-alpha3
+
+Two fixes from the 2026-11-06 to 2026-11-09 reports plus the Cogworks re-pin. Embedded Cogworks-1.0 moves to **`v0.17.0`** (tagged 2026-11-11 on cogworks main @ 9559cc3 after cogworks#86); the `Core.lua` `ItemKeyToItemString` override for cogworks#83 (COG-83) is gone (PR #288, FQ-249). **Schema stays at 14.** One new file, `test/warbanktabs_spec.lua` (test only; no toc change). **F8 not yet run**; the maintainer is handing this build to players for the in-game check. Each fix was built on its own branch (PRs #291, #292, squash-merged); master passes all 26 spec files.
+
+### FQ-290 (#290): warbank tab toggles were dead, and the generator never looked at tabs
+
+A player unticked every warbank tab but one on the Characters page and FlipQueue still put the whole warbank on the to-do list. Two holes.
+
+- `ns:GetEnabledWarbankTabs` / `ns:GetEnabledBankTabs` (`DB.lua`) early-returned every tab when `pullTabs.mode == "all"`. `mode` is set once by the defaults and no code path ever changes it, so the toggles (which write `pullTabs.warbank[i]` / `pullTabs.bank[char][i]`) were no-ops for `AuctionPost`, `BankQueue`, `Tracker`, `TrackerBank` and `ContextDrawer` alike. The gate is gone; the per-tab flags are the filter, default enabled. New **`ns:IsWarbankTabEnabled(i)`**.
+- `TodoList:BuildItemPool` pooled `ns.db.warbank.items` by `quantity`; `Scanner.ProjectWarband` folded every Syndicator tab together. `FoldContainerSlots` takes a `tabIndex` and records **`item.tabs[i]`**; `ProjectWarband` returns **`warbank.tabs[i] = { total, free }`** (Syndicator's `warband.bank` index is the tab index in purchase order). New **`ns:GetWarbankFreeSlots()`** → `(free, total)` over enabled tabs and **`ns:GetWarbankEnabledQuantity(item)`**; the pool, the generator's warbank deposit budget and its debug line, both `TodoPage` readouts and `TrackerBank`'s deposit-all / reagent interrupts use them. Entries with no `tabs` split (pre-fix scans, partner data synced from older builds) count in full.
+- Tab-button tooltip on the Characters page says what disabling does.
+- `test/warbanktabs_spec.lua` (new, 36): helpers under the shipped `mode = "all"` shape, free/total fallbacks, projection split, pool with tabs toggled off, legacy entry without tabs. The three generator specs stub the two new helpers.
+
+### FQ-256 (#256, #284): a newer warbank, character or import snapshot replaces the queued one
+
+bredsheeran_'s `/fq state` files on #284 (same-Battle.net whisper link, both 0.13.3) showed `pending=443 CHAR=167,IMP=3,TDCLEAR=9,TDCOMMIT=10,WB=254` on the posting account while its partner's `recvSeq` already matched the sender's `sentSeq`. Every bag event re-emits the whole warbank and every scan re-emits that character, so a posting session queues hundreds of snapshots behind each other; past `REPLAY_THRESHOLD` (100) the reconnect path wipes the queue and forces a full sync, which is the slow path #256 describes.
+
+- **`Sync:SupersedePending(partner, delta)`**, called from `EmitDelta` before fan-out: `WB` (all), `CHAR` (same `charKey`) and `IMP` (same `source`) remove the pending deltas they replace and cancel those deltas' chunks still in the send queue. Event deltas (`TD*`, `DNT±`, `CDEL`/`CUND`) are untouched and keep their order.
+- `Sync:Enqueue` / `Sync:SendMessage` take a `tag` (`DELT:<seq>` for delta chunks); **`Sync:CancelQueued(tag)`** marks entries in place; `DrainQueue` pops and skips cancelled entries without firing `onSent`. The receiver's 60 s reassembly expiry absorbs a partially sent cancelled message; seq gaps are fine (`SeenDeltaSeq` is a set, not a counter). **`Sync:GetQueueDepth()`** for diagnostics; `_supersededDeltas` / `_cancelledChunks` counters.
+- `/fq state` `SY|` line gains **`queue=<send-queue depth>`** and **`superseded=<count>`**. On a posting account `superseded=` should climb and `pending=` stay small; a dump where `pending=` keeps growing means something other than snapshots is piling up.
+- `test/sync_spec.lua` 107 → 122 (section 22): connected pair with chunked warbanks (first one's chunks cancelled, partner holds only the newest, queue and pending drain to 0); offline partner with 254 refreshes queues one delta; one per character; one per import source; list edits and events never coalesced.
+
+### Housekeeping
+
+#290 closed by the merge (Player summary in the body). Alpha3 Player updates go out on #290, #284 and #256 with this tag. #284 is resolved-by-sync (both accounts held the identical import and list) and stays open for the alpha2/alpha3 retest; #256 still waits on makkenmak's alpha2 timing and `FULL_SYNC_SCOPE` lines; #261 (RU realms) was nudged 2026-11-05, no reply. PR #288 merged 2026-11-11 (ab61a31) once cogworks `v0.17.0` was tagged; cogworks#86 closed.
+
 ## v0.13.4-alpha2
 
 Three follow-ups to the alpha1 field results. Embedded Cogworks-1.0 stays at **`v0.16.0`**; the `Core.lua` `ItemKeyToItemString` override stays (cogworks#83 is fixed upstream as 0.17.0 but has no tag; cogworks#86 asks for one, and the rollback is prepared in draft PR #288). **Schema stays at 14.** No new files. **F8 not yet run**; the maintainer tested the pre-merge `integ/v0.13.4-alpha2` branch in-game. Each fix was built on its own branch (PRs #286, #287, #289, squash-merged); master passes all 25 spec files.
