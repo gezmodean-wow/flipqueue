@@ -763,8 +763,9 @@ function UI:RefreshTodoPage()
             -- This is a soft warning — the UI renders a red icon but the
             -- user can still click through, matching the soft ordering
             -- the scheduling model uses elsewhere.
-            if ns.db.warbank and type(ns.db.warbank.freeSlots) == "number" then
-                local balance = ns.db.warbank.freeSlots
+            local enabledFree = ns:GetWarbankFreeSlots()  -- enabled tabs only (FQ-290)
+            if type(enabledFree) == "number" then
+                local balance = enabledFree
                 for _, group in ipairs(displayGroups) do
                     for _, item in ipairs(group.items) do
                         item._warbankAtRisk = nil
@@ -1164,9 +1165,10 @@ function UI:RefreshTodoPage()
             -- at-risk indicator matches the per-task [!] badge: orange when
             -- pending deposits exceed free slots, yellow when tight.
             local warbankReadout = ""
-            if ns.db.warbank and type(ns.db.warbank.freeSlots) == "number" then
-                local freeSlots = ns.db.warbank.freeSlots
-                local totalSlots = ns.db.warbank.totalSlots or 0
+            local enabledFree, enabledTotal = ns:GetWarbankFreeSlots()  -- enabled tabs only (FQ-290)
+            if type(enabledFree) == "number" then
+                local freeSlots = enabledFree
+                local totalSlots = enabledTotal or 0
                 local pendingDeposits = 0
                 local pendingRetrieves = 0
                 for _, g in ipairs(displayGroups) do

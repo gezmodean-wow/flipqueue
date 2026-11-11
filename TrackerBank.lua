@@ -954,9 +954,9 @@ function Tracker:AutoDepositExtraItems(onComplete)
     -- moves are unaffected. This is the "constrained runtime" escape
     -- hatch the scheduling model requests — autoDepositAll isn't part of
     -- the at-generation-time budget, so we guard it here.
-    if ns.db.warbank and type(ns.db.warbank.freeSlots) == "number"
-        and #warbankMoves > 0 then
-        local freeSlots = ns.db.warbank.freeSlots
+    local enabledFree = ns:GetWarbankFreeSlots()  -- enabled tabs only (FQ-290)
+    if type(enabledFree) == "number" and #warbankMoves > 0 then
+        local freeSlots = enabledFree
         if freeSlots <= 0 then
             ns:Print(ns.COLORS.ORANGE .. "Warbank is full|r — deposit-all skipped for warbank items. " ..
                 "Consider pausing Deposit All until space opens up.")
@@ -1115,9 +1115,9 @@ function Tracker:AutoDepositReagents(onComplete)
     -- Same warbank free-slot interrupt as AutoDepositExtraItems. Reagents
     -- and extras share warbank space; if either runs short of slots the
     -- player gets the same warning.
-    if ns.db.warbank and type(ns.db.warbank.freeSlots) == "number"
-        and #warbankMoves > 0 then
-        local freeSlots = ns.db.warbank.freeSlots
+    local enabledFree = ns:GetWarbankFreeSlots()  -- enabled tabs only (FQ-290)
+    if type(enabledFree) == "number" and #warbankMoves > 0 then
+        local freeSlots = enabledFree
         if freeSlots <= 0 then
             ns:Print(ns.COLORS.ORANGE .. "Warbank is full|r — reagent deposits skipped for warbank items.")
             warbankMoves = {}
