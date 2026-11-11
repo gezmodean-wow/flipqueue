@@ -604,5 +604,69 @@ do
     check("scope: guilds no longer ride along", p.guilds, nil)
 end
 
+--------------------------
+-- 22. Snapshot deltas supersede their queued predecessors (FQ-256, #284)
+--------------------------
+-- A linked player's /fq state showed 443 pending deltas (254 warbank, 167
+-- character snapshots) on an account whose partner had already received
+-- everything: every bag event re-queued a whole warbank behind the last one,
+-- and the backlog tripped the replay threshold into a full sync on reconnect.
+do
+    local a, b = Fresh()
+    a.Sync:RequestFullSyncWith("UB")
+    RunToIdle(a, b)
+    local function Pend() return a.ns.db.sync.partners.UB.pendingDeltas or {} end
+
+    -- Big enough that each warbank delta is many whisper chunks, so the
+    -- first is still in the send queue when the second replaces it.
+    local function Bank(marker)
+        local items = {}
+        for i = 1, 300 do items[i .. ";;"] = { quantity = i, name = "Bank item " .. i } end
+        items[marker] = { quantity = 1, name = marker }
+        return { lastScan = time(), items = items }
+    end
+    a.Sync:EmitDelta("WB", Bank("old;;"))
+    local queuedForFirst = a.Sync:GetQueueDepth()
+    check("supersede: first warbank is queued in chunks", queuedForFirst > 1, true)
+    now = now + 1
+    a.Sync:EmitDelta("WB", Bank("new;;"))
+    local wbPending = 0
+    for _, e in ipairs(Pend()) do if e.delta.type == "WB" then wbPending = wbPending + 1 end end
+    check("supersede: one warbank delta pending", wbPending, 1)
+    check("supersede: it is the newest", Pend()[#Pend()].delta.data.items["new;;"] ~= nil, true)
+    check("supersede: the old one's chunks were cancelled", a.Sync._cancelledChunks, queuedForFirst)
+    check("supersede: counted", a.Sync._supersededDeltas, 1)
+
+    RunToIdle(a, b)
+    check("supersede: partner holds the newest warbank", b.ns.db.warbank and b.ns.db.warbank.items["new;;"] ~= nil, true)
+    check("supersede: partner never saw the old one", b.ns.db.warbank and b.ns.db.warbank.items["old;;"], nil)
+    check("supersede: send queue drained", a.Sync:GetQueueDepth(), 0)
+    check("supersede: nothing left pending", #Pend(), 0)
+
+    -- Offline partner: the queue is what a reconnect replays, so it must not
+    -- hold 254 copies of the warbank either.
+    local a2 = Fresh()
+    local function P2() return a2.ns.db.sync.partners.UB.pendingDeltas or {} end
+    for i = 1, 254 do a2.Sync:EmitDelta("WB", { lastScan = i, items = {} }) end
+    check("supersede: 254 warbank refreshes queue one delta", #P2(), 1)
+    check("supersede: the last refresh", P2()[1].delta.data.lastScan, 254)
+    a2.Sync:EmitDelta("CHAR", { charKey = "Alt1-Realm", charData = { v = 1 } })
+    a2.Sync:EmitDelta("CHAR", { charKey = "Alt2-Realm", charData = { v = 1 } })
+    a2.Sync:EmitDelta("CHAR", { charKey = "Alt1-Realm", charData = { v = 2 } })
+    check("supersede: one delta per character", #P2(), 3)
+    check("supersede: newest scan of the character kept", P2()[#P2()].delta.data.charData.v, 2)
+    a2.Sync:EmitDelta("IMP", { source = "fpScanner", deals = { n = 1 } })
+    a2.Sync:EmitDelta("IMP", { source = "dealFinder", deals = { n = 1 } })
+    a2.Sync:EmitDelta("IMP", { source = "fpScanner", deals = { n = 2 } })
+    check("supersede: one delta per import source", #P2(), 5)
+    a2.Sync:EmitDelta("TDSTATUS", { taskUUID = "t1", status = "done" })
+    a2.Sync:EmitDelta("TDSTATUS", { taskUUID = "t1", status = "failed" })
+    a2.Sync:EmitDelta("TDCOMMIT", { mode = "replace", list = { name = "L", createdAt = 1, tasks = {} } })
+    a2.Sync:EmitDelta("TDCOMMIT", { mode = "replace", list = { name = "M", createdAt = 2, tasks = {} } })
+    a2.Sync:EmitDelta("DNT+", { itemID = "5", name = "x" })
+    a2.Sync:EmitDelta("DNT+", { itemID = "5", name = "x" })
+    check("supersede: list edits and events are never coalesced", #P2(), 11)
+end
+
 print(string.format("sync_spec: %d passed, %d failed", passed, failed))
 if failed > 0 then os.exit(1) end

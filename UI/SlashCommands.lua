@@ -455,6 +455,8 @@ local function cmdState()
             .. "|lastFull=" .. T(p.lastFullSync) .. "|logBuilt=" .. T(p.logBuiltAt)
             .. "|peerSince=" .. T(p.peerLogSince)
             .. "|sentSeq=" .. V(sy.lastSentSeq) .. "|recvSeq=" .. V(p.lastRecvSeq)
+            .. "|queue=" .. V(ns.Sync and ns.Sync.GetQueueDepth and ns.Sync:GetQueueDepth())
+            .. "|superseded=" .. V(ns.Sync and ns.Sync._supersededDeltas or 0)
             .. "|pending=" .. #(p.pendingDeltas or {}) .. (#q > 0 and (" " .. table.concat(q, ",")) or ""))
     end
 
